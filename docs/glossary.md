@@ -15,6 +15,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   maximised over the working area. Umbriel calls it "maximize".
 - **Game mode**: the state Yuna enters when a game is fullscreen: effects and animations off,
   notifications silent, VRR in its band.
+- **HDR10**: high dynamic range output as monitors take it: the PQ curve, BT.2020 primaries, at
+  least 10 bits per channel, and static metadata sent with the picture (`HDR_OUTPUT_METADATA`).
 - **Headless mode**: Yuna running without a physical screen, on virtual outputs.
 - **Home output**: the output a workspace goes back to when that output returns after being
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
@@ -22,6 +24,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
+- **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
+  to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
+  1,023.
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's.
 - **Special workspace**: a hidden workspace shown over the current one by a key.

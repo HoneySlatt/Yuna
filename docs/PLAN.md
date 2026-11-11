@@ -18,7 +18,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   workspaces ([ADR-0018](adr/0018-workspaces.md)), behaviours
   ([ADR-0019](adr/0019-the-layouts-behaviours.md)) and the model's shape
   ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
-- Next: [M1.3](#m13--hdr-through-smithay-a-prototype), on the owner's go.
+- [M1.3](#m13--hdr-through-smithay-a-prototype) is in progress: the prototype is built and
+  tested; it waits for the owner's run ([steps](hdr-prototype.md)), which gives the verdict.
 
 ## Status
 
@@ -26,7 +27,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
-| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Planned |
+| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | In progress |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Planned |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
@@ -88,6 +89,13 @@ milestone first needs it.
   indicator, or the reason they cannot is written; the patches it needed are listed.
 - **By hand.** Agents have no access to the owner's display: the owner runs it from a text console.
 - **Measured.** Nothing beyond the verdict; the program is then deleted, its findings kept here.
+- **Where it stands** (2026-11-11). The program is on the branch `m1.3-hdr-prototype`; the owner
+  runs it by [these steps](hdr-prototype.md). It needed one patch to Smithay, in Yuna's private
+  fork ([ADR-0021](adr/0021-smithays-fork.md), [patches](smithay-patches.md)), and Smithay's
+  DRM, GBM, EGL, GLES, libseat and libinput backends, for that branch only. It drives Smithay's
+  `GbmBufferedSurface`: `DrmCompositor` needs the `wayland_frontend` feature. A test on the GPU's
+  render node checks that every patch reaches an `Xbgr2101010` buffer with its exact PQ codes; the
+  monitor's side is unverified until the owner's run.
 
 ### M1.4 — The headless compositor
 
@@ -173,6 +181,12 @@ milestone first needs it.
   actions).
 
 ## Known debt
+
+- The HDR metadata's primaries are sent red, green, blue; that order is not checked against
+  CTA-861-G (M1.3's prototype; Stage 5 checks it).
+- Smithay `8fd9fe0` stops reading a CRTC's properties at the first of `ACTIVE` and
+  `VRR_ENABLED` (`State::current_state`), so one of the two is not read back; it matters once
+  Yuna uses VRR (Stage 4).
 
 - The layout model's client side waits for M1.4 (above): today a window is assumed to take the
   size it is given, and a deep dwindle tree can give windows a size of zero.
