@@ -14,14 +14,18 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.1](#m11--the-workspace-and-its-checks) is done (2026-11-11): the workspace, its checks and CI;
   Rust 1.99.1 ([ADR-0016](adr/0016-the-rust-toolchain.md)) and Smithay `8fd9fe0`
   ([ADR-0017](adr/0017-smithays-revision.md)) pinned.
-- Next: [M1.2](#m12--the-layout-model), on the owner's go.
+- [M1.2](#m12--the-layout-model) is done (2026-11-11): the layout model, `crates/yuna-layout`;
+  workspaces ([ADR-0018](adr/0018-workspaces.md)), behaviours
+  ([ADR-0019](adr/0019-the-layouts-behaviours.md)) and the model's shape
+  ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
+- Next: [M1.3](#m13--hdr-through-smithay-a-prototype), on the owner's go.
 
 ## Status
 
 | Milestone | Goal | Status |
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
-| [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Planned |
+| [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Planned |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Planned |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
@@ -63,6 +67,15 @@ milestone first needs it.
 - **Done when.** Each behaviour has its scenario; the property tests find no broken invariant over
   their runs in CI.
 - **Measured.** An operation's time on a workspace of 100 windows.
+- **Result.** Done on 2026-11-11. 97 scenarios, the two Umbriel cases among them; 70 name the
+  behaviour of niri or Hyprland they rewrite or depart from, the others test Yuna's own rules. Property
+  tests over 1,536 random sequences per run check the invariants, that one seat never changes
+  another's state, and that a refused operation changes nothing. Two rounds of closing review:
+  their defects are fixed, each with its scenario; their other findings are answered in
+  [ADR-0019](adr/0019-the-layouts-behaviours.md) and [ADR-0020](adr/0020-the-layout-models-shape.md)
+  or kept as debt below. An operation and `arrange` on 100 windows: under 25 µs at the 99th
+  percentile; linear up to 1,000 ([measurements](measurements.md)). What is not built yet is listed
+  in ADR-0019; terminal swallowing and per-application rules need clients: Stage 2.
 
 ### M1.3 — HDR through Smithay, a prototype
 
@@ -83,7 +96,11 @@ milestone first needs it.
   size, rate and scale, 3840 × 2160 at 240 Hz and 1.5 by default; a controlled clock; drawing
   through GLES on the GPU or Mesa's CPU renderer. The protocols an application needs: `xdg-shell`,
   `linux-dmabuf`, viewporter, fractional scale, presentation time, `xdg-decoration`, cursor shape,
-  data device, text input; the layout model of M1.2 behind them.
+  data device, text input; the layout model of M1.2 behind them, with what it still lacks for real
+  clients ([ADR-0020](adr/0020-the-layout-models-shape.md)): sizes asked and sizes committed,
+  configure sizes in whole logical units, clients that ignore their size in the property tests;
+  dialogs opening next to their parent, and a focus policy; a minimum window size, dwindle
+  included; which windows are told they are activated.
 - **Done when.** Alacritty, a GTK 4 and a Qt 6 application, and uwui's and SlimeEngine's windowed
   examples run in it in CI, and each draws nothing at rest.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output.
@@ -95,7 +112,8 @@ milestone first needs it.
 - **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
   presentation times read, the clock stepped. One seat per agent; a test that an agent's input never
-  reaches another seat.
+  reaches another seat. The layout model arranges a workspace not shown, for the owner's peek
+  ([ADR-0020](adr/0020-the-layout-models-shape.md)).
 - **Done when.** An agent, through MCP alone, opens one of uwui's examples, types, clicks and checks
   the result by capture.
 - **Measured.** An MCP call's time; a capture's time on a 4K output.
@@ -115,7 +133,8 @@ milestone first needs it.
 - **Goal.** Motion on springs and curves, interrupted without a jump
   ([ADR-0010](adr/0010-animations-and-effects.md)).
 - **Delivers.** Springs and curves, configurable; a running animation retargeted keeping its
-  velocity; the layout's moves animated; every animation stepped by the test clock.
+  velocity; the layout's moves animated, the scrolling view as one camera the model gives out
+  ([ADR-0020](adr/0020-the-layout-models-shape.md)); every animation stepped by the test clock.
 - **Done when.** Snapshot tests check each animation frame by frame; scrolling and workspace
   switches hold 240 Hz headless without a missed frame.
 - **Measured.** A frame's time during the heaviest animation.
@@ -148,7 +167,17 @@ milestone first needs it.
 
 - Contributing Yuna's headless series to the owner's other projects' CI, beside SlimeEngine's
   compositors.
+- Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
+  (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
+- Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
+  actions).
 
 ## Known debt
 
-None yet.
+- The layout model's client side waits for M1.4 (above): today a window is assumed to take the
+  size it is given, and a deep dwindle tree can give windows a size of zero.
+- A scrolling column whose gaps leave no room gives all its windows a height of zero; M1.4, with
+  clients' minimum sizes, decides what happens then.
+- The dwindle tree is walked by recursion: one tree of 100,000 windows overflows the stack and
+  takes the process down (10,000 work). M1.4 bounds a client's windows or removes the recursion
+  ([ADR-0020](adr/0020-the-layout-models-shape.md)).
