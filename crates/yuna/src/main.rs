@@ -4,6 +4,7 @@
 //! work in progress is in `docs/PLAN.md`.
 
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 const HELP: &str = "\
@@ -42,30 +43,44 @@ fn read_request(arguments: impl IntoIterator<Item = OsString>) -> Request {
     match first.to_str() {
         Some("-h" | "--help") => Request::Help,
         Some("-V" | "--version") => Request::Version,
-        _ => Request::Invalid(format!("unknown argument {}", first.to_string_lossy())),
+        // Quoted, so that an empty argument shows, and escaped where it is not UTF-8.
+        _ => Request::Invalid(format!("unknown argument {first:?}")),
     }
 }
 
 fn main() -> ExitCode {
     match read_request(std::env::args_os().skip(1)) {
-        Request::Help => {
-            print!("{HELP}");
-            ExitCode::SUCCESS
-        }
-        Request::Version => {
-            println!("yuna {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
+        Request::Help => print(HELP),
+        Request::Version => print(&format!("yuna {}\n", env!("CARGO_PKG_VERSION"))),
         Request::Session => {
-            eprintln!("yuna: no backend exists yet; see docs/PLAN.md");
+            print_error("yuna: no backend exists yet; see docs/PLAN.md\n");
             ExitCode::FAILURE
         }
         Request::Invalid(reason) => {
-            eprintln!("yuna: {reason}\n\n{HELP}");
+            print_error(&format!("yuna: {reason}\n\n{HELP}"));
             // 2, as most command-line programs, for a usage error.
             ExitCode::from(2)
         }
     }
+}
+
+/// Writes to standard output. When the reader has left (`yuna --help | true`), the write fails and
+/// the program exits with a failure, without the panic of `print!` and without a message.
+fn print(text: &str) -> ExitCode {
+    let mut stdout = io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
+/// Writes to standard error. If that fails too, nothing is left to report it to: the exit status
+/// alone tells.
+fn print_error(text: &str) {
+    let _ = io::stderr().lock().write_all(text.as_bytes());
 }
 
 #[cfg(test)]

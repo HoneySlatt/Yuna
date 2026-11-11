@@ -36,5 +36,22 @@ fn a_session_fails_while_no_backend_exists() {
 fn an_unknown_argument_is_a_usage_error() {
     let output = run_yuna(&["--start"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown argument --start"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains(r#"unknown argument "--start""#));
+}
+
+#[test]
+fn a_reader_that_left_early_is_no_panic() {
+    let (reader, writer) = std::io::pipe().expect("a pipe opens");
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_yuna"))
+        .arg("--help")
+        .stdout(writer)
+        .output()
+        .expect("the yuna binary runs");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
