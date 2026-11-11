@@ -11,13 +11,16 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 - The design session ran on 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
   [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar.
-- Next: [M1.1](#m11--the-workspace-and-its-checks), on the owner's go.
+- [M1.1](#m11--the-workspace-and-its-checks) is done (2026-11-11): the workspace, its checks and CI;
+  Rust 1.99.1 ([ADR-0016](adr/0016-the-rust-toolchain.md)) and Smithay `8fd9fe0`
+  ([ADR-0017](adr/0017-smithays-revision.md)) pinned.
+- Next: [M1.2](#m12--the-layout-model), on the owner's go.
 
 ## Status
 
 | Milestone | Goal | Status |
 |---|---|---|
-| [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Planned |
+| [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Planned |
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Planned |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Planned |
@@ -44,6 +47,9 @@ milestone first needs it.
   chosen and pinned.
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **Measured.** The check's time, warm and cold; CI's job time.
+- **Result.** Done on 2026-11-11. The check takes 1.2 s warm and about 13 s cold locally, CI's job
+  82 s without a cache ([measurements](measurements.md)). The `yuna` crate depends on Smithay
+  without using it until M1.4 (ADR-0017).
 
 ### M1.2 — The layout model
 
