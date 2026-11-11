@@ -14,6 +14,9 @@ publish = false
 # Pinned to one revision of the upstream repository, raised at each stage's end (ADR-0011,
 # ADR-0017). Each crate turns on the features it uses.
 smithay = { git = "https://github.com/Smithay/smithay.git", rev = "8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55", default-features = false }
+# Property tests of the layout model (M1.2), in tests only. Without its default features: no
+# forking, no timeouts, no temporary files.
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"
