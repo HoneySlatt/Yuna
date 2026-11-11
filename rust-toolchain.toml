@@ -1,0 +1,7 @@
+# The Rust toolchain that builds and checks Yuna. This file is the single source of truth: the Nix
+# development shell reads it (flake.nix), and rustup reads it for a contributor without Nix.
+# ADR-0016 gives the policy: raised on purpose at a stage's end, with `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt", "rust-src", "rust-analyzer"]
+profile = "minimal"

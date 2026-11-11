@@ -1,0 +1,16 @@
+[package]
+name = "yuna"
+description = "A Wayland compositor for Linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Not used yet: depending on it makes Cargo.lock hold the exact revision, and cargo deny check its
+# licences and advisories, from the start (ADR-0017). The headless backend (M1.4) is its first use.
+smithay.workspace = true
+
+[lints]
+workspace = true
