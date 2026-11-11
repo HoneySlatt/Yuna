@@ -9,14 +9,21 @@ all-features = true
 targets = ["x86_64-unknown-linux-gnu"]
 
 [advisories]
-# Every RustSec advisory (a vulnerability, an unsound or an unmaintained crate) fails the check. One
-# may be ignored only by an entry here that says why.
+# Every RustSec advisory fails the check, on any crate of the graph, direct or not: a vulnerability
+# always does; an unsound or an unmaintained crate does through the two settings below (cargo-deny's
+# default for unsound crates covers only Yuna's direct dependencies). A yanked crate fails too: its
+# author withdrew it. One advisory may be ignored only by an entry here that says why.
+unsound = "all"
+unmaintained = "all"
+yanked = "deny"
 ignore = []
 
 [licenses]
-# Only licences whose code may be distributed inside a GPL-3.0-or-later program (ADR-0009). Absent on
-# purpose: GPL-2.0-only, and every licence the Free Software Foundation lists as incompatible with
-# the GPL version 3.
+# Only licences whose code may be distributed inside a GPL-3.0-or-later program (ADR-0009). A licence
+# not listed is refused, so the check fails safe: one a new dependency needs is added here when it
+# comes, after checking its compatibility. Never listed: GPL-2.0-only and the other licences the Free
+# Software Foundation calls incompatible with the GPL version 3; GPL-3.0-only and LGPL-3.0-only,
+# which would make Yuna GPL-3.0-only (ADR-0013); and the AGPL, whose network clause would bind Yuna.
 allow = [
     "0BSD",
     "Apache-2.0",
