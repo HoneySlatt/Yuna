@@ -89,14 +89,6 @@ impl Rect {
             && self.y < other.bottom() - EPSILON
             && other.y < self.bottom() - EPSILON
     }
-
-    /// Whether `other` lies inside this rectangle, to `EPSILON`.
-    pub fn contains(&self, other: &Rect) -> bool {
-        other.x >= self.x - EPSILON
-            && other.y >= self.y - EPSILON
-            && other.right() <= self.right() + EPSILON
-            && other.bottom() <= self.bottom() + EPSILON
-    }
 }
 
 /// The tolerance of comparisons between logical coordinates: far below a physical pixel at any
@@ -107,12 +99,9 @@ pub const EPSILON: f64 = 1e-6;
 ///
 /// Always finite and positive; [`Scale::new`] refuses anything else.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Scale(f64);
+pub(crate) struct Scale(f64);
 
 impl Scale {
-    /// Scale 1: one logical unit per physical pixel.
-    pub const ONE: Scale = Scale(1.0);
-
     /// The smallest scale accepted. Below it, a 4K output would be more than 16,000 logical units
     /// wide, which no configuration means.
     pub const MIN: f64 = 0.25;

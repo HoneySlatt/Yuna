@@ -40,8 +40,7 @@ fn each_new_window_splits_the_focused_one_along_its_longer_side() {
 }
 
 /// Hyprland: DwindleAlgorithm.cpp `removeTarget` (the sibling takes the parent's place) and
-/// `getNextCandidate` (focus to the window nearest the closed one's centre, `input:focus_on_close`
-/// 0).
+/// `getNextCandidate` (`input:focus_on_close` 0).
 #[test]
 fn a_closed_window_leaves_its_space_to_its_sibling_and_focus_to_the_nearest_window() {
     let mut m = three_windows();
@@ -154,4 +153,42 @@ fn preset_widths_change_nothing_in_dwindle() {
     m.ok(|l| l.change_width(w(3), 0.2));
     m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
     assert_eq!(m.placed(MAIN), before);
+}
+
+/// Hyprland: one fullscreen state per window, maximised or fullscreen
+/// (wiki configuring/core/dispatchers.md); one covering window per workspace, which has the focus.
+#[test]
+fn fullscreen_and_maximised_never_cover_at_once() {
+    let mut m = dwindle();
+    m.open(1);
+    m.open(2);
+    m.ok(|l| l.set_full_width(w(1), true));
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    assert!(!m.info(1).full_width);
+    m.ok(|l| l.set_fullscreen(w(2), false));
+    assert!(m.placement(2).activated);
+    m.ok(|l| l.set_fullscreen(w(1), true));
+    m.ok(|l| l.set_full_width(w(2), true));
+    assert!(!m.info(1).fullscreen);
+    assert_eq!(m.shown(MAIN).last(), Some(&2));
+}
+
+/// Hyprland: DwindleAlgorithm.cpp `getClosestNode`, after `removeTarget` lays the tree out again.
+#[test]
+fn focus_after_a_close_goes_to_the_window_now_covering_the_closed_ones_centre() {
+    let mut m = dwindle();
+    for n in 0..4 {
+        m.open(n);
+    }
+    m.ok(|l| l.focus_window(w(0)));
+    let centre = m.rect(0).center();
+    m.ok(|l| l.close_window(w(0)));
+    let one = m.rect(1);
+    assert!(
+        one.x <= centre.x
+            && centre.x <= one.right()
+            && one.y <= centre.y
+            && centre.y <= one.bottom()
+    );
+    assert_eq!(m.focused(), Some(1));
 }

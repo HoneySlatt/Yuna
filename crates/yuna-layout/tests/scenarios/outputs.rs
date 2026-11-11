@@ -99,3 +99,23 @@ fn a_pinned_window_stays_in_view_when_its_output_goes() {
     assert!(m.info(2).pinned);
     assert!(m.shown(SIDE).contains(&2));
 }
+
+#[test]
+fn a_pinned_window_comes_back_into_view_when_a_seats_only_output_is_replaced() {
+    let mut m = Model::new();
+    m.ok(|l| l.focus_workspace(OWNER, "1"));
+    m.ok(|l| l.focus_workspace(OWNER, "2"));
+    m.open_with(
+        OWNER,
+        1,
+        OpenOptions {
+            floating: true,
+            ..OpenOptions::default()
+        },
+    );
+    m.ok(|l| l.set_pinned(w(1), true));
+    m.ok(|l| l.remove_output(MAIN));
+    m.ok(|l| l.add_output(OWNER, SIDE, output(0.0, 1920, 1080, 1.0)));
+    assert!(m.shown(SIDE).contains(&1));
+    assert!(m.info(1).pinned);
+}

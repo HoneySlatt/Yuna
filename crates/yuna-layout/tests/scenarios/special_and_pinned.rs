@@ -186,3 +186,16 @@ fn floating_and_pinned_windows_hide_while_a_fullscreen_window_holds_the_focus() 
     m.ok(|l| l.focus_window(w(2)));
     assert_eq!(m.shown(MAIN), vec![1, 2]);
 }
+
+/// The owner's decision (ADR-0019): nothing over a fullscreen window, the special workspace's
+/// included.
+#[test]
+fn a_pinned_window_hides_under_a_fullscreen_window_of_the_special_workspace() {
+    let mut m = Model::new();
+    m.open_with(OWNER, 1, floating());
+    m.ok(|l| l.set_pinned(w(1), true));
+    m.ok(|l| l.toggle_special(OWNER, "scratch"));
+    m.open(2);
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    assert_eq!(m.shown(MAIN), vec![2]);
+}

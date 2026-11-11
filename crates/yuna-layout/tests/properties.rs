@@ -372,7 +372,7 @@ fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
 
 /// Runs `ops` from two seats without outputs, checking every property after each step.
 fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
-    let mut layout = Layout::new(options);
+    let mut layout = Layout::new(options).expect("the strategy gives valid options");
     layout.add_seat(SeatId(1)).unwrap();
     layout.add_seat(SeatId(2)).unwrap();
     for (step, op) in ops.iter().enumerate() {

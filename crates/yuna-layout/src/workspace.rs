@@ -174,6 +174,14 @@ impl Workspace {
         }
     }
 
+    /// The width of `window`'s column and whether it is full width, in scrolling columns.
+    pub fn column_width(&self, window: WindowId) -> Option<(ColumnWidth, bool)> {
+        match &self.tiling {
+            TilingLayout::Scrolling(s) => s.column_width(window),
+            TilingLayout::Dwindle(_) => None,
+        }
+    }
+
     /// Adds `window` on top of the floating windows; with `focus`, focuses it, unless a fullscreen
     /// window holds the focus.
     pub fn add_floating(
@@ -338,34 +346,44 @@ impl Workspace {
     /// unless a fullscreen window holds the focus. Linear in the number of windows: `arrange`
     /// runs after every change.
     pub fn arrange(&self, area: &Area, out: &mut Vec<Arranged>) {
-        let mut placed = Vec::new();
-        // Few windows are fullscreen at once; one search per window would make this quadratic.
-        let fullscreen: Vec<WindowId> = match &self.tiling {
+        match &self.tiling {
             TilingLayout::Scrolling(s) => {
+                let mut placed = Vec::new();
                 s.arrange(area, &mut placed);
-                s.fullscreen_windows().collect()
+                out.extend(
+                    placed
+                        .into_iter()
+                        .map(|(window, rect, fullscreen)| Arranged {
+                            window,
+                            rect,
+                            tiled: true,
+                            fullscreen,
+                            pinned: false,
+                        }),
+                );
             }
             TilingLayout::Dwindle(d) => {
+                let mut placed = Vec::new();
                 d.arrange(area, &mut placed);
-                d.fullscreen_window().into_iter().collect()
+                let fullscreen = d.fullscreen_window();
+                out.extend(placed.into_iter().map(|(window, rect)| Arranged {
+                    window,
+                    rect,
+                    tiled: true,
+                    fullscreen: fullscreen == Some(window),
+                    pinned: false,
+                }));
             }
-        };
-        out.extend(placed.drain(..).map(|(window, rect)| Arranged {
-            window,
-            rect,
-            tiled: true,
-            fullscreen: fullscreen.contains(&window),
-            pinned: false,
-        }));
+        }
         if !self.fullscreen_covers() {
-            let pinned: Vec<WindowId> = self.floating.pinned().collect();
+            let mut placed = Vec::new();
             self.floating.arrange(area, &mut placed);
-            out.extend(placed.drain(..).map(|(window, rect)| Arranged {
+            out.extend(placed.into_iter().map(|(window, rect, pinned)| Arranged {
                 window,
                 rect,
                 tiled: false,
                 fullscreen: false,
-                pinned: pinned.contains(&window),
+                pinned,
             }));
         }
     }

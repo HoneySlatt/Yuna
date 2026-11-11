@@ -66,15 +66,23 @@ fn focus_switches_between_floating_and_tiled_windows() {
     assert_eq!(m.focused(), Some(1));
 }
 
-/// niri: docs/wiki/Floating-Windows.md:16, src/layout/workspace.rs:1487 (code).
+/// niri: src/layout/floating.rs:136-159 ("Numbers taken from Mutter").
 #[test]
-fn a_floating_window_stays_inside_the_working_area() {
+fn a_floating_window_may_hang_off_the_edge_but_stays_within_reach() {
     let mut m = Model::new();
     m.open_with(OWNER, 1, floating(None));
-    m.ok(|l| l.set_floating_rect(w(1), rect(1800.0, -50.0, 400.0, 300.0)));
-    assert_rect(m.rect(1), rect(1520.0, 0.0, 400.0, 300.0));
-    m.ok(|l| l.set_floating_rect(w(1), rect(0.0, 0.0, 5000.0, 5000.0)));
-    assert_rect(m.rect(1), rect(0.0, 0.0, 1920.0, 1080.0));
+    // Partly off the right edge: allowed, as in niri.
+    m.ok(|l| l.set_floating_rect(w(1), rect(1800.0, 100.0, 400.0, 300.0)));
+    assert_rect(m.rect(1), rect(1800.0, 100.0, 400.0, 300.0));
+    // Almost wholly off: a quarter of it, at most 75 units, stays on the working area.
+    m.ok(|l| l.set_floating_rect(w(1), rect(5000.0, -5000.0, 400.0, 300.0)));
+    assert_rect(
+        m.rect(1),
+        rect(1920.0 - 75.0, -(300.0 - 75.0), 400.0, 300.0),
+    );
+    // A window larger than the output keeps its size.
+    m.ok(|l| l.set_floating_rect(w(1), rect(0.0, 0.0, 5000.0, 3000.0)));
+    assert_eq!((m.rect(1).w, m.rect(1).h), (5000.0, 3000.0));
 }
 
 /// niri: docs/wiki/Floating-Windows.md:12-14.
@@ -92,4 +100,15 @@ fn directional_focus_among_floating_windows_follows_their_places() {
     assert_eq!(m.focused(), Some(1));
     // Focusing raises: window 1 is now drawn last.
     assert_eq!(m.shown(MAIN).last(), Some(&1));
+}
+
+/// niri: src/layout/floating.rs:412-418 (a window leaving the tiles takes its own size).
+#[test]
+fn a_fullscreen_window_floated_takes_its_tiled_size_not_the_outputs() {
+    let mut m = Model::new();
+    m.open(1);
+    m.ok(|l| l.set_fullscreen(w(1), true));
+    m.ok(|l| l.set_floating(w(1), true));
+    assert!(!m.info(1).fullscreen);
+    assert_eq!((m.rect(1).w, m.rect(1).h), (936.0, 1048.0));
 }

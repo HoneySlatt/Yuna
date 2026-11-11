@@ -16,7 +16,7 @@ fn three_columns() -> Model {
     m
 }
 
-/// niri: src/layout/scrolling.rs:963, src/layout/tests/fullscreen.rs:464.
+/// niri: src/layout/scrolling.rs:963-978 (code).
 #[test]
 fn a_new_window_opens_right_of_the_focused_one_and_takes_focus() {
     let mut m = Model::new();
@@ -125,7 +125,7 @@ fn closing_a_window_above_the_focused_one_keeps_the_focus() {
     assert_eq!(m.focused(), Some(1));
 }
 
-/// niri: resources/default-config.kdl:542-546, src/layout/tests.rs:2441, src/layout/tests.rs:3673.
+/// niri: resources/default-config.kdl:542-546.
 #[test]
 fn consume_or_expel_moves_a_window_into_and_out_of_a_column() {
     let mut m = Model::new();
@@ -147,7 +147,7 @@ fn consume_or_expel_moves_a_window_into_and_out_of_a_column() {
     assert_eq!(m.focused(), Some(2));
 }
 
-/// niri: resources/default-config.kdl:545-546, src/layout/tests/fullscreen.rs:39.
+/// niri: resources/default-config.kdl:542-546.
 #[test]
 fn consume_or_expel_right_mirrors_left() {
     let mut m = Model::new();
@@ -191,8 +191,7 @@ fn moving_a_column_swaps_it_with_its_neighbour_and_focus_follows() {
     assert_eq!(m.focused(), Some(3));
 }
 
-/// niri: src/layout/tests.rs:408 (`Op`), docs/wiki/Configuration:-Layout.md (proportions with
-/// gaps).
+/// niri: docs/wiki/Configuration:-Layout.md:182-183.
 #[test]
 fn proportions_count_the_gaps_so_two_halves_fill_the_output() {
     let mut m = Model::new();
@@ -203,7 +202,7 @@ fn proportions_count_the_gaps_so_two_halves_fill_the_output() {
     assert_eq!(1920.0 - m.rect(2).right(), 16.0);
 }
 
-/// niri: src/layout/tests.rs:3342, src/layout/tests.rs:3389.
+/// niri: src/layout/tests.rs:3389, src/layout/scrolling.rs:4796-4842 (code).
 #[test]
 fn preset_widths_cycle_and_a_manual_change_restarts_the_cycle() {
     let mut m = Model::new();
@@ -240,7 +239,7 @@ fn a_full_width_column_spans_the_working_area_and_goes_back_to_its_width() {
     assert_eq!(m.rect(2).w, HALF);
 }
 
-/// niri: src/layout/scrolling.rs:5457 (code).
+/// niri: src/layout/scrolling.rs:5464-5466 (code).
 #[test]
 fn a_column_wider_than_the_view_shows_from_its_left_edge() {
     let mut m = Model::new();
@@ -253,7 +252,22 @@ fn a_column_wider_than_the_view_shows_from_its_left_edge() {
             ..OpenOptions::default()
         },
     );
-    assert_rect(m.rect(2), rect(16.0, 16.0, 3000.0, TALL));
+    assert_rect(m.rect(2), rect(0.0, 16.0, 3000.0, TALL));
+}
+
+/// niri: src/layout/scrolling.rs:5468-5470 (the padding shrinks to fit).
+#[test]
+fn a_column_almost_as_wide_as_the_view_shows_whole() {
+    let mut m = Model::new();
+    m.open_with(
+        OWNER,
+        1,
+        OpenOptions {
+            width: Some(ColumnWidth::Fixed(1910.0)),
+            ..OpenOptions::default()
+        },
+    );
+    assert_rect(m.rect(1), rect(5.0, 16.0, 1910.0, TALL));
 }
 
 #[test]
@@ -289,4 +303,73 @@ fn at_scale_one_and_a_half_every_edge_lands_on_a_physical_pixel() {
             );
         }
     }
+}
+
+/// niri: src/layout/scrolling.rs:1848-1855 (an expelled window keeps its column's widths).
+#[test]
+fn an_expelled_window_keeps_its_columns_full_width() {
+    let mut m = Model::new();
+    m.open(1);
+    m.open(2);
+    m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
+    m.ok(|l| l.set_full_width(w(2), true));
+    m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
+    assert!(m.info(2).full_width);
+    assert!(m.info(1).full_width);
+}
+
+/// niri: src/layout/scrolling.rs:1210-1214 (forgotten only when a column left of the focus goes).
+#[test]
+fn a_window_closed_right_after_it_opened_gives_focus_back_though_another_closed_meanwhile() {
+    let mut m = Model::new();
+    for n in [1, 2, 4] {
+        m.open(n);
+    }
+    m.ok(|l| l.focus(OWNER, Direction::Left));
+    m.ok(|l| l.focus(OWNER, Direction::Left));
+    m.open(3);
+    m.ok(|l| l.close_window(w(4)));
+    m.ok(|l| l.close_window(w(3)));
+    assert_eq!(m.focused(), Some(1));
+}
+
+/// niri: src/layout/scrolling.rs:790-797 and 3774-3779 (the view kept for leaving fullscreen
+/// goes when another column takes the focus).
+#[test]
+fn leaving_fullscreen_does_not_bring_back_a_view_kept_for_another_column() {
+    let mut m = Model::new();
+    m.open(1);
+    m.open(2);
+    m.ok(|l| l.focus(OWNER, Direction::Left));
+    m.ok(|l| l.set_fullscreen(w(1), true));
+    m.ok(|l| l.focus(OWNER, Direction::Right));
+    m.ok(|l| l.set_fullscreen(w(1), false));
+    m.open(3);
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    m.ok(|l| l.focus(OWNER, Direction::Left));
+    m.ok(|l| l.set_fullscreen(w(2), false));
+    assert_eq!(m.rect(2).x, 16.0);
+}
+
+/// A column holding more windows than its height fits gives the last ones no height, inside
+/// the working area, rather than pushing them below the output.
+#[test]
+fn a_column_too_full_for_its_height_stays_inside_the_working_area() {
+    let mut m = Model::with(Options {
+        gap: 300.0,
+        ..Options::default()
+    });
+    m.open(0);
+    for n in 1..4 {
+        m.open(n);
+        m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
+    }
+    assert!(m.rect(3).bottom() <= 1080.0);
+    let mut m = Model::new();
+    m.open(0);
+    for n in 1..68 {
+        m.open(n);
+        m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
+    }
+    assert!(m.rect(67).bottom() <= 1080.0);
 }

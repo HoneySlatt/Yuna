@@ -132,6 +132,21 @@ fn workspaces_are_stacked_and_relative_switches_stop_at_the_ends() {
     assert_eq!(m.workspaces(MAIN).1, 0);
 }
 
+/// niri: src/layout/monitor.rs:805-816 (a moved window keeps its column's width and full width).
+#[test]
+fn a_window_moved_to_another_workspace_keeps_its_column_width_and_full_width() {
+    let mut m = desk();
+    m.ok(|l| l.focus_workspace(OWNER, "1"));
+    m.open(1);
+    m.ok(|l| l.cycle_preset_width(w(1), true));
+    let width = m.rect(1).w;
+    m.ok(|l| l.move_to_workspace(OWNER, "3"));
+    assert_eq!(m.rect(1).w, width);
+    m.ok(|l| l.set_full_width(w(1), true));
+    m.ok(|l| l.move_to_workspace(OWNER, "5"));
+    assert!(m.info(1).full_width);
+}
+
 /// niri: `move-window-to-workspace` follows the window by default.
 #[test]
 fn a_window_moved_to_a_workspace_takes_the_seat_with_it_and_keeps_floating() {
@@ -158,15 +173,14 @@ fn a_window_moved_to_a_workspace_takes_the_seat_with_it_and_keeps_floating() {
 }
 
 #[test]
-fn a_removed_workspace_loses_its_name_and_goes_once_left_but_not_while_it_holds_windows() {
+fn a_removed_workspace_loses_its_name_keeps_its_windows_and_goes_once_empty_and_left() {
     let mut m = desk();
     m.ok(|l| l.focus_workspace(OWNER, "3"));
     m.open(1);
-    m.refused(yuna_layout::LayoutError::NotEmpty, |l| {
-        l.remove_workspace(OWNER, "3")
-    });
-    m.ok(|l| l.close_window(w(1)));
+    // niri: docs/wiki/Configuration:-Named-Workspaces.md:37.
     m.ok(|l| l.remove_workspace(OWNER, "3"));
+    assert_eq!(m.info(1).workspace, None);
+    m.ok(|l| l.close_window(w(1)));
     assert_eq!(
         m.workspaces(MAIN),
         (vec!["1".into(), "-".into(), "5".into()], 1)

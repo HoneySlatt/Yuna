@@ -99,6 +99,53 @@ fn nonsense_numbers_are_refused() {
 }
 
 #[test]
+fn nonsense_options_are_refused() {
+    use yuna_layout::{Layout, Options};
+    let bad = [
+        Options {
+            gap: -1.0,
+            ..Options::default()
+        },
+        Options {
+            gap: f64::NAN,
+            ..Options::default()
+        },
+        Options {
+            preset_widths: vec![ColumnWidth::Proportion(2.0)],
+            ..Options::default()
+        },
+        Options {
+            default_width: ColumnWidth::Fixed(1e20),
+            ..Options::default()
+        },
+    ];
+    for options in bad {
+        assert_eq!(Layout::new(options).err(), Some(LayoutError::InvalidValue));
+    }
+}
+
+#[test]
+fn huge_numbers_are_refused() {
+    let mut m = Model::new();
+    m.refused(LayoutError::InvalidValue, |l| {
+        l.open_window(
+            OWNER,
+            w(1),
+            OpenOptions {
+                width: Some(ColumnWidth::Fixed(1e20)),
+                ..OpenOptions::default()
+            },
+        )
+    });
+    m.refused(LayoutError::InvalidValue, |l| {
+        l.add_output(OWNER, SIDE, output(1e12, 1920, 1080, 1.0))
+    });
+    m.refused(LayoutError::InvalidValue, |l| {
+        l.add_output(OWNER, SIDE, output(0.0, u32::MAX, 1080, 1.0))
+    });
+}
+
+#[test]
 fn a_thousand_windows_open_and_close_with_every_invariant_kept() {
     let mut m = Model::new();
     for n in 0..1000 {

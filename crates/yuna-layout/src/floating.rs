@@ -51,18 +51,17 @@ impl Floating {
         self.focused
     }
 
-    /// Adds `window` on top, focused only if no other window floats. `rect` is where it was when it last floated, relative to the working
-    /// area; without it, the window is centred at `size`. Either way it is made to fit the working
-    /// area, and to show whole when it can.
+    /// Adds `window` on top, focused only if no other window floats. `rect` is where it was when
+    /// it last floated, relative to the working area; without it, the window is centred at
+    /// `size`. Either way enough of it stays on the working area to grab it (see [`fit`]).
     pub fn add(&mut self, window: WindowId, rect: Option<Rect>, size: Size, area: Option<&Area>) {
         let rect = match (rect, area) {
             (Some(rect), Some(area)) => fit(rect, area),
             (Some(rect), None) => rect,
             (None, Some(area)) => {
-                let w = size.w.min(area.working.w).max(1.0);
-                let h = size.h.min(area.working.h).max(1.0);
+                let (w, h) = (size.w.max(1.0), size.h.max(1.0));
                 let rect = Rect::new((area.working.w - w) / 2.0, (area.working.h - h) / 2.0, w, h);
-                area.scale.snap_rect(rect)
+                fit(rect, area)
             }
             (None, None) => Rect::new(0.0, 0.0, size.w.max(1.0), size.h.max(1.0)),
         };
@@ -142,8 +141,9 @@ impl Floating {
         nearest_in_direction(from, direction, &others)
     }
 
-    /// Every window with its rectangle on the output, bottom to top, snapped to the grid.
-    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
+    /// Every window with its rectangle on the output and whether it is pinned, bottom to top,
+    /// snapped to the grid.
+    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect, bool)>) {
         for f in &self.windows {
             let rect = Rect::new(
                 area.working.x + f.rect.x,
@@ -151,7 +151,7 @@ impl Floating {
                 f.rect.w,
                 f.rect.h,
             );
-            out.push((f.window, area.scale.snap_rect(rect)));
+            out.push((f.window, area.scale.snap_rect(rect), f.pinned));
         }
     }
 
@@ -163,12 +163,15 @@ impl Floating {
     }
 }
 
-/// `rect`, relative to the working area, made no larger than it and moved to show whole, on the
-/// physical grid.
+/// `rect`, relative to the working area, moved so that enough of it stays on the working area to
+/// grab it, on the physical grid. Its size is kept. As niri, after Mutter: on each axis, a quarter
+/// of the window stays on, between 10 and 75 units.
 fn fit(rect: Rect, area: &Area) -> Rect {
-    let w = rect.w.clamp(1.0, area.working.w.max(1.0));
-    let h = rect.h.clamp(1.0, area.working.h.max(1.0));
-    let x = rect.x.clamp(0.0, (area.working.w - w).max(0.0));
-    let y = rect.y.clamp(0.0, (area.working.h - h).max(0.0));
+    let (w, h) = (rect.w.max(1.0), rect.h.max(1.0));
+    let off_x = (w - (w / 4.0).clamp(10.0, 75.0)).max(0.0);
+    let off_y = (h - (h / 4.0).clamp(10.0, 75.0)).max(0.0);
+    let clamp = |v: f64, low: f64, high: f64| v.max(low).min(high.max(low));
+    let x = clamp(rect.x, -off_x, area.working.w - w + off_x);
+    let y = clamp(rect.y, -off_y, area.working.h - h + off_y);
     area.scale.snap_rect(Rect::new(x, y, w, h))
 }

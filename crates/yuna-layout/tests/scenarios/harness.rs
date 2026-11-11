@@ -57,7 +57,7 @@ impl Model {
     /// No seat, no output.
     pub fn bare(options: Options) -> Model {
         Model {
-            layout: Layout::new(options),
+            layout: Layout::new(options).expect("valid options"),
         }
     }
 

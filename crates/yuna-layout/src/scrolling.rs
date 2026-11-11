@@ -78,6 +78,14 @@ impl Column {
         }
     }
 
+    /// A column for a window leaving this one, with its width and full width, as niri does.
+    fn split_off(&self, window: WindowId) -> Column {
+        Column {
+            full_width: self.full_width,
+            ..Column::new(window, self.width)
+        }
+    }
+
     /// The column's width on screen, in logical units.
     fn tile_width(&self, area: &Area) -> f64 {
         if self.fullscreen {
@@ -226,7 +234,7 @@ impl Scrolling {
         let Some((ci, wi)) = self.locate(window) else {
             return false;
         };
-        let before_open = self.before_open.take().filter(|b| b.window == window);
+        let reopen = self.before_open.filter(|b| b.window == window);
         let column = &mut self.columns[ci];
         if column.windows.len() > 1 {
             column.windows.remove(wi);
@@ -239,13 +247,16 @@ impl Scrolling {
         let removed_width = area.map(|a| column.tile_width(a) + a.gap);
         let was_fullscreen_focus = ci == self.focused && column.fullscreen;
         self.columns.remove(ci);
-        if let Some(before) = before_open {
+        if let Some(before) = reopen {
             // The window that just opened closes again: focus and view go back as they were.
+            self.before_open = None;
             self.focused = before
                 .focused_column
                 .min(self.columns.len().saturating_sub(1));
             self.view_x = before.view_x;
         } else if ci < self.focused {
+            // Indices shift: the point to go back to is lost, as in niri.
+            self.before_open = None;
             self.focused -= 1;
             if let Some(width) = removed_width {
                 self.view_x -= width;
@@ -357,9 +368,9 @@ impl Scrolling {
             if column.focused == column.windows.len() {
                 column.focused -= 1;
             }
-            let width = column.width;
+            let new_column = column.split_off(window);
             let index = if left { ci } else { ci + 1 };
-            self.columns.insert(index, Column::new(window, width));
+            self.columns.insert(index, new_column);
             self.focused = index;
         } else {
             let target = if left {
@@ -394,6 +405,12 @@ impl Scrolling {
         true
     }
 
+    /// The width of `window`'s column and whether it is full width.
+    pub fn column_width(&self, window: WindowId) -> Option<(ColumnWidth, bool)> {
+        let (ci, _) = self.locate(window)?;
+        Some((self.columns[ci].width, self.columns[ci].full_width))
+    }
+
     /// Whether `window`'s column is full width.
     pub fn is_full_width(&self, window: WindowId) -> bool {
         self.locate(window)
@@ -426,12 +443,12 @@ impl Scrolling {
                 if column.focused > wi || column.focused == column.windows.len() {
                     column.focused -= 1;
                 }
-                let width = column.width;
+                let new_column = column.split_off(window);
                 if self.focused > ci || had_focus {
                     self.focused += 1;
                 }
                 ci += 1;
-                self.columns.insert(ci, Column::new(window, width));
+                self.columns.insert(ci, new_column);
             }
             if ci == self.focused {
                 self.view_before_fullscreen = Some(self.view_x);
@@ -502,9 +519,6 @@ impl Scrolling {
         let Some((ci, _)) = self.locate(window) else {
             return false;
         };
-        if !delta.is_finite() {
-            return true;
-        }
         let share = self.columns[ci].width.as_proportion(area) + delta;
         self.change_width_keeping_focus(ci, Some(area), |column| {
             column.width = ColumnWidth::Proportion(share.clamp(ColumnWidth::MIN_PROPORTION, 1.0));
@@ -532,11 +546,16 @@ impl Scrolling {
         self.fit_view(area);
     }
 
-    /// Moves the view the least needed for the focused column to show whole, a gap from the edge
-    /// it comes in from; a column wider than the view shows from its left edge; a fullscreen
-    /// column takes exactly the output. Without an area, the workspace is not shown and the view
-    /// waits until it is.
+    /// Moves the view the least needed for the focused column to show whole, with a gap of
+    /// padding on the side it comes in from, less when the column is nearly as wide as the view; a
+    /// column wider than the view shows from its left edge, flush; a fullscreen column takes
+    /// exactly the output (niri's rules, with centring "never"). Without an area, the workspace is
+    /// not shown and the view waits until it is. The view kept for leaving fullscreen is dropped
+    /// once the focused column is not fullscreen.
     pub fn fit_view(&mut self, area: Option<&Area>) {
+        if !self.focused_is_fullscreen() {
+            self.view_before_fullscreen = None;
+        }
         let Some(area) = area else { return };
         if self.columns.is_empty() {
             self.view_x = -area.gap;
@@ -546,13 +565,19 @@ impl Scrolling {
         let column = &self.columns[self.focused];
         let width = column.tile_width(area);
         let view_width = area.working.w;
-        let gap = area.gap;
         if column.fullscreen {
             self.view_x = x - (area.output.x - area.working.x);
-        } else if width + 2.0 * gap > view_width || x - gap < self.view_x {
-            self.view_x = x - gap;
-        } else if x + width + gap > self.view_x + view_width {
-            self.view_x = x + width + gap - view_width;
+        } else if width >= view_width {
+            self.view_x = x;
+        } else {
+            let padding = ((view_width - width) / 2.0).clamp(0.0, area.gap);
+            let left = x - padding;
+            let right = x + width + padding;
+            if left < self.view_x {
+                self.view_x = left;
+            } else if right > self.view_x + view_width {
+                self.view_x = right - view_width;
+            }
         }
         self.view_x = area.scale.snap(self.view_x);
     }
@@ -564,33 +589,39 @@ impl Scrolling {
         };
         let x = self.column_x(self.focused, area) - self.view_x;
         let width = column.tile_width(area);
+        let view_width = area.working.w;
         let tolerance = 1.0 / area.scale.get() + crate::geometry::EPSILON;
         if column.fullscreen {
             return (area.working.x + x - area.output.x).abs() < tolerance;
         }
-        if width + 2.0 * area.gap > area.working.w {
-            return (x - area.gap).abs() < tolerance;
+        if width >= view_width {
+            return x.abs() < tolerance;
         }
-        x - area.gap > -tolerance && x + width + area.gap < area.working.w + tolerance
+        let padding = ((view_width - width) / 2.0).clamp(0.0, area.gap);
+        x - padding > -tolerance && x + width + padding < view_width + tolerance
     }
 
-    /// Every window with its rectangle, left to right and top to bottom, snapped to the grid.
-    /// Columns scrolled out of view are included, outside the output.
-    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
+    /// Every window with its rectangle and whether it is fullscreen, left to right and top to
+    /// bottom, snapped to the grid. Columns scrolled out of view are included, outside the output.
+    /// A column holding more windows than its height fits, gaps included, gives the last ones no
+    /// height rather than letting them leave the working area.
+    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect, bool)>) {
         let mut x = area.working.x - self.view_x;
+        let bottom = area.working.bottom();
         for column in &self.columns {
             let width = column.tile_width(area);
             if column.fullscreen {
                 let rect = Rect::new(x, area.output.y, width, area.output.h);
-                out.push((column.windows[0], area.scale.snap_rect(rect)));
+                out.push((column.windows[0], area.scale.snap_rect(rect), true));
             } else {
                 let count = column.windows.len() as f64;
-                let usable = area.working.h - 2.0 * area.gap - (count - 1.0) * area.gap;
+                let usable = area.working.h - (count + 1.0) * area.gap;
                 let height = (usable / count).max(0.0);
                 for (i, &window) in column.windows.iter().enumerate() {
-                    let y = area.working.y + area.gap + i as f64 * (height + area.gap);
-                    let rect = Rect::new(x, y, width, height);
-                    out.push((window, area.scale.snap_rect(rect)));
+                    let y =
+                        (area.working.y + area.gap + i as f64 * (height + area.gap)).min(bottom);
+                    let rect = Rect::new(x, y, width, height.min(bottom - y));
+                    out.push((window, area.scale.snap_rect(rect), false));
                 }
             }
             x += width + area.gap;
@@ -617,6 +648,11 @@ impl Scrolling {
             {
                 return Err(format!("column {i} has proportion {share}"));
             }
+        }
+        if self.view_before_fullscreen.is_some() && !self.focused_is_fullscreen() {
+            return Err(
+                "a view is kept for leaving fullscreen, but the focused column is not".into(),
+            );
         }
         if let Some(area) = area
             && !self.focused_is_in_view(area)

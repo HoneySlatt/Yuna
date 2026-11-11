@@ -76,21 +76,29 @@ struct Moving {
     window: WindowId,
     floating: Option<Rect>,
     fullscreen: bool,
+    /// Its column's width and full width, kept as niri keeps them.
+    column: Option<(ColumnWidth, bool)>,
 }
 
 impl Layout {
-    /// An empty model: no seat, no output, no window.
-    pub fn new(options: Options) -> Layout {
-        Layout {
+    /// An empty model: no seat, no output, no window. Refused if an option is not finite or out
+    /// of its range: a gap below 0 or above 1,000; a proportion below
+    /// [`ColumnWidth::MIN_PROPORTION`] or above 1, or a fixed width above 100,000; an empty
+    /// floating size, or one above 100,000.
+    pub fn new(options: Options) -> Result<Layout, LayoutError> {
+        let valid = options.gap.is_finite()
+            && (0.0..=MAX_GAP).contains(&options.gap)
+            && valid_width(options.default_width)
+            && options.preset_widths.iter().all(|&w| valid_width(w))
+            && valid_size(options.default_floating_size);
+        if !valid {
+            return Err(LayoutError::InvalidValue);
+        }
+        Ok(Layout {
             options,
             seats: Vec::new(),
             windows: HashMap::new(),
-        }
-    }
-
-    /// The settings.
-    pub fn options(&self) -> &Options {
-        &self.options
+        })
     }
 
     // ----- Lookups -----
@@ -245,27 +253,11 @@ impl Layout {
 
     // ----- Keeping the tree tidy -----
 
-    /// Shows workspace `index` on output `oi` of seat `si`, the pinned windows moving with the
-    /// view. A special workspace shown over the output stays, as in Hyprland
+    /// Shows workspace `index` on output `oi` of seat `si`; `tidy` then brings the output's pinned
+    /// windows over to it. A special workspace shown over the output stays, as in Hyprland
     /// (`binds:hide_special_on_workspace_change` false).
     fn show(&mut self, si: usize, oi: usize, index: usize) {
-        let gap = self.options.gap;
-        let output = &mut self.seats[si].outputs[oi];
-        if output.shown == index {
-            return;
-        }
-        let area = output.area(gap);
-        let from = output.shown;
-        let pinned: Vec<WindowId> = output.workspaces[from].floating.pinned().collect();
-        for window in pinned {
-            // A pinned window follows the view, on top, without taking the focus.
-            if let Some(Some((rect, _))) = output.workspaces[from].remove(window, Some(&area)) {
-                let to = &mut output.workspaces[index];
-                to.add_floating(window, Some(rect), rect.size(), Some(&area), false);
-                to.floating.set_pinned(window, true);
-            }
-        }
-        output.shown = index;
+        self.seats[si].outputs[oi].shown = index;
     }
 
     /// Hides the special workspace shown over output `oi`, if any, so that a window beneath it can
@@ -316,6 +308,7 @@ impl Layout {
         let options = self.options.clone();
         let seat = &mut self.seats[si];
         for output in &mut seat.outputs {
+            gather_pinned(output, options.gap);
             let last = output.workspaces.len().saturating_sub(1);
             for i in (0..output.workspaces.len()).rev() {
                 let ws = &output.workspaces[i];
@@ -351,6 +344,22 @@ impl Layout {
         seat.detached.retain(|w| w.name.is_some() || !w.is_empty());
         if seat.active >= seat.outputs.len() {
             seat.active = 0;
+        }
+        // A window floats back on leaving fullscreen only through `set_fullscreen`; fullscreen
+        // ended any other way (focus moving in dwindle, a window joining its column, a tiling
+        // switch) leaves it tiled, so the promise is dropped.
+        let seat_id = seat.id;
+        let stale: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, r)| r.seat == seat_id && r.float_after_fullscreen)
+            .map(|(&w, _)| w)
+            .filter(|&w| !self.window(w).is_some_and(|info| info.fullscreen))
+            .collect();
+        for window in stale {
+            if let Some(record) = self.windows.get_mut(&window) {
+                record.float_after_fullscreen = false;
+            }
         }
     }
 
@@ -397,10 +406,11 @@ impl Layout {
         }
         let scale = Scale::new(config.scale).ok_or(LayoutError::InvalidValue)?;
         let position = config.position;
-        if !position.x.is_finite()
-            || !position.y.is_finite()
-            || config.physical_width == 0
-            || config.physical_height == 0
+        let physical_ok = |pixels: u32| (1.0..=MAX_SIZE).contains(&f64::from(pixels));
+        if !valid_coordinate(position.x)
+            || !valid_coordinate(position.y)
+            || !physical_ok(config.physical_width)
+            || !physical_ok(config.physical_height)
         {
             return Err(LayoutError::InvalidValue);
         }
@@ -479,18 +489,8 @@ impl Layout {
             self.tidy(si);
             return Ok(());
         };
-        // The pinned windows stay in view: they move to the workspace the target shows.
+        // The pinned windows go with them; `tidy` brings them over to the workspace shown.
         let area = target.area(gap);
-        let target_shown = target.shown;
-        if let Some(from) = workspaces.get_mut(shown) {
-            for window in from.floating.pinned().collect::<Vec<_>>() {
-                if let Some(Some((rect, _))) = from.remove(window, None) {
-                    let to = &mut target.workspaces[target_shown];
-                    to.add_floating(window, Some(rect), rect.size(), Some(&area), false);
-                    to.floating.set_pinned(window, true);
-                }
-            }
-        }
         for mut workspace in workspaces {
             workspace.fit_view(&area);
             target.workspaces.push(workspace);
@@ -548,17 +548,14 @@ impl Layout {
         Ok(())
     }
 
-    /// Removes a named workspace: it loses its name, and goes as soon as it is not shown.
-    /// Refused while it holds windows.
+    /// Removes a named workspace: it loses its name and keeps its windows, as in niri; it goes once
+    /// it is empty and not shown.
     pub fn remove_workspace(&mut self, seat: SeatId, name: &str) -> Result<(), LayoutError> {
         let si = self.seat_index(seat)?;
         let slot = self
             .named_slot(si, name)
             .ok_or_else(|| LayoutError::UnknownWorkspace(name.to_owned()))?;
         let (workspace, _) = self.workspace_mut(si, slot);
-        if !workspace.is_empty() {
-            return Err(LayoutError::NotEmpty);
-        }
         workspace.name = None;
         self.tidy(si);
         Ok(())
@@ -825,8 +822,8 @@ impl Layout {
     }
 
     /// Moves `window` from `source` to `target` in the same seat, keeping it floating or tiled,
-    /// and fullscreen; a pinned window is unpinned. With `follow`, the seat shows the target and
-    /// focuses the window.
+    /// fullscreen, and its column's width and full width; a pinned window is unpinned. With
+    /// `follow`, the seat shows the target and focuses the window.
     fn move_window(
         &mut self,
         si: usize,
@@ -837,6 +834,7 @@ impl Layout {
     ) {
         let (from, area) = self.workspace_mut(si, source);
         let fullscreen = from.is_fullscreen(window);
+        let column = from.column_width(window);
         let Some(removed) = from.remove(window, area.as_ref()) else {
             return;
         };
@@ -844,6 +842,7 @@ impl Layout {
             window,
             floating: removed.map(|(rect, _)| rect),
             fullscreen,
+            column,
         };
         self.insert_window(si, target, moving);
         self.close_special_if_emptied(si, source);
@@ -876,7 +875,11 @@ impl Layout {
                 workspace.add_floating(moving.window, Some(rect), rect.size(), area.as_ref(), true);
             }
             None => {
-                workspace.add_tiled(moving.window, options.default_width, area.as_ref());
+                let (width, full_width) = moving.column.unwrap_or((options.default_width, false));
+                workspace.add_tiled(moving.window, width, area.as_ref());
+                if let (true, TilingLayout::Scrolling(s)) = (full_width, &mut workspace.tiling) {
+                    s.set_full_width(moving.window, true, area.as_ref());
+                }
                 if moving.fullscreen {
                     set_tiled_fullscreen(workspace, moving.window, true, area.as_ref());
                 }
@@ -929,7 +932,8 @@ impl Layout {
                 seat,
                 fake_fullscreen: false,
                 floating_rect: None,
-                float_after_fullscreen: false,
+                // As niri: a window opened floating and fullscreen floats on leaving fullscreen.
+                float_after_fullscreen: options.floating && options.fullscreen,
             },
         );
         let home = match slot {
@@ -998,11 +1002,12 @@ impl Layout {
         let is_tiled = workspace.is_tiled(window);
         let mut new_rect = None;
         if floating && is_tiled {
+            // Out of fullscreen first, so that its tiled size, not the output's, is measured.
+            set_tiled_fullscreen(workspace, window, false, area.as_ref());
             let size = area
                 .as_ref()
                 .and_then(|area| tiled_rect(workspace, window, area))
                 .map_or(default_size, |r| r.size());
-            set_tiled_fullscreen(workspace, window, false, area.as_ref());
             let was_focused = workspace.focused() == Some(window);
             workspace.remove(window, area.as_ref());
             workspace.add_floating(window, saved_rect, size, area.as_ref(), was_focused);
@@ -1027,7 +1032,7 @@ impl Layout {
     /// Moves and resizes a floating window; `rect` is relative to the working area's top-left
     /// corner, and the window is kept inside it. Refused for a tiled window.
     pub fn set_floating_rect(&mut self, window: WindowId, rect: Rect) -> Result<(), LayoutError> {
-        if !(rect.x.is_finite() && rect.y.is_finite() && valid_size(rect.size())) {
+        if !(valid_coordinate(rect.x) && valid_coordinate(rect.y) && valid_size(rect.size())) {
             return Err(LayoutError::InvalidValue);
         }
         let (si, slot) = self.find_window(window)?;
@@ -1059,12 +1064,15 @@ impl Layout {
         let mut float_after = record.as_ref().is_some_and(|r| r.float_after_fullscreen);
         let mut saved_rect = record.as_ref().and_then(|r| r.floating_rect);
         if fullscreen {
+            if !workspace.is_fullscreen(window) {
+                // As niri: whether it floats back is decided at each entry into fullscreen.
+                float_after = !workspace.is_tiled(window);
+            }
             if !workspace.is_tiled(window) {
                 if let Some(Some((rect, _))) = workspace.remove(window, area.as_ref()) {
                     saved_rect = Some(rect);
                 }
                 workspace.add_tiled(window, default_width, area.as_ref());
-                float_after = true;
             }
             set_tiled_fullscreen(workspace, window, true, area.as_ref());
         } else if workspace.is_fullscreen(window) {
@@ -1231,12 +1239,17 @@ impl Layout {
         o.workspaces[o.shown].arrange(&area, &mut raw);
         let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
         let mut placed: Vec<Placed> = unpinned.into_iter().map(place).collect();
+        let mut special_covers = false;
         if let Some(special) = &o.special {
             let mut raw = Vec::new();
             special.arrange(&area, &mut raw);
             placed.extend(raw.into_iter().map(place));
+            special_covers = special.fullscreen_covers();
         }
-        placed.extend(pinned.into_iter().map(place));
+        // A fullscreen window of the special workspace hides them too: nothing over a game.
+        if !special_covers {
+            placed.extend(pinned.into_iter().map(place));
+        }
         Ok(placed)
     }
 
@@ -1308,8 +1321,7 @@ impl Layout {
                 self.check_output(output, &area)?;
                 for (i, ws) in output.workspaces.iter().enumerate() {
                     names.extend(ws.name.as_deref());
-                    // Views are fitted only on shown workspaces' areas; hidden ones too, since
-                    // tidy fits every workspace of an output.
+                    // `tidy` fits the view of every workspace of an output, shown or not.
                     ws.check(Some(&area))
                         .map_err(|e| format!("workspace {i} of output {:?}: {e}", output.id))?;
                     if i != output.shown && ws.floating.pinned().next().is_some() {
@@ -1368,6 +1380,28 @@ impl Layout {
             match self.windows.get(window) {
                 Some(record) if record.seat == *seat => {}
                 _ => return Err(format!("window {window:?} is placed on the wrong seat")),
+            }
+        }
+        for seat in &self.seats {
+            let (Some(focused), Some(output)) =
+                (self.focused(seat.id), self.active_output(seat.id))
+            else {
+                continue;
+            };
+            let drawn = self.arrange(output).map_err(|e| e.to_string())?;
+            if !drawn.iter().any(|p| p.window == focused && p.activated) {
+                return Err(format!(
+                    "seat {:?} focuses {focused:?}, which is not drawn",
+                    seat.id
+                ));
+            }
+        }
+        for (window, record) in &self.windows {
+            if record.float_after_fullscreen && !self.window(*window).is_some_and(|i| i.fullscreen)
+            {
+                return Err(format!(
+                    "{window:?} would float back, but it is not fullscreen"
+                ));
             }
         }
         Ok(())
@@ -1465,6 +1499,26 @@ impl Layout {
     }
 }
 
+/// Brings the pinned windows of an output's workspaces over to the workspace it shows, on top,
+/// without taking the focus: a pinned window shows over whichever workspace its output shows.
+fn gather_pinned(output: &mut Output, gap: f64) {
+    let area = output.area(gap);
+    let shown = output.shown;
+    for index in 0..output.workspaces.len() {
+        if index == shown {
+            continue;
+        }
+        let pinned: Vec<WindowId> = output.workspaces[index].floating.pinned().collect();
+        for window in pinned {
+            if let Some(Some((rect, _))) = output.workspaces[index].remove(window, Some(&area)) {
+                let to = &mut output.workspaces[shown];
+                to.add_floating(window, Some(rect), rect.size(), Some(&area), false);
+                to.floating.set_pinned(window, true);
+            }
+        }
+    }
+}
+
 /// Records the windows of a workspace as placed on `seat`; a window placed twice is an error.
 fn record_windows(
     seen: &mut HashMap<WindowId, SeatId>,
@@ -1510,13 +1564,28 @@ fn tiled_rect(workspace: &Workspace, window: WindowId, area: &Area) -> Option<Re
         .map(|a| a.rect)
 }
 
+/// The widest size, in logical units, a window or an output may have: 25 times a 4K output's
+/// width at scale 1. Beyond it, numbers mean nothing and only push other windows away.
+const MAX_SIZE: f64 = 100_000.0;
+/// The farthest an output or a floating window may lie from the origin, in logical units.
+const MAX_COORDINATE: f64 = 1_000_000.0;
+/// The widest gap.
+const MAX_GAP: f64 = 1_000.0;
+
 fn valid_size(size: Size) -> bool {
-    size.w.is_finite() && size.h.is_finite() && size.w > 0.0 && size.h > 0.0
+    (f64::MIN_POSITIVE..=MAX_SIZE).contains(&size.w)
+        && (f64::MIN_POSITIVE..=MAX_SIZE).contains(&size.h)
 }
 
+fn valid_coordinate(value: f64) -> bool {
+    (-MAX_COORDINATE..=MAX_COORDINATE).contains(&value)
+}
+
+/// A proportion between [`ColumnWidth::MIN_PROPORTION`] and 1, or a fixed width up to
+/// [`MAX_SIZE`].
 fn valid_width(width: ColumnWidth) -> bool {
     match width {
         ColumnWidth::Proportion(share) => (ColumnWidth::MIN_PROPORTION..=1.0).contains(&share),
-        ColumnWidth::Fixed(width) => width.is_finite() && width > 0.0,
+        ColumnWidth::Fixed(width) => (f64::MIN_POSITIVE..=MAX_SIZE).contains(&width),
     }
 }

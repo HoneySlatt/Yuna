@@ -122,7 +122,7 @@ fn fullscreen_and_fake_fullscreen_exclude_each_other() {
     assert!(!m.placement(1).fullscreen);
 }
 
-/// niri: src/layout/tests/fullscreen.rs:56.
+/// niri: src/layout/scrolling.rs:4305-4308 (code).
 #[test]
 fn a_window_joining_a_fullscreen_column_ends_its_fullscreen() {
     let mut m = Model::new();
@@ -156,4 +156,49 @@ fn a_floating_window_goes_fullscreen_through_the_tiles_and_floats_back_where_it_
     assert!(m.info(2).floating);
     assert_rect(m.rect(2), rect(100.0, 50.0, 640.0, 480.0));
     assert_eq!(m.focused(), Some(2));
+}
+
+/// Yuna's rule (ADR-0019): a window floats back only when it leaves fullscreen itself; fullscreen
+/// ended another way leaves it tiled.
+#[test]
+fn a_floating_window_floats_back_only_when_it_leaves_fullscreen_itself() {
+    let mut m = Model::with(Options {
+        default_tiling: yuna_layout::Tiling::Dwindle,
+        ..Options::default()
+    });
+    m.open(1);
+    m.open_with(
+        OWNER,
+        2,
+        OpenOptions {
+            floating: true,
+            ..OpenOptions::default()
+        },
+    );
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    m.ok(|l| l.focus_window(w(1)));
+    assert!(!m.info(2).fullscreen && !m.info(2).floating);
+    // Now tiled, a fullscreen round trip keeps it tiled (niri: workspace.rs:1303-1310).
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    m.ok(|l| l.set_fullscreen(w(2), false));
+    assert!(!m.info(2).floating);
+}
+
+/// niri: src/layout/workspace.rs:611 (a window opened floating and fullscreen floats after).
+#[test]
+fn a_window_opened_floating_and_fullscreen_floats_on_leaving_fullscreen() {
+    let mut m = Model::new();
+    m.open(1);
+    m.open_with(
+        OWNER,
+        2,
+        OpenOptions {
+            floating: true,
+            fullscreen: true,
+            ..OpenOptions::default()
+        },
+    );
+    assert!(m.info(2).fullscreen);
+    m.ok(|l| l.set_fullscreen(w(2), false));
+    assert!(m.info(2).floating);
 }

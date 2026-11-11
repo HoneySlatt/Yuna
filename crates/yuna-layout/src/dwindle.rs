@@ -4,12 +4,20 @@
 //! The windows are the leaves of a binary tree; each inner node splits its rectangle in two at a
 //! ratio, side by side when the rectangle is wider than tall, one above the other otherwise. The
 //! direction is chosen from the shape at every arrangement, so a workspace moved to an output of
-//! another shape splits to suit it. The tree is as deep as it has windows at most; the recursion
-//! below is bounded by that.
+//! another shape splits to suit it. The tree is as deep as it has windows at most, and the
+//! functions below recurse that deep: 10,000 windows in one tree work, 100,000 overflow the stack
+//! (debt in `docs/PLAN.md`).
 
 use crate::area::Area;
 use crate::geometry::{Rect, nearest_in_direction};
 use crate::{Direction, WindowId};
+
+/// The distance from `point` to the nearest point of `rect`; zero inside it.
+fn distance_to_rect(point: crate::geometry::Point, rect: &Rect) -> f64 {
+    let dx = (rect.x - point.x).max(point.x - rect.right()).max(0.0);
+    let dy = (rect.y - point.y).max(point.y - rect.bottom()).max(0.0);
+    dx.hypot(dy)
+}
 
 /// A node of the tree.
 #[derive(Debug, Clone)]
@@ -42,6 +50,13 @@ impl Node {
                 first.collect_leaves(out);
                 second.collect_leaves(out);
             }
+        }
+    }
+
+    fn contains(&self, window: WindowId) -> bool {
+        match self {
+            Node::Leaf(w) => *w == window,
+            Node::Split { first, second, .. } => first.contains(window) || second.contains(window),
         }
     }
 
@@ -226,7 +241,7 @@ impl Dwindle {
 
     /// Whether `window` is a leaf.
     pub fn contains(&self, window: WindowId) -> bool {
-        self.windows().contains(&window)
+        self.root.as_ref().is_some_and(|root| root.contains(window))
     }
 
     /// The focused window.
@@ -266,36 +281,42 @@ impl Dwindle {
     }
 
     /// Removes `window`; returns whether it was here. Its sibling takes their parent's space. If
-    /// it was focused, focus goes to the window whose centre is nearest its centre (Hyprland's
-    /// default); without an area to measure, to the nearest window of the sibling's part.
+    /// it was focused, focus goes to the window whose rectangle, once the tree is laid out again,
+    /// is nearest the closed window's centre (Hyprland's `input:focus_on_close` 0); without an
+    /// area to measure, to the nearest window of the sibling's part.
     pub fn remove_window(&mut self, window: WindowId, area: Option<&Area>) -> bool {
         let Some(root) = self.root.take() else {
             return false;
         };
-        let mut placed = Vec::new();
+        let mut before = Vec::new();
         if let Some(area) = area {
-            root.arrange(area.working.shrunk(area.gap), area, &mut placed);
+            root.arrange(area.working.shrunk(area.gap), area, &mut before);
         }
-        let closed_centre = placed
+        let closed_centre = before
             .iter()
             .find(|(w, _)| *w == window)
             .map(|(_, r)| r.center());
         let sibling_leaf = root.nearest_sibling_leaf(window);
-        let mut leaves = Vec::new();
-        root.collect_leaves(&mut leaves);
+        let found = root.contains(window);
         self.root = root.without(window);
-        if !leaves.contains(&window) {
+        if !found {
             return false;
         }
         if self.focused == Some(window) {
-            let nearest = closed_centre.and_then(|c| {
-                placed
-                    .iter()
-                    .filter(|(w, _)| *w != window)
-                    .map(|(w, r)| (*w, (r.center().x - c.x).hypot(r.center().y - c.y)))
-                    .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(w, _)| w)
-            });
+            // Hyprland lays the tree out again first, then takes the window nearest the closed
+            // one's centre: the one now covering it, if any.
+            let nearest = match (closed_centre, area) {
+                (Some(centre), Some(area)) => {
+                    let mut after = Vec::new();
+                    self.arrange_tree(area, &mut after);
+                    after
+                        .iter()
+                        .map(|(w, r)| (*w, distance_to_rect(centre, r)))
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .map(|(w, _)| w)
+                }
+                _ => None,
+            };
             self.focused = nearest.or(sibling_leaf);
         }
         if self.fullscreen == Some(window) {
@@ -364,13 +385,16 @@ impl Dwindle {
         }
     }
 
-    /// Makes `window` fullscreen or not; returns whether it is here. One window at most is
-    /// fullscreen: another one leaves it. The fullscreen window takes focus.
+    /// Makes `window` fullscreen or not; returns whether it is here. One window at most covers
+    /// the others, fullscreen or maximised: another one going fullscreen ends that. The
+    /// fullscreen window takes focus.
     pub fn set_fullscreen(&mut self, window: WindowId, on: bool) -> bool {
         if !self.contains(window) {
             return false;
         }
         if on {
+            // One covering window at a time, as Hyprland's one fullscreen state per window.
+            self.maximized = None;
             self.fullscreen = Some(window);
             self.focused = Some(window);
         } else if self.fullscreen == Some(window) {
@@ -380,12 +404,14 @@ impl Dwindle {
     }
 
     /// Maximises `window` over the working area, or not; returns whether it is here. One window
-    /// at most is maximised: another one leaves it. The maximised window takes focus.
+    /// at most covers the others, fullscreen or maximised: another one maximised ends that. The
+    /// maximised window takes focus.
     pub fn set_maximized(&mut self, window: WindowId, on: bool) -> bool {
         if !self.contains(window) {
             return false;
         }
         if on {
+            self.fullscreen = None;
             self.maximized = Some(window);
             self.focused = Some(window);
         } else if self.maximized == Some(window) {
@@ -435,6 +461,16 @@ impl Dwindle {
             None if !windows.is_empty() => return Err("dwindle has windows but no focus".into()),
             Some(f) if !windows.contains(&f) => return Err(format!("dwindle focuses {f:?}")),
             _ => {}
+        }
+        if self.fullscreen.is_some() && self.maximized.is_some() {
+            return Err("dwindle has a fullscreen and a maximised window at once".into());
+        }
+        for cover in [self.fullscreen, self.maximized].into_iter().flatten() {
+            if self.focused != Some(cover) {
+                return Err(format!(
+                    "dwindle's covering window {cover:?} has not the focus"
+                ));
+            }
         }
         for (what, window) in [
             ("fullscreen", self.fullscreen),
