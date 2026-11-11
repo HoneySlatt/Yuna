@@ -19,7 +19,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Home output**: the output a workspace goes back to when that output returns after being
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
-  pixels at scale 1.5 is 2560 × 1440 logical units wide. Rectangles are snapped to the
+  pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has

@@ -139,7 +139,8 @@ it is met.
 - The rivals measured at rest and in motion; the bar's figures set.
 
 **Exit.** uwui's, SlimeEngine's and Aerith's windowed examples run in Yuna headless in CI, driven by
-an agent through MCP; every layout behaviour of ADR-0005 has its tests; the HDR prototype has its
+an agent through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
+and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
 verdict; the rivals' figures are in `docs/measurements.md`.
 
 ### Stage 2 — The desktop → 0.2
@@ -150,8 +151,7 @@ verdict; the rivals' figures are in `docs/measurements.md`.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5.
 - Amane on top through standard protocols.
-- The touchpad's gestures; the configuration live; per-application rules, the pinned window,
-  terminal swallowing.
+- The touchpad's gestures; the configuration live; per-application rules, terminal swallowing.
 - The crash restart and session restore.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and

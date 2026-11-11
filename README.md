@@ -10,8 +10,8 @@ tests drive it.
 
 ## State
 
-Designed on 2026-11-11. The workspace and its checks exist; no backend yet, so Yuna cannot start a
-session. The first stage builds the headless core.
+Designed on 2026-11-11. The workspace, its checks and the layout model exist; no backend yet, so
+Yuna cannot start a session. The first stage builds the headless core.
 
 ## Build
 

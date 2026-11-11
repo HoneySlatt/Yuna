@@ -77,7 +77,8 @@ times are in [`docs/measurements.md`](docs/measurements.md).
 ## Dependencies
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
-licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11. Smithay is pinned to one revision ([ADR-0017](docs/adr/0017-smithays-revision.md)).
+licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11. Smithay
+is pinned to one revision ([ADR-0017](docs/adr/0017-smithays-revision.md)).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 

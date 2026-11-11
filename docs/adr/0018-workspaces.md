@@ -17,7 +17,8 @@ Both, chosen by configuration (`Options::dynamic_workspaces` in `yuna-layout`):
 
 - **Named workspaces always exist.** The configuration declares them, each with its home output,
   even one not plugged in yet; switching to an unknown name creates it on the seat's active
-  output. They stay, empty or not, until removed.
+  output. They stay, empty or not, until removed; removing one takes its name and keeps its
+  windows, as in niri.
 - **Unnamed workspaces** hold what has no name: an output with no workspace gets one, and they go
   as soon as they are empty and not shown.
 - **Dynamic workspaces**, when the option is on, keep one empty unnamed workspace last on every

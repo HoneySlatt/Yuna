@@ -69,7 +69,7 @@ physical pixels of their output, so that they stay crisp at scale 1.5
 ([ADR-0020](adr/0020-the-layout-models-shape.md)).
 
 `Layout::check_invariants` checks every rule the model keeps. The tests call it after every
-operation:
+operation, and an example measures the model:
 
 - `crates/yuna-layout/tests/scenarios/`: one test per behaviour, each naming its source in niri or
   Hyprland ([ADR-0019](adr/0019-the-layouts-behaviours.md));

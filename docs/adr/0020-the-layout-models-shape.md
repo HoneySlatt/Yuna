@@ -30,8 +30,9 @@ any code was written (M1.2).
 - **Logical coordinates in `f64`**, shared by all outputs, as niri; gaps, the working area and
   every rectangle given out are snapped to the output's physical pixels, so that they stay crisp
   at scale 1.5, and re-snapped when a workspace moves to another scale.
-- **Nothing runs between operations.** There is no clock and no animation state; `arrange` is
-  computed when asked, in time linear in the windows shown.
+- **Nothing runs between operations.** There is no clock and no animation state. An operation and
+  `arrange` take time linear in the seat's windows: under 25 µs for 100, under 300 µs for 1,000
+  ([measurements](../measurements.md)).
 - **Bad input is an error, never a panic, and a refused operation changes nothing.**
   `check_invariants` states every rule; the tests call it after every operation.
 
@@ -66,3 +67,6 @@ The challenge asked for these now; each adds to the model without changing its t
 - Each later milestone listed above extends the model; none needs to change its tree.
 - A dwindle tree deeper than its space allows gives windows of zero size; M1.4, with clients'
   minimum sizes, decides what happens then (Hyprland floats a window that does not fit).
+- The dwindle tree is walked by recursion, as deep as it has windows: 10,000 windows in one tree
+  work, 100,000 overflow the stack. M1.4 bounds the windows a client may open, or walks the tree
+  without recursion.
