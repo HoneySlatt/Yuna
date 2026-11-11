@@ -110,7 +110,8 @@ pub(crate) struct Scrolling {
     /// focus and view go back to where they were (niri's principle that dealing with a short-lived
     /// window does not move the view).
     before_open: Option<BeforeOpen>,
-    /// The view before the focused column went fullscreen, restored when it leaves fullscreen.
+    /// The view before the focused column went fullscreen, restored when it leaves fullscreen;
+    /// kept relative to that column, as niri, so that columns closing on its left do not spoil it.
     view_before_fullscreen: Option<f64>,
 }
 
@@ -119,7 +120,8 @@ pub(crate) struct Scrolling {
 struct BeforeOpen {
     window: WindowId,
     focused_column: usize,
-    view_x: f64,
+    /// The view, relative to the left edge of `focused_column`.
+    view_offset: f64,
 }
 
 impl Scrolling {
@@ -219,10 +221,10 @@ impl Scrolling {
         if self.columns[self.focused].fullscreen {
             return;
         }
-        self.before_open = Some(BeforeOpen {
+        self.before_open = area.map(|area| BeforeOpen {
             window,
             focused_column: self.focused,
-            view_x: self.view_x,
+            view_offset: self.view_x - self.column_x(self.focused, area),
         });
         self.focused = index;
         self.fit_view(area);
@@ -253,7 +255,9 @@ impl Scrolling {
             self.focused = before
                 .focused_column
                 .min(self.columns.len().saturating_sub(1));
-            self.view_x = before.view_x;
+            if let Some(area) = area {
+                self.view_x = self.column_x(self.focused, area) + before.view_offset;
+            }
         } else if ci < self.focused {
             // Indices shift: the point to go back to is lost, as in niri.
             self.before_open = None;
@@ -265,8 +269,9 @@ impl Scrolling {
             // The last column closed while focused: focus goes to the new last one.
             self.focused = self.focused.saturating_sub(1);
         }
-        if was_fullscreen_focus && let Some(view) = self.view_before_fullscreen.take() {
-            self.view_x = view;
+        if was_fullscreen_focus {
+            // The view was kept for the column that just went: the new focus decides the view.
+            self.view_before_fullscreen = None;
         }
         self.fit_view(area);
         true
@@ -383,8 +388,8 @@ impl Scrolling {
             } else {
                 return;
             };
-            self.leave_fullscreen_at(target);
-            self.leave_fullscreen_at(ci);
+            self.leave_fullscreen_at(target, area);
+            self.leave_fullscreen_at(ci, area);
             let column = self.columns.remove(ci);
             let target = if left { target } else { target - 1 };
             let into = &mut self.columns[target];
@@ -450,27 +455,30 @@ impl Scrolling {
                 ci += 1;
                 self.columns.insert(ci, new_column);
             }
-            if ci == self.focused {
-                self.view_before_fullscreen = Some(self.view_x);
+            if ci == self.focused
+                && let Some(area) = area
+            {
+                self.view_before_fullscreen = Some(self.view_x - self.column_x(ci, area));
             }
             self.columns[ci].fullscreen = true;
         } else {
-            self.leave_fullscreen_at(ci);
+            self.leave_fullscreen_at(ci, area);
         }
         self.fit_view(area);
         true
     }
 
     /// Takes column `index` out of fullscreen, putting the view back if it is the focused one.
-    fn leave_fullscreen_at(&mut self, index: usize) {
+    fn leave_fullscreen_at(&mut self, index: usize, area: Option<&Area>) {
         if !self.columns[index].fullscreen {
             return;
         }
         self.columns[index].fullscreen = false;
         if index == self.focused
-            && let Some(view) = self.view_before_fullscreen.take()
+            && let Some(offset) = self.view_before_fullscreen.take()
+            && let Some(area) = area
         {
-            self.view_x = view;
+            self.view_x = self.column_x(index, area) + offset;
         }
     }
 
@@ -603,8 +611,8 @@ impl Scrolling {
 
     /// Every window with its rectangle and whether it is fullscreen, left to right and top to
     /// bottom, snapped to the grid. Columns scrolled out of view are included, outside the output.
-    /// A column holding more windows than its height fits, gaps included, gives the last ones no
-    /// height rather than letting them leave the working area.
+    /// A column whose gaps leave no room gives all its windows no height, rather than letting
+    /// them leave the working area (debt in `docs/PLAN.md`).
     pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect, bool)>) {
         let mut x = area.working.x - self.view_x;
         let bottom = area.working.bottom();

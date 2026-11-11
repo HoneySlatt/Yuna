@@ -167,9 +167,11 @@ fn fullscreen_and_maximised_never_cover_at_once() {
     assert!(!m.info(1).full_width);
     m.ok(|l| l.set_fullscreen(w(2), false));
     assert!(m.placement(2).activated);
+    // Focusing window 2 ends window 1's fullscreen; window 2 may then be maximised.
     m.ok(|l| l.set_fullscreen(w(1), true));
-    m.ok(|l| l.set_full_width(w(2), true));
+    m.ok(|l| l.focus_window(w(2)));
     assert!(!m.info(1).fullscreen);
+    m.ok(|l| l.set_full_width(w(2), true));
     assert_eq!(m.shown(MAIN).last(), Some(&2));
 }
 
@@ -191,4 +193,41 @@ fn focus_after_a_close_goes_to_the_window_now_covering_the_closed_ones_centre() 
             && centre.y <= one.bottom()
     );
     assert_eq!(m.focused(), Some(1));
+}
+
+/// Hyprland: wiki configuring/core/dispatchers.md, "restore client maximized state".
+#[test]
+fn a_maximised_window_is_maximised_again_after_its_own_fullscreen() {
+    let mut m = dwindle();
+    m.open(1);
+    m.open(2);
+    m.ok(|l| l.set_full_width(w(2), true));
+    m.ok(|l| l.set_fullscreen(w(2), true));
+    m.ok(|l| l.set_fullscreen(w(2), false));
+    assert!(m.info(2).full_width);
+    assert_rect(m.rect(2), rect(16.0, 16.0, 1888.0, 1048.0));
+}
+
+/// The owner's choice against Hyprland (ADR-0019): a background window may not take a fullscreen
+/// game's screen, by maximise, fullscreen, or opening fullscreen.
+#[test]
+fn a_background_window_cannot_take_a_fullscreen_games_screen() {
+    let mut m = dwindle();
+    m.open(1);
+    m.ok(|l| l.set_fullscreen(w(1), true));
+    m.open(2);
+    let held = yuna_layout::LayoutError::Refused("another window's fullscreen holds the screen");
+    m.refused(held.clone(), |l| l.set_full_width(w(2), true));
+    m.refused(held, |l| l.set_fullscreen(w(2), true));
+    m.open_with(
+        OWNER,
+        3,
+        yuna_layout::OpenOptions {
+            fullscreen: true,
+            ..yuna_layout::OpenOptions::default()
+        },
+    );
+    assert!(!m.info(3).fullscreen);
+    assert_eq!(m.focused(), Some(1));
+    assert_eq!(m.shown(MAIN), vec![1]);
 }

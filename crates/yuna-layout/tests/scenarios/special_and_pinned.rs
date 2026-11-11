@@ -199,3 +199,15 @@ fn a_pinned_window_hides_under_a_fullscreen_window_of_the_special_workspace() {
     m.ok(|l| l.set_fullscreen(w(2), true));
     assert_eq!(m.shown(MAIN), vec![2]);
 }
+
+#[test]
+fn a_pinned_window_stays_on_its_output_when_the_workspace_beneath_it_goes_home() {
+    let mut m = Model::new();
+    m.ok(|l| l.add_workspace(OWNER, "side", Some(SIDE)));
+    m.ok(|l| l.focus_workspace(OWNER, "side"));
+    m.open_with(OWNER, 1, floating());
+    m.ok(|l| l.set_pinned(w(1), true));
+    m.ok(|l| l.add_output(OWNER, SIDE, output(1920.0, 1920, 1080, 1.0)));
+    assert!(m.shown(MAIN).contains(&1));
+    assert_eq!(m.info(1).output, Some(MAIN));
+}

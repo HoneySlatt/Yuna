@@ -393,8 +393,11 @@ impl Dwindle {
             return false;
         }
         if on {
-            // One covering window at a time, as Hyprland's one fullscreen state per window.
-            self.maximized = None;
+            // One covering window at a time; a window keeps its own maximised state under its
+            // fullscreen and finds it again after, as Hyprland ("restore client maximized state").
+            if self.maximized != Some(window) {
+                self.maximized = None;
+            }
             self.fullscreen = Some(window);
             self.focused = Some(window);
         } else if self.fullscreen == Some(window) {
@@ -411,7 +414,9 @@ impl Dwindle {
             return false;
         }
         if on {
-            self.fullscreen = None;
+            if self.fullscreen != Some(window) {
+                self.fullscreen = None;
+            }
             self.maximized = Some(window);
             self.focused = Some(window);
         } else if self.maximized == Some(window) {
@@ -462,7 +467,9 @@ impl Dwindle {
             Some(f) if !windows.contains(&f) => return Err(format!("dwindle focuses {f:?}")),
             _ => {}
         }
-        if self.fullscreen.is_some() && self.maximized.is_some() {
+        if let (Some(f), Some(m)) = (self.fullscreen, self.maximized)
+            && f != m
+        {
             return Err("dwindle has a fullscreen and a maximised window at once".into());
         }
         for cover in [self.fullscreen, self.maximized].into_iter().flatten() {

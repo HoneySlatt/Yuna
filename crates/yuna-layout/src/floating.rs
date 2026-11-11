@@ -59,8 +59,12 @@ impl Floating {
             (Some(rect), Some(area)) => fit(rect, area),
             (Some(rect), None) => rect,
             (None, Some(area)) => {
+                // Centred if it fits; else from the top-left corner, as niri, where a window's
+                // important part usually is.
                 let (w, h) = (size.w.max(1.0), size.h.max(1.0));
-                let rect = Rect::new((area.working.w - w) / 2.0, (area.working.h - h) / 2.0, w, h);
+                let x = ((area.working.w - w) / 2.0).max(0.0);
+                let y = ((area.working.h - h) / 2.0).max(0.0);
+                let rect = Rect::new(x, y, w, h);
                 fit(rect, area)
             }
             (None, None) => Rect::new(0.0, 0.0, size.w.max(1.0), size.h.max(1.0)),

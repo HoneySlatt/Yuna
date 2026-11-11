@@ -202,3 +202,16 @@ fn a_window_opened_floating_and_fullscreen_floats_on_leaving_fullscreen() {
     m.ok(|l| l.set_fullscreen(w(2), false));
     assert!(m.info(2).floating);
 }
+
+/// niri: src/layout/scrolling.rs:48-53 (the view kept relative to its column).
+#[test]
+fn leaving_fullscreen_after_a_column_on_the_left_closed_shows_the_columns_as_before() {
+    let mut m = Model::new();
+    for n in 1..=3 {
+        m.open(n);
+    }
+    m.ok(|l| l.set_fullscreen(w(3), true));
+    m.ok(|l| l.close_window(w(1)));
+    m.ok(|l| l.set_fullscreen(w(3), false));
+    assert_eq!((m.rect(2).x, m.rect(3).x), (16.0, 968.0));
+}

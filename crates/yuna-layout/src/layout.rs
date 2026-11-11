@@ -294,7 +294,10 @@ impl Layout {
             let other = if index > 0 { index - 1 } else { index + 1 };
             self.show(si, oi, other);
         }
+        let gap = self.options.gap;
         let output = &mut self.seats[si].outputs[oi];
+        // The pinned windows stay with the output, not with the workspace leaving it.
+        gather_pinned(output, gap);
         let workspace = output.workspaces.remove(index);
         if output.shown > index {
             output.shown -= 1;
@@ -406,20 +409,15 @@ impl Layout {
         }
         let scale = Scale::new(config.scale).ok_or(LayoutError::InvalidValue)?;
         let position = config.position;
-        let physical_ok = |pixels: u32| (1.0..=MAX_SIZE).contains(&f64::from(pixels));
-        if !valid_coordinate(position.x)
-            || !valid_coordinate(position.y)
-            || !physical_ok(config.physical_width)
-            || !physical_ok(config.physical_height)
-        {
+        let logical = |pixels: u32| f64::from(pixels) / scale.get();
+        let size = Size {
+            w: logical(config.physical_width),
+            h: logical(config.physical_height),
+        };
+        if !valid_coordinate(position.x) || !valid_coordinate(position.y) || !valid_size(size) {
             return Err(LayoutError::InvalidValue);
         }
-        let rect = scale.snap_rect(Rect::new(
-            position.x,
-            position.y,
-            f64::from(config.physical_width) / scale.get(),
-            f64::from(config.physical_height) / scale.get(),
-        ));
+        let rect = scale.snap_rect(Rect::new(position.x, position.y, size.w, size.h));
         let seat_ref = &mut self.seats[si];
         let mut workspaces: Vec<Workspace> = std::mem::take(&mut seat_ref.detached);
         seat_ref.outputs.push(Output {
@@ -932,8 +930,7 @@ impl Layout {
                 seat,
                 fake_fullscreen: false,
                 floating_rect: None,
-                // As niri: a window opened floating and fullscreen floats on leaving fullscreen.
-                float_after_fullscreen: options.floating && options.fullscreen,
+                float_after_fullscreen: false,
             },
         );
         let home = match slot {
@@ -941,20 +938,34 @@ impl Layout {
             _ => None,
         };
         let default_width = self.options.default_width;
-        let default_size = self.options.default_floating_size;
+        let size = options.size.unwrap_or(self.options.default_floating_size);
+        // Behind a fullscreen game in dwindle, a window asking to open fullscreen opens normally.
+        let fullscreen =
+            options.fullscreen && !screen_held_by_another(self.workspace(si, slot), window);
         let (workspace, area) = self.workspace_mut(si, slot);
         if let Some(home) = home {
             workspace.settle_on(home);
         }
-        if options.floating && !options.fullscreen {
-            let size = options.size.unwrap_or(default_size);
+        // As niri: a window opened floating and fullscreen floats on leaving fullscreen, centred
+        // at its size.
+        let float_after = options.floating && fullscreen;
+        let floating_rect = area.as_ref().filter(|_| float_after).map(|area| {
+            let x = ((area.working.w - size.w) / 2.0).max(0.0);
+            let y = ((area.working.h - size.h) / 2.0).max(0.0);
+            Rect::new(x, y, size.w, size.h)
+        });
+        if options.floating && !fullscreen {
             workspace.add_floating(window, None, size, area.as_ref(), true);
         } else {
             let width = options.width.unwrap_or(default_width);
             workspace.add_tiled(window, width, area.as_ref());
-            if options.fullscreen {
+            if fullscreen {
                 set_tiled_fullscreen(workspace, window, true, area.as_ref());
             }
+        }
+        if let Some(record) = self.windows.get_mut(&window) {
+            record.float_after_fullscreen = float_after;
+            record.floating_rect = floating_rect;
         }
         self.tidy(si);
         Ok(())
@@ -1030,7 +1041,7 @@ impl Layout {
     }
 
     /// Moves and resizes a floating window; `rect` is relative to the working area's top-left
-    /// corner, and the window is kept inside it. Refused for a tiled window.
+    /// corner; enough of the window stays on it to grab it. Refused for a tiled window.
     pub fn set_floating_rect(&mut self, window: WindowId, rect: Rect) -> Result<(), LayoutError> {
         if !(valid_coordinate(rect.x) && valid_coordinate(rect.y) && valid_size(rect.size())) {
             return Err(LayoutError::InvalidValue);
@@ -1048,7 +1059,8 @@ impl Layout {
     /// floating one moves into the tiled layout, and floats again where it was when it leaves
     /// fullscreen. Either way the window stops being fake fullscreen: the two states exclude each
     /// other, and a client asking to leave fullscreen leaves both (niri). Refused for a pinned
-    /// window, as in Hyprland: unpin it first.
+    /// window, as in Hyprland: unpin it first; and in dwindle while another window's fullscreen
+    /// holds the focus, so that no client takes a game's screen (the owner's choice, ADR-0019).
     pub fn set_fullscreen(
         &mut self,
         window: WindowId,
@@ -1057,6 +1069,9 @@ impl Layout {
         let (si, slot) = self.find_window(window)?;
         if fullscreen && self.workspace(si, slot).floating.is_pinned(window) {
             return Err(LayoutError::Refused("a pinned window cannot be fullscreen"));
+        }
+        if fullscreen && screen_held_by_another(self.workspace(si, slot), window) {
+            return Err(LayoutError::Refused(SCREEN_HELD));
         }
         let default_width = self.options.default_width;
         let record = self.windows.get(&window).cloned();
@@ -1109,13 +1124,17 @@ impl Layout {
     }
 
     /// Makes a tiled window's column full width (scrolling), or maximises it over the working
-    /// area (dwindle), or neither. Nothing happens to a floating window.
+    /// area (dwindle), or neither. Nothing happens to a floating window. Maximising is refused in
+    /// dwindle while another window's fullscreen holds the focus (ADR-0019).
     pub fn set_full_width(
         &mut self,
         window: WindowId,
         full_width: bool,
     ) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
+        if full_width && screen_held_by_another(self.workspace(si, slot), window) {
+            return Err(LayoutError::Refused(SCREEN_HELD));
+        }
         let (workspace, area) = self.workspace_mut(si, slot);
         match &mut workspace.tiling {
             TilingLayout::Scrolling(s) => {
@@ -1497,6 +1516,18 @@ impl Layout {
         }
         Ok(())
     }
+}
+
+/// Why a window may not take the screen: another window's fullscreen holds it.
+const SCREEN_HELD: &str = "another window's fullscreen holds the screen";
+
+/// Whether, in dwindle, another window than `window` is fullscreen and holds the focus: a client
+/// may then not take the screen (the owner's choice: games first, ADR-0019). Scrolling columns
+/// let several windows be fullscreen, each in its own column, so nothing is taken there.
+fn screen_held_by_another(workspace: &Workspace, window: WindowId) -> bool {
+    matches!(&workspace.tiling, TilingLayout::Dwindle(d)
+        if d.fullscreen_window().is_some_and(|f| f != window))
+        && workspace.fullscreen_covers()
 }
 
 /// Brings the pinned windows of an output's workspaces over to the workspace it shows, on top,

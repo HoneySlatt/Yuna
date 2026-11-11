@@ -112,3 +112,36 @@ fn a_fullscreen_window_floated_takes_its_tiled_size_not_the_outputs() {
     assert!(!m.info(1).fullscreen);
     assert_eq!((m.rect(1).w, m.rect(1).h), (936.0, 1048.0));
 }
+
+/// niri: src/utils/mod.rs:525-535 (a window larger than the area shows from its top-left).
+#[test]
+fn a_new_floating_window_larger_than_the_output_opens_from_its_top_left_corner() {
+    let mut m = Model::new();
+    m.open_with(
+        OWNER,
+        1,
+        floating(Some(Size {
+            w: 3000.0,
+            h: 2000.0,
+        })),
+    );
+    assert_rect(m.rect(1), rect(0.0, 0.0, 3000.0, 2000.0));
+}
+
+/// niri: src/layout/workspace.rs:611; the size asked when it opened is kept.
+#[test]
+fn a_window_opened_floating_and_fullscreen_floats_back_at_the_size_it_asked() {
+    let mut m = Model::new();
+    m.open_with(
+        OWNER,
+        1,
+        OpenOptions {
+            floating: true,
+            fullscreen: true,
+            size: Some(Size { w: 640.0, h: 480.0 }),
+            ..OpenOptions::default()
+        },
+    );
+    m.ok(|l| l.set_fullscreen(w(1), false));
+    assert_rect(m.rect(1), rect(640.0, 300.0, 640.0, 480.0));
+}

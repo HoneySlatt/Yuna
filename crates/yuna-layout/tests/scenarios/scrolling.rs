@@ -351,8 +351,8 @@ fn leaving_fullscreen_does_not_bring_back_a_view_kept_for_another_column() {
     assert_eq!(m.rect(2).x, 16.0);
 }
 
-/// A column holding more windows than its height fits gives the last ones no height, inside
-/// the working area, rather than pushing them below the output.
+/// A column whose gaps leave no room gives its windows no height, inside the working area,
+/// rather than pushing them below the output.
 #[test]
 fn a_column_too_full_for_its_height_stays_inside_the_working_area() {
     let mut m = Model::with(Options {
