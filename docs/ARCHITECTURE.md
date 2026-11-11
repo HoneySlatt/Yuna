@@ -57,7 +57,9 @@ The flow of an operation:
    windows (`floating.rs`). Each keeps its own focus: the focused column, the focused leaf, the
    focused floating window.
 3. `Layout::tidy` removes the workspaces that have no reason to exist, gives every output the
-   workspaces it must have, and puts each strip's view back on its focused column.
+   workspaces it must have, brings each output's pinned windows to the workspace it shows, drops
+   the promise to float back of windows no longer fullscreen, and puts each strip's view back on
+   its focused column.
 
 The compositor then reads `Layout::arrange(output)`: the windows that output shows, bottom to top,
 each with its rectangle in logical coordinates on the output's physical pixel grid, whether it is
@@ -71,12 +73,13 @@ physical pixels of their output, so that they stay crisp at scale 1.5
 `Layout::check_invariants` checks every rule the model keeps. The tests call it after every
 operation, and an example measures the model:
 
-- `crates/yuna-layout/tests/scenarios/`: one test per behaviour, each naming its source in niri or
-  Hyprland ([ADR-0019](adr/0019-the-layouts-behaviours.md));
+- `crates/yuna-layout/tests/scenarios/`: one test per behaviour; those that rewrite niri's or
+  Hyprland's name their source ([ADR-0019](adr/0019-the-layouts-behaviours.md));
 - `crates/yuna-layout/tests/properties.rs`: random sequences of operations over two seats and up
   to three outputs, checking the invariants, that one seat never changes another's, and that a
   refused operation changes nothing;
-- `crates/yuna-layout/examples/timing.rs`: an operation's time on a workspace of 100 windows.
+- `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
+  windows.
 
 ## Main flows
 

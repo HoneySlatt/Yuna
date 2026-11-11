@@ -194,7 +194,8 @@ latency, frames and upscaling at least as good as gamescope's.
 **Goal.** The most beautiful desktop, at the lowest cost.
 
 - Blur and glass, animated borders, the built-in effects, exotic open and close animations.
-- The overview, Alt-Tab with previews, screenshots, GPU-encoded recording, a colour picker.
+- The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
+  Alt-Tab with previews, screenshots, GPU-encoded recording, a colour picker.
 - Consent before capture; sandboxed applications kept from sensitive protocols.
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.

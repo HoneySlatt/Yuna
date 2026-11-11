@@ -12,8 +12,10 @@ against the frame at 240 Hz, 4.17 ms on the high tier.
 
 Machine: the high tier's desktop, Ryzen 7 5800X, with the owner's consent. The program ran pinned
 to one core. The machine was not idle: two builds and an audio test of other projects ran on other
-cores, at low priority for the builds, with a load average of 11 to 12; the medians match a run
-made at a load of 3 before the closing review's fixes. Build: the release profile, Rust 1.99.1,
+cores, at low priority for the builds, with a load average of 11 to 12, which raised some figures:
+`arrange` alone on 1,000 windows in dwindle measured 44 µs at a load of 3 on the same path before
+the fixes, 59 µs here. The second round of review's fixes came after, on paths these rows do not
+time but for a check of a few steps before fullscreen and maximise. Build: the release profile, Rust 1.99.1,
 the code of the commit that adds this section. Command:
 `nix develop -c cargo build --release -p yuna-layout --example timing`, then
 `taskset -c 6 target/release/examples/timing`; three runs of 5,000 samples per row, on the 4K
