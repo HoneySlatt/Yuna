@@ -37,7 +37,14 @@ pin the versions of `cargo deny` and `lychee`, and a check could pass for the wr
 nix develop -c scripts/check.sh           # every check; what CI runs
 nix develop -c cargo run -- --help        # run Yuna
 nix develop -c cargo test --workspace     # the tests alone
+nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
+
+The layout model's property tests (`crates/yuna-layout/tests/properties.rs`) shrink a failure to
+the shortest sequence of operations that still fails, and keep its seed in a
+`.proptest-regressions` file beside the test. Commit that file with the fix: the case then runs
+at every check. The timings are measured on an idle machine, one measurement at a time, and go to
+[`docs/measurements.md`](docs/measurements.md).
 
 `scripts/check.sh` runs, in order, and stops at the first failure:
 
@@ -70,7 +77,7 @@ times are in [`docs/measurements.md`](docs/measurements.md).
 ## Dependencies
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
-licence. Smithay is pinned to one revision ([ADR-0017](docs/adr/0017-smithays-revision.md)).
+licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11. Smithay is pinned to one revision ([ADR-0017](docs/adr/0017-smithays-revision.md)).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 
