@@ -1,7 +1,7 @@
 # Runs scripts/check.sh, every automated check of the definition of done (AGENTS.md), in the same Nix
-# development shell that agents and the owner use. The repository is private: its CI minutes are
-# counted, so CI stays one job (ADR-0009). Actions are pinned to commit SHAs, their release in a
-# comment.
+# development shell that agents and the owner use. The repository is private and its CI minutes are
+# counted, so CI stays lean (ADR-0009): one job. Actions are pinned to commit SHAs, their release in
+# a comment.
 name: CI
 
 on:
@@ -27,6 +27,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes: the token need not stay in the checkout's configuration.
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}

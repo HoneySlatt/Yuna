@@ -6,10 +6,17 @@
 ## Context
 
 Every build of Yuna, by an agent, the owner or CI, must use the same compiler, or a check could pass
-in one place and fail in another. On 2026-11-11, the latest stable Rust is 1.99.1 (2026-10-16), and
-1.100.0 is due on 2026-11-12. Smithay at the pinned revision needs 1.88 or later
-([ADR-0017](0017-smithays-revision.md)). nixpkgs-unstable gives 1.99.1. SlimeEngine pins its
-toolchain in `rust-toolchain.toml`, read by Nix through rust-overlay.
+in one place and fail in another. On 2026-11-11:
+
+- the latest stable Rust was 1.99.1, of 2026-10-16, after 1.99.0 on 2026-10-01; at Rust's six-week
+  pace, 1.100.0 was due on 2026-11-12
+  ([releases](https://github.com/rust-lang/rust/releases));
+- Smithay at the pinned revision needs 1.88 or later (its `Cargo.toml`;
+  [ADR-0017](0017-smithays-revision.md));
+- the `nixos-unstable` branch of nixpkgs gave 1.99.1 (`nix eval nixpkgs#rustc.version`);
+- rust-overlay ([oxalica/rust-overlay](https://github.com/oxalica/rust-overlay), MIT) had 1.99.1;
+- SlimeEngine, the owner's engine, pins its toolchain in `rust-toolchain.toml`, read by Nix through
+  rust-overlay.
 
 ## Decision
 
@@ -19,7 +26,9 @@ toolchain in `rust-toolchain.toml`, read by Nix through rust-overlay.
   rustup reads the same file for a contributor without Nix.
 - `rust-version` in `Cargo.toml` names the same version: Yuna promises nothing to older compilers.
 - The version is raised on purpose, at a stage's end with the other updates, or sooner when a
-  milestone needs a newer feature or fix; the file and `rust-version` change in the same commit.
+  milestone needs a newer feature or fix; the file and `rust-version` change in the same commit,
+  which `scripts/check.sh` checks. A raise is routine: its commit says why, and this ADR stays as it
+  is. Only a change of policy needs a new ADR.
 - Stable only. A nightly tool (Miri, cargo-fuzz) would need an ADR of its own.
 
 ## Alternatives considered

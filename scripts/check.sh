@@ -14,6 +14,24 @@ cd "$(dirname "$0")/.."
 
 step() { printf '\n==> %s\n' "$*"; }
 
+step "The workspace's own rules"
+# `rust-version` in Cargo.toml names the toolchain of rust-toolchain.toml (ADR-0016); Cargo cannot
+# read one from the other, so this compares them.
+channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+rust_version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+if [ -z "$channel" ] || [ "$channel" != "$rust_version" ]; then
+    echo "rust-toolchain.toml names \"$channel\" but Cargo.toml's rust-version is \"$rust_version\""
+    exit 1
+fi
+# The workspace's lints (the `// SAFETY:` comment, documentation) reach only the crates that take
+# them; a crate without these lines would escape them silently.
+for manifest in crates/*/Cargo.toml; do
+    if ! grep -Pzq '\n\[lints\]\nworkspace = true\n' "$manifest"; then
+        echo "$manifest lacks the lines \"[lints]\" and \"workspace = true\""
+        exit 1
+    fi
+done
+
 step "Formatting"
 cargo fmt --all --check
 
@@ -32,8 +50,8 @@ cargo deny --locked check
 step "Links between the Markdown files"
 git ls-files -z '*.md' | xargs -0 lychee --offline --include-fragments --no-progress
 
-# Every agent reads these files at each session's start: their length is paid every time
-# (AGENTS.md, "Documentation").
+# Every agent reads these files at each session's start, so their length is paid every time. The
+# limits are the owner's project method's: AGENTS.md under about 1,500 words, the PLAN about 2,000.
 step "Lengths of the files read at every session"
 too_long=0
 for file_and_limit in "AGENTS.md 1500" "docs/PLAN.md 2000"; do

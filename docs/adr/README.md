@@ -25,4 +25,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0014](0014-vrr-without-flicker.md) | VRR without flicker | Accepted |
 | [0015](0015-agents-workspaces.md) | Agents' workspaces | Accepted |
 | [0016](0016-the-rust-toolchain.md) | The Rust toolchain: an exact stable version, in one file | Accepted |
-| [0017](0017-smithays-revision.md) | Smithay's revision: upstream master of 2026-11-11 | Accepted |
+| [0017](0017-smithays-revision.md) | Smithay's revision: upstream, pinned, first at master of 2026-11-11 | Accepted |

@@ -1,4 +1,4 @@
-# 0017. Smithay's revision: upstream master of 2026-11-11
+# 0017. Smithay's revision: upstream, pinned, first at master of 2026-11-11
 
 - Status: Accepted
 - Date: 2026-11-11
@@ -7,7 +7,8 @@
 
 [ADR-0011](0011-built-on-smithay.md) builds Yuna on Smithay at a pinned revision, raised at each
 stage's end. Smithay's last release, 0.7.0, dates from 2025-06-24; compositors build on git
-revisions. On 2026-11-11:
+revisions. On 2026-11-11, from Smithay's, niri's and cosmic-comp's repositories on GitHub (their
+commits, `Cargo.toml`, `Cargo.lock` and CI runs):
 
 - master was `8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55` (2026-11-11). Its tests passed in Smithay's
   CI; only the publication of its documentation failed.
@@ -24,6 +25,8 @@ revisions. On 2026-11-11:
   and `cargo deny` checks its licences, advisories and sources from the start.
 - The dependency moves to Yuna's fork of Smithay with the first patch (ADR-0011), listed in
   `docs/smithay-patches.md`.
+- Raising the revision at a stage's end is routine: the commit that raises it says why, and this
+  ADR stays as it is. Only a change of policy needs a new ADR.
 
 ## Alternatives considered
 

@@ -30,6 +30,8 @@
           pkgs.cargo-deny
           # Links between the Markdown files.
           pkgs.lychee
+          # Lists the Markdown files the link check reads.
+          pkgs.git
         ];
 
         # Tells scripts/check.sh that it runs in this shell.

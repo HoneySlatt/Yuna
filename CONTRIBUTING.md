@@ -20,14 +20,16 @@ The shell gives:
   rust-src and rust-analyzer ([ADR-0016](docs/adr/0016-the-rust-toolchain.md));
 - `cargo deny`, which checks the dependencies against [`deny.toml`](deny.toml);
 - `lychee`, which checks the links between the Markdown files;
+- git, which the link check uses to list the Markdown files;
 - `YUNA_DEV_SHELL`, which `scripts/check.sh` requires.
 
 Nix sees only the files git knows: `git add` a new file before `nix develop` reads it. Plain
 `nix develop`, never `nix develop path:.`, which copies the whole folder, `target/` included, into
 the store.
 
-Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain; `cargo deny` and
-`lychee` are then yours to install.
+Without Nix, rustup reads `rust-toolchain.toml` and installs the same toolchain, enough to build,
+run and test Yuna. `scripts/check.sh` still refuses to run outside the shell: there, nothing would
+pin the versions of `cargo deny` and `lychee`, and a check could pass for the wrong reason.
 
 ## Commands
 
@@ -39,23 +41,30 @@ nix develop -c cargo test --workspace     # the tests alone
 
 `scripts/check.sh` runs, in order, and stops at the first failure:
 
-1. formatting, `cargo fmt --check`;
-2. clippy over every target, warnings as errors;
-3. the build and the tests;
-4. the documentation, `cargo doc`, warnings as errors;
-5. `cargo deny`: licences compatible with GPL-3.0-or-later, RustSec advisories, the sources of the
-   dependencies; it reads the advisory database from the network;
-6. the links between the tracked Markdown files, offline, anchors included;
-7. the length of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
+1. the workspace's own rules: `rust-version` in `Cargo.toml` equals the toolchain's version, and
+   every crate takes the workspace's lints;
+2. formatting, `cargo fmt --check`;
+3. clippy over every target, warnings as errors;
+4. the build and the tests;
+5. the documentation, `cargo doc`, warnings as errors;
+6. `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory and every yanked
+   crate, on any dependency, direct or not; the sources of the dependencies. It reads the advisory
+   database from the network;
+7. the links between the tracked Markdown files, offline, anchors included;
+8. the length of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
    session.
 
-Every command passes `--locked`: `Cargo.lock` changes only on purpose.
+Every cargo command of the check passes `--locked`: `Cargo.lock` changes only on purpose.
+
+A new crate goes in `crates/` and its `Cargo.toml` holds the two lines `[lints]` and `workspace = true`, so
+that the workspace's lints (the `// SAFETY:` comment, documentation) reach it; the check refuses it
+otherwise.
 
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. The repository is private and its CI
-minutes are counted: CI stays one job ([ADR-0009](docs/adr/0009-gpl-private-until-ready.md)). Its
+minutes are counted: CI stays lean, one job ([ADR-0009](docs/adr/0009-gpl-private-until-ready.md)). Its
 times are in [`docs/measurements.md`](docs/measurements.md).
 
 ## Dependencies
