@@ -10,32 +10,42 @@ What one operation of the layout model costs, followed by `arrange`, which a com
 draw the result: what a key press costs the model. No budget of the bar names it; it is measured
 against the frame at 240 Hz, 4.17 ms on the high tier.
 
-Machine: the high tier's desktop, Ryzen 7 5800X, the program pinned to one core (`taskset -c 6`),
-with the owner's consent. Another project's fuzzer ran on another core at times; the load average
-was 3.1 to 3.3. Build: the release profile, Rust 1.99.1, the code of the commit that adds this
-section's crate. Command: `nix develop -c cargo run --release -p yuna-layout --example timing`,
-three runs of 5,000 samples per row; the 4K output at scale 1.5, the middle window focused.
+Machine: the high tier's desktop, Ryzen 7 5800X, with the owner's consent. The program ran pinned
+to one core. The machine was not idle: two builds and an audio test of other projects ran on other
+cores, at low priority for the builds, with a load average of 11 to 12; the medians match a run
+made at a load of 3 before the closing review's fixes. Build: the release profile, Rust 1.99.1,
+the code of the commit that adds this section. Command:
+`nix develop -c cargo build --release -p yuna-layout --example timing`, then
+`taskset -c 6 target/release/examples/timing`; three runs of 5,000 samples per row, on the 4K
+output at scale 1.5. Each operation goes one way, then back, and the program checks first that
+it changes what is shown or focused. In dwindle, where each window halves the one before, only the
+first dozen windows have a size; the third one is focused.
 
 Medians and 99th percentiles in microseconds, the lowest and highest of the three runs:
 
 | Operation, then `arrange` | Windows | Scrolling: median | p99 | Dwindle: median | p99 |
 |---|---|---|---|---|---|
-| `arrange` alone | 100 | 3.7–4.2 | 5.4–6.3 | 4.4–4.7 | 4.7–5.8 |
-| Focus left, then right | 100 | 4.2–4.4 | 4.3–6.1 | 7.4–7.8 | 10.1–10.6 |
-| Open a window, then close it | 100 | 4.4–4.6 | 6.3–6.8 | 10.8–11.3 | 11.5–15.8 |
-| Move the focused window | 100 | 4.1–4.3 | 6.2–6.7 | 7.3–7.7 | 7.7–10.4 |
-| Fullscreen on, then off | 100 | 4.9–5.2 | 5.2–8.0 | 5.5–5.8 | 5.7–6.1 |
-| Float, then tile | 100 | 7.1–7.3 | 8.5–11.6 | 14.3–14.8 | 17.0–18.7 |
-| Switch the tiling and back | 100 | 11.4–12.0 | 14.8–20.8 | 11.0–11.2 | 15.4–15.7 |
-| `arrange` alone | 1,000 | 34–36 | 54–56 | 44–45 | 52–60 |
-| Open a window, then close it | 1,000 | 40–41 | 48–64 | 100–103 | 115–143 |
-| Float, then tile | 1,000 | 64–65 | 75–103 | 130–136 | 145–185 |
-| Switch the tiling and back | 1,000 | 115 | 140–209 | 116–118 | 136–195 |
+| `arrange` alone | 100 | 4.1–6.7 | 6.4–7.1 | 5.0–5.2 | 6.7–7.1 |
+| Focus left, then right | 100 | 4.9–7.8 | 8.0–8.4 | 8.5–8.8 | 11.3–12.3 |
+| Open a window, then close it | 100 | 4.8–8.2 | 8.2–8.7 | 14.3–14.7 | 19.5–20.4 |
+| Move the focused window, then back | 100 | 4.7–4.8 | 7.7–8.3 | 8.6–8.8 | 11.5–11.9 |
+| Fullscreen on, then off | 100 | 4.9–5.0 | 7.8–8.4 | 5.2–5.3 | 6.7–7.3 |
+| Float, then tile | 100 | 7.2–7.5 | 12.1–12.7 | 17.3–17.7 | 23.6–24.2 |
+| Switch the tiling, then back | 100 | 8.9–9.2 | 15.0–16.0 | 9.0–9.2 | 14.0–15.0 |
+| `arrange` alone | 1,000 | 39–40 | 61–66 | 59–60 | 80–84 |
+| Focus left, then right | 1,000 | 44–51 | 69–80 | 92–95 | 118–123 |
+| Open a window, then close it | 1,000 | 45–50 | 73–80 | 147–148 | 194–208 |
+| Move the focused window, then back | 1,000 | 44–49 | 71–79 | 93–96 | 119–129 |
+| Fullscreen on, then off | 1,000 | 46–48 | 74–82 | 58 | 76–79 |
+| Float, then tile | 1,000 | 67–68 | 102–109 | 196–197 | 266–283 |
+| Switch the tiling, then back | 1,000 | 87–95 | 135–152 | 88–99 | 146–153 |
 
-At 100 windows, every operation stays under 21 µs at the 99th percentile, half a percent of a
-frame at 240 Hz. Ten times the windows cost about ten times the time: the model is linear. The
-first measure was not: `arrange` cost 490 µs at 1,000 windows, and switching the tiling 2.4 ms,
-from searches repeated for every window; both were fixed before these figures.
+At 100 windows, every operation stays under 25 µs at the 99th percentile, about half a percent of
+a frame at 240 Hz. Ten times the windows cost about ten times the time: the model is linear in the
+seat's windows. The first measures were not: `arrange` cost 490 µs at 1,000 windows and switching
+the tiling 2.4 ms, from searches repeated for every window; they were fixed. A first set of
+figures was withdrawn after the closing review found that some of its rows timed operations that
+changed nothing.
 
 ## M1.1 — The workspace and its checks (2026-11-11)
 
