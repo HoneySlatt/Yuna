@@ -29,3 +29,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0018](0018-workspaces.md) | Workspaces: named, with dynamic ones as an option | Accepted |
 | [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted |
 | [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted |
+| [0021](0021-smithays-fork.md) | Smithay's fork: a private repository, generic patches | Accepted |

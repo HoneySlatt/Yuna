@@ -108,6 +108,7 @@ it is met.
 | Agents | Their own outputs and seats, at full rate ([ADR-0015](adr/0015-agents-workspaces.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
+| Smithay's fork | A private repository, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
 
 ### Open
 

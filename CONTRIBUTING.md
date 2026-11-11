@@ -77,8 +77,12 @@ times are in [`docs/measurements.md`](docs/measurements.md).
 ## Dependencies
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
-licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11. Smithay
-is pinned to one revision ([ADR-0017](docs/adr/0017-smithays-revision.md)).
+licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11, and, for
+the HDR prototype's branch only (M1.3), the same day, Smithay's `backend_drm`, `backend_gbm`,
+`backend_egl`, `renderer_gl`, `backend_session_libseat` and `backend_libinput` features with the
+system libraries they link. Smithay is pinned to one revision
+([ADR-0017](docs/adr/0017-smithays-revision.md)); its patches live in Yuna's fork
+([ADR-0021](docs/adr/0021-smithays-fork.md), [`docs/smithay-patches.md`](docs/smithay-patches.md)).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 
