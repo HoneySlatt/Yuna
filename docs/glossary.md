@@ -4,6 +4,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
+- **Development shell**: the environment `nix develop` opens from `flake.nix`, with the pinned
+  toolchain and every tool the checks use; CI runs in it too.
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Game mode**: the state Yuna enters when a game is fullscreen: effects and animations off,

@@ -8,7 +8,7 @@ Yuna is a Wayland compositor in Rust, for Linux, in two modes: headless, where a
 drive it, and the desktop, its owner's daily compositor ([ADR-0001](docs/adr/0001-what-yuna-is.md)).
 It is built on Smithay ([ADR-0011](docs/adr/0011-built-on-smithay.md)), headless first
 ([ADR-0002](docs/adr/0002-the-headless-mode-first.md)). It is under GPL-3.0-or-later and private
-until its owner decides otherwise. Today it is designed; no code exists yet.
+until its owner decides otherwise. Today it has its workspace and its checks; no backend yet.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.
@@ -17,7 +17,7 @@ understand it from the repository alone. Documentation is part of every delivera
 
 - `docs/PLAN.md`, its *Current* section and the current milestone: what to do now.
 - When planning, or when the task touches a decision: `docs/ROADMAP.md` (direction, stages, the
-  quality bar), `docs/ARCHITECTURE.md` once it exists, `docs/adr/`, and `docs/survey.md`, the facts
+  quality bar), `docs/ARCHITECTURE.md`, `docs/adr/`, and `docs/survey.md`, the facts
   behind the decisions.
 
 You remember nothing from earlier sessions. What is not written in these files is lost.
@@ -31,10 +31,12 @@ You remember nothing from earlier sessions. What is not written in these files i
 
 ## Commands
 
-M1.1 sets them up; until then there is nothing to build.
+Everything runs in the Nix development shell, with the toolchain pinned in `rust-toolchain.toml`.
+`CONTRIBUTING.md` gives the detail.
 
 ```sh
 nix develop -c scripts/check.sh    # every check of the definition of done; what CI runs
+nix develop -c cargo run -- --help
 ```
 
 Never here:

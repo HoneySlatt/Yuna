@@ -1,0 +1,51 @@
+# cargo-deny's policy for Yuna's dependencies: their licences, their advisories and where they come
+# from. scripts/check.sh runs `cargo deny --locked check`, which reads the advisory database from the
+# network.
+
+[graph]
+# Every feature of Yuna's crates, not only the default ones.
+all-features = true
+# Linux only (ADR-0006): the crates of other platforms in Cargo.lock are never built.
+targets = ["x86_64-unknown-linux-gnu"]
+
+[advisories]
+# Every RustSec advisory (a vulnerability, an unsound or an unmaintained crate) fails the check. One
+# may be ignored only by an entry here that says why.
+ignore = []
+
+[licenses]
+# Only licences whose code may be distributed inside a GPL-3.0-or-later program (ADR-0009). Absent on
+# purpose: GPL-2.0-only, and every licence the Free Software Foundation lists as incompatible with
+# the GPL version 3.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# The list says what may come in, not what has come in yet.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between Yuna's own crates carry no version; that is not a wildcard.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Smithay is taken from its repository at a pinned revision (ADR-0011, ADR-0017).
+allow-git = ["https://github.com/Smithay/smithay"]
