@@ -106,12 +106,13 @@ it is met.
 | Code | Our own; niri and jay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate ([ADR-0015](adr/0015-agents-workspaces.md)) |
+| Toolchain | Rust 1.99.1, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
+| Smithay's revision | Upstream master of 2026-11-11, `8fd9fe0` ([ADR-0017](adr/0017-smithays-revision.md)) |
 
 ### Open
 
 | Topic | Decided at |
 |---|---|
-| The toolchain, and Smithay's revision | M1.1 |
 | The KDL reader | the milestone that reads the configuration |
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
