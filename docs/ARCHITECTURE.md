@@ -117,11 +117,16 @@ operation, and an example measures the model:
 - `compositor.rs`: the public face, `Compositor`, which has at least one output. It holds
   calloop's event loop, the Wayland display and the state, and runs them: `dispatch` for one
   round, `run_until` for the program, `advance` to move the manual clock. Each round ends by
-  freeing what went away, without drawing: the outputs forget the surfaces destroyed
-  (`Output::cleanup`), Smithay's popup trees forget the popups destroyed
-  (`PopupManager::cleanup`), and the renderer frees the textures of closed windows, destroyed
-  surfaces and destroyed dmabufs. Then it sends the events written. Its `Counters` count frames
-  drawn, frame callbacks, configures, commits and wake-ups, for tests.
+  freeing what went away, without drawing. First the clients the display ended: each records its
+  end in a list the compositor holds, and `Backend::dispatch_single_client` frees it, its objects
+  destroyed as when a client leaves. wayland-backend frees an ended client only after a dispatch
+  that read some client, so one ended while Yuna drew its buffer (SIGBUS) or wrote it an event its
+  full buffer could not take would otherwise keep its windows, shown and focused, until another
+  client spoke. Then the outputs forget the surfaces destroyed (`Output::cleanup`), Smithay's
+  popup trees forget the popups destroyed (`PopupManager::cleanup`), and the renderer frees the
+  textures of closed windows, destroyed surfaces and destroyed dmabufs. Then it sends the events
+  written. Its `Counters` count frames drawn, frame callbacks, configures, commits and wake-ups,
+  for tests.
 - `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
   are not the shell's: `wl_compositor` (version 6) and `wl_subcompositor`, `wl_shm`,
   `wp_viewporter`, one seat with a keyboard (the owner's), `wl_output` with `xdg-output`,
@@ -186,8 +191,8 @@ from the rate each time, so that errors never add up.
    nothing changes; at once, with the state the window has, when the layout refuses it. Before
    the window is mapped, it will open so, and a configure says it if the first one is past.
 6. A commit without a buffer, the toplevel's destruction, or its surface's, closes it in the
-   layout and dismisses its popups. A client that leaves has its toplevels destroyed by the
-   display, the same way.
+   layout and dismisses its popups. A client that leaves, or that the display ends, has its
+   toplevels destroyed by the display, the same way, by the end of the round.
 
 ### Popups
 
@@ -231,8 +236,10 @@ its place relative to the toplevel's window geometry.
 5. Between refresh boundaries the keyboard moves only within the window it is on: to the popup
    that takes a grab there, or back to the window when the grab ends. A move to another window,
    such as an activation asks, waits for the next boundary ([A frame](#a-frame), step 1).
-6. Its window unmapping or going dismisses it. A client that destroys a parent popup before its
-   child gets xdg-shell's `not_the_topmost_popup` error from Smithay, and leaves.
+6. Its window unmapping or going dismisses it. When the window's surface is destroyed first,
+   Smithay keeps that surface's popup tree while its popups live; Yuna counts none of them as
+   tracked, so that none takes a grab. A client that destroys a parent popup before its child
+   gets xdg-shell's `not_the_topmost_popup` error from Smithay, and leaves.
 
 ### Activation and dialogs
 
@@ -367,24 +374,41 @@ the event loop watches, so that the loop returns and the socket is removed.
   `dmabuf.rs`, `selection.rs`).
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
-  (SIGBUS, which Smithay turns into a protocol error), leave mid-frame or holding a grab, a
-  selection and tokens, flood with 10,000 commits, or never read their socket. Each story ends
-  the same way: Yuna still dispatches, the layout keeps its invariants and agrees with the shell
-  (`Compositor::check_windows`, hidden from the documentation, for tests), a well-behaved
-  *sentinel* client gets its next frame callback at the exact boundary, and Yuna rests.
+  (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no
+  other client speaking), leave mid-frame or holding a grab, a selection and tokens, flood with
+  10,000 commits, or never read their socket. Each story ends the same way: before any client
+  speaks, and again after, the layout keeps its invariants and agrees with the shell
+  (`Compositor::check_windows`), and the popups and the keyboard are sound
+  (`Compositor::check_popups_and_keyboard`), both hidden from the documentation, for tests; a
+  well-behaved *sentinel* client gets its next frame callback at the exact boundary; and Yuna
+  rests.
 - `random_requests.rs` in it: proptest's random sequences of up to 99 steps. Up to three clients
   send any request with any values: toplevels, acknowledgements, buffers of 1 to 2,048 pixels a
   side, limits, geometry, fullscreen, maximise, parents, popups with any positioner, grabs,
-  activation tokens, viewports, fractional scale, selections, destruction in any order,
-  departure, second roles; the test moves the clock by up to 2 s and presses key bindings. A
-  request that breaks the protocol ends its client, which is allowed. Half the sequences start
-  from a busy state: three clients with a window, a dialog and a menu each. After each step Yuna
-  must dispatch, and the layout keep its invariants and agree with the shell; after the
-  sequence, the sentinel, focused by a key binding, gets its frame callback at the next
-  boundary, and Yuna rests once every client has gone. It runs the seeds kept in
-  `random_requests.proptest-regressions`, then 160 cases, which took 9.5 to 10.0 s in three runs
-  of a debug build on the development machine (16 threads; alone among measurements, but other
-  work ran); `PROPTEST_CASES=<n>` runs more ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
+  activation tokens, activations, viewports, fractional scale, selections, destruction in any
+  order, departure, second roles; the test moves the clock by up to 2 s, presses key bindings,
+  and focuses a window and moves to the next boundary, which gives that window the keyboard. A
+  request that breaks the protocol ends its client, which is allowed. A step in six is a
+  request of the client that has the keyboard, sent as a well-behaved client would: a token for
+  the surface its keyboard is on with its last `enter` serial, an activation of another of its
+  windows with its newest token, a grabbing menu on that surface, a selection. After each step
+  Yuna must dispatch, the layout keep its invariants and agree with the shell, and the popups and
+  the keyboard be sound; after the sequence, the sentinel, focused by a key binding, gets its
+  frame callback at the next boundary, and Yuna rests once every client has gone. Two tests share
+  the cases, so that they run at once on several cores: 80 cases start from a busy state, three
+  clients with a window, a dialog and a menu each; 80 from the sentinel alone.
+  `sequences_found_before` replays the sequences found failing, written out, since a seed in
+  `random_requests.proptest-regressions` replays its case only while the generator stays the
+  same. Each test prints how often the requests that need the keyboard took effect, as the
+  compositor's state and the clients' own events show it. Over 1,000 cases, 500 of each start,
+  on 2026-11-12: grabs granted 592 of 785 (75 %), tokens asked validly 631 of 3,650 (17 %),
+  activations that moved the focus 104 of 798 (13 %), selections taken 585 of 2,755 (21 %). From
+  busy starts alone: 75 %, 31 %, 20 % and 37 %; from the sentinel alone, where a random client
+  rarely has the keyboard before it breaks the protocol: 80 %, 4 %, 1 % and 5 %. The two tests
+  took 5.8 s together, and the whole of `tests/headless` 8.8 to 9.3 s in three runs, against
+  16.1 to 17.4 s with one test of 160 cases before (debug build, the development machine's 16
+  threads, alone among measurements but not alone on the machine); `PROPTEST_CASES=<n>` runs `n`
+  cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 

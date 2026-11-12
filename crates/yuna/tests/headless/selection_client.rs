@@ -130,6 +130,8 @@ pub struct SelectionState {
     control_device: Option<ext_data_control_device_v1::ExtDataControlDeviceV1>,
     /// The serial of each `wl_keyboard.enter`, in order.
     pub enters: Vec<u32>,
+    /// The surface the keyboard last entered and has not left.
+    pub keyboard_on: Option<wl_surface::WlSurface>,
     /// Every offer the client was given, in order; events name them by index.
     pub offers: Vec<Offer>,
     pub events: Vec<SelectionEvent>,
@@ -437,8 +439,19 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for SelectionState {
         _: &QueueHandle<Self>,
     ) {
         // The keymap's file descriptor, in its own event, is closed as the event drops.
-        if let wl_keyboard::Event::Enter { serial, .. } = event {
-            state.enters.push(serial);
+        match event {
+            wl_keyboard::Event::Enter {
+                serial, surface, ..
+            } => {
+                state.enters.push(serial);
+                state.keyboard_on = Some(surface);
+            }
+            wl_keyboard::Event::Leave { surface, .. }
+                if state.keyboard_on.as_ref() == Some(&surface) =>
+            {
+                state.keyboard_on = None;
+            }
+            _ => {}
         }
     }
 }

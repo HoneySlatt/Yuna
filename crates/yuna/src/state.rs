@@ -3,8 +3,8 @@
 //! preferred scale in `scale.rs`; viewporter needs no handler.
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -53,6 +53,10 @@ pub const OWNER_SEAT: SeatId = SeatId(1);
 /// A hook run when a frame's drawing has ended, before Yuna reads the time it ended at.
 pub(crate) type DrawHook = Box<dyn FnMut(&mut Clock)>;
 
+/// The clients the display ended since the end of the last round, which Yuna frees then
+/// (`Compositor::flush`). Each client's [`ClientState`] holds it and records its own end there.
+pub(crate) type DepartedClients = Arc<Mutex<Vec<ClientId>>>;
+
 /// Everything the compositor holds, beside its event loop and display.
 pub(crate) struct State {
     pub display_handle: DisplayHandle,
@@ -81,6 +85,7 @@ pub(crate) struct State {
     pub timer_fired: bool,
     pub stop_requested: bool,
     pub woke: bool,
+    pub departed_clients: DepartedClients,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     _xdg_decoration_state: XdgDecorationState,
@@ -145,6 +150,7 @@ impl State {
             timer_fired: false,
             stop_requested: false,
             woke: false,
+            departed_clients: DepartedClients::default(),
             // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
             compositor_state: CompositorState::new_v6::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),
@@ -197,18 +203,38 @@ impl State {
 }
 
 /// What Yuna keeps for each client.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ClientState {
     pub compositor: CompositorClientState,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
+    /// Where the client records that the display ended it: the compositor's list.
+    departed: DepartedClients,
+}
+
+impl ClientState {
+    pub(crate) fn new(departed: DepartedClients) -> ClientState {
+        ClientState {
+            compositor: CompositorClientState::default(),
+            window_cap_logged: AtomicBool::new(false),
+            departed,
+        }
+    }
 }
 
 impl ClientData for ClientState {
     fn initialized(&self, _client: ClientId) {}
 
-    fn disconnected(&self, _client: ClientId, reason: DisconnectReason) {
+    /// The display ended the client: it left, broke the protocol, or could not take its events.
+    /// Its objects are freed later, by a dispatch that reads a client or at the round's end. The
+    /// display calls this under its own lock, so it only records the client: a call back into
+    /// the display would wait for ever.
+    fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
         tracing::debug!(?reason, "a client left");
+        self.departed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(client);
     }
 }
 

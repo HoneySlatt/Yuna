@@ -701,3 +701,39 @@ fn a_positioner_past_i32_max_is_dismissed_not_a_panic() {
     }
     assert_rests(&mut compositor);
 }
+
+/// A window's surface is destroyed before its popup: the popup is dismissed. Smithay keeps it in
+/// the dead surface's tree while it lives, but Yuna no longer counts it as one of a window's: a
+/// grab it asks then, with the window's last `enter` serial, is refused, the keyboard goes
+/// nowhere, and the next boundary draws without them.
+#[test]
+fn a_popup_of_a_destroyed_surface_takes_no_grab() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    client.bind_keyboard(&mut compositor);
+    let enter = client.enter_serial();
+    let p = client.open_popup(&mut compositor, Parent::Window(w), menu());
+    client.destroy_surface(w);
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(p).done);
+    assert_eq!(compositor.check_popups_and_keyboard(), Ok(()));
+
+    client.grab_popup(p, enter);
+    client.ack_popup(p);
+    client.attach_popup(p, 200, 100, GREEN);
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.keyboard_focus().enter_serial, Some(enter));
+    assert_eq!(compositor.check_popups_and_keyboard(), Ok(()));
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_eq!(
+        compositor
+            .layout()
+            .arrange(OUTPUT)
+            .map(|placed| placed.len()),
+        Ok(0)
+    );
+    assert_rests(&mut compositor);
+}

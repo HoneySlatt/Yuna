@@ -207,20 +207,33 @@ impl Client {
             compositor
                 .dispatch(Some(Duration::ZERO))
                 .expect("the compositor dispatches");
-            if let Some(guard) = self.queue.prepare_read() {
-                match guard.read() {
-                    Ok(_) => {}
-                    Err(WaylandError::Io(error))
-                        if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            self.queue.dispatch_pending(&mut self.state)?;
+            self.read()?;
             if self.state.syncs >= target {
                 return Ok(());
             }
         }
         panic!("the compositor did not answer");
+    }
+
+    /// Reads and handles the events the compositor sent, without sending anything: for a story
+    /// in which no client may speak.
+    pub fn read_events(&mut self) {
+        if let Err(error) = self.read() {
+            panic!("the client's connection failed: {error}");
+        }
+    }
+
+    /// Reads what came on the socket, without waiting, and handles every event read.
+    fn read(&mut self) -> Result<(), DispatchError> {
+        if let Some(guard) = self.queue.prepare_read() {
+            match guard.read() {
+                Ok(_) => {}
+                Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        self.queue.dispatch_pending(&mut self.state)?;
+        Ok(())
     }
 
     /// Asks the compositor for an answer it writes into the socket, without ever reading it, as

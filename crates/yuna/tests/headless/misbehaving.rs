@@ -3,16 +3,17 @@
 //! frames.
 //!
 //! Every story has a well-behaved client, the sentinel, whose window opened first and was drawn
-//! at boundary 1, and ends the same way ([`the_others_go_on`]): Yuna still dispatches, the layout
-//! keeps its invariants and agrees with the shell, the sentinel's next frame callback comes at
-//! the exact next boundary, and then Yuna rests.
+//! at boundary 1, and ends the same way ([`the_others_go_on`]): before any client speaks, and
+//! again after, the layout keeps its invariants and agrees with the shell, and the popups and the
+//! keyboard are sound; Yuna still dispatches; the sentinel's next frame callback comes at the
+//! exact next boundary; and then Yuna rests.
 
 use std::time::Duration;
 
 use wayland_client::protocol::{wl_shm, wl_surface};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use yuna::Compositor;
 use yuna::yuna_layout::WindowId;
+use yuna::{Compositor, OWNER_SEAT};
 
 use crate::client::{Client, Parent, Placement, ProtocolError};
 use crate::popups::pixel;
@@ -58,18 +59,14 @@ fn next_boundary(start: Duration, now: Duration) -> Duration {
     boundary(start, k)
 }
 
-/// The end of every story: Yuna still dispatches; the layout keeps its invariants and agrees
-/// with the shell; the sentinel's frame callback, asked now, comes at the next boundary exactly,
-/// not a nanosecond before; then rest.
+/// The end of every story: Yuna's state is sound before any client speaks, so that a dispatch
+/// cannot hide a client the display ended and Yuna kept, and again once the sentinel has spoken;
+/// Yuna still dispatches; the sentinel's frame callback, asked now, comes at the next boundary
+/// exactly, not a nanosecond before; then rest.
 fn the_others_go_on(compositor: &mut Compositor, start: Duration, sentinel: &mut Sentinel) {
+    assert_sound(compositor);
     sentinel.client.roundtrip(compositor);
-    compositor
-        .layout()
-        .check_invariants()
-        .expect("the layout keeps its invariants");
-    compositor
-        .check_windows()
-        .expect("the layout and the shell agree");
+    assert_sound(compositor);
 
     let w = sentinel.window;
     let frames = sentinel.client.window(w).frames.len();
@@ -86,6 +83,21 @@ fn the_others_go_on(compositor: &mut Compositor, start: Duration, sentinel: &mut
     advance_to(compositor, &mut sentinel.client, next);
     assert_eq!(sentinel.client.window(w).frames[frames..], [millis(next)]);
     assert_rests(compositor);
+}
+
+/// The layout keeps its invariants and agrees with the shell, and the popups and the keyboard
+/// are sound.
+fn assert_sound(compositor: &Compositor) {
+    compositor
+        .layout()
+        .check_invariants()
+        .expect("the layout keeps its invariants");
+    compositor
+        .check_windows()
+        .expect("the layout and the shell agree");
+    compositor
+        .check_popups_and_keyboard()
+        .expect("the popups and the keyboard are sound");
 }
 
 /// Where the layout draws `window` on the default output: x, y, width, height.
@@ -474,29 +486,54 @@ fn protocol_breaches_end_their_client_alone() {
 }
 
 /// A client shrinks the memory of its buffer's pool after `create_pool`, so that reading the
-/// buffer raises SIGBUS. Yuna reads it when it draws, at boundary 2: Smithay's handler for SIGBUS
-/// turns the fault into `wl_shm.invalid_fd` on the buffer, which ends the client. The process
-/// lives; the window's buffer is left out, so that boundary has nothing new to draw; and the
-/// sentinel goes on.
+/// buffer raises SIGBUS. Its window, focused and drawn blue at boundary 2, commits that buffer;
+/// Yuna reads it when it draws, at boundary 3: Smithay's handler for SIGBUS turns the fault into
+/// `wl_shm.invalid_fd` on the buffer, which ends the client. The process lives, and the frame is
+/// drawn without the buffer, the background where the window was. No client speaks after, yet
+/// Yuna frees the client at the end of that round: its window leaves the layout, the sentinel's
+/// window takes the layout's focus at once and the keyboard at boundary 4, and Yuna rests.
 #[test]
 fn a_pool_shrunk_under_its_buffer_ends_its_client_alone() {
     let mut compositor = manual_compositor();
     let start = compositor.now();
     let mut sentinel = sentinel(&mut compositor, start);
+    sentinel.client.bind_keyboard(&mut compositor);
     let mut client = Client::connect(&mut compositor);
-    let w = client.open_window(&mut compositor);
-    client.ack(w);
+    let w = open_and_commit(&mut compositor, &mut client, BLUE);
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    // Its window's place, 1,288 logical units from the left, is pixel 1,932.
+    assert_eq!(pixel(&mut compositor, 1940, 30), BLUE_PIXEL);
     let surface = client.window(w).surface.clone();
-    let file = client.attach_shrinkable(&surface, (640, 480), BLUE);
+    let file = client.attach_shrinkable(&surface, TILE, BLUE);
     client.commit(w);
     client.roundtrip(&mut compositor);
     file.set_len(0).expect("the pool's file shrinks");
 
     let drawn = compositor.counters().frames_drawn;
     compositor
-        .advance(boundary(start, 2) - compositor.now())
+        .advance(boundary(start, 3) - compositor.now())
         .expect("the manual clock moves");
-    assert_eq!(compositor.counters().frames_drawn, drawn);
+    assert_eq!(compositor.counters().frames_drawn, drawn + 1);
+    assert_eq!(pixel(&mut compositor, 1940, 30), BACKGROUND_PIXEL);
+    compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("the compositor dispatches");
+    assert_eq!(compositor.layout().window(WindowId(2)), None);
+    assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
+    compositor
+        .check_windows()
+        .expect("the layout and the shell agree");
+    compositor
+        .advance(boundary(start, 4) - compositor.now())
+        .expect("the manual clock moves");
+    sentinel.client.read_events();
+    let sentinel_surface = sentinel.client.window(sentinel.window).surface.clone();
+    assert_eq!(
+        sentinel.client.keyboard_focus().surface,
+        Some(sentinel_surface)
+    );
+    assert_rests(&mut compositor);
+
     assert_eq!(
         client.protocol_error(&mut compositor),
         ProtocolError {
@@ -504,8 +541,6 @@ fn a_pool_shrunk_under_its_buffer_ends_its_client_alone() {
             code: wl_shm::Error::InvalidFd as u32,
         }
     );
-    // Its window's place is the background: 1,288 logical units are pixel 1,932.
-    assert_eq!(pixel(&mut compositor, 1940, 30), BACKGROUND_PIXEL);
     drop(client);
     the_others_go_on(&mut compositor, start, &mut sentinel);
 }

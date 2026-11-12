@@ -61,13 +61,17 @@ clock, with clients written with `wayland-client`; they need the shell's Mesa.
 The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
 compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
 to the shortest sequence that still fails, and keep its seed in a `.proptest-regressions` file
-beside the test. Commit that file with the fix: the case then runs at every check. The random
-requests run as many cases as fit about 10 s of the check ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests));
-`PROPTEST_CASES` runs more, for a search before a release or after a change to the protocols'
-handling:
+beside the test. Commit that file with the fix: the case then runs at every check. A seed
+replays its case only while the test's generator stays the same; when you change the random
+requests' generator, write each sequence found into `sequences_found_before` in that file, and
+drop the seeds. The random requests run, in two tests, as many cases as fit about 10 s of the
+check ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests)); `PROPTEST_CASES` runs that many in
+each, for a search before a release or after a change to the protocols' handling. With
+`--nocapture`, each test prints how often the requests that need the keyboard's focus took
+effect:
 
 ```sh
-PROPTEST_CASES=5000 nix develop -c cargo test -p yuna --test headless random_requests
+PROPTEST_CASES=2500 nix develop -c cargo test -p yuna --test headless random_requests -- --nocapture
 ```
 
 The timings are measured on an idle machine, one measurement at a time, and go to

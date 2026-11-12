@@ -4,7 +4,7 @@
 use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
@@ -134,7 +134,7 @@ impl Compositor {
                 handle
                     .insert_source(socket, |stream, _, state| {
                         state.woke = true;
-                        let client = Arc::new(ClientState::default());
+                        let client = Arc::new(ClientState::new(state.departed_clients.clone()));
                         if let Err(error) = state.display_handle.insert_client(stream, client) {
                             tracing::warn!(%error, "a client could not connect");
                         }
@@ -163,9 +163,10 @@ impl Compositor {
     /// `wayland-client`'s `Connection::from_socket`.
     pub fn connect_client(&mut self) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
+        let client = Arc::new(ClientState::new(self.state.departed_clients.clone()));
         self.state
             .display_handle
-            .insert_client(ours, Arc::new(ClientState::default()))
+            .insert_client(ours, client)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
         Ok(theirs)
     }
@@ -281,11 +282,24 @@ impl Compositor {
     }
 
     /// Checks that the layout and the shell agree on windows: each window Yuna gave an id is in
-    /// the layout exactly while a live toplevel holds it, and the reverse. For tests, beside
-    /// [`Layout::check_invariants`]; its cost grows with the windows.
+    /// the layout exactly while a live toplevel holds it, and the reverse; each toplevel's client
+    /// is one the display still serves; and a toplevel has a window when, and only when, it has a
+    /// buffer the layout did not refuse, once configured. For tests, beside
+    /// [`Layout::check_invariants`]; its cost grows with every window ever opened, and with the
+    /// clients.
     #[doc(hidden)]
     pub fn check_windows(&self) -> Result<(), String> {
         self.state.check_windows()
+    }
+
+    /// Checks the popups and the keyboard: every popup tracked is in the tree of the mapped
+    /// window its parents lead to, once; the popup grab, while there is one, holds popups its
+    /// window tracks; and the keyboard is on a live surface, or on none, or an arrangement is
+    /// pending that moves it. For tests, beside [`Compositor::check_windows`]; its cost grows
+    /// with the square of the popups.
+    #[doc(hidden)]
+    pub fn check_popups_and_keyboard(&self) -> Result<(), String> {
+        self.state.check_popups_and_keyboard()
     }
 
     /// Whether the client of `window` said, with `xdg-dialog-v1`, that it is a modal dialog.
@@ -364,10 +378,12 @@ impl Compositor {
         Ok(())
     }
 
-    /// Ends a round: frees what closed windows, destroyed popups and surfaces left behind, then
-    /// sends the events written to every client. A client that cannot take them is dropped by
-    /// the display; the others go on.
+    /// Ends a round: frees the clients the display ended, then what closed windows, destroyed
+    /// popups and surfaces left behind, then sends the events written to every client. A client
+    /// that cannot take them is ended by the display, and freed at the next round's end; the
+    /// others go on.
     fn flush(&mut self) {
+        self.free_departed_clients();
         // Smithay's popup trees and grabs forget their destroyed popups.
         self.state.popups.cleanup();
         // Each output forgets the surfaces destroyed since, which it keeps to send `enter` once.
@@ -377,6 +393,36 @@ impl Compositor {
         self.state.release_textures();
         if let Err(error) = self.display.flush_clients() {
             tracing::debug!(%error, "flushing the clients failed");
+        }
+    }
+
+    /// Frees the clients the display ended since the last round's end: their objects are
+    /// destroyed as when a client leaves, so that their windows close now. wayland-backend frees
+    /// an ended client only after a dispatch that read some client; one it ended while Yuna drew
+    /// its buffer (SIGBUS) or wrote it an event its full buffer could not take would keep its
+    /// windows, shown and focused, until another client spoke: at rest, for ever. Freeing a client
+    /// may end another, whose buffer the departure's events fill: the loop frees it too, and ends,
+    /// since each client is ended once.
+    fn free_departed_clients(&mut self) {
+        loop {
+            let departed = std::mem::take(
+                &mut *self
+                    .state
+                    .departed_clients
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+            );
+            if departed.is_empty() {
+                return;
+            }
+            for client in departed {
+                // An ended client is not read: the call fails, and frees it on its way out. A
+                // client a dispatch freed already is not found, and nothing happens.
+                let _ = self
+                    .display
+                    .backend()
+                    .dispatch_single_client(&mut self.state, client);
+            }
         }
     }
 }

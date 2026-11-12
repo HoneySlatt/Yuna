@@ -40,6 +40,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
+- A toplevel made again on a surface that kept its old buffer is mapped at its next commit, never
+  configured; xdg-shell calls that its client's error, and wlroots refuses it. Yuna should end
+  that client with a protocol error.
 - Smithay is built without overflow checks, so that a popup positioner's absurd values cannot
   panic a debug build ([ADR-0027](adr/0027-smithay-without-overflow-checks.md)): any overflow
   inside Smithay wraps silently. A saturating patch in the fork replaces the setting when main
@@ -64,11 +67,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   them without end, against [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)'s intent.
   A bound on the tokens of clients gone, the oldest pushed out, would close it; it changes
   ADR-0028, so it waits for the owner's decision.
-- A client the display ends outside a dispatch, when Yuna draws its buffer (SIGBUS) or sends it
-  an event its full buffer cannot take, is freed only at the next dispatch that reads a client:
-  its windows stay in the layout, and the focus with them, until any client sends something.
-  wayland-backend frees ended clients only after reading one; `Backend::dispatch_single_client`
-  frees them at once, and could be called after the deadlines run.
 - Smithay `8fd9fe0` gives a surface the role it has again: a second `xdg_toplevel` or
   `xdg_popup` while the first lives, which xdg-shell forbids. Yuna refuses it itself, with
   `xdg_surface.already_constructed`; for a second `xdg_surface` on the surface, xdg-shell names

@@ -26,13 +26,17 @@
 //! `xdg_popup` on a surface whose first lives ends its client, as a second toplevel does
 //! (`shell.rs`).
 
+use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
+
 use smithay::desktop::{
     PopupGrab, PopupGrabError, PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy,
 };
 use smithay::input::Seat;
-use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Resource, Weak};
 use smithay::utils::{Logical, Point, Rectangle, Serial};
 use smithay::wayland::compositor::{get_role, with_states};
 use smithay::wayland::shell::xdg::{
@@ -57,6 +61,11 @@ pub const MAX_POPUPS_PER_WINDOW: usize = 64;
 /// few of them; within this bound the sums stay far from `i32`'s limits.
 const MAX_POSITIONER_VALUE: u32 = 1 << 20;
 
+/// The `xdg_popup` that holds the popup role of a surface, kept in the surface's data so that a
+/// second one is found at once, without a walk over every popup. Weak: the role object holds its
+/// surface, so a strong reference in the surface's data would make a cycle that is never freed.
+struct PopupRoleHolder(Mutex<Weak<XdgPopup>>);
+
 /// A granted popup grab, and the toplevel surface whose popups it holds.
 pub(crate) struct ActivePopupGrab {
     pub toplevel: WlSurface,
@@ -67,7 +76,7 @@ impl State {
     /// A new popup: placed, tracked and told its window's scale, or dismissed when its window
     /// has too many popups or it cannot be placed.
     pub(crate) fn popup_created(&mut self, popup: PopupSurface, positioner: PositionerState) {
-        if self.has_another_popup_role(&popup) {
+        if !take_popup_role(&popup) {
             refuse_second_role(popup.xdg_popup());
             return;
         }
@@ -99,17 +108,6 @@ impl State {
         }
         // So that its first buffer is drawn at its window's scale (`scale.rs`).
         self.tell_surface_preferred_scale(popup.wl_surface(), popup.wl_surface());
-    }
-
-    /// Whether the surface of `popup` has another live `xdg_popup`: Smithay gives it the role
-    /// again, and tracking both would put the surface twice in its window's tree. Walks every
-    /// live popup, all clients together, as Smithay does when one is destroyed.
-    fn has_another_popup_role(&self, popup: &PopupSurface) -> bool {
-        self.xdg_shell_state.popup_surfaces().iter().any(|other| {
-            other.wl_surface() == popup.wl_surface()
-                && other.xdg_popup() != popup.xdg_popup()
-                && other.alive()
-        })
     }
 
     /// A commit of `surface`, part of the popup whose surface is `popup_surface`. Its initial
@@ -417,6 +415,91 @@ impl State {
         }
     }
 
+    /// Checks Yuna's popups and the keyboard they take, for tests. Every popup tracked, all
+    /// clients together, is in the tree of the mapped window its chain of parents leads to, and
+    /// in no tree twice. The popup grab, while Yuna holds one, has not ended, is on a mapped
+    /// window, and its topmost popup is tracked there, which keeps the grab's other popups, under
+    /// it, tracked too. The keyboard is on a live surface or on none, or, while an arrangement is
+    /// pending, on a surface gone since the last one: that arrangement moves it. Says which rule
+    /// is broken. Walks every popup, and for each the trees of every window.
+    pub(crate) fn check_popups_and_keyboard(&self) -> Result<(), String> {
+        let is_mapped = |root: &WlSurface| {
+            self.toplevels
+                .get(&root.id())
+                .is_some_and(|toplevel| toplevel.window.is_some())
+        };
+        for popup in self.xdg_shell_state.popup_surfaces() {
+            let surface = popup.wl_surface();
+            if self.popups.find_popup(surface).is_none() {
+                continue;
+            }
+            match popup_toplevel(surface) {
+                // Smithay keeps the tree of a destroyed surface while its popups live; Yuna
+                // dismissed them, and must not count them.
+                Some(root) if !root.is_alive() => {
+                    if is_tracked(&root, surface) {
+                        return Err(format!(
+                            "the popup {} of the destroyed surface {} is counted as tracked",
+                            surface.id(),
+                            root.id()
+                        ));
+                    }
+                }
+                Some(root) if is_mapped(&root) && is_tracked(&root, surface) => {}
+                _ => {
+                    return Err(format!(
+                        "the popup {} is tracked, but not in the tree of a mapped window its \
+                         parents lead to",
+                        surface.id()
+                    ));
+                }
+            }
+        }
+        let windows = self
+            .windows
+            .values()
+            .filter_map(|surface| self.toplevels.get(surface));
+        for toplevel in windows {
+            let mut seen = HashSet::new();
+            for (popup, _) in PopupManager::popups_for_surface(toplevel.wl_surface()) {
+                if !seen.insert(popup.wl_surface().id()) {
+                    return Err(format!(
+                        "the popup {} is twice in the tree of {}",
+                        popup.wl_surface().id(),
+                        toplevel.wl_surface().id()
+                    ));
+                }
+            }
+        }
+        if let Some(active) = &self.popup_grab {
+            if active.grab.has_ended() || !is_mapped(&active.toplevel) {
+                return Err(format!(
+                    "Yuna holds a popup grab on {} that has ended or whose window is not mapped",
+                    active.toplevel.id()
+                ));
+            }
+            let topmost = active.grab.current_grab();
+            let tracked = topmost.as_ref().is_some_and(|topmost| {
+                *topmost != active.toplevel && is_tracked(&active.toplevel, topmost)
+            });
+            if !tracked {
+                return Err(format!(
+                    "the popup grab on {} holds {:?}, which is not a popup its window tracks",
+                    active.toplevel.id(),
+                    topmost.map(|topmost| topmost.id())
+                ));
+            }
+        }
+        let focus = self.keyboard.current_focus();
+        if focus.as_ref().is_some_and(|focus| !focus.is_alive()) && !self.layout_dirty {
+            return Err(
+                "the keyboard is on a surface that is gone, and no arrangement will move it"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     /// Arms the next boundary of the output the toplevel whose surface is `toplevel` is shown on,
     /// so that a popup that left it is no longer drawn.
     fn refresh_output_of(&mut self, toplevel: &WlSurface) {
@@ -441,9 +524,32 @@ pub(crate) fn window_surface_trees(toplevel: &WlSurface) -> Vec<WlSurface> {
 }
 
 /// Whether the popup of `popup_surface` is in the popup tree of the toplevel whose surface is
-/// `toplevel`, alive and not dismissed. Walks at most [`MAX_POPUPS_PER_WINDOW`] popups.
+/// `toplevel`, alive and not dismissed. Walks at most [`MAX_POPUPS_PER_WINDOW`] popups. Smithay
+/// keeps the tree of a destroyed surface while its popups live, but each was dismissed when the
+/// surface went (`dismiss_popups_of`): none of them is tracked.
 fn is_tracked(toplevel: &WlSurface, popup_surface: &WlSurface) -> bool {
-    PopupManager::popups_for_surface(toplevel).any(|(popup, _)| popup.wl_surface() == popup_surface)
+    toplevel.is_alive()
+        && PopupManager::popups_for_surface(toplevel)
+            .any(|(popup, _)| popup.wl_surface() == popup_surface)
+}
+
+/// Records the `xdg_popup` of `popup` as the holder of its surface's popup role, unless another
+/// one that lives holds it: Smithay gives the surface the role again, which xdg-shell forbids, and
+/// tracking both would put the surface twice in its window's tree. False when another holds it.
+/// A surface whose first `xdg_popup` was destroyed may take a new one.
+fn take_popup_role(popup: &PopupSurface) -> bool {
+    let xdg_popup = popup.xdg_popup();
+    with_states(popup.wl_surface(), |states| {
+        let holder = states
+            .data_map
+            .get_or_insert_threadsafe(|| PopupRoleHolder(Mutex::new(xdg_popup.downgrade())));
+        let mut held_by = holder.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if held_by.is_alive() && *held_by != *xdg_popup {
+            return false;
+        }
+        *held_by = xdg_popup.downgrade();
+        true
+    })
 }
 
 /// The toplevel surface a popup belongs to, through its parent popups. None for a surface that

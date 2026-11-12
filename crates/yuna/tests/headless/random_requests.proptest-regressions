@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 17de33b28d915e76ab1bf53b9f48df1437ae4b7fd40f484433d4afe2e6d5e5ad # shrinks to busy = false, steps = [Client { client: 0, request: OpenToplevel }, Client { client: 0, request: Destroy(Surface(0)) }, Client { client: 0, request: SecondRole { target: Window(0), kind: 0 } }]

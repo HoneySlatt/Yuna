@@ -15,6 +15,7 @@
 //! `already_constructed`, which Smithay does not send; one on a surface its client destroyed is
 //! ignored. Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -539,9 +540,17 @@ impl State {
     }
 
     /// Checks that the layout and the shell agree, for tests: each window Yuna gave an id holds
-    /// it in the layout exactly while a live toplevel holds it, each output's workspaces hold
-    /// only such windows, and each toplevel Yuna keeps is alive. Says which rule is broken.
+    /// it in the layout exactly while a live toplevel holds it; each output's workspaces hold
+    /// only such windows; each toplevel Yuna keeps is alive and belongs to a client the display
+    /// still serves; a toplevel with a window has a buffer the layout did not refuse, and a
+    /// configured toplevel with such a buffer has a window. Says which rule is broken.
     pub(crate) fn check_windows(&self) -> Result<(), String> {
+        let mut served = HashSet::new();
+        self.display_handle
+            .backend_handle()
+            .with_all_clients(|client| {
+                served.insert(client);
+            });
         for (&window, surface) in &self.windows {
             let toplevel = self
                 .toplevels
@@ -561,10 +570,29 @@ impl State {
             if !toplevel.surface.alive() {
                 return Err(format!("the toplevel of {surface} is dead"));
             }
+            let client = toplevel.wl_surface().client().map(|client| client.id());
+            if !client.is_some_and(|client| served.contains(&client)) {
+                return Err(format!(
+                    "the toplevel of {surface} belongs to a client the display ended"
+                ));
+            }
             if let Some(window) = toplevel.window
                 && self.windows.get(&window) != Some(surface)
             {
                 return Err(format!("{surface}'s window {} is not recorded", window.0));
+            }
+            // A toplevel made on a surface that kept the buffer of an earlier role object has
+            // that buffer before its first configure: it maps at its next commit.
+            let buffer = has_buffer(toplevel.wl_surface());
+            let configured = toplevel.surface.is_initial_configure_sent();
+            let mapped = toplevel.window.is_some();
+            let unmapped_wrongly = !mapped && buffer && configured && !toplevel.refused;
+            if unmapped_wrongly || (mapped && (!buffer || toplevel.refused)) {
+                return Err(format!(
+                    "{surface} has a buffer: {buffer}, configured: {configured}, refused: {}, \
+                     but its window is {:?}",
+                    toplevel.refused, toplevel.window
+                ));
             }
         }
         let given = (1..self.next_window_id).map(WindowId);

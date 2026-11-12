@@ -1,36 +1,62 @@
 //! Random sequences of requests (ADR-0007, ADR-0025), with proptest: up to three clients send any
 //! request in any order, with any values, extremes and nonsense included, while the test moves
-//! the clock and changes the layout as key bindings would. A request that breaks the protocol
-//! ends its client, which is allowed; its slot connects a new client at its next request.
+//! the clock, changes the layout as key bindings would, and focuses windows. A request that breaks
+//! the protocol ends its client, which is allowed; its slot connects a new client at its next
+//! request.
 //!
-//! After every step: Yuna dispatches; the layout keeps its invariants; and the layout and the
-//! shell agree on windows ([`Compositor::check_windows`]). After the sequence, a sentinel client
-//! that joined first and stayed well-behaved, focused by a key binding, gets its frame callback
-//! at the next refresh boundary; once every client has gone, Yuna rests.
+//! The requests that need the keyboard's focus and a real serial, popup grabs, activation tokens,
+//! activations and selections, are often sent by the client that has the focus, naming the surface
+//! its keyboard is on and the serial of its last `enter`, so that they take effect as well as
+//! being refused. The test counts how often they take effect ([`Reach`]), and prints it.
 //!
-//! A failure shrinks to the shortest sequence that still fails; proptest keeps its seed in
-//! `random_requests.proptest-regressions`, committed beside this file so that the case runs at
-//! every check. The case count fits about 10 s of the check in a debug build
-//! (`docs/ARCHITECTURE.md`); `PROPTEST_CASES=<n>` runs more.
+//! After every step: Yuna dispatches; the layout keeps its invariants; the layout and the shell
+//! agree on windows ([`Compositor::check_windows`]); and the popups and the keyboard are sound
+//! ([`Compositor::check_popups_and_keyboard`]). After the sequence, a sentinel client that joined
+//! first and stayed well-behaved, focused by a key binding, gets its frame callback at the next
+//! refresh boundary; once every client has gone, Yuna rests.
+//!
+//! Two tests share the cases, so that a runner with several cores runs them at once: one starts
+//! from a busy state, three clients with a window, a dialog and a menu each; the other from the
+//! sentinel alone. A failure shrinks to the shortest sequence that still fails; proptest keeps its
+//! seed in `random_requests.proptest-regressions`, beside this file, committed so that the case
+//! runs at every check. A seed replays its case only while the generator stays the same: when the
+//! generator changes, the sequences found move to [`sequences_found_before`]. The case counts fit
+//! about 10 s of the check in a debug build (`docs/ARCHITECTURE.md`); `PROPTEST_CASES=<n>` runs
+//! `n` in each test.
 
+use std::cell::RefCell;
+use std::fmt;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use proptest::test_runner::FileFailurePersistence;
+use proptest::test_runner::{FileFailurePersistence, TestRunner, contextualize_config};
+use wayland_client::protocol::wl_surface::WlSurface;
 use yuna::yuna_layout::{Direction, OutputId, Tiling, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 
 use crate::assert_rests;
 use crate::client::{Anchor, Client, ConstraintAdjustment, Gravity, Parent, Placement};
-use crate::selection_client::SelectionClient;
+use crate::selection_client::{SelectionClient, SelectionEvent};
 
 /// The clients that send random requests, beside the sentinel.
 const CLIENTS: usize = 3;
+/// The cases of each of the two tests.
+const CASES_PER_TEST: u32 = 80;
 /// The output: 1280 × 720 pixels at 60 Hz and scale 1.5, small so that frames cost little.
 const OUTPUT_SIZE: (u32, u32) = (1280, 720);
+const OUTPUT: OutputId = OutputId(1);
 const RATE: u32 = 60;
 const SCALE: f64 = 1.5;
 const TEXT: &str = "text/plain;charset=utf-8";
+
+/// Who sends a request.
+#[derive(Debug, Clone, Copy)]
+enum Who {
+    /// The client of this slot, connected at its first request.
+    Slot(usize),
+    /// The client that has the keyboard focus; the first slot's when none has it.
+    Focused,
+}
 
 /// A serial a request names.
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +69,24 @@ enum Serial {
     Any(u32),
 }
 
-/// A surface of the client: a window's or a popup's, by an index taken modulo their count.
+/// A surface of the client: a window's or a popup's, by an index taken modulo their count, or
+/// the one its keyboard is on.
 #[derive(Debug, Clone, Copy)]
 enum Target {
     Window(usize),
     Popup(usize),
+    /// None when the client does not have the keyboard.
+    Focused,
+    /// A window but the one its keyboard is on, by an index taken modulo their count.
+    OtherWindow(usize),
+}
+
+/// Which of its activation tokens a client uses.
+#[derive(Debug, Clone, Copy)]
+enum Token {
+    Newest,
+    /// By an index taken modulo the tokens it asked.
+    Any(usize),
 }
 
 /// What a commit does to the surface's buffer.
@@ -140,10 +179,12 @@ enum Request {
         window: usize,
         parent: Option<usize>,
     },
-    /// A popup on a window, on a popup, or on nothing; its initial commit.
+    /// A popup on a window, on a popup, or on nothing; when `grab`, it asks a grab with the
+    /// serial of the client's last `enter`, if it had one; then its initial commit.
     OpenPopup {
         parent: Option<Target>,
         placement: RandomPlacement,
+        grab: bool,
     },
     Grab {
         popup: usize,
@@ -159,7 +200,7 @@ enum Request {
         surface: Option<Target>,
     },
     Activate {
-        token: usize,
+        token: Token,
         target: Target,
     },
     Viewport {
@@ -174,12 +215,14 @@ enum Request {
         primary: bool,
         serial: Serial,
     },
-    /// A second role object for the surface of `target`, of the kind it has or not: a toplevel
-    /// on its `xdg_surface` (0) or on a new one (1), or a popup (2). Allowed for a surface whose
-    /// role object was destroyed, the client's protocol error otherwise.
+    /// A second role object for the surface of `target`: for a window's, a toplevel on its
+    /// `xdg_surface` (0) or on a new one (1), or a popup (2); for a popup's, a popup. A popup
+    /// hangs from `parent`, or from nothing. Allowed for a surface whose role object was
+    /// destroyed, the client's protocol error otherwise.
     SecondRole {
         target: Target,
         kind: u8,
+        parent: Option<Target>,
     },
     Destroy(Object),
     Disconnect,
@@ -200,18 +243,74 @@ const WORKSPACES: [&str; 3] = ["1", "2", "3"];
 #[derive(Debug, Clone)]
 enum Step {
     Client {
-        client: usize,
+        who: Who,
         request: Request,
     },
     /// Moves the clock by this many milliseconds.
     Advance(u64),
     Layout(KeyBinding),
+    /// A key binding focuses a window the output holds, by an index taken modulo their count,
+    /// and the clock moves to the next boundary, which gives that window the keyboard.
+    FocusWindow(usize),
+}
+
+/// How often the requests that need the keyboard's focus and a real serial took effect, as Yuna's
+/// public state and the clients' own events show it.
+#[derive(Debug, Default, Clone, Copy)]
+struct Reach {
+    /// Popup grabs asked; granted: the keyboard went to the popup.
+    grabs: Tally,
+    /// Activation tokens asked; valid: asked with the serial of the client's last `enter`, for
+    /// the surface its keyboard is on, as Yuna asks of a valid token.
+    tokens: Tally,
+    /// Activations asked; done: the layout's focus moved to another window.
+    activations: Tally,
+    /// Selections set; taken: the client was told of its new selection.
+    selections: Tally,
+}
+
+/// Of the requests of one kind, how many were sent and how many took effect.
+#[derive(Debug, Default, Clone, Copy)]
+struct Tally {
+    asked: u64,
+    took: u64,
+}
+
+/// What a request sent asked, of what [`Reach`] counts.
+#[derive(Debug, Clone, Copy)]
+enum Asked {
+    Other,
+    /// A popup grab, and the popup when it was created and committed with it, which may grant
+    /// it at once.
+    Grab {
+        committed: Option<usize>,
+    },
+    /// A commit of a popup, which may grant a grab it asked before.
+    PopupCommit(usize),
+    Token {
+        valid: bool,
+    },
+    Activation,
+    Selection,
+}
+
+/// What [`Reach`] compares a step's outcome with, read before the step.
+struct Before {
+    keyboard_on: Option<WlSurface>,
+    selections_told: usize,
+    focused: Option<WindowId>,
 }
 
 /// A client slot: the first most often, so that one client lives long enough to reach deep
-/// states, the others less, so that clients meet.
-fn client() -> impl Strategy<Value = usize> {
-    prop_oneof![6 => Just(0), 3 => Just(1), 1 => Just(2)]
+/// states, the others less, so that clients meet; or, at times, the client that has the keyboard
+/// focus.
+fn who() -> impl Strategy<Value = Who> {
+    prop_oneof![
+        6 => Just(Who::Slot(0)),
+        3 => Just(Who::Slot(1)),
+        1 => Just(Who::Slot(2)),
+        2 => Just(Who::Focused),
+    ]
 }
 
 fn index() -> impl Strategy<Value = usize> {
@@ -277,6 +376,14 @@ fn target() -> impl Strategy<Value = Target> {
     prop_oneof![
         3 => index().prop_map(Target::Window),
         1 => index().prop_map(Target::Popup),
+        2 => Just(Target::Focused),
+    ]
+}
+
+fn token() -> impl Strategy<Value = Token> {
+    prop_oneof![
+        1 => Just(Token::Newest),
+        1 => index().prop_map(Token::Any),
     ]
 }
 
@@ -288,6 +395,8 @@ fn buffer() -> impl Strategy<Value = Buffer> {
     ]
 }
 
+/// Any positioner, its values as [`size_value`] and [`coordinate`] give them: a third or so can
+/// be placed, the others hold nonsense.
 fn placement() -> impl Strategy<Value = RandomPlacement> {
     (
         size_pair(),
@@ -296,6 +405,28 @@ fn placement() -> impl Strategy<Value = RandomPlacement> {
         0..=8u32,
         0..=63u32,
         coordinate_pair(),
+    )
+        .prop_map(
+            |(size, anchor_rect, anchor, gravity, adjustment, offset)| RandomPlacement {
+                size,
+                anchor_rect,
+                anchor,
+                gravity,
+                adjustment,
+                offset,
+            },
+        )
+}
+
+/// A positioner a menu would have: a size and an anchor within a window, any rules.
+fn menu_placement() -> impl Strategy<Value = RandomPlacement> {
+    (
+        (1..=600i32, 1..=600i32),
+        (0..=400i32, 0..=400i32, 1..=50i32, 1..=50i32),
+        0..=8u32,
+        0..=8u32,
+        0..=63u32,
+        (-50..=50i32, -50..=50i32),
     )
         .prop_map(
             |(size, anchor_rect, anchor, gravity, adjustment, offset)| RandomPlacement {
@@ -328,6 +459,7 @@ fn object() -> impl Strategy<Value = Object> {
 
 fn request() -> impl Strategy<Value = Request> {
     let drawn_size = proptest::option::weighted(0.5, (1..=2048i32, 1..=2048i32));
+    let popup_placement = prop_oneof![menu_placement(), placement()];
     prop_oneof![
         3 => Just(Request::OpenToplevel),
         6 => (target(), drawn_size, any::<bool>())
@@ -345,14 +477,14 @@ fn request() -> impl Strategy<Value = Request> {
         1 => (index(), any::<bool>()).prop_map(|(window, on)| Request::Maximize { window, on }),
         1 => (index(), proptest::option::of(index()))
             .prop_map(|(window, parent)| Request::SetParent { window, parent }),
-        2 => (proptest::option::weighted(0.95, target()), placement())
-            .prop_map(|(parent, placement)| Request::OpenPopup { parent, placement }),
+        3 => (proptest::option::weighted(0.95, target()), popup_placement, any::<bool>())
+            .prop_map(|(parent, placement, grab)| Request::OpenPopup { parent, placement, grab }),
         1 => (index(), serial()).prop_map(|(popup, serial)| Request::Grab { popup, serial }),
         1 => (index(), placement(), any::<u32>())
             .prop_map(|(popup, placement, token)| Request::Reposition { popup, placement, token }),
-        1 => (serial(), proptest::option::of(target()))
+        2 => (serial(), proptest::option::weighted(0.9, target()))
             .prop_map(|(serial, surface)| Request::AskToken { serial, surface }),
-        1 => (index(), target()).prop_map(|(token, target)| Request::Activate { token, target }),
+        2 => (token(), target()).prop_map(|(token, target)| Request::Activate { token, target }),
         1 => (
             index(),
             prop_oneof![4 => size_pair(), 1 => Just((-1, -1))],
@@ -366,9 +498,36 @@ fn request() -> impl Strategy<Value = Request> {
         1 => index().prop_map(|window| Request::FractionalScale { window }),
         1 => (any::<bool>(), serial())
             .prop_map(|(primary, serial)| Request::SetSelection { primary, serial }),
-        1 => (target(), 0..3u8).prop_map(|(target, kind)| Request::SecondRole { target, kind }),
+        1 => (target(), 0..3u8, proptest::option::of(target()))
+            .prop_map(|(target, kind, parent)| Request::SecondRole { target, kind, parent }),
         2 => object().prop_map(Request::Destroy),
         1 => Just(Request::Disconnect),
+    ]
+}
+
+/// A request the client that has the keyboard focus sends as a well-behaved client would: a
+/// token for the surface its keyboard is on, with the serial of its last `enter`; an activation
+/// of another of its windows with its newest token; a menu on the surface its keyboard is on, which
+/// grabs the keyboard with that serial; a selection with that serial.
+fn focused_request() -> impl Strategy<Value = Request> {
+    prop_oneof![
+        Just(Request::AskToken {
+            serial: Serial::Real,
+            surface: Some(Target::Focused),
+        }),
+        index().prop_map(|window| Request::Activate {
+            token: Token::Newest,
+            target: Target::OtherWindow(window),
+        }),
+        menu_placement().prop_map(|placement| Request::OpenPopup {
+            parent: Some(Target::Focused),
+            placement,
+            grab: true,
+        }),
+        any::<bool>().prop_map(|primary| Request::SetSelection {
+            primary,
+            serial: Serial::Real,
+        }),
     ]
 }
 
@@ -387,12 +546,23 @@ fn key_binding() -> impl Strategy<Value = KeyBinding> {
     ]
 }
 
+/// A step: most often a client's request, any or one the client with the keyboard focus sends
+/// as a well-behaved client would; else a move of the clock, a key binding, or a window focused.
 fn step() -> impl Strategy<Value = Step> {
     prop_oneof![
-        8 => (client(), request()).prop_map(|(client, request)| Step::Client { client, request }),
+        6 => (who(), request()).prop_map(|(who, request)| Step::Client { who, request }),
+        2 => focused_request().prop_map(|request| Step::Client {
+            who: Who::Focused,
+            request,
+        }),
         2 => (0..=2000u64).prop_map(Step::Advance),
         1 => key_binding().prop_map(Step::Layout),
+        1 => index().prop_map(Step::FocusWindow),
     ]
+}
+
+fn steps() -> impl Strategy<Value = Vec<Step>> {
+    prop::collection::vec(step(), 1..100)
 }
 
 /// `index` taken modulo `count`; none when there is nothing to name.
@@ -400,18 +570,51 @@ fn pick(index: usize, count: usize) -> Option<usize> {
     (count > 0).then(|| index % count)
 }
 
-/// The client's surface `target` names, if it has one of that kind.
-fn surface_of(client: &Client, target: Target) -> Option<Target> {
+/// The client's surface `target` names, if it has one of that kind; `keyboard_on` is the surface
+/// its keyboard is on.
+fn surface_of(client: &Client, keyboard_on: Option<&WlSurface>, target: Target) -> Option<Target> {
     match target {
         Target::Window(i) => pick(i, client.state.windows.len()).map(Target::Window),
         Target::Popup(i) => pick(i, client.popup_count()).map(Target::Popup),
+        Target::Focused => {
+            let focus = keyboard_on?;
+            let window = (0..client.state.windows.len())
+                .find(|&w| client.window(w).surface == *focus)
+                .map(Target::Window);
+            window.or_else(|| {
+                (0..client.popup_count())
+                    .find(|&p| client.popup(p).surface == *focus)
+                    .map(Target::Popup)
+            })
+        }
+        Target::OtherWindow(i) => {
+            let others: Vec<usize> = (0..client.state.windows.len())
+                .filter(|&w| Some(&client.window(w).surface) != keyboard_on)
+                .collect();
+            pick(i, others.len()).map(|o| Target::Window(others[o]))
+        }
     }
 }
 
-fn wl_surface(client: &Client, target: Target) -> wayland_client::protocol::wl_surface::WlSurface {
+/// The `wl_surface` of `target`, a window or a popup [`surface_of`] gave.
+fn wl_surface(client: &Client, target: Target) -> Option<WlSurface> {
     match target {
-        Target::Window(w) => client.window(w).surface.clone(),
-        Target::Popup(p) => client.popup(p).surface.clone(),
+        Target::Window(w) => Some(client.window(w).surface.clone()),
+        Target::Popup(p) => Some(client.popup(p).surface.clone()),
+        Target::Focused | Target::OtherWindow(_) => None,
+    }
+}
+
+/// The parent a popup on `target` names: none when the client has no such surface.
+fn popup_parent(
+    client: &Client,
+    keyboard_on: Option<&WlSurface>,
+    target: Target,
+) -> Option<Parent> {
+    match surface_of(client, keyboard_on, target)? {
+        Target::Window(w) => Some(Parent::Window(w)),
+        Target::Popup(p) => Some(Parent::Popup(p)),
+        Target::Focused | Target::OtherWindow(_) => None,
     }
 }
 
@@ -428,9 +631,12 @@ impl RandomPlacement {
     }
 }
 
-/// Sends `request`, without waiting for an answer.
-fn send(selection: &mut SelectionClient, request: &Request) {
+/// Sends `request`, without waiting for an answer, and says what it asked of what [`Reach`]
+/// counts.
+fn send(selection: &mut SelectionClient, request: &Request) -> Asked {
     let enter = selection.state.enters.last().copied();
+    let keyboard_on = selection.state.keyboard_on.clone();
+    let focus = keyboard_on.as_ref();
     let client = &mut selection.client;
     let windows = client.state.windows.len();
     let popups = client.popup_count();
@@ -446,8 +652,8 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             size,
             frame,
         } => {
-            let Some(target) = surface_of(client, target) else {
-                return;
+            let Some(target) = surface_of(client, focus, target) else {
+                return Asked::Other;
             };
             let (asked, acked) = match target {
                 Target::Window(w) => {
@@ -466,11 +672,12 @@ fn send(selection: &mut SelectionClient, request: &Request) {
                         .map(|c| (c.serial, c.width, c.height));
                     (asked, popup.acked)
                 }
+                Target::Focused | Target::OtherWindow(_) => return Asked::Other,
             };
             // Before its first configure a well-behaved client draws nothing; it acknowledges
             // each configure once.
             let Some((serial, width, height)) = asked else {
-                return;
+                return Asked::Other;
             };
             let ack = acked != Some(serial);
             let asked = (width, height);
@@ -479,7 +686,9 @@ fn send(selection: &mut SelectionClient, request: &Request) {
                 None if asked.0 > 0 && asked.1 > 0 => asked,
                 None => (640, 480),
             };
-            let surface = wl_surface(client, target);
+            let Some(surface) = wl_surface(client, target) else {
+                return Asked::Other;
+            };
             match target {
                 Target::Window(w) => {
                     if ack {
@@ -497,13 +706,19 @@ fn send(selection: &mut SelectionClient, request: &Request) {
                         client.request_popup_frame(p);
                     }
                 }
+                Target::Focused | Target::OtherWindow(_) => {}
             }
             // A size the configure asked may pass what `wl_shm` takes in a test's time.
             client.attach_black(&surface, width.min(2048), height.min(2048));
             surface.commit();
+            if let Target::Popup(p) = target {
+                return Asked::PopupCommit(p);
+            }
         }
         Request::Ack { window: w, serial } => {
-            let Some(w) = window(w) else { return };
+            let Some(w) = window(w) else {
+                return Asked::Other;
+            };
             match serial {
                 Serial::Any(serial) => client.ack_serial(w, serial),
                 Serial::Absent | Serial::Real if !client.window(w).configures.is_empty() => {
@@ -517,10 +732,12 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             buffer,
             frame,
         } => {
-            let Some(target) = surface_of(client, target) else {
-                return;
+            let Some(target) = surface_of(client, focus, target) else {
+                return Asked::Other;
             };
-            let surface = wl_surface(client, target);
+            let Some(surface) = wl_surface(client, target) else {
+                return Asked::Other;
+            };
             match buffer {
                 Buffer::New(width, height) => client.attach_black(&surface, width, height),
                 Buffer::Remove => surface.attach(None, 0, 0),
@@ -529,9 +746,12 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             match (target, frame) {
                 (Target::Window(w), true) => client.request_frame(w),
                 (Target::Popup(p), true) => client.request_popup_frame(p),
-                (_, false) => {}
+                _ => {}
             }
             surface.commit();
+            if let Target::Popup(p) = target {
+                return Asked::PopupCommit(p);
+            }
         }
         Request::SetMinSize { window: w, size } => {
             if let Some(w) = window(w) {
@@ -563,31 +783,48 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             None => {}
         },
         Request::SetParent { window: w, parent } => {
-            let Some(w) = window(w) else { return };
+            let Some(w) = window(w) else {
+                return Asked::Other;
+            };
             match parent.and_then(window) {
                 Some(parent) => client.set_parent(w, parent),
                 None => client.clear_parent(w),
             }
         }
-        Request::OpenPopup { parent, placement } => {
-            let parent = match parent.map(|parent| surface_of(client, parent)) {
-                Some(Some(Target::Window(w))) => Parent::Window(w),
-                Some(Some(Target::Popup(p))) => Parent::Popup(p),
-                // A popup on a surface the client does not have is not asked.
-                Some(None) => return,
+        Request::OpenPopup {
+            parent,
+            placement,
+            grab,
+        } => {
+            let parent = match parent {
+                Some(target) => match popup_parent(client, focus, target) {
+                    Some(parent) => parent,
+                    // A popup on a surface the client does not have is not asked.
+                    None => return Asked::Other,
+                },
                 None => Parent::Unset,
             };
             let p = client.create_popup(parent, placement.placement());
+            let serial = enter.filter(|_| grab);
+            if let Some(serial) = serial {
+                client.grab_popup(p, serial);
+            }
             client.commit_popup(p);
+            if serial.is_some() {
+                return Asked::Grab { committed: Some(p) };
+            }
         }
         Request::Grab { popup: p, serial } => {
-            let Some(p) = popup(p) else { return };
+            let Some(p) = popup(p) else {
+                return Asked::Other;
+            };
             let serial = match serial {
                 Serial::Any(serial) => Some(serial),
                 Serial::Absent | Serial::Real => enter,
             };
             if let Some(serial) = serial {
                 client.grab_popup(p, serial);
+                return Asked::Grab { committed: None };
             }
         }
         Request::Reposition {
@@ -606,17 +843,26 @@ fn send(selection: &mut SelectionClient, request: &Request) {
                 Serial::Any(serial) => Some(serial),
             };
             let surface = surface
-                .and_then(|target| surface_of(client, target))
-                .map(|target| wl_surface(client, target));
+                .and_then(|target| surface_of(client, focus, target))
+                .and_then(|target| wl_surface(client, target));
             client.ask_token(serial, surface.as_ref());
+            let valid =
+                serial.is_some() && serial == enter && surface.is_some() && surface == keyboard_on;
+            return Asked::Token { valid };
         }
         Request::Activate { token, target } => {
-            let token = pick(token, client.tokens_asked())
+            let index = match token {
+                Token::Newest => client.tokens_asked().checked_sub(1),
+                Token::Any(index) => pick(index, client.tokens_asked()),
+            };
+            let token = index
                 .and_then(|index| client.token(index))
                 .map(str::to_owned);
-            let surface = surface_of(client, target).map(|target| wl_surface(client, target));
+            let surface =
+                surface_of(client, focus, target).and_then(|target| wl_surface(client, target));
             if let (Some(token), Some(surface)) = (token, surface) {
                 client.activate_surface(&token, &surface);
+                return Asked::Activation;
             }
         }
         Request::Viewport {
@@ -624,7 +870,9 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             destination,
             source,
         } => {
-            let Some(w) = window(w) else { return };
+            let Some(w) = window(w) else {
+                return Asked::Other;
+            };
             if client.window(w).viewport.is_none() {
                 client.get_viewport(w);
             }
@@ -652,23 +900,34 @@ fn send(selection: &mut SelectionClient, request: &Request) {
             } else {
                 selection.set_clipboard(&[TEXT], serial);
             }
+            return Asked::Selection;
         }
-        Request::SecondRole { target, kind } => match (surface_of(client, target), kind) {
-            (Some(Target::Window(w)), 0 | 1) => {
-                client.create_second_toplevel(w, kind == 0);
+        Request::SecondRole {
+            target,
+            kind,
+            parent,
+        } => {
+            let parent = parent
+                .and_then(|parent| popup_parent(client, focus, parent))
+                .unwrap_or(Parent::Unset);
+            match (surface_of(client, focus, target), kind) {
+                (Some(Target::Window(w)), 0 | 1) => {
+                    client.create_second_toplevel(w, kind == 0);
+                }
+                (Some(Target::Window(w)), _) => {
+                    client.create_popup_on_window_surface(w, parent);
+                }
+                (Some(Target::Popup(p)), _) => {
+                    client.create_popup_on_popup_surface(p, parent);
+                }
+                (Some(Target::Focused | Target::OtherWindow(_)) | None, _) => {}
             }
-            (Some(Target::Window(w)), _) => {
-                client.create_popup_on_window_surface(w, Parent::Window(w));
-            }
-            (Some(Target::Popup(p)), _) => {
-                client.create_popup_on_popup_surface(p, Parent::Unset);
-            }
-            (None, _) => {}
-        },
+        }
         Request::Destroy(object) => destroy(selection, object),
         // The caller drops the client.
         Request::Disconnect => {}
     }
+    Asked::Other
 }
 
 fn destroy(selection: &mut SelectionClient, object: Object) {
@@ -721,6 +980,23 @@ fn press(compositor: &mut Compositor, binding: KeyBinding) {
             KeyBinding::SetTiling(tiling) => layout.set_tiling(OWNER_SEAT, tiling),
         };
     });
+}
+
+/// Focuses the window of the output's arrangement that `index` names, taken modulo their count,
+/// as a key binding would, and moves the clock to the next boundary, which gives it the
+/// keyboard. Nothing happens when the output holds no window.
+fn focus_window(compositor: &mut Compositor, start: Duration, index: usize) {
+    let placed = compositor.layout().arrange(OUTPUT).unwrap_or_default();
+    let Some(i) = pick(index, placed.len()) else {
+        return;
+    };
+    let window = placed[i].window;
+    // The layout may refuse it.
+    let _ = compositor.change_layout(|layout| layout.focus_window(window));
+    let next = next_boundary(start, compositor.now());
+    compositor
+        .advance(next - compositor.now())
+        .expect("the manual clock moves");
 }
 
 /// The test's compositor: manual clock, one small output.
@@ -820,9 +1096,138 @@ fn settle(
     sentinel.roundtrip(compositor);
 }
 
-/// Runs `steps`, checking after each, then checks the sentinel and rest. See the module's
-/// documentation.
-fn run(busy: bool, steps: &[Step]) -> Result<(), TestCaseError> {
+/// The slot `who` names: for [`Who::Focused`], the client whose keyboard is on one of its
+/// surfaces, or the first slot.
+fn slot_of(who: Who, clients: &[Option<SelectionClient>; CLIENTS]) -> usize {
+    match who {
+        Who::Slot(slot) => slot,
+        Who::Focused => clients
+            .iter()
+            .position(|client| {
+                client
+                    .as_ref()
+                    .is_some_and(|c| c.state.keyboard_on.is_some())
+            })
+            .unwrap_or(0),
+    }
+}
+
+/// How many times the client was told of a selection that holds something.
+fn selections_told(client: &SelectionClient) -> usize {
+    client
+        .state
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                SelectionEvent::Clipboard(Some(_)) | SelectionEvent::Primary(Some(_))
+            )
+        })
+        .count()
+}
+
+impl Before {
+    fn read(client: &SelectionClient, compositor: &Compositor) -> Before {
+        Before {
+            keyboard_on: client.state.keyboard_on.clone(),
+            selections_told: selections_told(client),
+            focused: compositor.layout().focused(OWNER_SEAT),
+        }
+    }
+}
+
+impl Reach {
+    /// Counts what a step's request asked, and whether it took effect: `client` is the client
+    /// that sent it, after the step, if its connection lasted.
+    fn count(
+        &mut self,
+        asked: Asked,
+        before: &Before,
+        client: Option<&SelectionClient>,
+        compositor: &Compositor,
+    ) {
+        // Whether the keyboard went to popup `p` during the step: only a grab takes it there.
+        let keyboard_went_to = |p: usize| {
+            client.is_some_and(|client| {
+                let on = client.state.keyboard_on.as_ref();
+                p < client.client.popup_count()
+                    && on == Some(&client.client.popup(p).surface)
+                    && before.keyboard_on.as_ref() != on
+            })
+        };
+        match asked {
+            Asked::Other => {}
+            Asked::Grab { committed } => {
+                self.grabs.asked += 1;
+                if committed.is_some_and(keyboard_went_to) {
+                    self.grabs.took += 1;
+                }
+            }
+            Asked::PopupCommit(p) => {
+                if keyboard_went_to(p) {
+                    self.grabs.took += 1;
+                }
+            }
+            Asked::Token { valid } => {
+                self.tokens.asked += 1;
+                self.tokens.took += u64::from(valid);
+            }
+            Asked::Activation => {
+                self.activations.asked += 1;
+                let focused = compositor.layout().focused(OWNER_SEAT);
+                if focused.is_some() && focused != before.focused {
+                    self.activations.took += 1;
+                }
+            }
+            Asked::Selection => {
+                self.selections.asked += 1;
+                if client.is_some_and(|client| selections_told(client) > before.selections_told) {
+                    self.selections.took += 1;
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for Tally {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let percent = if self.asked == 0 {
+            0.0
+        } else {
+            100.0 * self.took as f64 / self.asked as f64
+        };
+        write!(f, "{}/{} ({percent:.0} %)", self.took, self.asked)
+    }
+}
+
+impl fmt::Display for Reach {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "grabs granted {}, tokens valid {}, activations done {}, selections taken {}",
+            self.grabs, self.tokens, self.activations, self.selections
+        )
+    }
+}
+
+/// Checks Yuna after a step: the layout's invariants, the windows, the popups and the keyboard.
+fn check(compositor: &Compositor) -> Result<(), String> {
+    compositor
+        .layout()
+        .check_invariants()
+        .map_err(|error| format!("the layout's invariants: {error}"))?;
+    compositor
+        .check_windows()
+        .map_err(|error| format!("the layout and the shell: {error}"))?;
+    compositor
+        .check_popups_and_keyboard()
+        .map_err(|error| format!("the popups and the keyboard: {error}"))
+}
+
+/// Runs `steps`, checking after each, then checks the sentinel and rest, and adds to `reach`.
+/// See the module's documentation.
+fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseError> {
     let mut compositor = compositor();
     let start = compositor.now();
     let mut sentinel = sentinel(&mut compositor, start);
@@ -838,31 +1243,32 @@ fn run(busy: bool, steps: &[Step]) -> Result<(), TestCaseError> {
         settle(&mut compositor, &mut sentinel, &mut clients);
     }
     for (index, step) in steps.iter().enumerate() {
+        let mut asked = None;
         match step {
-            Step::Client { client, request } => {
-                let slot = &mut clients[*client];
+            Step::Client { who, request } => {
+                let slot = slot_of(*who, &clients);
                 if matches!(request, Request::Disconnect) {
-                    *slot = None;
+                    clients[slot] = None;
                 } else {
-                    let client =
-                        slot.get_or_insert_with(|| SelectionClient::connect(&mut compositor));
-                    send(client, request);
+                    let client = clients[slot]
+                        .get_or_insert_with(|| SelectionClient::connect(&mut compositor));
+                    let before = Before::read(client, &compositor);
+                    asked = Some((slot, before, send(client, request)));
                 }
             }
             Step::Advance(millis) => compositor
                 .advance(Duration::from_millis(*millis))
                 .expect("the manual clock moves"),
             Step::Layout(binding) => press(&mut compositor, *binding),
+            Step::FocusWindow(window) => focus_window(&mut compositor, start, *window),
         }
         settle(&mut compositor, &mut sentinel, &mut clients);
-        if let Err(error) = compositor.layout().check_invariants() {
-            return Err(TestCaseError::fail(format!(
-                "step {index}, {step:?}: the layout's invariants: {error}"
-            )));
+        if let Some((slot, before, asked)) = asked {
+            reach.count(asked, &before, clients[slot].as_ref(), &compositor);
         }
-        if let Err(error) = compositor.check_windows() {
+        if let Err(error) = check(&compositor) {
             return Err(TestCaseError::fail(format!(
-                "step {index}, {step:?}: the layout and the shell: {error}"
+                "step {index}, {step:?}: {error}"
             )));
         }
     }
@@ -908,11 +1314,11 @@ fn run(busy: bool, steps: &[Step]) -> Result<(), TestCaseError> {
     compositor
         .advance(next - compositor.now())
         .expect("the manual clock moves");
-    prop_assert_eq!(compositor.check_windows(), Ok(()));
+    prop_assert_eq!(check(&compositor), Ok(()));
     prop_assert_eq!(
         compositor
             .layout()
-            .arrange(OutputId(1))
+            .arrange(OUTPUT)
             .map(|placed| placed.len()),
         Ok(0)
     );
@@ -920,22 +1326,85 @@ fn run(busy: bool, steps: &[Step]) -> Result<(), TestCaseError> {
     Ok(())
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 160,
-        // Beside this file: the default would look for the folder of `main.rs`, and write
-        // elsewhere.
+/// Runs the cases of one of the two tests, those that start busy or not, then prints how far
+/// they reached. Written out rather than with `proptest!`, so that the cases add to one
+/// [`Reach`].
+fn run_cases(busy: bool) {
+    let mut config = contextualize_config(ProptestConfig {
+        cases: CASES_PER_TEST,
+        // Beside this file, as `proptest!` would set it.
         failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
-            "proptest-regressions"
+            "proptest-regressions",
         ))),
         ..ProptestConfig::default()
-    })]
+    });
+    config.source_file = Some(file!());
+    let cases = config.cases;
+    let reach = RefCell::new(Reach::default());
+    let mut runner = TestRunner::new(config);
+    let result = runner.run(&steps(), |steps| run(busy, &steps, &mut reach.borrow_mut()));
+    if let Err(error) = result {
+        panic!("{error}\n{runner}");
+    }
+    let start = if busy { "busy" } else { "fresh" };
+    println!("{cases} cases from {start} starts: {}", reach.borrow());
+}
 
-    #[test]
-    fn random_requests_keep_yuna_up(
-        busy in any::<bool>(),
-        steps in prop::collection::vec(step(), 1..100),
-    ) {
-        run(busy, &steps)?;
+#[test]
+fn random_requests_from_busy_starts_keep_yuna_up() {
+    run_cases(true);
+}
+
+#[test]
+fn random_requests_from_fresh_starts_keep_yuna_up() {
+    run_cases(false);
+}
+
+/// Sequences the random tests found failing, written out with whether they started busy: a seed
+/// kept in the regressions file replays its case only while the generator stays the same.
+#[test]
+fn sequences_found_before() {
+    let by_first = |request| Step::Client {
+        who: Who::Slot(0),
+        request,
+    };
+    let found = [
+        // A toplevel again on an `xdg_surface` whose surface its client destroyed: Yuna kept a
+        // record of it on the dead surface.
+        (
+            false,
+            vec![
+                by_first(Request::OpenToplevel),
+                by_first(Request::Destroy(Object::Surface(0))),
+                by_first(Request::SecondRole {
+                    target: Target::Window(0),
+                    kind: 0,
+                    parent: None,
+                }),
+            ],
+        ),
+        // A window's surface destroyed before its menu: Yuna counted the menu, dismissed, as one
+        // of a window's still.
+        (true, vec![by_first(Request::Destroy(Object::Surface(2)))]),
+        // A toplevel made again on a surface that kept its buffer: it has the buffer before its
+        // first configure, which `check_windows` took for a window refused without reason.
+        (
+            false,
+            vec![
+                by_first(Request::OpenToplevel),
+                by_first(draw(Target::Window(0))),
+                by_first(Request::Destroy(Object::Window(0))),
+                by_first(Request::SecondRole {
+                    target: Target::Window(0),
+                    kind: 1,
+                    parent: None,
+                }),
+            ],
+        ),
+    ];
+    for (busy, steps) in found {
+        if let Err(error) = run(busy, &steps, &mut Reach::default()) {
+            panic!("{error}");
+        }
     }
 }
