@@ -425,11 +425,13 @@ process reads.
   round for 2 s), and Yuna must then rest 10 s: no context switch in any of its threads, read in
   `/proc`, and no frame, frame callback, configure, commit or wake-up, read in its log. `vkcube`
   draws 120 frames and leaves, and Yuna must rest after it; left to draw, it must fail the same
-  check. Each application gets an environment of its own, nothing of the caller's: no `DISPLAY`
-  and no D-Bus, so that it reaches neither the user's desktop nor an accessibility bus; throwaway
-  home and XDG folders; DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for
-  Vulkan; cursors that never blink; GTK's animations off; GTK's renderer and Qt's pinned. The test
-  takes about 15 s. SlimeEngine's `window` example, built
+  check. Yuna and each application get an environment of their own, nothing of the caller's:
+  no `DISPLAY` and no D-Bus, so that they reach neither the user's desktop nor an accessibility
+  bus; a `PATH` of the store alone; throwaway home and XDG folders, the system's included;
+  DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for Vulkan, without the
+  machine's layers; cursors that never blink; GTK's animations off; GTK's renderer and Qt's
+  pinned. What still reads the machine is listed in the file's documentation. Every process it
+  starts dies with the test's thread. The test takes about 15 s. SlimeEngine's `window` example, built
   by the weekly job, runs in an ignored test of the same file.
 
 ## The tools around the code

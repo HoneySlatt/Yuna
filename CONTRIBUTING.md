@@ -28,8 +28,9 @@ The shell gives:
   Mesa's llvmpipe, never on the host's drivers
   ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
 - `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
-- the applications the tests run in Yuna: Alacritty, GTK 4's `gtk4-demo`, Qt's `qml` and
-  `vkcube`, with what the tests give them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
+- the applications the tests run in Yuna, kept off the shell's own `PATH`: Alacritty, GTK 4's
+  `gtk4-demo`, Qt's `qml` and `vkcube`, in `YUNA_APPLICATIONS_PATH`, with what the tests give
+  them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
 
@@ -57,15 +58,17 @@ nix develop -c cargo run --release -p yuna-layout --example timing   # the layou
 ```
 
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
-to it. Started from an agent's session, a program with a window runs through `agent-headless`,
-never on the desktop's display. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
-the tests. SIGTERM or Ctrl-C stops it and removes its socket.
+to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
+the tests. SIGTERM or Ctrl-C stops it and removes its socket. To run one of the tests'
+applications in it by hand, without a screen of your own:
+`PATH=$YUNA_APPLICATIONS_PATH:$PATH WAYLAND_DISPLAY=<socket> vkcube --wsi wayland`.
 
 The compositor's tests (`crates/yuna/tests/headless/`) run it in their own process, on the manual
-clock, with clients written with `wayland-client`; they need the shell's Mesa. The applications' tests
-(`crates/yuna/tests/applications.rs`) run the program with real applications and check that it
-rests; they need the shell's applications, and take about 15 s. SlimeEngine's `window` example
-runs in an ignored test, given the path of its binary, as the weekly job runs it:
+clock, with clients written with `wayland-client`; they need the shell's Mesa. The
+applications' tests (`crates/yuna/tests/applications.rs`) run the program with real applications
+and check that it rests; they need the shell's applications, and take about 15 s.
+SlimeEngine's `window` example runs in an ignored test, given the path of its binary, as the
+weekly job runs it:
 
 ```sh
 nix develop -c cargo test -p yuna --test applications -- --nocapture

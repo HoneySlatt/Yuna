@@ -5,7 +5,7 @@
 //! `window opened` when a window maps, `frame drawn` for each frame, and `counters` after each
 //! round of its loop that woke. Rest is read from those lines and from `/proc`: once the
 //! application has shown its window and gone quiet, 10 s with no context switch in any of Yuna's
-//! threads, and no frame, frame callback, configure or commit.
+//! threads, and no frame, frame callback, configure, commit or wake-up.
 //!
 //! Applications that animate without end, `vkcube` and SlimeEngine's `window` example, draw a
 //! number of frames and leave; Yuna must then rest. Their rest with their window open waits for
@@ -13,24 +13,37 @@
 //! `vkcube` left to run proves that a client that keeps drawing fails the check.
 //!
 //! What makes an application draw again is pinned, so that only Yuna's behaviour decides the
-//! result. Each gets an environment of its own, nothing of the caller's: no `DISPLAY` and no
-//! D-Bus, so that it reaches neither the user's desktop nor an accessibility bus; throwaway home
-//! and XDG folders; one font family; Mesa on the CPU, lavapipe for Vulkan; cursors that never
-//! blink; GTK's animations off.
+//! result. Yuna and each application get an environment of their own, nothing of the caller's:
+//! no `DISPLAY` and no D-Bus, so that they reach neither the user's desktop nor an accessibility
+//! bus; a `PATH` of the store alone; throwaway home and XDG folders, the system's XDG folders
+//! included, so that no settings of the machine or the user are read; DejaVu alone, through a
+//! fontconfig file that includes none of the machine's; Mesa on the CPU, lavapipe alone for
+//! Vulkan, without the machine's implicit layers; cursors that never blink; GTK's animations off.
+//! What still reads the machine, measured with strace on NixOS: Mesa reads `/etc/drirc` where a
+//! machine has one, and lists `/dev/dri` without opening a device; Vulkan's loader reads the
+//! machine's list of layers and loads none; the fontconfig of Alacritty and Qt looks for two
+//! NixOS files in `/etc/fonts`, `local.conf` and `70-no-bitmaps-except-emoji.conf`.
 //!
-//! Every program comes from the development shell (`flake.nix`).
+//! Every program comes from the development shell (`flake.nix`). Each process the test starts is
+//! killed if the test's thread ends first, so that a test killed or out of time leaves nothing.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, DirBuilder, File};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use smithay::reexports::rustix::io::Errno;
+use smithay::reexports::rustix::process::{
+    Pid, Signal, getppid, kill_process, set_parent_process_death_signal,
+};
 
 /// How long Yuna must do nothing: the rest window of the bar (ROADMAP's quality bar).
 const REST: Duration = Duration::from_secs(10);
@@ -195,8 +208,9 @@ fn draw_leave_and_rest(
         return Err(failure(format!("it ended with {status}")));
     }
     let left = yuna.wait_until_quiet(PATIENCE).map_err(failure)?;
-    // One commit per frame it drew; Yuna draws at most one frame per refresh, 60 a second here.
-    if left.commits < u64::from(FRAMES) || left.frames_drawn < 10 {
+    // One commit per frame it drew; Yuna draws at most one frame per refresh, 60 a second here,
+    // and drew one for each in every run measured: half of them leaves room for a slow runner.
+    if left.commits < u64::from(FRAMES) || left.frames_drawn < u64::from(FRAMES / 2) {
         return Err(failure(format!(
             "Yuna got {} commits and drew {} frames, for {FRAMES} frames of its client",
             left.commits, left.frames_drawn
@@ -248,13 +262,17 @@ fn application(yuna: &Yuna, program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     command
         .env_clear()
-        .env("PATH", shell_variable("PATH"))
+        // The store alone: nixpkgs' Qt also looks for plugins beside each folder of the PATH.
+        .env("PATH", shell_variable("YUNA_APPLICATIONS_PATH"))
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", yuna.runtime_dir())
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_DATA_HOME", home.join("data"))
         .env("XDG_CACHE_HOME", home.join("cache"))
         .env("XDG_STATE_HOME", home.join("state"))
+        // Unset, they would be /etc/xdg and /usr/share: the machine's settings, GTK's among them.
+        .env("XDG_CONFIG_DIRS", home.join("config-dirs"))
+        .env("XDG_DATA_DIRS", home.join("data-dirs"))
         // A path, so that nothing else in the runtime folder is ever reached.
         .env("WAYLAND_DISPLAY", &yuna.socket)
         .env("FONTCONFIG_FILE", shell_variable("YUNA_FONTS_CONF"))
@@ -266,8 +284,31 @@ fn application(yuna: &Yuna, program: impl AsRef<std::ffi::OsStr>) -> Command {
         )
         .env("LIBGL_ALWAYS_SOFTWARE", "1")
         .env("VK_DRIVER_FILES", shell_variable("YUNA_LAVAPIPE_ICD"))
+        // The machine's own layers, such as its Mesa's device_select, stay out.
+        .env("VK_LOADER_LAYERS_DISABLE", "~implicit~")
         .stdin(Stdio::null());
+    dies_with_test(&mut command);
     command
+}
+
+/// Makes `command`'s process end with SIGKILL when the thread that starts it ends, so that a test
+/// killed, or stopped at CI's time limit, leaves no Yuna or application running. Every run drops
+/// its processes before its thread ends.
+fn dies_with_test(command: &mut Command) {
+    let parent = std::process::id();
+    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
+    // calls are sound: it makes two system calls, `prctl` and `getppid`, and allocates nothing,
+    // an `Errno` turning into an `io::Error` without a box.
+    unsafe {
+        command.pre_exec(move || {
+            set_parent_process_death_signal(Some(Signal::KILL))?;
+            // The parent may have ended before the signal was set: then it never comes.
+            if u32::try_from(Pid::as_raw(getppid())) != Ok(parent) {
+                return Err(Errno::SRCH.into());
+            }
+            Ok(())
+        });
+    }
 }
 
 /// A variable the development shell sets.
@@ -288,32 +329,50 @@ struct Counters {
 }
 
 impl Counters {
-    /// Reads `frames_drawn=3 frame_callbacks=5 …` after the message `counters`.
+    /// Reads `frames_drawn=3 frame_callbacks=5 configures=2 commits=6 wakeups=40` after the
+    /// message `counters`: all five, nothing else.
     fn parse(line: &str) -> Option<Counters> {
-        let fields = line.split_once(" counters ")?.1;
-        let mut counters = Counters::default();
-        for field in fields.split_whitespace() {
-            let (key, value) = field.split_once('=')?;
-            let value: u64 = value.parse().ok()?;
-            match key {
-                "frames_drawn" => counters.frames_drawn = value,
-                "frame_callbacks" => counters.frame_callbacks = value,
-                "configures" => counters.configures = value,
-                "commits" => counters.commits = value,
-                "wakeups" => counters.wakeups = value,
-                _ => return None,
-            }
+        let fields: Vec<(&str, u64)> = line
+            .split_once(" counters ")?
+            .1
+            .split_whitespace()
+            .map(|field| {
+                let (key, value) = field.split_once('=')?;
+                Some((key, value.parse().ok()?))
+            })
+            .collect::<Option<_>>()?;
+        match fields.as_slice() {
+            [
+                ("frames_drawn", frames_drawn),
+                ("frame_callbacks", frame_callbacks),
+                ("configures", configures),
+                ("commits", commits),
+                ("wakeups", wakeups),
+            ] => Some(Counters {
+                frames_drawn: *frames_drawn,
+                frame_callbacks: *frame_callbacks,
+                configures: *configures,
+                commits: *commits,
+                wakeups: *wakeups,
+            }),
+            _ => None,
         }
-        Some(counters)
     }
 
+    /// What was counted since `before`. Yuna's counters only grow: a smaller value is a reading
+    /// gone wrong, never Yuna at rest.
     fn since(self, before: Counters) -> Counters {
+        let less = |after: u64, before: u64| {
+            after
+                .checked_sub(before)
+                .unwrap_or_else(|| panic!("a counter of Yuna fell from {before} to {after}"))
+        };
         Counters {
-            frames_drawn: self.frames_drawn - before.frames_drawn,
-            frame_callbacks: self.frame_callbacks - before.frame_callbacks,
-            configures: self.configures - before.configures,
-            commits: self.commits - before.commits,
-            wakeups: self.wakeups - before.wakeups,
+            frames_drawn: less(self.frames_drawn, before.frames_drawn),
+            frame_callbacks: less(self.frame_callbacks, before.frame_callbacks),
+            configures: less(self.configures, before.configures),
+            commits: less(self.commits, before.commits),
+            wakeups: less(self.wakeups, before.wakeups),
         }
     }
 }
@@ -355,6 +414,8 @@ struct Yuna {
     log: PathBuf,
     /// Its Wayland socket's path.
     socket: PathBuf,
+    /// Whether a failure was reported: the folder, with its logs, is then kept.
+    failed: Cell<bool>,
 }
 
 impl Yuna {
@@ -372,24 +433,42 @@ impl Yuna {
             .create(folder.join("runtime"))
             .expect("a runtime folder");
         let log = folder.join("yuna.log");
-        let child = Command::new(env!("CARGO_BIN_EXE_yuna"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_yuna"));
+        command
             .args(["--headless", "--output", "1920x1080@60,1"])
+            // What it draws with, from the shell; a throwaway home, so that Mesa reads none of
+            // the user's settings.
+            .env_clear()
+            .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH"))
+            .env(
+                "__EGL_VENDOR_LIBRARY_FILENAMES",
+                shell_variable("__EGL_VENDOR_LIBRARY_FILENAMES"),
+            )
+            .env("XKB_CONFIG_ROOT", shell_variable("XKB_CONFIG_ROOT"))
+            .env("HOME", folder.join("yuna-home"))
             .env("XDG_RUNTIME_DIR", folder.join("runtime"))
             .env("YUNA_LOG", "debug")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(File::create(&log).expect("Yuna's log"))
-            .spawn()
-            .expect("the yuna binary runs");
+            .stderr(File::create(&log).expect("Yuna's log"));
+        dies_with_test(&mut command);
+        let child = command.spawn().expect("the yuna binary runs");
         let mut yuna = Yuna {
             child,
             folder,
             log,
             socket: PathBuf::new(),
+            failed: Cell::new(false),
         };
+        // Read on a thread of its own, so that a Yuna that never prints fails the test in time.
         let stdout = yuna.child.stdout.take().expect("its standard output");
-        let mut line = String::new();
-        let _ = BufReader::new(stdout).read_line(&mut line);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(stdout).read_line(&mut line);
+            let _ = sender.send(line);
+        });
+        let line = receiver.recv_timeout(PATIENCE).unwrap_or_default();
         let Some(name) = line.trim_end().strip_prefix("WAYLAND_DISPLAY=") else {
             panic!("yuna printed no socket: {line:?}\n{}", yuna.log_tail());
         };
@@ -409,9 +488,12 @@ impl Yuna {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Its last `counters` line, or zeros before its first round.
+    /// Its last `counters` line, or zeros before its first round. A last line without its end
+    /// may be half written, and is left out.
     fn counters(&self) -> Counters {
-        self.read_log()
+        let log = self.read_log();
+        let complete = log.rfind('\n').map_or("", |end| &log[..end]);
+        complete
             .lines()
             .rev()
             .find_map(Counters::parse)
@@ -538,10 +620,14 @@ impl Yuna {
             match self.child.try_wait() {
                 Ok(Some(status)) if status.success() => return Ok(()),
                 Ok(Some(status)) => {
+                    self.failed.set(true);
                     return Err(format!("yuna ended with {status}\n{}", self.log_tail()));
                 }
                 Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
-                _ => return Err(format!("yuna did not stop on SIGTERM\n{}", self.log_tail())),
+                _ => {
+                    self.failed.set(true);
+                    return Err(format!("yuna did not stop on SIGTERM\n{}", self.log_tail()));
+                }
             }
         }
     }
@@ -564,8 +650,10 @@ impl Yuna {
         )
     }
 
-    /// What a failure shows: the ends of Yuna's log and of its application's, `app_log`.
+    /// What a failure shows: the ends of Yuna's log and of its application's, `app_log`. The
+    /// folder that holds both is then kept.
     fn diagnosis(&self, app_log: &Path) -> String {
+        self.failed.set(true);
         let log = fs::read_to_string(app_log).unwrap_or_default();
         let lines: Vec<&str> = log.lines().collect();
         format!(
@@ -578,11 +666,11 @@ impl Yuna {
 }
 
 impl Drop for Yuna {
-    /// Kills Yuna if it still runs. Its folder is kept when the test fails, for its logs.
+    /// Kills Yuna if it still runs. Its folder is kept when the run failed, for its logs.
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if std::thread::panicking() {
+        if self.failed.get() || std::thread::panicking() {
             eprintln!("Yuna's folder is kept: {}", self.folder.display());
         } else {
             let _ = fs::remove_dir_all(&self.folder);
