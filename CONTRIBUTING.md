@@ -57,6 +57,16 @@ nix develop -c cargo test --workspace     # the tests alone
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
 
+A frame's cost is measured with `crates/yuna/examples/frame_time.rs`: it runs the `yuna` built
+beside it with `vkcube` drawing in two windows, and reads Yuna's frames, CPU and GPU time
+([ADR-0030](docs/adr/0030-a-frames-gpu-time-from-the-kernel.md)); its documentation gives its
+options, `--gpu` among them:
+
+```sh
+nix develop -c cargo build --release -p yuna --bin yuna --example frame_time
+nix develop -c agent-headless -- target/release/examples/frame_time
+```
+
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
 to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
 the tests. SIGTERM or Ctrl-C stops it and removes its socket. To run one of the tests'
@@ -67,11 +77,13 @@ The compositor's tests (`crates/yuna/tests/headless/`) run it in their own proce
 clock, with clients written with `wayland-client`; they need the shell's Mesa. The
 applications' tests (`crates/yuna/tests/applications.rs`) run the program with real applications
 and check that it rests; they need the shell's applications, and take about 15 s.
+Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATIONS_OUTPUT` names.
 SlimeEngine's `window` example runs in an ignored test, given the path of its binary, as the
 weekly job runs it:
 
 ```sh
 nix develop -c cargo test -p yuna --test applications -- --nocapture
+YUNA_APPLICATIONS_OUTPUT=3840x2160@240,1.5 nix develop -c cargo test -p yuna --test applications
 YUNA_SLIMEENGINE_WINDOW=<binary> nix develop -c cargo test -p yuna --test applications -- --ignored
 ```
 

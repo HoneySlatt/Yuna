@@ -370,7 +370,9 @@ grab, and the seat has neither: it refuses every `start_drag`.
 the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
-process reads.
+process reads. `frame drawn` gives the frame's time, `took_us`: from when its elements begin to be
+built, which imports its clients' new buffers (a `wl_shm` buffer is copied then), to when its
+drawing is done.
 
 ### Tests
 
@@ -441,6 +443,10 @@ process reads.
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
 - `.github/workflows/slimeengine.yml`: SlimeEngine's `window` example in `yuna --headless`,
   weekly, on demand and when the drawing path changes, built at a pinned revision and cached.
+- `crates/yuna/examples/frame_time.rs`: a frame's cost while `vkcube` draws, read from outside
+  the program: its frames and `took_us` from its log, each thread's CPU time from `/proc`, the
+  GPU's from the kernel's DRM usage statistics
+  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
 - `deny.toml`: the dependency policy.
 
 ## Where to start reading

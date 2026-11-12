@@ -208,8 +208,9 @@ fn draw_leave_and_rest(
         return Err(failure(format!("it ended with {status}")));
     }
     let left = yuna.wait_until_quiet(PATIENCE).map_err(failure)?;
-    // One commit per frame it drew; Yuna draws at most one frame per refresh, 60 a second here,
-    // and drew one for each in every run measured: half of them leaves room for a slow runner.
+    // One commit per frame it drew; Yuna draws at most one frame per refresh, 60 a second by
+    // default, and drew one for each in every run measured: half of them leaves room for a slow
+    // runner.
     if left.commits < u64::from(FRAMES) || left.frames_drawn < u64::from(FRAMES / 2) {
         return Err(failure(format!(
             "Yuna got {} commits and drew {} frames, for {FRAMES} frames of its client",
@@ -406,8 +407,9 @@ impl fmt::Display for Activity {
     }
 }
 
-/// A `yuna --headless` process with one output, 1920 × 1080 at 60 Hz and scale 1, in a folder of
-/// its own: its runtime folder, its log, and its application's home.
+/// A `yuna --headless` process with one output, in a folder of its own: its runtime folder, its
+/// log, and its application's home. The output is 1920 × 1080 at 60 Hz and scale 1, or the mode
+/// `YUNA_APPLICATIONS_OUTPUT` names, as `--output` takes it, to measure rest on another output.
 struct Yuna {
     child: Child,
     folder: PathBuf,
@@ -433,9 +435,11 @@ impl Yuna {
             .create(folder.join("runtime"))
             .expect("a runtime folder");
         let log = folder.join("yuna.log");
+        let output = std::env::var("YUNA_APPLICATIONS_OUTPUT")
+            .unwrap_or_else(|_| "1920x1080@60,1".to_owned());
         let mut command = Command::new(env!("CARGO_BIN_EXE_yuna"));
         command
-            .args(["--headless", "--output", "1920x1080@60,1"])
+            .args(["--headless", "--output", &output])
             // What it draws with, from the shell; a throwaway home, so that Mesa reads none of
             // the user's settings.
             .env_clear()
