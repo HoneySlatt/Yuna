@@ -26,14 +26,18 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 ## The headless compositor
 
-- At a fractional scale, a buffer drawn at scale 1 cannot sit on whole pixels at both edges: its
-  right and bottom edges may blend up to one pixel of its margin. Exact placement comes with
-  fractional scale and viewporter (M1.4, B2).
+- At a fractional scale, a client that draws at an integer buffer scale, rather than at its
+  output's physical size through fractional scale and a viewport, is scaled when drawn: where its
+  window geometry starts inside its surface, its right and bottom edges may blend up to one pixel
+  of its margin. It stays while such a client's pixels are scaled anyway
+  ([Scale](ARCHITECTURE.md#scale)).
 - Virtual time is not kept from running ahead of real time while real clients are connected
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
   clock.
-- CI has no GPU, so the dmabuf path is not tested there
-  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `--gpu` has not been run yet.
+- No test draws a client's dmabuf: the stories check the `linux-dmabuf` global on llvmpipe and
+  the protocol's errors only. llvmpipe imports a plain memfd as a dmabuf, so such a test needs no
+  GPU. `--gpu`, and with it the dmabuf feedback, has not been run yet
+  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.

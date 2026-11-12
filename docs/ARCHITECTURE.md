@@ -117,16 +117,20 @@ operation, and an example measures the model:
   calloop's event loop, the Wayland display and the state, and runs them: `dispatch` for one
   round, `run_until` for the program, `advance` to move the manual clock. Each round ends by
   freeing what went away, without drawing: the outputs forget the surfaces destroyed
-  (`Output::cleanup`), and the renderer frees the textures of closed windows and destroyed
-  surfaces. Then it sends the events written. Its `Counters` count frames drawn, frame callbacks,
+  (`Output::cleanup`), and the renderer frees the textures of closed windows, destroyed surfaces
+  and destroyed dmabufs. Then it sends the events written. Its `Counters` count frames drawn, frame callbacks,
   configures, commits and wake-ups, for tests.
 - `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
-  are not the shell's: `wl_compositor` and `wl_subcompositor`, `wl_shm`, one seat with a keyboard
-  (the owner's), `wl_output` with `xdg-output`, presentation time.
+  are not the shell's: `wl_compositor` (version 6) and `wl_subcompositor`, `wl_shm`,
+  `wp_viewporter`, one seat with a keyboard (the owner's), `wl_output` with `xdg-output`,
+  presentation time.
 - `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
   `WindowId` and passes on what its client asks.
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
   reported presented, and the hidden windows.
+- `scale.rs`: the scale each surface is told: `wp_fractional_scale_v1`, and `wl_surface`'s
+  preferred buffer scale and transform.
+- `dmabuf.rs`: `linux-dmabuf`: its global, and the import of each client's dmabuf.
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
   damage tracker; their refresh boundaries.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
@@ -180,7 +184,8 @@ At an output's refresh boundary:
    surface tree with its window geometry at its rectangle's corner, cut to the rectangle, over a
    plain background. Surfaces sit on whole pixels: where the geometry's offset in its surface is
    not a whole number of pixels, it is rounded up, so that the cut takes a sliver of content
-   rather than show the window's margin. Yuna waits until the drawing is done.
+   rather than show the window's margin. A surface drawn at its output's physical size is drawn
+   exactly ([Scale](#scale)). Yuna waits until the drawing is done.
 3. The surfaces shown there get their frame callbacks, and their presentation feedback: a frame
    whose drawing takes no time, as on the manual clock, is presented at its own boundary;
    otherwise at the first boundary after its drawing ended; never at the boundary of the frame
@@ -191,6 +196,32 @@ content updates are discarded, and its frame callbacks go out at most once a sec
 hidden windows' deadline, armed only while one of them waits. A window the layout refused is
 treated the same way.
 
+### Scale
+
+Each surface is told the scale of the output its window is shown on: `wp_fractional_scale_v1`'s
+preferred scale, in 120ths, and `wl_surface.preferred_buffer_scale`, that scale's integer
+ceiling. It is told when its fractional scale object is created, at its first commit, and when
+its window enters an output; only a change sends anything. Before its window is shown anywhere,
+it is told the scale of the owner seat's active output, where new windows open; a window shown
+on no output keeps the last value.
+
+A client that follows the fractional scale draws its buffer at its window's physical size,
+rounded half away from zero, and sets its viewport's destination (`wp_viewporter`) to its
+logical size. Its window geometry, its drawing and the size the layout is given all use that
+logical size. One buffer pixel then covers one physical pixel: on whole pixels, at a rectangle
+the layout put on the physical grid, the window is drawn exactly, with no blending at any edge.
+A client that draws at an integer buffer scale is scaled when drawn ([debt](debt.md)).
+
+### Buffers
+
+Clients' buffers come through `wl_shm` or `linux-dmabuf`. Yuna offers `linux-dmabuf` only when
+its renderer imports a format: on llvmpipe, version 3 with the formats; with `--gpu`, default
+feedback naming the render node, which Smithay offers as version 6. Each dmabuf is imported when
+its client creates its buffer, so that the client learns at once whether it can be used.
+Smithay refuses broken parameters with a protocol error, which ends that client alone; a buffer
+whose drawing fails is left out of that frame and logged by Smithay's renderer. A destroyed
+dmabuf's texture is freed at the end of the round, like a closed window's.
+
 ### The program
 
 `yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
@@ -200,7 +231,8 @@ the event loop watches, so that the loop returns and the socket is removed.
 ### Tests
 
 - `crates/yuna/tests/headless/`: the compositor in the test's process, manual clock, clients
-  written with `wayland-client` (`client.rs`), each test a short story with exact figures.
+  written with `wayland-client` (`client.rs`; viewports, fractional scale and dmabufs in
+  `client/buffers.rs`), each test a short story with exact figures.
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 

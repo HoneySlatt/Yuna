@@ -252,6 +252,13 @@ impl Compositor {
         self.state.clock.next_deadline()
     }
 
+    /// How many dmabuf formats, each a fourcc code and a modifier, clients are offered through
+    /// `linux-dmabuf`: those its renderer imports. 0 when the renderer imports none, and Yuna
+    /// offers no `linux-dmabuf` global.
+    pub fn dmabuf_format_count(&self) -> usize {
+        self.state.dmabuf_formats
+    }
+
     /// What it did so far.
     pub fn counters(&self) -> Counters {
         self.state.counters

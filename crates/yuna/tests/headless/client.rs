@@ -3,7 +3,11 @@
 //!
 //! It binds the globals a window needs, opens `xdg_toplevel`s with server-side decorations, and
 //! records every event a test checks: configures, decoration modes, frame callbacks and
-//! presentation feedback.
+//! presentation feedback. `client/buffers.rs` adds viewports, fractional scale and dmabufs.
+
+mod buffers;
+
+pub use buffers::{ProtocolError, memory_file};
 
 use std::fs::File;
 use std::io::Write;
@@ -17,7 +21,12 @@ use wayland_client::protocol::{
     wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
+};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1;
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
@@ -63,17 +72,27 @@ pub struct Window {
     /// The time each frame callback carried, in milliseconds.
     pub frames: Vec<u32>,
     pub feedback: Vec<Feedback>,
+    /// Its `wp_viewport`, once made.
+    pub viewport: Option<wp_viewport::WpViewport>,
+    /// Its `wp_fractional_scale_v1`, once made.
+    pub fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    /// Each `wp_fractional_scale_v1.preferred_scale`, in 120ths.
+    pub preferred_scales: Vec<u32>,
+    /// Each `wl_surface.preferred_buffer_scale`.
+    pub preferred_buffer_scales: Vec<i32>,
 }
 
-/// What a subsurface of a window received: its `wl_surface.enter` events.
+/// What a subsurface of a window received: its `wl_surface.enter` events, and each
+/// `wl_surface.preferred_buffer_scale`.
 pub struct Subsurface {
     pub enters: u32,
+    pub preferred_buffer_scales: Vec<i32>,
 }
 
 /// Which surface a `wl_surface`'s events are for.
 #[derive(Debug, Clone, Copy)]
 enum SurfaceOwner {
-    Window,
+    Window(usize),
     Subsurface(usize),
 }
 
@@ -93,6 +112,14 @@ pub struct ClientState {
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     decorations: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     presentation: Option<wp_presentation::WpPresentation>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+    fractional_scale_manager: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    /// `zwp_linux_dmabuf_v1`, bound at version 3 at most, and the version the global offers.
+    dmabuf: Option<(zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, u32)>,
+    /// The formats and modifiers `zwp_linux_dmabuf_v1` offered.
+    pub dmabuf_formats: Vec<(u32, u64)>,
+    /// What each `zwp_linux_buffer_params_v1.create` came to: `created` (true) or `failed`.
+    pub dmabuf_results: Vec<bool>,
     _outputs: Vec<wl_output::WlOutput>,
     _seat: Option<wl_seat::WlSeat>,
     pub windows: Vec<Window>,
@@ -186,7 +213,7 @@ impl Client {
             .compositor
             .as_ref()
             .expect("wl_compositor")
-            .create_surface(&qh, SurfaceOwner::Window);
+            .create_surface(&qh, SurfaceOwner::Window(index));
         let xdg_surface = state
             .wm_base
             .as_ref()
@@ -208,6 +235,10 @@ impl Client {
             decoration_mode: None,
             frames: Vec::new(),
             feedback: Vec::new(),
+            viewport: None,
+            fractional_scale: None,
+            preferred_scales: Vec::new(),
+            preferred_buffer_scales: Vec::new(),
         });
         index
     }
@@ -223,7 +254,13 @@ impl Client {
     /// whole.
     pub fn attach(&mut self, window: usize, width: i32, height: i32, argb: u32) {
         let pixels = vec![argb; pixel_count(width, height)];
-        let buffer = self.buffer(width, height, &pixels);
+        self.attach_pixels(window, width, height, &pixels);
+    }
+
+    /// Attaches a new buffer of `width` × `height` pixels, `0xAARRGGBB` row by row, damaged
+    /// whole.
+    pub fn attach_pixels(&mut self, window: usize, width: i32, height: i32, pixels: &[u32]) {
+        let buffer = self.buffer(width, height, pixels);
         let surface = &self.state.windows[window].surface;
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, width, height);
@@ -301,7 +338,10 @@ impl Client {
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, 50, 50);
         surface.commit();
-        self.state.subsurfaces.push(Subsurface { enters: 0 });
+        self.state.subsurfaces.push(Subsurface {
+            enters: 0,
+            preferred_buffer_scales: Vec::new(),
+        });
         index
     }
 
@@ -388,7 +428,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
         };
         match interface.as_str() {
             "wl_compositor" => {
-                state.compositor = Some(registry.bind(name, version.min(5), qh, ()));
+                state.compositor = Some(registry.bind(name, version.min(6), qh, ()));
             }
             "wl_subcompositor" => state.subcompositor = Some(registry.bind(name, 1, qh, ())),
             "wl_shm" => state.shm = Some(registry.bind(name, 1, qh, ())),
@@ -401,6 +441,13 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
                 ._outputs
                 .push(registry.bind(name, version.min(4), qh, ())),
             "wl_seat" => state._seat = Some(registry.bind(name, 1, qh, ())),
+            "wp_viewporter" => state.viewporter = Some(registry.bind(name, 1, qh, ())),
+            "wp_fractional_scale_manager_v1" => {
+                state.fractional_scale_manager = Some(registry.bind(name, 1, qh, ()));
+            }
+            "zwp_linux_dmabuf_v1" => {
+                state.dmabuf = Some((registry.bind(name, version.min(3), qh, ()), version));
+            }
             _ => {}
         }
     }
@@ -563,8 +610,22 @@ impl Dispatch<wl_surface::WlSurface, SurfaceOwner> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let (wl_surface::Event::Enter { .. }, SurfaceOwner::Subsurface(index)) = (event, owner) {
-            state.subsurfaces[*index].enters += 1;
+        match (event, owner) {
+            (wl_surface::Event::Enter { .. }, SurfaceOwner::Subsurface(index)) => {
+                state.subsurfaces[*index].enters += 1;
+            }
+            (wl_surface::Event::PreferredBufferScale { factor }, SurfaceOwner::Window(index)) => {
+                state.windows[*index].preferred_buffer_scales.push(factor);
+            }
+            (
+                wl_surface::Event::PreferredBufferScale { factor },
+                SurfaceOwner::Subsurface(index),
+            ) => {
+                state.subsurfaces[*index]
+                    .preferred_buffer_scales
+                    .push(factor);
+            }
+            _ => {}
         }
     }
 }

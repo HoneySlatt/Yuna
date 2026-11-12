@@ -14,10 +14,15 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   toolchain and every tool the checks use; CI runs in it too.
 - **Dialog**: a window that names a parent, as xdg-shell's `set_parent`; it opens floating, centred
   on its parent, and takes the focus only from it.
+- **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
+  most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
 - **Dynamic workspaces**: an option of the layout: each output keeps one empty unnamed workspace
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
+- **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
+  follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
+  viewport (`wp_viewporter`) to its logical size: one buffer pixel per physical pixel.
 - **Full width**: a column that spans the working area, gaps aside; in dwindle, a window
   maximised over the working area. Umbriel calls it "maximize".
 - **Game mode**: the state Yuna enters when a game is fullscreen: effects and animations off,
