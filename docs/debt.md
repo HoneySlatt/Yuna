@@ -6,7 +6,7 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 ## Smithay and the HDR prototype
 
 - The HDR metadata's primaries are sent red, green, blue; that order is not checked against
-  CTA-861-G (M1.3's prototype; Stage 5 checks it).
+  CTA-861-G (M1.3's prototype sent them so and the monitor showed HDR; Stage 5 checks the order).
 - Smithay `8fd9fe0` stops reading a CRTC's properties at the first of `ACTIVE` and
   `VRR_ENABLED` (`State::current_state`), so one of the two is not read back; it matters once
   Yuna uses VRR (Stage 4).

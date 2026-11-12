@@ -96,7 +96,7 @@ times are in [`docs/measurements.md`](docs/measurements.md).
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
 licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11, and, for
-the HDR prototype's branch only (M1.3), the same day, Smithay's `backend_drm`, `backend_gbm`,
+the HDR prototype's branch only (M1.3, deleted since), the same day, Smithay's `backend_drm`, `backend_gbm`,
 `backend_egl`, `renderer_gl`, `backend_session_libseat` and `backend_libinput` features with the
 system libraries they link. For the headless compositor (M1.4), the owner accepted on 2026-11-12
 Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` and

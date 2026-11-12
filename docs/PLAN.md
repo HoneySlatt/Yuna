@@ -18,10 +18,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   workspaces ([ADR-0018](adr/0018-workspaces.md)), behaviours
   ([ADR-0019](adr/0019-the-layouts-behaviours.md)) and the model's shape
   ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
-- [M1.3](#m13--hdr-through-smithay-a-prototype) waits for the owner's run
-  ([steps](hdr-prototype.md)): the prototype is built, tested and reviewed. The owner decided on
-  2026-11-12 that M1.4 starts meanwhile; the verdict should come before M1.4 ends, since a
-  failure on Smithay's side would reopen [ADR-0011](adr/0011-built-on-smithay.md).
+- [M1.3](#m13--hdr-through-smithay-a-prototype) is done (2026-11-12): HDR through Smithay works on
+  the owner's monitor; [ADR-0011](adr/0011-built-on-smithay.md) holds.
 - [M1.4](#m14--the-headless-compositor) designed on 2026-11-12
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0025](adr/0025-applications-in-ci.md)). Current: M1.4, Phase B.
@@ -32,7 +30,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
-| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Waiting for the owner's run |
+| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | In progress |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
@@ -94,17 +92,19 @@ milestone first needs it.
   indicator, or the reason they cannot is written; the patches it needed are listed.
 - **By hand.** Agents have no access to the owner's display: the owner runs it from a text console.
 - **Measured.** Nothing beyond the verdict; the program is then deleted, its findings kept here.
-- **Where it stands** (2026-11-11). The program is on the branch `m1.3-hdr-prototype`; the owner
-  runs it by [these steps](hdr-prototype.md). It needed one patch to Smithay, in Yuna's private
-  fork ([ADR-0021](adr/0021-smithays-fork.md), [patches](smithay-patches.md)), and Smithay's
-  DRM, GBM, EGL, GLES, libseat and libinput backends, for that branch only. It drives Smithay's
-  `GbmBufferedSurface`: `DrmCompositor` needs the `wayland_frontend` feature. A test on the GPU's
-  render node checks that every patch reaches an `Xbgr2101010` buffer with its exact PQ codes; the
-  display engine's and the monitor's sides are unverified until the owner's run. The closing
-  review (2026-11-12) found no danger to the owner's session; its fixes are in: a key to switch
-  `Colorspace`, a refusal while the CRTC holds a colour transform, the console switch, honest
-  readings of patterns 1, 4 and 5. The shell's `fortify` off, its `LD_LIBRARY_PATH` and the GPU
-  test stay on the branch.
+- **Result.** Done on 2026-11-12: Smithay, with Yuna's one patch, drives the owner's monitor in
+  HDR; [ADR-0011](adr/0011-built-on-smithay.md) holds. The owner ran it from a text console under
+  KDE, once KWin's colour settings were off: KWin had left a `GAMMA_LUT`, which the prototype
+  refuses. It set `max bpc` 10, `Colorspace` `BT2020_RGB` and `HDR_OUTPUT_METADATA` (each tested
+  with a modeset), scanned out `Xbgr2101010` at 3840 × 2160 and 240 Hz, and gave all three back
+  at exit. The monitor switched to HDR. Pattern 1's steps rose in order from a true black; above
+  the panel's peak, pattern 2's squares kept rising up to 4,000 cd/m², so the monitor compresses
+  highlights rather than clips them (Stage 5's tone mapping must know); pattern 3 showed from
+  0.005 cd/m²; BT.2020's primaries were more saturated than BT.709's. A change of `Colorspace` is
+  a modeset: the screen goes black about a second while amdgpu trains the DisplayPort link again,
+  its first DPCD writes failing. Not observed: whether the monitor reads `Colorspace`, pattern
+  5's bands, the depth the monitor shows. The program and its branch are deleted, its run steps
+  with them; the patch stays in the fork for Stage 5 ([patches](smithay-patches.md)).
 
 ### M1.4 — The headless compositor
 
