@@ -26,7 +26,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0027](adr/0027-smithay-without-overflow-checks.md) and
   [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md); B3's in
   [ADR-0029](adr/0029-the-rest-of-animated-applications.md); B4's in
-  [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md). Current: M1.4's closing review.
+  [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md). M1.4 is done (2026-11-12). Next:
+  M1.5, opening with frames drawn ahead of their boundary.
 
 ## Status
 
@@ -35,7 +36,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
-| [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | In progress |
+| [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
@@ -97,18 +98,10 @@ milestone first needs it.
 - **By hand.** Agents have no access to the owner's display: the owner runs it from a text console.
 - **Measured.** Nothing beyond the verdict; the program is then deleted, its findings kept here.
 - **Result.** Done on 2026-11-12: Smithay, with Yuna's one patch, drives the owner's monitor in
-  HDR; [ADR-0011](adr/0011-built-on-smithay.md) holds. The owner ran it from a text console under
-  KDE, once KWin's colour settings were off: KWin had left a `GAMMA_LUT`, which the prototype
-  refuses. It set `max bpc` 10, `Colorspace` `BT2020_RGB` and `HDR_OUTPUT_METADATA` (each tested
-  with a modeset), scanned out `Xbgr2101010` at 3840 × 2160 and 240 Hz, and gave all three back
-  at exit. The monitor switched to HDR. Pattern 1's steps rose in order from a true black; above
-  the panel's peak, pattern 2's squares kept rising up to 4,000 cd/m², so the monitor compresses
-  highlights rather than clips them (Stage 5's tone mapping must know); pattern 3 showed from
-  0.005 cd/m²; BT.2020's primaries were more saturated than BT.709's. A change of `Colorspace` is
-  a modeset: the screen goes black about a second while amdgpu trains the DisplayPort link again,
-  its first DPCD writes failing. Not observed: whether the monitor reads `Colorspace`, pattern
-  5's bands, the depth the monitor shows. The program and its branch are deleted, its run steps
-  with them; the patch stays in the fork for Stage 5 ([patches](smithay-patches.md)).
+  HDR at 3840 × 2160 and 240 Hz; [ADR-0011](adr/0011-built-on-smithay.md) holds. The monitor
+  compresses highlights above its peak rather than clip them, which Stage 5's tone mapping must
+  know; a change of `Colorspace` is a modeset. What was set, seen and not observed is in
+  [measurements](measurements.md) and [patches](smithay-patches.md); the program is deleted.
 
 ### M1.4 — The headless compositor
 
@@ -131,20 +124,23 @@ milestone first needs it.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
   machine ([measurements](measurements.md)).
-- **Where it stands** (2026-11-12). Phases A to B4 are done; the closing review is next. B2's and
-  B3's tests found and fixed five defects. B4: Yuna rests on the 4K output as at 1080p. A 4K
-  frame with two `vkcube` takes 0.2 ms on the GPU with dmabufs (`--gpu`, first run: feedback and
-  import work), 1.4 ms with `wl_shm`, and 7 ms on llvmpipe, which draws 116 frames a second for
-  240 ([debt](debt.md)). GPU time is read from the kernel
-  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)). The layout meets ADR-0020's budgets but for "float, then tile" at 100 windows (debt).
-  Delegated briefs and
-  proofs are in `.delegation/` (local).
+- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided. B2's and B3's
+  tests found and fixed five defects. B4, on the 4K output with two `vkcube`: a frame takes
+  0.2 ms on the GPU with dmabufs, with 0.12 ms of GPU time and 0.17 ms of Yuna's CPU
+  (`--gpu`, run once by hand: its feedback and import work); 1.4 ms with `wl_shm`; 7 ms on
+  llvmpipe, which draws 116 frames a second for 240. GPU time is read from the kernel
+  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)). Yuna rests on the 4K output. The
+  layout meets ADR-0020's budgets but for "float, then tile" at 100 windows. Frames are
+  presented a period late headless. All four in [debt](debt.md); figures in
+  [measurements](measurements.md); briefs and proofs in `.delegation/` (local).
 
 ### M1.5 — Agents' control
 
 - **Goal.** An agent drives an application through Yuna's MCP server, on a seat of its own
   ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
+- **Delivers.** First, frames drawn ahead of their refresh boundary, so that a frame drawn in
+  time is presented at it, in an ADR that amends ADR-0023 (the owner's choice, 2026-11-12;
+  [debt](debt.md)). The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
   presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
   so that input tests them. One seat per agent; a test that an agent's input never

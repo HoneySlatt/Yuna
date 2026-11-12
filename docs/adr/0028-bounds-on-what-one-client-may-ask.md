@@ -1,6 +1,8 @@
 # 0028. Bounds on what one client may ask
 
-- Status: Accepted
+- Status: Accepted; context corrected on 2026-11-12: the dwindle walk no longer recurses
+  (commit `62568b3`, before this ADR), so its first point is wrong; the window caps stand for
+  the other reasons, linear walks at each commit and refresh, and memory
 - Date: 2026-11-12
 
 ## Context

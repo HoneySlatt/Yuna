@@ -46,9 +46,9 @@ const SUSPENDED_SINCE: u32 = 6;
 /// client keeps its other windows and its user's data.
 pub const MAX_WINDOWS_PER_CLIENT: usize = 1_000;
 
-/// The most windows the layout holds, all clients together. The layout walks a dwindle tree by
-/// recursion, as deep as it has windows: 10,000 windows in one tree work, 100,000 overflow the
-/// stack (ADR-0020). A window over the cap is treated as one over its client's cap.
+/// The most windows the layout holds, all clients together: the layout's operations and Yuna's
+/// frame loop walk every window, linearly, at each commit and refresh, and each window holds
+/// memory (ADR-0028). A window over the cap is treated as one over its client's cap.
 pub const MAX_WINDOWS: usize = 10_000;
 
 /// What Yuna keeps of an `xdg_toplevel`.

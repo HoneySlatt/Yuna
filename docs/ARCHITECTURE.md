@@ -179,9 +179,9 @@ from the rate each time, so that errors never add up.
    clamped to the layout's `MAX_SIZE`; the window gets the next `WindowId`, never reused. The
    layout changed: every output's next boundary is armed. An activation asked before, if any, is
    applied now. A window is refused when its client has 1,000 windows already
-   (`MAX_WINDOWS_PER_CLIENT`) or the layout holds 10,000 (`MAX_WINDOWS`): the layout walks a
-   dwindle tree by recursion, and 10,000 windows in one tree work where 100,000 overflow the stack
-   ([ADR-0020](adr/0020-the-layout-models-shape.md), [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)).
+   (`MAX_WINDOWS_PER_CLIENT`) or the layout holds 10,000 (`MAX_WINDOWS`): the layout and the
+   frame loop walk every window at each commit and refresh, and each window holds memory
+   ([ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)).
    A refusal for a cap is logged once per
    client. Should the layout itself refuse it, which a client's values cannot cause, that is
    logged once per window. A refused window is not shown, and its client gets frame callbacks at
@@ -409,15 +409,9 @@ drawing is done.
   `sequences_found_before` replays the sequences found failing, written out, since a seed in
   `random_requests.proptest-regressions` replays its case only while the generator stays the
   same. Each test prints how often the requests that need the keyboard took effect, as the
-  compositor's state and the clients' own events show it. Over 1,000 cases, 500 of each start,
-  on 2026-11-12: grabs granted 592 of 785 (75 %), tokens asked validly 631 of 3,650 (17 %),
-  activations that moved the focus 104 of 798 (13 %), selections taken 585 of 2,755 (21 %). From
-  busy starts alone: 75 %, 31 %, 20 % and 37 %; from the sentinel alone, where a random client
-  rarely has the keyboard before it breaks the protocol: 80 %, 4 %, 1 % and 5 %. The two tests
-  took 5.8 s together, and the whole of `tests/headless` 8.8 to 9.3 s in three runs, against
-  16.1 to 17.4 s with one test of 160 cases before (debug build, the development machine's 16
-  threads, alone among measurements but not alone on the machine); `PROPTEST_CASES=<n>` runs `n`
-  cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
+  compositor's state and the clients' own events show it; those rates and the tests' times are
+  in [`measurements.md`](measurements.md). `PROPTEST_CASES=<n>` runs `n` cases in each test
+  ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as
@@ -426,8 +420,9 @@ drawing is done.
   once: Alacritty, `gtk4-demo` and Qt's `qml` on a still file show their window, go quiet (no
   round for 2 s), and Yuna must then rest 10 s: no context switch in any of its threads, read in
   `/proc`, and no frame, frame callback, configure, commit or wake-up, read in its log. `vkcube`
-  draws 120 frames and leaves, and Yuna must rest after it; left to draw, it must fail the same
-  check. Yuna and each application get an environment of their own, nothing of the caller's:
+  draws 120 frames and leaves; Yuna must get its 120 commits, draw at least 60 frames, a margin
+  for a slow runner where every run measured drew them all, and rest after it; left to draw, it
+  must fail the same check. Yuna and each application get an environment of their own, nothing of the caller's:
   no `DISPLAY` and no D-Bus, so that they reach neither the user's desktop nor an accessibility
   bus; a `PATH` of the store alone; throwaway home and XDG folders, the system's included;
   DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for Vulkan, without the

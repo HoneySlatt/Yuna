@@ -22,7 +22,7 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - "Float, then tile" on a workspace of 100 windows misses
   [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile in 3 of 5
-  runs measured in M1.4's B4, up to 32 µs; its median is 15.7 to 21.5 µs. Every other row met
+  runs measured in M1.4's B4, up to 32 µs; its median is 15.7 to 24.2 µs. Every other row met
   its budget on a quiet machine ([measurements](measurements.md)). The cause is not found; the
   operation is to be profiled before M1.7 animates the layout's moves.
 
@@ -33,6 +33,13 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   window geometry starts inside its surface, its right and bottom edges may blend up to one pixel
   of its margin. It stays while such a client's pixels are scaled anyway
   ([Scale](ARCHITECTURE.md#scale)).
+- A frame is presented at least one period after the commit it shows: a commit arms the first
+  boundary after it, drawing starts there, and the frame is presented at the first boundary
+  after its drawing ends (`frames.rs`). At 240 Hz, a client waits over 4.17 ms however fast the
+  frame, so the bar's input-to-present budget, one frame, read headless, is missed by
+  construction; the manual clock, where drawing takes no time, hides it. M1.5 opens with the
+  design of frames drawn ahead of their boundary, in an ADR that amends
+  [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) (the owner's choice, 2026-11-12).
 - Virtual time is not kept from running ahead of real time while real clients are connected
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
   clock.

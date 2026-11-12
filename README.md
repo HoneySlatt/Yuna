@@ -12,8 +12,10 @@ tests drive it.
 
 Designed on 2026-11-11. The first stage builds the headless core. Today Yuna runs without a screen:
 virtual outputs drawn offscreen, `xdg-shell` windows placed by its layout model, frames that
-follow damage and report when they could show. Popups, input and most protocols come next; the
-desktop session does not exist yet.
+follow damage and report when they could show; popups, the clipboard, dmabufs and fractional
+scale; real applications (Alacritty, GTK 4, Qt 6, Vulkan) run in it in CI, and it rests when
+they do. Pointer input and agents' control through MCP come next, then XWayland; the desktop
+session does not exist yet.
 
 ## Build
 

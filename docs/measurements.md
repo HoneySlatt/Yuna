@@ -10,14 +10,17 @@ Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), RX 6900 XT, Linux 
 26.2.6 from the development shell, for Yuna and its clients. One measurement at a time, each
 series started after 30 s with no build, game or other measure and under 1.5 cores busy; the
 load averages below rise from the series' own runs. Everything ran through `agent-headless`;
-`--gpu` drew on the render node, never on a display device. Build: release, at commit
-`29f9f54`, with `frame_time` before its last fix, which only stops its clients at its end;
-debug for rest, as the test runs.
+`--gpu` drew on the render node, never on a display device. Build: release, from the sources
+of commit `29f9f54`, built before it was made, with `frame_time` as it was before its fix to
+stop its clients at its end; debug for rest, as the test runs. The scripts that ran each series
+and their outputs are kept locally, in `.delegation/m1.4-b4-measures/`; the layout's runs A and
+B and the rest run were started by hand, with the commands given here.
 
 ### A frame on the 4K output
 
 Command: `nix develop -c cargo build --release -p yuna --bin yuna --example frame_time`, then
-`nix develop -c agent-headless -- target/release/examples/frame_time` with the options below:
+`nix develop -c agent-headless -- target/release/examples/frame_time` with the options below
+(`--gpu`; `--client-vulkan` with the shell's Mesa's `radeon_icd.x86_64.json`):
 Yuna's default output, 3840 × 2160 at 240 Hz and scale 1.5; two `vkcube` windows, side by side
 in columns of half the width, so that the whole output changes at each frame; 10 s measured
 after 3 s of warm-up; three runs of each row, the lowest and highest given. Load average at the
@@ -38,13 +41,13 @@ What the figures are ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md))
 
 | Yuna on | Clients' buffers | Frames a second | A frame's time: median | p99 | longest | Yuna's CPU per frame | GPU per frame |
 |---|---|---|---|---|---|---|---|
-| llvmpipe | `wl_shm`, from lavapipe | 115.4–117.4 | 6,851–7,225 µs | 8,572–9,108 µs | 9.3–10.7 ms | 74.3–76.4 ms: llvmpipe's threads 72.0–73.9 ms, the main thread 2.3–2.4 ms | none: llvmpipe's threads |
+| llvmpipe | `wl_shm`, from lavapipe | 115.4–117.4 | 6,851–7,225 µs | 8,572–9,108 µs | 9.3–10.7 ms | 2.3–2.4 ms, the main thread | 72.0–73.9 ms of llvmpipe's threads, on the CPU |
 | the GPU, `--gpu` | `wl_shm`, from lavapipe | 240.0 | 1,375–1,393 µs | 1,648–1,853 µs | 2.3–3.7 ms | 1,234–1,254 µs: the main thread 1,126–1,144 µs | 770–775 µs (gfx) |
 | the GPU, `--gpu` | dmabufs, from radv | 239.9–240.0 | 198–207 µs | 235–247 µs | 459–503 µs | 162–178 µs: the main thread 140–153 µs | 117 µs (gfx) |
 
 - On llvmpipe, every frame takes longer than the 4.17 ms period: each is presented a boundary
   late, and Yuna draws about 116 frames a second for 240. Yuna then keeps 8.7 to 8.8 of the 16
-  threads busy, and its two clients 3.4 more (28.5 to 29.4 ms of CPU per frame). The bar's
+  threads busy, almost all of it llvmpipe's, and its two clients 3.4 more (28.5 to 29.4 ms of CPU per frame). The bar's
   budget for an agent's output, full rate while its programs draw, is missed there
   ([debt](debt.md)).
 - On the GPU, no frame took longer than the period. With `wl_shm` clients, each frame copies
@@ -63,7 +66,7 @@ lavapipe's clients, it holds none, only their `wl_shm` memfds.
 
 At scale 1 (`--output 3840x2160@240,1`), on llvmpipe, one run at a load average of 5.3: 65.8
 frames a second; a frame 12.1 ms at the median, 17.8 ms at the 99th percentile; Yuna's CPU 92.6
-ms per frame, of which llvmpipe's threads 87.1 ms and the main thread 5.5 ms; the clients' 68.6
+ms per frame, the main thread 5.5 ms and llvmpipe's threads 87.1 ms; the clients' 68.6
 ms. Scale 1.5 is lighter most likely because `vkcube` follows no fractional scale: it draws at its
 logical size, and Yuna scales it up. At scale 1 its buffers have 2.25 times the pixels, and the
 clients' CPU and Yuna's main thread, which copies them, take about 2.4 times as long. Not
@@ -107,7 +110,7 @@ Against [ADR-0020](adr/0020-the-layout-models-shape.md)'s budgets at the 99th pe
 slower on other rows too, for a cause not found. Two more runs, right after a frame measure on
 llvmpipe, at a load average of 7 to 8 and with every median about 15 % higher, missed that row
 again, 28.2 µs in scrolling columns, 30.5 and 31.1 µs in dwindle, and no other. That row's
-median, 15.7 to 21.5 µs, leaves too little room under its budget: it stays debt
+median, 15.7 to 24.2 µs, leaves too little room under its budget: it stays debt
 ([debt](debt.md)). At 1,000 windows every run of every row meets its budget; the worst, 270 µs.
 In runs 2 and 3, the medians at 100 windows are within a few percent of Phase A's below.
 
@@ -162,6 +165,12 @@ at 1920 × 1080 at 60 Hz, scale 1, and at 2880 × 1620 at 60 Hz, scale 1.5, 3 fr
 then 0 context switches in 10 s for every thread of Yuna and of Alacritty. Alacritty draws
 through `wl_shm` and takes the fractional scale (120, then 180) and a viewport.
 
+How often the random requests that need the keyboard's focus took effect, over 1,000 cases,
+500 of each start: grabs granted 592 of 785 (75 %), tokens asked validly 631 of 3,650 (17 %),
+activations that moved the focus 104 of 798 (13 %), selections taken 585 of 2,755 (21 %). From
+busy starts alone: 75 %, 31 %, 20 % and 37 %; from the sentinel alone, where a random client
+rarely has the keyboard before it breaks the protocol: 80 %, 4 %, 1 % and 5 %.
+
 CI's one job on GitHub's `ubuntu-24.04` runner, without a cache: 3 min 23 s for commit
 `0b398f0` (run 43192826739), against 2 min 47 s at B1; the B2 tests and their proptests run
 in it.
@@ -209,6 +218,24 @@ them on several rows, by up to 55 µs at 100 windows and 460 µs at 1,000. Wheth
 the other build's or the model's is not known until a quiet machine measures again. The medians
 rose from M1.2's: about 1.7 times on scrolling columns at 1,000 windows, where the view now reads
 every column's drawn width; dwindle's barely.
+
+## M1.3 — HDR through Smithay, the owner's run (2026-11-12)
+
+A verdict by the owner's eye and the monitor's own indicator; nothing was timed. Moved here from
+the PLAN when M1.4 closed.
+
+The owner ran the prototype from a text console under KDE, once KWin's colour settings were off:
+KWin had left a `GAMMA_LUT`, which the prototype refuses. It set `max bpc` 10, `Colorspace`
+`BT2020_RGB` and `HDR_OUTPUT_METADATA` (each tested with a modeset), scanned out `Xbgr2101010` at
+3840 × 2160 and 240 Hz, and gave all three back at exit. The monitor switched to HDR. Pattern 1's
+steps rose in order from a true black; above the panel's peak, pattern 2's squares kept rising up
+to 4,000 cd/m², so the monitor compresses highlights rather than clips them (Stage 5's tone
+mapping must know); pattern 3 showed from 0.005 cd/m²; BT.2020's primaries were more saturated
+than BT.709's. A change of `Colorspace` is a modeset: the screen goes black about a second while
+amdgpu trains the DisplayPort link again, its first DPCD writes failing. Not observed: whether
+the monitor reads `Colorspace`, pattern 5's bands, the depth the monitor shows. The program and
+its branch are deleted, its run steps with them; the patch stays in the fork for Stage 5
+([patches](smithay-patches.md)).
 
 ## M1.2 — The layout model (2026-11-11)
 
