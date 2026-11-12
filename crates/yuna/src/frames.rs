@@ -16,7 +16,7 @@
 //! discarded, and entering or leaving outputs with its own surfaces.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::desktop::utils::{
@@ -169,6 +169,9 @@ impl State {
 
     /// Draws output `index`, which shows `shown`, if anything on it is damaged.
     fn draw(&mut self, index: usize, shown: &[Placed]) -> Drawing {
+        // From here, so that a frame's time includes the import of its clients' buffers, which
+        // Smithay does while it builds their elements: a `wl_shm` buffer is copied then.
+        let started = Instant::now();
         let output = &self.outputs[index];
         let mut elements = Vec::new();
         // The layout gives windows bottom to top; the renderer takes them front to back.
@@ -196,7 +199,7 @@ impl State {
             ));
         }
         let output = &mut self.outputs[index];
-        match render::draw(&mut self.renderer, output, &elements) {
+        match render::draw(&mut self.renderer, output, &elements, started) {
             Ok(true) => {
                 self.counters.frames_drawn += 1;
                 if let Some(hook) = &mut self.draw_hook {

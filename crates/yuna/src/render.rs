@@ -235,13 +235,14 @@ pub(crate) fn popup_elements(
 }
 
 /// Draws what changed of `output`'s elements, given front to back, and waits until the drawing
-/// is done. Returns whether anything was drawn.
+/// is done. Returns whether anything was drawn. A frame drawn is logged with its time since
+/// `started`, when its elements began to be built: `took_us`.
 pub(crate) fn draw(
     renderer: &mut GlesRenderer,
     output: &mut VirtualOutput,
     elements: &[WindowElement],
+    started: Instant,
 ) -> Result<bool, Error> {
-    let started = Instant::now();
     let id = output.id.0;
     let mut target = renderer
         .bind(&mut output.buffer)
