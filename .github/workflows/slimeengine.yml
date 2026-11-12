@@ -11,8 +11,9 @@ on:
   push:
     branches: [main]
     # The drawing path: the renderer, the outputs, the frame loop, the buffers, the clock; the
-    # event loop and the program, whose log the test reads; the test that runs the example; what
-    # builds Yuna and the shell.
+    # commits and wl_shm, the configures and the scale a client is told; the event loop and the
+    # program, whose log the test reads; the test that runs the example; what builds Yuna and the
+    # shell.
     paths:
       - "crates/yuna/src/render.rs"
       - "crates/yuna/src/output.rs"
@@ -21,6 +22,9 @@ on:
       - "crates/yuna/src/clock.rs"
       - "crates/yuna/src/compositor.rs"
       - "crates/yuna/src/main.rs"
+      - "crates/yuna/src/state.rs"
+      - "crates/yuna/src/shell.rs"
+      - "crates/yuna/src/scale.rs"
       - "crates/yuna/tests/applications.rs"
       - "Cargo.lock"
       - "flake.nix"
