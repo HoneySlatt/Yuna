@@ -8,8 +8,8 @@
 //!
 //! - the frames Yuna drew and the commits it got, from its `counters` lines;
 //! - each frame's time, from its `frame drawn` lines (`took_us`): from when Yuna starts to build
-//!   the frame, its clients' buffers imported, to when the drawing is done, as Yuna's own clock
-//!   says. It decides when the frame is presented;
+//!   the frame, its clients' buffers imported, to when the drawing is done, on `CLOCK_MONOTONIC`.
+//!   It decides when the frame is presented;
 //! - the CPU time of each of Yuna's threads, from `/proc/<pid>/task/<tid>/schedstat`: on
 //!   llvmpipe, its `llvmpipe-N` threads rasterize, the work a GPU would do;
 //! - the GPU's busy time for Yuna, from the kernel's DRM usage statistics in
@@ -17,15 +17,18 @@
 //!   files open;
 //! - the same CPU and GPU times for the clients, and the buffers Yuna holds: dma-bufs or memfds.
 //!
-//! Build it and Yuna for release, then run it in the development shell, through
-//! `agent-headless` on the owner's machine, alone among measurements. It stops what it started
-//! when it ends, and keeps its folder of logs when it fails; killed outright, it leaves them to
-//! `agent-headless`, which stops every process of its run:
+//! Build it and Yuna for release, then run it in the development shell, alone among
+//! measurements; it needs no screen of its own:
 //!
 //! ```sh
 //! nix develop -c cargo build --release -p yuna --bin yuna --example frame_time
-//! nix develop -c agent-headless -- target/release/examples/frame_time
+//! nix develop -c target/release/examples/frame_time
 //! ```
+//!
+//! It stops what it started when it ends, and keeps its folder of logs when it fails. Its
+//! processes get no signal when it dies: killed outright, it leaves Yuna and `vkcube` running.
+//! On the owner's machine, agents run it inside `agent-headless`, which stops every process of
+//! its run.
 //!
 //! Options: `--gpu` draws on the GPU's render node (never in the tests); `--client-vulkan
 //! <icd.json>` gives `vkcube` that Vulkan driver rather than lavapipe, such as the shell's Mesa's
@@ -360,8 +363,8 @@ struct Sample {
     yuna_threads: BTreeMap<u32, (String, u64)>,
     /// The GPU's busy time for Yuna, per engine, in nanoseconds.
     yuna_gpu: BTreeMap<String, u64>,
-    /// The CPU time of all the clients' threads, in nanoseconds.
-    clients_cpu: u64,
+    /// Each of the clients' threads, and its CPU time in nanoseconds.
+    clients_threads: BTreeMap<u32, u64>,
     /// The GPU's busy time for all the clients, per engine, in nanoseconds.
     clients_gpu: BTreeMap<String, u64>,
     /// The files Yuna holds open that are dma-bufs, and memfds.
@@ -382,13 +385,11 @@ impl Sample {
         let counter =
             |key| field(last_counters, key).ok_or_else(|| format!("no {key} in {last_counters:?}"));
         let pid = yuna.child.id();
-        let mut clients_cpu = 0;
+        let mut clients_threads = BTreeMap::new();
         let mut clients_gpu = BTreeMap::new();
         for client in clients {
-            clients_cpu += threads(client.id())?
-                .values()
-                .map(|(_, ns)| ns)
-                .sum::<u64>();
+            let client_threads = threads(client.id())?;
+            clients_threads.extend(client_threads.into_iter().map(|(tid, (_, ns))| (tid, ns)));
             add_engines(&mut clients_gpu, gpu_engines(client.id()));
         }
         let (yuna_dmabufs, yuna_memfds) = buffer_files(pid);
@@ -400,7 +401,7 @@ impl Sample {
             commits: counter("commits")?,
             yuna_threads: threads(pid)?,
             yuna_gpu: gpu_engines(pid),
-            clients_cpu,
+            clients_threads,
             clients_gpu,
             yuna_dmabufs,
             yuna_memfds,
@@ -533,6 +534,13 @@ fn output_rate(options: &Options) -> f64 {
         .unwrap_or(240.0)
 }
 
+/// A thread's CPU time since `before_ns`, its time at the window's start, or since it started if
+/// it started within the window. Each thread's time is taken apart, so that a thread that ended
+/// within the window never makes a difference of totals go below zero.
+fn used_since(after_ns: u64, before_ns: Option<u64>) -> u64 {
+    after_ns.saturating_sub(before_ns.unwrap_or(0))
+}
+
 /// The value at percentile `p` of `sorted`, by the nearest rank.
 fn percentile(sorted: &[u64], p: f64) -> u64 {
     let rank = ((p / 100.0) * sorted.len() as f64).ceil() as usize;
@@ -597,27 +605,39 @@ fn report(
     }
 
     let mut kinds: BTreeMap<&str, (usize, u64)> = BTreeMap::new();
-    let mut total = 0;
+    let (mut cpu, mut rasterizer) = (0, 0);
     for (tid, (name, after_ns)) in &after.yuna_threads {
-        let before_ns = before.yuna_threads.get(tid).map_or(0, |(_, ns)| *ns);
-        let used = after_ns.saturating_sub(before_ns);
+        let before_ns = before.yuna_threads.get(tid).map(|(_, ns)| *ns);
+        let used = used_since(*after_ns, before_ns);
         // The main thread runs the event loop and Yuna's own work; the others are Mesa's.
         let kind = if *tid == after.pid {
             "main thread"
         } else {
             thread_kind(name)
         };
+        // llvmpipe's threads rasterize: the work a GPU would do (ADR-0030).
+        if kind == "llvmpipe" {
+            rasterizer += used;
+        } else {
+            cpu += used;
+        }
         let kind = kinds.entry(kind).or_default();
         kind.0 += 1;
         kind.1 += used;
-        total += used;
     }
     println!(
-        "Yuna's CPU time per frame: {:.0} µs over its {} threads ({:.2} cores busy)",
-        per_frame(total),
-        after.yuna_threads.len(),
-        total as f64 / 1e9 / seconds,
+        "Yuna's CPU time per frame, llvmpipe's rasterizer apart: {:.0} µs ({:.2} cores busy)",
+        per_frame(cpu),
+        cpu as f64 / 1e9 / seconds,
     );
+    if rasterizer > 0 {
+        println!(
+            "llvmpipe's rasterizer per frame, in place of a GPU: {:.0} µs ({:.2} cores busy)",
+            per_frame(rasterizer),
+            rasterizer as f64 / 1e9 / seconds,
+        );
+    }
+    println!("  by thread, of Yuna's {}:", after.yuna_threads.len());
     for (kind, (count, used)) in &kinds {
         if *used > 0 {
             println!("  {kind} ({count} threads): {:.0} µs", per_frame(*used));
@@ -643,7 +663,13 @@ fn report(
     );
     println!(
         "the clients, per frame Yuna drew: CPU {:.0} µs; GPU (fdinfo) {}",
-        per_frame(after.clients_cpu - before.clients_cpu),
+        per_frame(
+            after
+                .clients_threads
+                .iter()
+                .map(|(tid, ns)| used_since(*ns, before.clients_threads.get(tid).copied()))
+                .sum()
+        ),
         gpu(&after.clients_gpu, &before.clients_gpu),
     );
     println!(

@@ -64,8 +64,11 @@ options, `--gpu` among them:
 
 ```sh
 nix develop -c cargo build --release -p yuna --bin yuna --example frame_time
-nix develop -c agent-headless -- target/release/examples/frame_time
+nix develop -c target/release/examples/frame_time
 ```
+
+It needs no screen of its own. On the owner's machine, agents run it inside `agent-headless`,
+one measure at a time.
 
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
 to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by

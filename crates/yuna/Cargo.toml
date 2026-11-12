@@ -22,3 +22,9 @@ wayland-protocols.workspace = true
 
 [lints]
 workspace = true
+
+# Its unit tests run with the workspace's: an example's do not by default, and its parsing decides
+# the figures it reports.
+[[example]]
+name = "frame_time"
+test = true
