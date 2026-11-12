@@ -9,9 +9,11 @@
 //! destruction of its toplevel or of its surface, closes it. Its configures follow the layout's
 //! arrangement, at refresh boundaries (`frames.rs`). Fullscreen and maximise requests always get
 //! a configure, as xdg-shell asks, even when the layout refuses them or nothing changes. A window
-//! the layout refuses to open is not shown; its client gets frame callbacks at the hidden
-//! windows' rate. Popups are refused for now, by dismissing them.
+//! the layout refuses to open, or that would pass a cap on windows ([`MAX_WINDOWS_PER_CLIENT`],
+//! [`MAX_WINDOWS`]), is not shown; its client gets frame callbacks at the hidden windows' rate.
+//! Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use smithay::backend::renderer::utils::with_renderer_surface_state;
@@ -30,10 +32,21 @@ use smithay::wayland::shell::xdg::{
 use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 
-use crate::state::{OWNER_SEAT, State};
+use crate::activation::TokenValidity;
+use crate::state::{ClientState, OWNER_SEAT, State};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
 const SUSPENDED_SINCE: u32 = 6;
+
+/// The most windows one client may have in the layout, so that one client cannot fill it alone
+/// (see [`MAX_WINDOWS`]). A window over the cap is not shown, never a protocol error, so that its
+/// client keeps its other windows and its user's data.
+pub const MAX_WINDOWS_PER_CLIENT: usize = 1_000;
+
+/// The most windows the layout holds, all clients together. The layout walks a dwindle tree by
+/// recursion, as deep as it has windows: 10,000 windows in one tree work, 100,000 overflow the
+/// stack (ADR-0020). A window over the cap is treated as one over its client's cap.
+pub const MAX_WINDOWS: usize = 10_000;
 
 /// What Yuna keeps of an `xdg_toplevel`.
 #[derive(Debug)]
@@ -56,6 +69,11 @@ pub(crate) struct Toplevel {
     pub refused: bool,
     /// A request it made is owed a configure, even if nothing changes (xdg-shell).
     pub configure_owed: bool,
+    /// An activation was refused, or came without a valid token, and the window has not had the
+    /// seat's focus since (`activation.rs`).
+    pub urgent: bool,
+    /// An activation asked before it was mapped, applied when it is.
+    pub waiting_activation: Option<TokenValidity>,
 }
 
 impl Toplevel {
@@ -71,6 +89,8 @@ impl Toplevel {
             last_frame_sent: None,
             refused: false,
             configure_owed: false,
+            urgent: false,
+            waiting_activation: None,
         }
     }
 
@@ -237,8 +257,13 @@ impl State {
         self.counters.configures += 1;
     }
 
-    /// The toplevel's first buffer: it opens in the layout, its size known.
+    /// The toplevel's first buffer: it opens in the layout, its size known, unless it would pass
+    /// a cap on windows.
     fn map(&mut self, root: &WlSurface) {
+        if let Some(cap) = self.window_cap_passed(root) {
+            self.refuse_over_cap(root, cap);
+            return;
+        }
         let geometry = window_geometry(root);
         let mut options = self.open_options(root);
         options.committed = committed_size(geometry);
@@ -267,8 +292,46 @@ impl State {
         {
             tracing::debug!(%error, window = window.0, "full width refused");
         }
+        let waiting_activation = toplevel.waiting_activation.take();
         tracing::debug!(window = window.0, "window opened");
         self.mark_layout_changed();
+        if let Some(validity) = waiting_activation {
+            self.activate(window, validity);
+        }
+    }
+
+    /// The cap a new window of the client of `root` would pass, if any. A window counts from its
+    /// mapping to its closing.
+    fn window_cap_passed(&self, root: &WlSurface) -> Option<&'static str> {
+        if self.windows.len() >= MAX_WINDOWS {
+            return Some("the layout holds its most windows");
+        }
+        let of_client = self
+            .windows
+            .values()
+            .filter(|surface| surface.same_client_as(&root.id()))
+            .count();
+        (of_client >= MAX_WINDOWS_PER_CLIENT).then_some("its client has its most windows")
+    }
+
+    /// Refuses the toplevel of `root` a place in the layout, as the layout's own refusal does:
+    /// not shown, its frame callbacks at the hidden windows' rate. Logged once per client, which
+    /// may try many windows.
+    fn refuse_over_cap(&mut self, root: &WlSurface, cap: &str) {
+        if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
+            toplevel.refused = true;
+        }
+        let first = root
+            .client()
+            .and_then(|client| {
+                client
+                    .get_data::<ClientState>()
+                    .map(|state| !state.window_cap_logged.swap(true, Ordering::Relaxed))
+            })
+            .unwrap_or(true);
+        if first {
+            tracing::warn!(cap, "a window is not shown; said once per client");
+        }
     }
 
     /// A commit of a mapped toplevel: its limits and window geometry go to the layout when they
@@ -315,7 +378,8 @@ impl State {
         }
     }
 
-    /// Takes the toplevel of `root` out of the layout and off its output.
+    /// Takes the toplevel of `root` out of the layout and off its output, and dismisses its
+    /// popups.
     fn close(&mut self, root: &WlSurface) {
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
@@ -326,10 +390,13 @@ impl State {
         let shown_on = toplevel.shown_on.take();
         toplevel.limits = (Size::default(), Size::default());
         toplevel.geometry = Rectangle::default();
+        toplevel.urgent = false;
         self.windows.remove(&window);
         if let Some(output) = shown_on {
             self.leave_output(root, output);
         }
+        // After `leave_output`, which reaches the popups through their window's tree.
+        self.dismiss_popups_of(root);
         if let Err(error) = self.layout.close_window(window) {
             tracing::warn!(%error, window = window.0, "closing a window failed");
         }
@@ -484,21 +551,25 @@ impl XdgShellHandler for State {
         self.toplevel_gone(surface.wl_surface());
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        // Popups come with m1.4-b2. Until then each is dismissed at once, which xdg-shell allows
-        // the compositor at any time: the client destroys it.
-        tracing::debug!("a popup was dismissed: popups are not shown yet");
-        surface.send_popup_done();
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        self.popup_created(surface, positioner);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        self.popup_grab_requested(surface, seat, serial);
+    }
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        self.popup_reposition_requested(surface, positioner, token);
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.popup_gone(surface.wl_surface());
     }
 
     fn fullscreen_request(

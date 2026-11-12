@@ -7,11 +7,15 @@
 //! created, which is the clock's start: the manual clock does not move until a test moves it.
 //! `scale.rs` and `dmabuf.rs` hold the stories of viewporter, fractional scale and linux-dmabuf.
 
+mod activation;
 mod client;
+mod dialogs;
 mod dmabuf;
+mod popups;
 mod scale;
 mod selection;
 mod selection_client;
+mod window_cap;
 
 use std::cell::Cell;
 use std::rc::Rc;

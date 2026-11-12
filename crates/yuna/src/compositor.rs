@@ -13,7 +13,7 @@ use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction, Registr
 use smithay::reexports::wayland_server::{BindError, Display};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
-use yuna_layout::{Layout, OutputId};
+use yuna_layout::{Layout, OutputId, WindowId};
 
 use crate::Error;
 use crate::clock::{Clock, ClockMode};
@@ -54,7 +54,7 @@ pub struct Counters {
     pub frames_drawn: u64,
     /// `wl_callback.done` events sent for frame callbacks.
     pub frame_callbacks: u64,
-    /// `xdg_toplevel` configures sent.
+    /// `xdg_toplevel` and `xdg_popup` configures sent.
     pub configures: u64,
     /// `wl_surface.commit` requests received.
     pub commits: u64,
@@ -274,6 +274,18 @@ impl Compositor {
         &self.state.layout
     }
 
+    /// Whether `window` is urgent: an activation of it was refused, or came without a valid
+    /// token, and it has not had the seat's focus since. False for a window that is not mapped.
+    pub fn is_urgent(&self, window: WindowId) -> bool {
+        self.state.is_urgent(window)
+    }
+
+    /// Whether the client of `window` said, with `xdg-dialog-v1`, that it is a modal dialog.
+    /// False for a window that is not mapped.
+    pub fn is_modal(&self, window: WindowId) -> bool {
+        self.state.is_modal(window)
+    }
+
     /// Changes the layout model, as a key binding would: every output arranges it again at its
     /// next refresh boundary.
     pub fn change_layout<R>(&mut self, change: impl FnOnce(&mut Layout) -> R) -> R {
@@ -344,10 +356,12 @@ impl Compositor {
         Ok(())
     }
 
-    /// Ends a round: frees what closed windows and destroyed surfaces left behind, then sends
-    /// the events written to every client. A client that cannot take them is dropped by the
-    /// display; the others go on.
+    /// Ends a round: frees what closed windows, destroyed popups and surfaces left behind, then
+    /// sends the events written to every client. A client that cannot take them is dropped by
+    /// the display; the others go on.
     fn flush(&mut self) {
+        // Smithay's popup trees and grabs forget their destroyed popups.
+        self.state.popups.cleanup();
         // Each output forgets the surfaces destroyed since, which it keeps to send `enter` once.
         for output in &self.state.outputs {
             output.output.cleanup();

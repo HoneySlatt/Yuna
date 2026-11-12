@@ -22,7 +22,8 @@ One Cargo workspace; its crates live in `crates/`.
 - `yuna` → Smithay, at a pinned git revision, with only its `wayland_frontend`, `desktop` and
   `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
-  its logs; `yuna-layout`. Its tests use `wayland-client` and `wayland-protocols`' client side.
+  its logs; `yuna-layout`. Its tests use `wayland-client` and `wayland-protocols`' client side,
+  staging protocols included.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers.
@@ -117,15 +118,20 @@ operation, and an example measures the model:
   calloop's event loop, the Wayland display and the state, and runs them: `dispatch` for one
   round, `run_until` for the program, `advance` to move the manual clock. Each round ends by
   freeing what went away, without drawing: the outputs forget the surfaces destroyed
-  (`Output::cleanup`), and the renderer frees the textures of closed windows, destroyed surfaces
-  and destroyed dmabufs. Then it sends the events written. Its `Counters` count frames drawn,
-  frame callbacks, configures, commits and wake-ups, for tests.
+  (`Output::cleanup`), Smithay's popup trees forget the popups destroyed
+  (`PopupManager::cleanup`), and the renderer frees the textures of closed windows, destroyed
+  surfaces and destroyed dmabufs. Then it sends the events written. Its `Counters` count frames
+  drawn, frame callbacks, configures, commits and wake-ups, for tests.
 - `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
   are not the shell's: `wl_compositor` (version 6) and `wl_subcompositor`, `wl_shm`,
   `wp_viewporter`, one seat with a keyboard (the owner's), `wl_output` with `xdg-output`,
   presentation time.
 - `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
-  `WindowId` and passes on what its client asks.
+  `WindowId`, passes on what its client asks, and caps the windows of each client.
+- `popups.rs`: popups (`xdg_popup`), through Smithay's `PopupManager`: their placement, their
+  configures, their keyboard grabs, their dismissal.
+- `activation.rs`: `xdg-activation-v1`: tokens, activation through the layout, urgent windows.
+- `dialog.rs`: `xdg-dialog-v1`: offered; the modal hint is read, and nothing uses it yet.
 - `selection.rs`: the clipboard (`wl_data_device`), the primary selection and
   `ext-data-control-v1`, on Smithay's handlers.
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
@@ -160,9 +166,14 @@ from the rate each time, so that errors never add up.
    ([ADR-0024](adr/0024-no-title-bars.md)), decorations on the server's side.
 3. Its first buffer: `Layout::open_window`, with its parent, its limits and its window geometry,
    clamped to the layout's `MAX_SIZE`; the window gets the next `WindowId`, never reused. The
-   layout changed: every output's next boundary is armed. Should the layout refuse it, which a
-   client's values cannot cause, the refusal is logged once, the window is not shown, and its
-   client gets frame callbacks at the hidden windows' rate, never left waiting.
+   layout changed: every output's next boundary is armed. An activation asked before, if any, is
+   applied now. A window is refused when its client has 1,000 windows already
+   (`MAX_WINDOWS_PER_CLIENT`) or the layout holds 10,000 (`MAX_WINDOWS`): the layout walks a
+   dwindle tree by recursion, and 10,000 windows in one tree work where 100,000 overflow the stack
+   ([ADR-0020](adr/0020-the-layout-models-shape.md)). A refusal for a cap is logged once per
+   client. Should the layout itself refuse it, which a client's values cannot cause, that is
+   logged once per window. A refused window is not shown, and its client gets frame callbacks at
+   the hidden windows' rate, never left waiting; its next buffer tries again.
 4. Each later commit passes its limits (`set_size_limits`) and its geometry (`commit_size`) on
    when they changed, and arms its output's next boundary when it is shown.
 5. Fullscreen and maximise requests become `set_fullscreen` and `set_full_width`, and each gets a
@@ -170,9 +181,60 @@ from the rate each time, so that errors never add up.
    nothing changes; at once, with the state the window has, when the layout refuses it. Before
    the window is mapped, it will open so, and a configure says it if the first one is past.
 6. A commit without a buffer, the toplevel's destruction, or its surface's, closes it in the
-   layout. A client that leaves has its toplevels destroyed by the display, the same way.
+   layout and dismisses its popups. A client that leaves has its toplevels destroyed by the
+   display, the same way.
 
-Popups are not shown yet: each is dismissed at once (`xdg_popup.popup_done`).
+### Popups
+
+Popups (`popups.rs`) are not windows of the layout: they get no `WindowId` and never change it.
+Smithay's `PopupManager` keeps each window's popups in a tree on its toplevel's surface, each with
+its place relative to the toplevel's window geometry.
+
+1. A client creates an `xdg_popup` on a toplevel or on another popup. Yuna places it: the
+   positioner's rules, then its constraint adjustments (`PositionerState::get_unconstrained_geometry`)
+   against the output its window is shown on, in the coordinates of its parent's window geometry.
+   A window shown on no output places its popups without constraint. A popup is dismissed
+   (`popup_done`) at once when its window is not mapped, its parent popup was dismissed, its chain
+   of parents is broken, cyclic or deeper than 32 (`MAX_POPUP_DEPTH`), or its positioner holds
+   nonsense values.
+2. Its initial commit gets its configure; its first buffer shows it. A `reposition` request
+   places it again and is answered with `repositioned` and a configure, or dismisses it when it
+   can no longer be placed.
+3. Its commits arm what its window's commits arm (`schedule_for_commit`), and its frame callbacks
+   and presentation feedback go out with its window's.
+4. An explicit grab (`xdg_popup.grab`) is granted when the owner's keyboard is on the popup's
+   window, or one of its popups, and the grab's serial is the last `enter` that keyboard sent, or
+   the serial of the grab a parent popup holds. Until M1.5 brings input, an `enter` is the only
+   serial a client can have. A grab asked otherwise is refused by dismissing the popup, as
+   xdg-shell allows. A granted grab sets Smithay's keyboard grab for popups, and the keyboard goes
+   to the topmost grabbing popup. The grab ends when its popups are gone, the keyboard then
+   returning to the layout's focused window, or when the focus moves to another window, its
+   popups then dismissed. A new grabbing popup on the window, not on the topmost grabbing one,
+   ends the older grab first: Smithay would answer it with a protocol error, which xdg-shell does
+   not ask.
+5. Its window unmapping or going dismisses it. A client that destroys a parent popup before its
+   child gets xdg-shell's `not_the_topmost_popup` error from Smithay, and leaves.
+
+### Activation and dialogs
+
+A client asks an `xdg-activation-v1` token, then asks with it that a window be activated, as a
+launcher does for the program it starts (`activation.rs`). A token is valid when it was asked with
+the owner's seat, for the surface that has the keyboard focus, and the serial of the `enter` the
+keyboard sent that surface; it lasts 10 s of Yuna's clock and is used once. Tokens asked
+otherwise are given, as the protocol requires, but are not valid. Yuna keeps the 64 newest
+tokens not used yet, without a timer.
+
+With a valid token, `Layout::request_activation` decides: the window takes the focus at the next
+refresh boundary, unless a fullscreen window holds the screen
+([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Refused, or with a token that is not valid
+or expired, the window is marked urgent and nothing else changes. Urgent is the compositor's
+state, kept on the toplevel: it ends when the window gets the seat's focus, at the arrangement
+that gives it, or closes; a window that has the focus is not marked. A request for a toplevel not
+mapped yet waits for its mapping; one for a surface that is not a toplevel is ignored.
+
+`xdg-dialog-v1` is offered. Dialogs already open on their parent through `xdg_toplevel.set_parent`;
+the modal hint (`dialog.rs`) is read from Smithay's record of the toplevel, and nothing uses it
+yet.
 
 ### A frame
 
@@ -181,23 +243,27 @@ At an output's refresh boundary:
 1. If the layout changed, it is arranged once, for every output. Each window is told its asked
    size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
    is shown on no output. A configure goes out only when its size or states changed, or when a
-   request of its client is owed one. The keyboard focus follows `Layout::focused`, and the
-   selections follow the keyboard focus.
+   request of its client is owed one. The keyboard focus follows `Layout::focused`, or the
+   topmost popup of a grab on that window; the selections follow the keyboard focus; the
+   focused window is no longer urgent.
 2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
-   surface tree with its window geometry at its rectangle's corner, cut to the rectangle, over a
-   plain background. Surfaces sit on whole pixels: where the geometry's offset in its surface is
-   not a whole number of pixels, it is rounded up, so that the cut takes a sliver of content
-   rather than show the window's margin. A surface drawn at its output's physical size is drawn
-   exactly ([Scale](#scale)). Yuna waits until the drawing is done.
-3. The surfaces shown there get their frame callbacks, and their presentation feedback: a frame
-   whose drawing takes no time, as on the manual clock, is presented at its own boundary;
-   otherwise at the first boundary after its drawing ended; never at the boundary of the frame
-   before. `seq` is the boundary's number, the flags VSYNC, the refresh the output's period.
+   surface tree with its window geometry at its rectangle's corner, cut to the rectangle, then
+   its popups just above it, over a plain background. Surfaces sit on whole pixels: where the
+   geometry's offset in its surface is not a whole number of pixels, it is rounded up, so that
+   the cut takes a sliver of content rather than show the window's margin. A surface drawn at
+   its output's physical size is drawn exactly ([Scale](#scale)). A popup's corner is rounded
+   to the nearest pixel, and a popup is cut to the output, not to its window: a menu may
+   overflow it. Yuna waits until the drawing is done.
+3. The surfaces shown there, windows' and their popups', get their frame callbacks, and their
+   presentation feedback: a frame whose drawing takes no time, as on the manual clock, is
+   presented at its own boundary; otherwise at the first boundary after its drawing ended; never
+   at the boundary of the frame before. `seq` is the boundary's number, the flags VSYNC, the
+   refresh the output's period.
 
 A window shown on no output, on a workspace not shown or scrolled out of view, is hidden: its
 content updates are discarded, and its frame callbacks go out at most once a second, through the
-hidden windows' deadline, armed only while one of them waits. A window the layout refused is
-treated the same way.
+hidden windows' deadline, armed only while one of them waits; its popups' too. A window the
+layout refused is treated the same way.
 
 ### Scale
 
@@ -272,9 +338,10 @@ the event loop watches, so that the loop returns and the socket is removed.
 ### Tests
 
 - `crates/yuna/tests/headless/`: the compositor in the test's process, manual clock, clients
-  written with `wayland-client` (`client.rs`; viewports, fractional scale and dmabufs in
-  `client/buffers.rs`; `selection_client.rs` for the selections), each test a short story with
-  exact figures.
+  written with `wayland-client` (`client.rs` and `client/`; `selection_client.rs` for the
+  selections), each test a short story with exact figures: the windows' in `main.rs`, then one
+  file per subject (`popups.rs`, `activation.rs`, `dialogs.rs`, `window_cap.rs`, `scale.rs`,
+  `dmabuf.rs`, `selection.rs`).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 

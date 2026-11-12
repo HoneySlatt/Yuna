@@ -114,12 +114,6 @@ impl Client {
         surface.damage_buffer(0, 0, width, height);
     }
 
-    /// Sends what the client wrote, without waiting for an answer: for requests the compositor
-    /// may answer with a protocol error, which a round trip cannot survive.
-    pub fn send(&mut self) {
-        self.queue.flush().expect("the client sends");
-    }
-
     /// Lets the compositor handle what the client sent until it answers with a protocol error,
     /// and returns it. Panics if none comes.
     pub fn protocol_error(&mut self, compositor: &mut Compositor) -> ProtocolError {

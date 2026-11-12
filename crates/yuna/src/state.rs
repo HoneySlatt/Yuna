@@ -4,39 +4,45 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
 
 use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
+use smithay::desktop::PopupManager;
 use smithay::input::keyboard::{KeyboardHandle, XkbConfig};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, ObjectId,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::ClockSource;
 use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorClientState, CompositorHandler, CompositorState, get_parent,
+    CompositorClientState, CompositorHandler, CompositorState, get_parent, get_role,
 };
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::pointer_constraints::PointerConstraintsHandler;
 use smithay::wayland::presentation::PresentationState;
-use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+use smithay::wayland::shell::xdg::dialog::XdgDialogState;
+use smithay::wayland::shell::xdg::{XDG_POPUP_ROLE, XdgShellState};
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
 use crate::output::VirtualOutput;
+use crate::popups::ActivePopupGrab;
 use crate::render::Device;
 use crate::selection::Selections;
 use crate::shell::Toplevel;
@@ -91,6 +97,12 @@ pub(crate) struct State {
     pub dmabuf_formats: usize,
     _viewporter_state: ViewporterState,
     _fractional_scale_state: FractionalScaleManagerState,
+    /// Every window's popups, in trees kept on their toplevels' surfaces.
+    pub popups: PopupManager,
+    /// The popup grab that holds the keyboard, if any.
+    pub popup_grab: Option<ActivePopupGrab>,
+    pub xdg_activation_state: XdgActivationState,
+    _xdg_dialog_state: XdgDialogState,
 }
 
 impl State {
@@ -148,6 +160,10 @@ impl State {
             dmabuf_formats,
             _viewporter_state: ViewporterState::new::<State>(dh),
             _fractional_scale_state: FractionalScaleManagerState::new::<State>(dh),
+            popups: PopupManager::default(),
+            popup_grab: None,
+            xdg_activation_state: XdgActivationState::new::<State>(dh),
+            _xdg_dialog_state: XdgDialogState::new::<State>(dh),
         })
     }
 
@@ -172,12 +188,20 @@ impl State {
             tracing::warn!(%error, "the textures of closed windows could not be freed");
         }
     }
+
+    /// The seat a client named, when it is the owner's: the one whose keyboard Yuna holds.
+    pub(crate) fn owner_seat_of(&self, seat: &WlSeat) -> Option<Seat<State>> {
+        Seat::<State>::from_resource(seat)
+            .filter(|seat| seat.get_keyboard().as_ref() == Some(&self.keyboard))
+    }
 }
 
 /// What Yuna keeps for each client.
 #[derive(Debug, Default)]
 pub(crate) struct ClientState {
     pub compositor: CompositorClientState,
+    /// Whether a window of this client was refused for passing a cap on windows: said once.
+    pub window_cap_logged: AtomicBool,
 }
 
 impl ClientData for ClientState {
@@ -210,6 +234,8 @@ impl CompositorHandler for State {
         self.tell_surface_preferred_scale(&root, surface);
         if self.toplevels.contains_key(&root.id()) {
             self.toplevel_committed(&root, surface);
+        } else if get_role(&root) == Some(XDG_POPUP_ROLE) {
+            self.popup_committed(&root, surface);
         }
     }
 
@@ -218,6 +244,8 @@ impl CompositorHandler for State {
         // A client may destroy a toplevel's surface before the toplevel: its window closes then.
         if self.toplevels.contains_key(&surface.id()) {
             self.toplevel_gone(surface);
+        } else if get_role(surface) == Some(XDG_POPUP_ROLE) {
+            self.popup_gone(surface);
         }
     }
 }
