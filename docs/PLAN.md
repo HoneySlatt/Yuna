@@ -18,8 +18,11 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   workspaces ([ADR-0018](adr/0018-workspaces.md)), behaviours
   ([ADR-0019](adr/0019-the-layouts-behaviours.md)) and the model's shape
   ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
-- [M1.3](#m13--hdr-through-smithay-a-prototype) is in progress: the prototype is built and
-  tested; it waits for the owner's run ([steps](hdr-prototype.md)), which gives the verdict.
+- [M1.3](#m13--hdr-through-smithay-a-prototype) waits for the owner's run
+  ([steps](hdr-prototype.md)): the prototype is built, tested and reviewed. The owner decided on
+  2026-11-12 that M1.4 starts meanwhile; the verdict should come before M1.4 ends, since a
+  failure on Smithay's side would reopen [ADR-0011](adr/0011-built-on-smithay.md).
+- Current: [M1.4](#m14--the-headless-compositor).
 
 ## Status
 
@@ -27,8 +30,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 |---|---|---|
 | [M1.1](#m11--the-workspace-and-its-checks) | One command checks everything, and CI runs it | Done |
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
-| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | In progress |
-| [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Planned |
+| [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Waiting for the owner's run |
+| [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | In progress |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
