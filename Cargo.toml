@@ -28,6 +28,11 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
 
+# Smithay adds a popup positioner's values with plain sums before Yuna sees them: with overflow
+# checks, a client's absurd values would panic a debug build. Built as in release (ADR-0027).
+[profile.dev.package.smithay]
+overflow-checks = false
+
 [workspace.lints.rust]
 missing_docs = "warn"
 

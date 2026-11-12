@@ -677,3 +677,26 @@ fn a_nested_popup_is_placed_again_relative_to_its_parent() {
     assert_eq!(pixel(&mut compositor, 3839, 60), BLUE_PIXEL);
     assert_rests(&mut compositor);
 }
+
+/// A positioner whose anchor rectangle ends past `i32::MAX`: Smithay's sums wrap, as in a
+/// release build, rather than panic a debug one (ADR-0027), and Yuna's own bound on positioner
+/// values dismisses the popup. The client keeps its window, and Yuna rests.
+#[test]
+fn a_positioner_past_i32_max_is_dismissed_not_a_panic() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    let placement = Placement::below_right((200, 100), (i32::MAX - 5, i32::MAX - 5, 10, 10));
+    let p = client.create_popup(Parent::Window(w), placement);
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(p).done);
+    assert!(client.popup(p).configures.is_empty());
+    client.destroy_popup(p);
+    client.roundtrip(&mut compositor);
+    assert!(compositor.layout().window(WindowId(1)).is_some());
+    if let Some(at) = compositor.next_deadline() {
+        advance_to(&mut compositor, &mut client, at);
+    }
+    assert_rests(&mut compositor);
+}

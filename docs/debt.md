@@ -40,12 +40,10 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
-- Smithay `8fd9fe0` places a new popup by its client's positioner with plain `i32` sums
-  (`PositionerState::get_geometry`, in its `get_popup` handler), before Yuna sees the popup. An
-  anchor rectangle or an offset near `i32::MAX` panics a debug build, whose overflow checks are on
-  (seen: "attempt to add with overflow", `src/wayland/shell/xdg/mod.rs:591`), and wraps in a
-  release build. Yuna checks the values before its own placement, but cannot reach that first
-  sum: a patch in the fork, or overflow checks off, before debug builds run untrusted clients.
+- Smithay is built without overflow checks, so that a popup positioner's absurd values cannot
+  panic a debug build ([ADR-0027](adr/0027-smithay-without-overflow-checks.md)): any overflow
+  inside Smithay wraps silently. A saturating patch in the fork replaces the setting when main
+  moves to the fork.
 - A popup is placed when it is created and when it asks again; a reactive popup
   (`set_reactive`) is not placed again when its window moves or resizes. A popup of a window
   shown on no output is placed without constraint.
