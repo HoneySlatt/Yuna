@@ -4,10 +4,46 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.4, Phase A — The layout model with real clients (2026-11-12)
+
+The same measure as M1.2's below, after the model learned clients' limits and committed sizes
+([ADR-0026](adr/0026-real-clients-in-the-layout.md)) and dwindle stopped recursing.
+
+Machine: the high tier's desktop, with the owner's consent, 18 minutes after a restart. Not idle:
+another agent's `cargo check` of SlimeEngine ran on other cores during the runs, which spreads the
+99th percentiles; the medians agree to a few percent across runs. Build: the release profile, Rust
+1.99.1, commit `447d014`. Command: `nix develop -c cargo build --release -p yuna-layout --example
+timing`, then `taskset -c 6 target/release/examples/timing`, three runs.
+
+Medians and 99th percentiles in microseconds, the lowest and highest of the three runs:
+
+| Operation, then `arrange` | Windows | Scrolling: median | p99 | Dwindle: median | p99 |
+|---|---|---|---|---|---|
+| Arrange alone | 100 | 6.4–6.7 | 9.7–18.2 | 6.7–6.9 | 9.4–13.0 |
+| Focus left, then right | 100 | 9.4–9.7 | 13.4–23.6 | 9.7–9.9 | 13.4–17.7 |
+| Open a window, then close it | 100 | 11.0–11.3 | 16.2–40.4 | 13.4–13.6 | 17.5–45.3 |
+| Move the focused window, then back | 100 | 9.3–9.7 | 13.2–20.7 | 10.2–10.4 | 14.0–41.5 |
+| Fullscreen on, then off | 100 | 10.9–11.2 | 15.7–23.3 | 7.0–7.2 | 7.6–10.6 |
+| Float, then tile | 100 | 15.8–16.6 | 20.6–49.6 | 18.6–18.8 | 22.9–55.0 |
+| Switch the tiling, then back | 100 | 10.9–11.1 | 14.2–19.4 | 8.6–8.8 | 12.6–15.2 |
+| Arrange alone | 1,000 | 65.6–68.3 | 134–178 | 64.6–67.3 | 123–135 |
+| Focus left, then right | 1,000 | 95.1–97.0 | 176–202 | 93.2–95.7 | 159–171 |
+| Open a window, then close it | 1,000 | 111–115 | 202–299 | 128–130 | 209–335 |
+| Move the focused window, then back | 1,000 | 94.6–97.3 | 185–284 | 94.2–96.7 | 165–179 |
+| Fullscreen on, then off | 1,000 | 111–114 | 225–460 | 67.3–69.2 | 108–127 |
+| Float, then tile | 1,000 | 160–167 | 295–322 | 178–181 | 282–304 |
+| Switch the tiling, then back | 1,000 | 110–111 | 178–316 | 84.3–86.3 | 146–312 |
+
+Against [ADR-0020](adr/0020-the-layout-models-shape.md)'s budgets, 25 µs at 100 windows and
+300 µs at 1,000, at the 99th percentile: the best run of every row meets them; the worst runs miss
+them on several rows, by up to 55 µs at 100 windows and 460 µs at 1,000. Whether the misses are
+the other build's or the model's is not known until a quiet machine measures again. The medians
+rose from M1.2's: about 1.7 times on scrolling columns at 1,000 windows, where the view now reads
+every column's drawn width; dwindle's barely.
+
 ## M1.2 — The layout model (2026-11-11)
 
-These figures describe the model before M1.4 gave it real clients' sizes; they are measured
-again once the machine is quiet.
+These figures describe the model before M1.4 gave it real clients' sizes (see above).
 
 What one operation of the layout model costs, followed by `arrange`, which a compositor calls to
 draw the result: what a key press costs the model. No budget of the bar names it; it is measured

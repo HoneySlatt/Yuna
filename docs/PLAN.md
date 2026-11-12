@@ -129,8 +129,9 @@ milestone first needs it.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent, on the GPU; CI's time.
 - **Where it stands** (2026-11-12). Phase A is done: the client side
-  ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Its timings wait for a quiet machine:
-  M1.2's figures no longer describe the code. Phase B next.
+  ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Its timings, beside another build, miss
+  ADR-0020's budgets in some runs ([measurements](measurements.md)): to measure again, quiet.
+  Phase B next.
 
 ### M1.5 — Agents' control
 
