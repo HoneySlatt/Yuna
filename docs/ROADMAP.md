@@ -68,7 +68,7 @@ it is met.
 | At rest | 0 frames, 0 own wake-ups a second, 0 % of a core | every thread's context switches over 10 s, headless and on the desktop |
 | Motion | no missed frame at 240 Hz while scrolling, animating or switching workspaces | presentation feedback over scripted gestures, headless and on the owner's monitor |
 | Input to present | at the 99th percentile, one frame, 4.17 ms on the high tier | input given through the compositor, presentation time read |
-| A frame's cost | GPU and CPU time per frame, set from the rivals' at Stage 1 | the renderer's timers |
+| A frame's cost | GPU and CPU time per frame, set from the rivals' at Stage 1 | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
 | Memory | set from the rivals' at Stage 1 | resident memory at rest with 15 windows |
 | Start | from launch to the first frame, set from the rivals' at Stage 2 | the log's times |

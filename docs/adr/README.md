@@ -38,3 +38,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Accepted |
 | [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted |
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022 |
+| [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted |

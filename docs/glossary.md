@@ -24,6 +24,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   destroy it.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
+- **DRM usage statistics**: what the kernel counts for each client of a GPU, read in the
+  `fdinfo` of its render node: each engine's busy time in nanoseconds (`drm-engine-gfx`), the
+  measure of a frame's GPU time ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
 - **Dynamic workspaces**: an option of the layout: each output keeps one empty unnamed workspace
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).
@@ -44,6 +47,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   at most one frame callback a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Home output**: the output a workspace goes back to when that output returns after being
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
+- **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
+  every Vulkan client.
 - **llvmpipe**: Mesa's OpenGL driver that draws on the CPU; the headless mode's default
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
