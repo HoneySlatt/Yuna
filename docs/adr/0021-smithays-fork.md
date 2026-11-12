@@ -1,6 +1,6 @@
 # 0021. Smithay's fork: a private repository, generic patches
 
-- Status: Accepted
+- Status: Accepted; amends [0017](0017-smithays-revision.md) (when main moves to the fork)
 - Date: 2026-11-11
 
 ## Context
@@ -9,8 +9,8 @@
 control, and [ADR-0017](0017-smithays-revision.md) moves the dependency to that fork with its first
 patch. M1.3 needed the first one: at `8fd9fe0`, Smithay's atomic DRM surface sets only `CRTC_ID` on
 its connectors, so a compositor cannot send `max bpc`, `Colorspace` or `HDR_OUTPUT_METADATA`, which
-HDR output needs. The same code already sends `VRR_ENABLED` on the CRTC: a value kept in the
-surface's state, sent with every modeset, whose change makes a commit pending.
+HDR output needs. The same code already keeps `VRR_ENABLED`, a CRTC property, in the surface's
+state and sends it with its commits.
 
 GitHub's own forks of a public repository are public, and Yuna is private
 ([ADR-0009](0009-gpl-private-until-ready.md)). Smithay asks that AI-written code be flagged, which
@@ -19,7 +19,7 @@ the owner's rules forbid; Yuna never contributes upstream.
 ## Decision
 
 - The fork is the private repository `HoneySlatt/smithay`: Smithay's history up to the revision
-  Yuna pins, then the branch `yuna`, its default, with one commit per patch. GitHub Actions are off
+  Yuna pins, then the branch `yuna`, its default, holding the patches. GitHub Actions are off
   there: Yuna's CI checks what Yuna uses.
 - A patch is as generic as it can be and leaves the meaning to Yuna. The first one adds
   `DrmSurface::set_connector_property(connector, name, raw value)`: Smithay sends the value with

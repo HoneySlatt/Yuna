@@ -95,7 +95,11 @@ milestone first needs it.
   DRM, GBM, EGL, GLES, libseat and libinput backends, for that branch only. It drives Smithay's
   `GbmBufferedSurface`: `DrmCompositor` needs the `wayland_frontend` feature. A test on the GPU's
   render node checks that every patch reaches an `Xbgr2101010` buffer with its exact PQ codes; the
-  monitor's side is unverified until the owner's run.
+  display engine's and the monitor's sides are unverified until the owner's run. The closing
+  review (2026-11-12) found no danger to the owner's session; its fixes are in: a key to switch
+  `Colorspace`, a refusal while the CRTC holds a colour transform, the console switch, honest
+  readings of patterns 1, 4 and 5. The shell's `fortify` off, its `LD_LIBRARY_PATH` and the GPU
+  test stay on the branch.
 
 ### M1.4 — The headless compositor
 
@@ -187,7 +191,9 @@ milestone first needs it.
 - Smithay `8fd9fe0` stops reading a CRTC's properties at the first of `ACTIVE` and
   `VRR_ENABLED` (`State::current_state`), so one of the two is not read back; it matters once
   Yuna uses VRR (Stage 4).
-
+- Smithay's `DrmDevice`, dropped while active, commits back every property it read at opening,
+  immutable ones and `DPMS` among them, which the kernel likely refuses: an exit may not give the
+  previous state back. Check it at Stage 2, with a `tracing` subscriber, which the prototype lacks.
 - The layout model's client side waits for M1.4 (above): today a window is assumed to take the
   size it is given, and a deep dwindle tree can give windows a size of zero.
 - A scrolling column whose gaps leave no room gives all its windows a height of zero; M1.4, with
