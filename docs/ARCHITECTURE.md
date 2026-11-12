@@ -320,7 +320,9 @@ A client that draws at an integer buffer scale is scaled when drawn ([debt](debt
 
 Clients' buffers come through `wl_shm` or `linux-dmabuf`. Yuna offers `linux-dmabuf` only when
 its renderer imports a format: on llvmpipe, version 3 with the formats; with `--gpu`, default
-feedback naming the render node, which Smithay offers as version 6. Each dmabuf is imported when
+feedback naming the render node, which Smithay offers as version 6. On llvmpipe, Mesa's own
+clients draw through `wl_shm` all the same: with no GPU named, their EGL and Vulkan fall back on
+shared memory ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)). Each dmabuf is imported when
 its client creates its buffer, so that the client learns at once whether it can be used.
 Smithay refuses broken parameters with a protocol error, which ends that client alone; a buffer
 whose drawing fails is left out of that frame and logged by Smithay's renderer. A destroyed
@@ -416,12 +418,27 @@ process reads.
   cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
+- `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as
+  agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
+  [ADR-0029](adr/0029-the-rest-of-animated-applications.md)). One `yuna` per application, all at
+  once: Alacritty, `gtk4-demo` and Qt's `qml` on a still file show their window, go quiet (no
+  round for 2 s), and Yuna must then rest 10 s: no context switch in any of its threads, read in
+  `/proc`, and no frame, frame callback, configure, commit or wake-up, read in its log. `vkcube`
+  draws 120 frames and leaves, and Yuna must rest after it; left to draw, it must fail the same
+  check. Each application gets an environment of its own, nothing of the caller's: no `DISPLAY`
+  and no D-Bus, so that it reaches neither the user's desktop nor an accessibility bus; throwaway
+  home and XDG folders; DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for
+  Vulkan; cursors that never blink; GTK's animations off; GTK's renderer and Qt's pinned. The test
+  takes about 15 s. SlimeEngine's `window` example, built
+  by the weekly job, runs in an ignored test of the same file.
 
 ## The tools around the code
 
 - `flake.nix`: the development shell; `rust-toolchain.toml`: the toolchain
   ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
+- `.github/workflows/slimeengine.yml`: SlimeEngine's `window` example in `yuna --headless`,
+  weekly, on demand and when the drawing path changes, built at a pinned revision and cached.
 - `deny.toml`: the dependency policy.
 
 ## Where to start reading

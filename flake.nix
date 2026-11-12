@@ -32,6 +32,12 @@
           pkgs.lychee
           # Lists the Markdown files the link check reads.
           pkgs.git
+          # The applications that crates/yuna/tests/applications.rs runs in `yuna --headless`
+          # (ADR-0025): a terminal, GTK 4's demo, Qt's QML runner and Vulkan's cube.
+          pkgs.alacritty
+          (pkgs.lib.getBin pkgs.gtk4.dev)
+          pkgs.qt6.qtdeclarative
+          pkgs.vulkan-tools
         ];
 
         # Linked by Smithay's keyboard (xkbcommon).
@@ -46,6 +52,23 @@
         __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
         # The keyboard's default keymap.
         XKB_CONFIG_ROOT = "${pkgs.xkeyboard_config}/share/X11/xkb";
+
+        # What the applications' tests give each application, so that it draws the same on every
+        # machine, on the CPU (crates/yuna/tests/applications.rs). Mesa's Vulkan driver for the
+        # CPU, lavapipe, the only one Vulkan's loader is let load.
+        YUNA_LAVAPIPE_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
+        # One font family, so that no font the machine has changes what is drawn.
+        YUNA_FONTS_CONF = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
+        # Where Qt finds its Wayland platform, and QML its modules: qml is not wrapped.
+        YUNA_QT_PLUGINS = "${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}";
+        YUNA_QML_IMPORTS = "${pkgs.qt6.qtdeclarative}/${pkgs.qt6.qtbase.qtQmlPrefix}";
+        # The libraries that winit and wgpu load at run time, for SlimeEngine's `window` example,
+        # which the weekly job runs (.github/workflows/slimeengine.yml).
+        YUNA_CLIENT_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+          pkgs.wayland
+          pkgs.libxkbcommon
+          pkgs.vulkan-loader
+        ];
       };
     };
 }

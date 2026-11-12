@@ -27,7 +27,11 @@ The shell gives:
   `__EGL_VENDOR_LIBRARY_FILENAMES` the shell's own Mesa, so that Yuna and its tests draw on that
   Mesa's llvmpipe, never on the host's drivers
   ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
-- `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from.
+- `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
+- the applications the tests run in Yuna: Alacritty, GTK 4's `gtk4-demo`, Qt's `qml` and
+  `vkcube`, with what the tests give them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
+  `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
+  is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
 
 Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
 `yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
@@ -53,11 +57,23 @@ nix develop -c cargo run --release -p yuna-layout --example timing   # the layou
 ```
 
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
-to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
+to it. Started from an agent's session, a program with a window runs through `agent-headless`,
+never on the desktop's display. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
 the tests. SIGTERM or Ctrl-C stops it and removes its socket.
 
 The compositor's tests (`crates/yuna/tests/headless/`) run it in their own process, on the manual
-clock, with clients written with `wayland-client`; they need the shell's Mesa.
+clock, with clients written with `wayland-client`; they need the shell's Mesa. The applications' tests
+(`crates/yuna/tests/applications.rs`) run the program with real applications and check that it
+rests; they need the shell's applications, and take about 15 s. SlimeEngine's `window` example
+runs in an ignored test, given the path of its binary, as the weekly job runs it:
+
+```sh
+nix develop -c cargo test -p yuna --test applications -- --nocapture
+YUNA_SLIMEENGINE_WINDOW=<binary> nix develop -c cargo test -p yuna --test applications -- --ignored
+```
+
+The example is built at the revision `.github/workflows/slimeengine.yml` pins, in this shell:
+`cargo build --release --locked --example window` in SlimeEngine's checkout.
 
 The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
 compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
@@ -103,7 +119,11 @@ otherwise.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. The repository is private and its CI
-minutes are counted: CI stays lean, one job ([ADR-0009](docs/adr/0009-gpl-private-until-ready.md)). Its
+minutes are counted: CI stays lean, one job ([ADR-0009](docs/adr/0009-gpl-private-until-ready.md)).
+[`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
+`window` example in Yuna every Thursday, on demand, and on a push that changes the drawing path; it
+builds the example once per pinned revision and keeps the binary in GitHub's cache
+([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md)). Its
 times are in [`docs/measurements.md`](docs/measurements.md).
 
 ## Dependencies
@@ -118,7 +138,8 @@ Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` an
 `tracing-subscriber` with its `fmt` and `std` features alone; `wayland-client` and the client side
 of `wayland-protocols`, for tests only; and, in the shell, Mesa, libglvnd, libxkbcommon,
 xkeyboard-config, a font, and the applications the tests run
-([ADR-0025](docs/adr/0025-applications-in-ci.md)). Smithay is pinned to one revision
+([ADR-0025](docs/adr/0025-applications-in-ci.md)); on 2026-11-12 too, the action
+`actions/cache`, for SlimeEngine's binary. Smithay is pinned to one revision
 ([ADR-0017](docs/adr/0017-smithays-revision.md)); its patches live in Yuna's fork
 ([ADR-0021](docs/adr/0021-smithays-fork.md), [`docs/smithay-patches.md`](docs/smithay-patches.md)).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a

@@ -1,6 +1,7 @@
 # 0025. Real applications in CI, and rest checked on the program
 
-- Status: Accepted
+- Status: Accepted; amended by [0029](0029-the-rest-of-animated-applications.md) (when an
+  animated application's rest is checked)
 - Date: 2026-11-12
 
 ## Context

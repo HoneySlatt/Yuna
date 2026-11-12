@@ -36,10 +36,14 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   clock.
 - `--gpu`, and with it the dmabuf feedback, has not been run yet
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). The stories draw a client's dmabuf on
-  llvmpipe alone, from a sealed memfd; a real GPU's dmabufs are tested nowhere, in CI or out.
+  llvmpipe alone, from a sealed memfd; a real GPU's dmabufs are tested nowhere, in CI or out. No
+  real application in CI uses `linux-dmabuf`: on llvmpipe, Mesa's clients draw through `wl_shm`
+  ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
+- Without libEGL on its library path, `yuna --headless` panics inside Smithay `8fd9fe0`
+  (`src/backend/egl/ffi.rs:154`) rather than reporting the error and exiting.
 - A toplevel made again on a surface that kept its old buffer is mapped at its next commit, never
   configured; xdg-shell calls that its client's error, and wlroots refuses it. Yuna should end
   that client with a protocol error.

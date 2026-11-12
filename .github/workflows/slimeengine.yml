@@ -1,0 +1,82 @@
+# Runs SlimeEngine's `window` example, which draws through wgpu and Vulkan, in `yuna --headless`
+# (ADR-0025, ADR-0029). A workflow of its own, beside CI's one job, since it runs on other events:
+# weekly, on demand, and when Yuna's drawing path changes. The example is built at the SlimeEngine
+# revision below, in Yuna's development shell, so that it links the shell's own libraries; its
+# binary is cached per revision. The repository is private and its CI minutes are counted
+# (ADR-0009). Actions are pinned to commit SHAs, their release in a comment.
+name: SlimeEngine
+
+on:
+  push:
+    branches: [main]
+    # The drawing path: the renderer, the outputs, the frame loop, the buffers, the clock; the
+    # test that runs the example; what builds Yuna and the shell.
+    paths:
+      - "crates/yuna/src/render.rs"
+      - "crates/yuna/src/output.rs"
+      - "crates/yuna/src/frames.rs"
+      - "crates/yuna/src/dmabuf.rs"
+      - "crates/yuna/src/clock.rs"
+      - "crates/yuna/tests/applications.rs"
+      - "Cargo.lock"
+      - "flake.nix"
+      - "flake.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/slimeengine.yml"
+  # Every Thursday at 06:43 UTC, apart from CI's Monday run. Off the hour, when GitHub delays
+  # scheduled runs.
+  schedule:
+    - cron: "43 6 * * 4"
+  workflow_dispatch:
+
+# A new push to the same branch cancels the run in progress.
+concurrency:
+  group: slimeengine-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # SlimeEngine's revision, raised by hand in a commit of its own: main on 2026-11-12.
+  SLIMEENGINE_REVISION: dc4ceaa30af84733d4e8bc242603f1d7df905d74
+
+jobs:
+  window:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes: the token need not stay in the checkout's configuration.
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      # The binary depends on SlimeEngine's revision, and on the toolchain and libraries of
+      # Yuna's shell that build and link it. GitHub drops a cache unused for 7 days: a miss
+      # costs one build.
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: slimeengine-window
+          key: slimeengine-window-${{ env.SLIMEENGINE_REVISION }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: HoneySlatt/SlimeEngine
+          ref: ${{ env.SLIMEENGINE_REVISION }}
+          path: slimeengine
+          persist-credentials: false
+      - name: Build SlimeEngine's window example
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          nix develop --no-update-lock-file --command \
+            bash -c 'cd slimeengine && cargo build --release --locked --example window'
+          cp slimeengine/target/release/examples/window slimeengine-window
+      # Without the flag, an incomplete flake.lock would be completed with an unpinned revision.
+      - name: The window example in yuna --headless
+        run: |
+          nix develop --no-update-lock-file --command \
+            env YUNA_SLIMEENGINE_WINDOW="$PWD/slimeengine-window" \
+            cargo test --locked -p yuna --test applications -- --ignored --nocapture
