@@ -46,6 +46,8 @@ Never here:
   hand, from steps written in the milestone.
 - Never measure on the owner's desktop without the owner's consent; timed measures run one at a
   time across the owner's projects ([ADR-0003](docs/adr/0003-a-parallel-project-uwui-first.md)).
+- `--gpu` opens the GPU's render node, never a display device; an agent runs it only for a
+  measure the owner consented to, one at a time, never beside a game, and never in tests.
 
 ## Definition of done
 
