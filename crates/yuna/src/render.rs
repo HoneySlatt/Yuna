@@ -4,6 +4,7 @@
 //!
 //! This is the only module that knows OpenGL; the layout and the frame loop do not.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use smithay::backend::allocator::Fourcc;
@@ -75,6 +76,14 @@ fn find_device(device: Device) -> Result<EGLDevice, Error> {
     })
 }
 
+/// The render node of the device `renderer` draws on, such as `/dev/dri/renderD128`; refused for
+/// the software device, which has none.
+pub(crate) fn render_node(renderer: &GlesRenderer) -> Result<PathBuf, Error> {
+    EGLDevice::device_for_display(renderer.egl_context().display())
+        .and_then(|device| device.render_device_path())
+        .map_err(|e| Error::Renderer(format!("no render node: {e}")))
+}
+
 /// `GL_MAX_RENDERBUFFER_SIZE`: the widest and tallest output the renderer can draw.
 fn max_renderbuffer_size(renderer: &mut GlesRenderer) -> Result<u32, Error> {
     let size = renderer
@@ -112,6 +121,10 @@ pub(crate) fn create_buffer(
 /// up: the geometry's corner lands on the rectangle's corner or up to a pixel before it, so that
 /// the crop takes a sliver of content rather than show the margin, a toolkit's shadow. The far
 /// edges may then show up to a pixel of margin, cut by the crop at the rectangle.
+///
+/// A surface whose buffer, through its viewport, maps one buffer pixel to one physical pixel, as
+/// a client following its fractional scale draws it (`scale.rs`), is then copied pixel for pixel:
+/// no edge blends.
 pub(crate) fn window_elements(
     renderer: &mut GlesRenderer,
     surface: &WlSurface,

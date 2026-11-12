@@ -24,7 +24,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 # Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
 # Wayland protocol and of the protocols beyond the core one, unstable and staging ones included
-# (`ext-data-control-v1` is staging).
+# (`ext-data-control-v1`, fractional scale).
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
 

@@ -5,8 +5,11 @@
 //! logical units, with gaps of 16. A new column is half the width: (2560 − 3 × 16) / 2 = 1256
 //! wide, 1440 − 2 × 16 = 1408 tall. Refresh boundary `k` comes `k / 240` s after the output was
 //! created, which is the clock's start: the manual clock does not move until a test moves it.
+//! `scale.rs` and `dmabuf.rs` hold the stories of viewporter, fractional scale and linux-dmabuf.
 
 mod client;
+mod dmabuf;
+mod scale;
 mod selection;
 mod selection_client;
 
@@ -70,6 +73,20 @@ fn advance_to(compositor: &mut Compositor, client: &mut Client, to: Duration) {
     let by = to.saturating_sub(compositor.now());
     compositor.advance(by).expect("the manual clock moves");
     client.roundtrip(compositor);
+}
+
+/// A story's end: once everything is drawn and answered, 10 s of clock draw nothing, send no
+/// frame callback and no configure, wake nothing, and leave no deadline armed.
+fn assert_rests(compositor: &mut Compositor) {
+    assert_eq!(compositor.next_deadline(), None);
+    let before = compositor.counters();
+    compositor
+        .advance(Duration::from_secs(10))
+        .expect("the manual clock moves");
+    let after = compositor.counters();
+    assert_eq!(activity(before, after), (0, 0, 0, 0));
+    assert_eq!(after.wakeups, before.wakeups);
+    assert_eq!(compositor.next_deadline(), None);
 }
 
 /// Opens a window, acknowledges its first configure and commits a buffer of the tile's size

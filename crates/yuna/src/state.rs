@@ -1,5 +1,6 @@
 //! The compositor's state, and the protocol handlers that are not the shell's: surfaces, shared
-//! memory, the seat, outputs and presentation time.
+//! memory, the seat, outputs and presentation time. `linux-dmabuf` is in `dmabuf.rs`, the
+//! preferred scale in `scale.rs`; viewporter needs no handler.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -21,12 +22,15 @@ use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, get_parent,
 };
+use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::pointer_constraints::PointerConstraintsHandler;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::viewporter::ViewporterState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 
 use crate::Error;
@@ -61,8 +65,8 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
-    /// Whether a window closed or a surface was destroyed since the last round: their textures
-    /// wait to be freed.
+    /// Whether a window closed, a surface or a dmabuf's buffer was destroyed, or a dmabuf was
+    /// imported for a client that left, since the last round: their textures wait to be freed.
     pub surfaces_gone: bool,
     pub counters: Counters,
     pub draw_hook: Option<DrawHook>,
@@ -82,6 +86,11 @@ pub(crate) struct State {
     /// The owner's seat.
     pub seat: Seat<State>,
     pub selections: Selections,
+    pub dmabuf_state: DmabufState,
+    /// How many dmabuf formats clients are offered; 0 when there is no `linux-dmabuf` global.
+    pub dmabuf_formats: usize,
+    _viewporter_state: ViewporterState,
+    _fractional_scale_state: FractionalScaleManagerState,
 }
 
 impl State {
@@ -103,6 +112,8 @@ impl State {
         let keyboard = seat
             .add_keyboard(XkbConfig::default(), 600, 25)
             .map_err(|e| Error::Keyboard(e.to_string()))?;
+        let mut dmabuf_state = DmabufState::new();
+        let dmabuf_formats = crate::dmabuf::create_global(dh, &mut dmabuf_state, &renderer, device);
         Ok(State {
             display_handle: display_handle.clone(),
             clock: Clock::new(clock_mode),
@@ -122,7 +133,8 @@ impl State {
             timer_fired: false,
             stop_requested: false,
             woke: false,
-            compositor_state: CompositorState::new::<State>(dh),
+            // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
+            compositor_state: CompositorState::new_v6::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),
             _xdg_decoration_state: XdgDecorationState::new::<State>(dh),
             shm_state: ShmState::new::<State>(dh, Vec::new()),
@@ -132,6 +144,10 @@ impl State {
             _presentation_state: PresentationState::new::<State>(dh, Monotonic::ID as u32),
             seat,
             selections: Selections::new(dh),
+            dmabuf_state,
+            dmabuf_formats,
+            _viewporter_state: ViewporterState::new::<State>(dh),
+            _fractional_scale_state: FractionalScaleManagerState::new::<State>(dh),
         })
     }
 
@@ -146,9 +162,9 @@ impl State {
         self.outputs.iter().position(|o| o.id == id)
     }
 
-    /// Frees the renderer's textures of the surfaces that went since the last round, without
-    /// drawing. A frame frees them too, but nothing draws for a hidden window that closes, and
-    /// its textures would stay in memory at rest.
+    /// Frees the renderer's textures of the surfaces and dmabufs that went since the last round,
+    /// without drawing. A frame frees them too, but nothing draws for a hidden window that closes,
+    /// and its textures would stay in memory at rest.
     pub(crate) fn release_textures(&mut self) {
         if std::mem::take(&mut self.surfaces_gone)
             && let Err(error) = self.renderer.cleanup_texture_cache()
@@ -190,10 +206,8 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
         on_commit_buffer_handler::<State>(surface);
-        let mut root = surface.clone();
-        while let Some(parent) = get_parent(&root) {
-            root = parent;
-        }
+        let root = tree_root(surface);
+        self.tell_surface_preferred_scale(&root, surface);
         if self.toplevels.contains_key(&root.id()) {
             self.toplevel_committed(&root, surface);
         }
@@ -208,8 +222,24 @@ impl CompositorHandler for State {
     }
 }
 
+/// The root of the surface tree `surface` belongs to: itself, or the surface its subsurfaces
+/// hang from.
+pub(crate) fn tree_root(surface: &WlSurface) -> WlSurface {
+    let mut root = surface.clone();
+    while let Some(parent) = get_parent(&root) {
+        root = parent;
+    }
+    root
+}
+
 impl BufferHandler for State {
-    fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
+    fn buffer_destroyed(&mut self, buffer: &WlBuffer) {
+        // A dmabuf was imported when its buffer was created (`dmabuf.rs`): its texture goes with
+        // it, even if nothing draws again.
+        if get_dmabuf(buffer).is_ok() {
+            self.surfaces_gone = true;
+        }
+    }
 }
 
 impl ShmHandler for State {

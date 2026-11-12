@@ -14,30 +14,22 @@ use crate::selection_client::SelectionEvent::{
     Clipboard, ControlClipboard, ControlPrimary, Primary,
 };
 use crate::{
-    BLUE, OUTPUT, RED, activity, advance_to, boundary, manual_compositor, millis, open_and_commit,
+    BLUE, OUTPUT, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
+    open_and_commit,
 };
 
 const TEXT: &str = "text/plain;charset=utf-8";
 /// The seat's serials count up from 1 for the whole process: no test gets near this one.
 const NEVER_SENT: u32 = u32::MAX;
 
-/// Runs what is armed, then checks that 10 s of clock draw nothing, send no frame callback and
-/// no configure, wake nothing, and leave no deadline armed (ADR-0023).
-fn assert_rests(compositor: &mut Compositor) {
+/// Runs the deadline still armed, the last frame of a story, then checks that Yuna rests.
+fn settle_and_rest(compositor: &mut Compositor) {
     if let Some(at) = compositor.next_deadline() {
         compositor
             .advance(at.saturating_sub(compositor.now()))
             .expect("the manual clock moves");
     }
-    assert_eq!(compositor.next_deadline(), None);
-    let before = compositor.counters();
-    compositor
-        .advance(Duration::from_secs(10))
-        .expect("the manual clock moves");
-    let after = compositor.counters();
-    assert_eq!(activity(before, after), (0, 0, 0, 0));
-    assert_eq!(after.wakeups, before.wakeups);
-    assert_eq!(compositor.next_deadline(), None);
+    assert_rests(compositor);
 }
 
 /// Opens a window for `client` and moves the clock to `at`, a refresh boundary, where the window
@@ -86,7 +78,7 @@ fn the_clipboard_follows_the_focus_from_one_client_to_another() {
     // A, without the focus now, is told nothing more; its source still holds the clipboard.
     assert_eq!(a.state.events.len(), 3);
     assert!(!a.source(source).cancelled);
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Story 2: story 1 with the primary selection.
@@ -117,7 +109,7 @@ fn the_primary_selection_follows_the_focus_from_one_client_to_another() {
     a.answer(source, b"Yuna");
     assert_eq!(pipe.read_all(), b"Yuna");
     assert_eq!(a.state.events.len(), 3);
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Story 3: a client without the focus sets the clipboard and the primary selection, with the
@@ -161,7 +153,7 @@ fn a_selection_from_a_client_without_the_focus_is_ignored() {
         assert!(source.asked.is_empty());
         assert!(!source.cancelled);
     }
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Smithay checks the focus, not the serial (`docs/debt.md`): the client with the focus sets the
@@ -190,7 +182,7 @@ fn the_serial_of_the_client_with_the_focus_is_not_checked() {
             ControlClipboard(Some(0))
         ]
     );
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Story 4: a data-control client with no window is offered the current clipboard as soon as
@@ -249,7 +241,7 @@ fn a_data_control_client_reads_and_sets_the_clipboard_without_a_window() {
     assert_eq!(manager.source(own).asked, ["text/uri-list"]);
     manager.answer(own, b"Yuna");
     assert_eq!(pipe.read_all(), b"Yuna");
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Story 5: the client whose sources hold the clipboard and the primary selection leaves while
@@ -297,7 +289,7 @@ fn the_selections_empty_when_their_client_leaves() {
     told_manager.sort();
     assert_eq!(told_manager, [ControlClipboard(None), ControlPrimary(None)]);
     assert_eq!(pipe.read_all(), b"");
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// Story 5, misbehaving requests: a source destroyed as soon as it is set, a receive from a
@@ -365,7 +357,7 @@ fn misbehaving_selection_requests_leave_the_others_running() {
         other.client.window(window).frames[frames_before..],
         [millis(boundary(start, 3))]
     );
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// A data-control client that sets the clipboard twice to one source breaks the protocol: it is
@@ -420,7 +412,7 @@ fn a_data_control_client_that_breaks_the_protocol_leaves_alone() {
         focused.client.window(window).frames[frames_before..],
         [millis(boundary(start, 2))]
     );
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// When the last window closes, no client has the focus, so none may set the selections or is
@@ -472,7 +464,7 @@ fn a_client_whose_window_closed_is_offered_nothing() {
         [Clipboard(Some(0)), Primary(None)]
     );
     assert_eq!(client.state.offers[0].mime_types, [TEXT]);
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }
 
 /// The client with the focus, whose sources hold both selections, leaves. Its window closes, so
@@ -521,5 +513,5 @@ fn the_selections_empty_when_the_focused_client_leaves() {
         manager.state.events[4..],
         [ControlClipboard(None), ControlPrimary(None)]
     );
-    assert_rests(&mut compositor);
+    settle_and_rest(&mut compositor);
 }

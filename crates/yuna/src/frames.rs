@@ -258,6 +258,9 @@ impl State {
         for (window, root) in windows {
             match shown.get(&window) {
                 Some(&(output, placed)) => {
+                    // The output, and with it its scale, before the configure: the client then
+                    // draws the buffer that acknowledges it at the right scale.
+                    self.move_to_output(&root, Some(output));
                     self.configure(
                         &root,
                         Some(placed.configure),
@@ -265,7 +268,6 @@ impl State {
                         placed.activated,
                         false,
                     );
-                    self.move_to_output(&root, Some(output));
                 }
                 None => {
                     let size = scrolled_out.get(&window).map(|placed| placed.configure);
@@ -284,7 +286,7 @@ impl State {
     }
 
     /// Records the output a toplevel is shown on, and sends its surfaces `wl_surface.enter` and
-    /// `leave` when it changes.
+    /// `leave` when it changes, and the new output's scale (`scale.rs`).
     fn move_to_output(&mut self, root: &WlSurface, output: Option<OutputId>) {
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
@@ -296,9 +298,12 @@ impl State {
         if let Some(before) = before {
             self.leave_output(root, before);
         }
-        if let Some(index) = output.and_then(|output| self.output_index(output)) {
+        if let Some(output) = output
+            && let Some(index) = self.output_index(output)
+        {
             let smithay_output = &self.outputs[index].output;
             with_surfaces_surface_tree(root, |surface, _| smithay_output.enter(surface));
+            self.tell_preferred_scale(root, output);
         }
     }
 

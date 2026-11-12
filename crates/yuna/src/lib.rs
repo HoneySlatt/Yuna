@@ -13,14 +13,17 @@
 //! boundaries (`output.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
 //! surfaces, the seat and the other protocol handlers (`state.rs`); `xdg-shell` and
 //! `xdg-decoration` in front of the layout (`shell.rs`); the clipboard and the primary selection
-//! (`selection.rs`); the frame loop (`frames.rs`); the public face (`compositor.rs`).
-//! `docs/ARCHITECTURE.md` gives the flow across them.
+//! (`selection.rs`); the frame loop (`frames.rs`); clients' dmabufs (`dmabuf.rs`); the scale each
+//! surface is told (`scale.rs`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives
+//! the flow across them.
 
 mod clock;
 mod compositor;
+mod dmabuf;
 mod frames;
 mod output;
 mod render;
+mod scale;
 mod selection;
 mod shell;
 mod state;
