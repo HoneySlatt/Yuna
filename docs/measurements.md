@@ -33,6 +33,12 @@ All five draw through `wl_shm`; none uses `linux-dmabuf`.
 | SlimeEngine's `window` example, release, from nothing, in Yuna's shell | 1 | 58 s; a 26 MB binary |
 | What the applications add to the shell | 1 | 403 store paths, 1.34 GB unpacked |
 
+On GitHub's `ubuntu-24.04` runner, for commit `9ea2271`: CI's one job took 2 min 41 s (run
+43243317324), the applications' test 15.6 s of it, against 3 min 23 s at B2, for a cause not
+measured: one run each. SlimeEngine's workflow took 4 min 11 s when it built the
+example (run 43243317407; the build 2 min 43 s) and 1 min 38 s with the binary from its cache
+(run 43244291340). Yuna has 11 threads there, against 34 or 35 on the 16-thread desktop.
+
 ## M1.4, Phase B2 — The protocols and the robustness tests (2026-11-12)
 
 Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), load average 6 to 9 from other
