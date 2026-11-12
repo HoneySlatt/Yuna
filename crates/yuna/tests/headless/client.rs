@@ -3,7 +3,13 @@
 //!
 //! It binds the globals a window needs, opens `xdg_toplevel`s with server-side decorations, and
 //! records every event a test checks: configures, decoration modes, frame callbacks and
-//! presentation feedback.
+//! presentation feedback. Its popups, its keyboard, its activation tokens and its dialogs are in
+//! the modules below.
+
+mod activation;
+mod dialog;
+mod keyboard;
+mod popups;
 
 use std::fs::File;
 use std::io::Write;
@@ -13,20 +19,24 @@ use std::time::Duration;
 use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_subcompositor, wl_subsurface, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
+use wayland_protocols::xdg::dialog::v1::client::{xdg_dialog_v1, xdg_wm_dialog_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use yuna::Compositor;
 
 pub use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::Kind;
 pub use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
 pub use wayland_protocols::xdg::shell::client::xdg_toplevel::State;
+
+pub use popups::{ConstraintAdjustment, Parent, Placement};
 
 /// One `xdg_surface.configure`, with the `xdg_toplevel.configure` that came before it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -94,10 +104,18 @@ pub struct ClientState {
     decorations: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     presentation: Option<wp_presentation::WpPresentation>,
     _outputs: Vec<wl_output::WlOutput>,
-    _seat: Option<wl_seat::WlSeat>,
+    seat: Option<wl_seat::WlSeat>,
     pub windows: Vec<Window>,
     pub subsurfaces: Vec<Subsurface>,
     syncs: u64,
+    popups: Vec<popups::Popup>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboard_focus: keyboard::KeyboardFocus,
+    activation: Option<xdg_activation_v1::XdgActivationV1>,
+    /// The tokens asked, by the order they were asked, once they came.
+    tokens: Vec<Option<String>>,
+    wm_dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
+    dialogs: Vec<xdg_dialog_v1::XdgDialogV1>,
 }
 
 /// What a `wl_callback` is for.
@@ -162,6 +180,12 @@ impl Client {
             }
         }
         panic!("the compositor did not answer");
+    }
+
+    /// Sends what the client wrote, without waiting for an answer: for a client that a protocol
+    /// error is about to end.
+    pub fn send(&mut self) {
+        self.queue.flush().expect("the client sends");
     }
 
     pub fn window(&self, index: usize) -> &Window {
@@ -354,6 +378,13 @@ impl Client {
         self.state.windows[window].toplevel.unset_maximized();
     }
 
+    /// Unmaps the window: a commit without a buffer.
+    pub fn unmap(&mut self, window: usize) {
+        let surface = &self.state.windows[window].surface;
+        surface.attach(None, 0, 0);
+        surface.commit();
+    }
+
     /// Destroys the window's `wl_surface` alone, before its toplevel, as a client may.
     pub fn destroy_surface(&mut self, window: usize) {
         self.state.windows[window].surface.destroy();
@@ -400,7 +431,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
             "wl_output" => state
                 ._outputs
                 .push(registry.bind(name, version.min(4), qh, ())),
-            "wl_seat" => state._seat = Some(registry.bind(name, 1, qh, ())),
+            "wl_seat" => state.seat = Some(registry.bind(name, 1, qh, ())),
+            "xdg_activation_v1" => state.activation = Some(registry.bind(name, 1, qh, ())),
+            "xdg_wm_dialog_v1" => state.wm_dialog = Some(registry.bind(name, 1, qh, ())),
             _ => {}
         }
     }
@@ -518,7 +551,16 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for Clien
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let feedback = match event {
+        if let Some(feedback) = Feedback::from_event(event) {
+            state.windows[*index].feedback.push(feedback);
+        }
+    }
+}
+
+impl Feedback {
+    /// What a `wp_presentation_feedback` event says; none for an event that ends nothing.
+    fn from_event(event: wp_presentation_feedback::Event) -> Option<Feedback> {
+        match event {
             wp_presentation_feedback::Event::Presented {
                 tv_sec_hi,
                 tv_sec_lo,
@@ -527,7 +569,7 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for Clien
                 seq_hi,
                 seq_lo,
                 flags,
-            } => Feedback::Presented {
+            } => Some(Feedback::Presented {
                 time: Duration::new((u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo), tv_nsec),
                 refresh: Duration::from_nanos(u64::from(refresh)),
                 seq: (u64::from(seq_hi) << 32) | u64::from(seq_lo),
@@ -535,11 +577,10 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for Clien
                     WEnum::Value(flags) => flags,
                     WEnum::Unknown(raw) => panic!("unknown presentation flags {raw}"),
                 },
-            },
-            wp_presentation_feedback::Event::Discarded => Feedback::Discarded,
-            _ => return,
-        };
-        state.windows[*index].feedback.push(feedback);
+            }),
+            wp_presentation_feedback::Event::Discarded => Some(Feedback::Discarded),
+            _ => None,
+        }
     }
 }
 

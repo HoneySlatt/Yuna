@@ -2,6 +2,9 @@
 
 Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
+- **Activation token**: a string a client asks Yuna for and hands on, a launcher to the program
+  it starts, so that a window can be activated with it (`xdg-activation-v1`); valid only when
+  asked from the window that has the keyboard focus.
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
@@ -40,6 +43,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   only when a test advances it, running each deadline it passes, in order
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
+- **Popup grab**: a popup's request for the keyboard until it is dismissed, as an open menu
+  holds it; granted only with a serial Yuna's seat sent.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
@@ -52,6 +57,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   it the output shows, and scrolls to keep the focused column whole.
 - **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it
   to hidden windows, to clients whose `xdg_wm_base` version has it (6 and later).
+- **Urgent**: said of a window that asked for the focus and did not get it, because its request
+  came without a valid activation token or a fullscreen window held the screen; it stays urgent
+  until it gets the focus or closes. Nothing shows it yet.
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed

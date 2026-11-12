@@ -23,9 +23,10 @@ tracing = "0.1.44"
 # time crate; the level comes from YUNA_LOG.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 # Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
-# Wayland protocol and of the protocols beyond the core one.
+# Wayland protocol and of the protocols beyond the core one, staging ones included
+# (xdg-activation, xdg-dialog).
 wayland-client = "0.31.15"
-wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
+wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

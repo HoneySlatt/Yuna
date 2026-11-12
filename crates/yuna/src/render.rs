@@ -15,6 +15,7 @@ use smithay::backend::renderer::element::surface::{
 use smithay::backend::renderer::element::utils::CropRenderElement;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, ffi};
 use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
+use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 use yuna_layout::geometry::Rect;
@@ -36,7 +37,8 @@ pub enum Device {
 /// What an output shows where no window is.
 const BACKGROUND: Color32F = Color32F::new(0.08, 0.08, 0.1, 1.0);
 
-/// An element of a frame: part of a client's surface, cut to its window's rectangle.
+/// An element of a frame: part of a client's surface, cut to its window's rectangle, or to the
+/// output for a popup.
 pub(crate) type WindowElement = CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>;
 
 /// Opens the renderer on `device`, and reads the largest renderbuffer it allocates.
@@ -147,6 +149,49 @@ pub(crate) fn window_elements(
     .into_iter()
     .filter_map(|element| CropRenderElement::from_element(element, scale, crop))
     .collect()
+}
+
+/// The elements of the popups of the window whose toplevel surface is `toplevel` and whose
+/// rectangle is `rect`, front to back. Each popup's window geometry has its top-left corner at
+/// its place relative to the window's, rounded to the nearest pixel; its offset in its surface
+/// is rounded up, as a window's is. Popups are cut to the output, not to the window: a menu may
+/// overflow its window.
+pub(crate) fn popup_elements(
+    renderer: &mut GlesRenderer,
+    toplevel: &WlSurface,
+    rect: Rect,
+    output: &VirtualOutput,
+) -> Vec<WindowElement> {
+    let scale = output.mode.scale();
+    let crop =
+        Rectangle::from_size((to_i32(output.mode.width()), to_i32(output.mode.height())).into());
+    let mut elements = Vec::new();
+    for (popup, at) in PopupManager::popups_for_surface(toplevel) {
+        let corner: Point<i32, Physical> = (
+            ((rect.x - output.rect.x + f64::from(at.x)) * scale).round() as i32,
+            ((rect.y - output.rect.y + f64::from(at.y)) * scale).round() as i32,
+        )
+            .into();
+        let geometry = popup.geometry();
+        let offset: Point<i32, Physical> = (
+            (f64::from(geometry.loc.x) * scale).ceil() as i32,
+            (f64::from(geometry.loc.y) * scale).ceil() as i32,
+        )
+            .into();
+        elements.extend(
+            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
+                renderer,
+                popup.wl_surface(),
+                corner - offset,
+                scale,
+                1.0,
+                Kind::Unspecified,
+            )
+            .into_iter()
+            .filter_map(|element| CropRenderElement::from_element(element, scale, crop)),
+        );
+    }
+    elements
 }
 
 /// Draws what changed of `output`'s elements, given front to back, and waits until the drawing

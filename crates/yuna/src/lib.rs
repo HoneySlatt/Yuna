@@ -12,24 +12,32 @@
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
 //! boundaries (`output.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
 //! surfaces, the seat and the other protocol handlers (`state.rs`); `xdg-shell` and
-//! `xdg-decoration` in front of the layout (`shell.rs`); the frame loop (`frames.rs`); the
-//! public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! `xdg-decoration` in front of the layout (`shell.rs`), with popups (`popups.rs`),
+//! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the frame loop
+//! (`frames.rs`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow
+//! across them.
 
+mod activation;
 mod clock;
 mod compositor;
+mod dialog;
 mod frames;
 mod output;
+mod popups;
 mod render;
 mod shell;
 mod state;
 
 use std::fmt;
 
+pub use activation::TOKEN_LIFETIME;
 pub use clock::{Clock, ClockMode};
 pub use compositor::{Compositor, Config, Counters};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use output::{InvalidOutput, OutputMode};
+pub use popups::MAX_POPUP_DEPTH;
 pub use render::Device;
+pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use yuna_layout;
 

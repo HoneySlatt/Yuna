@@ -6,7 +6,11 @@
 //! wide, 1440 − 2 × 16 = 1408 tall. Refresh boundary `k` comes `k / 240` s after the output was
 //! created, which is the clock's start: the manual clock does not move until a test moves it.
 
+mod activation;
 mod client;
+mod dialogs;
+mod popups;
+mod window_cap;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -91,6 +95,20 @@ fn activity(before: Counters, after: Counters) -> (u64, u64, u64, u64) {
         after.configures - before.configures,
         after.commits - before.commits,
     )
+}
+
+/// Checks that the compositor is at rest: nothing armed, then 10 s of clock that draw nothing,
+/// send no frame callback and no configure, take no commit, wake nothing, and leave nothing armed.
+fn assert_rests(compositor: &mut Compositor) {
+    assert_eq!(compositor.next_deadline(), None);
+    let before = compositor.counters();
+    compositor
+        .advance(Duration::from_secs(10))
+        .expect("the manual clock moves");
+    let after = compositor.counters();
+    assert_eq!(activity(before, after), (0, 0, 0, 0));
+    assert_eq!(after.wakeups, before.wakeups);
+    assert_eq!(compositor.next_deadline(), None);
 }
 
 /// Story 1: a toplevel's first configure is its tile, 1256 × 1408, tiled on four edges, with

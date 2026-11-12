@@ -11,6 +11,9 @@
 //! discarded, and its frame callbacks go out at most once a second, through one deadline armed
 //! only while such a window waits for one. A window the layout refused to open is treated the
 //! same way, so that its client never waits for ever.
+//!
+//! A window's popups go with it: drawn just above it, called back, reported presented or
+//! discarded, and entering or leaving outputs with its own surfaces.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -31,6 +34,7 @@ use smithay::wayland::presentation::Refresh;
 use yuna_layout::{OutputId, Placed, WindowId};
 
 use crate::clock::Deadline;
+use crate::popups::window_surface_trees;
 use crate::render;
 use crate::state::{OWNER_SEAT, State};
 
@@ -150,12 +154,14 @@ impl State {
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
         for placed in &shown {
             if let Some(root) = self.root_of(placed.window) {
-                take_presentation_feedback_surface_tree(
-                    &root,
-                    &mut feedback,
-                    |_, _| Some(smithay_output.clone()),
-                    |_, _| Kind::empty(),
-                );
+                for tree in window_surface_trees(&root) {
+                    take_presentation_feedback_surface_tree(
+                        &tree,
+                        &mut feedback,
+                        |_, _| Some(smithay_output.clone()),
+                        |_, _| Kind::empty(),
+                    );
+                }
             }
         }
         feedback.presented::<Duration, Monotonic>(presented_at, refresh, seq, Kind::Vsync);
@@ -174,6 +180,13 @@ impl State {
             else {
                 continue;
             };
+            // A window's popups are in front of it, behind the windows over it.
+            elements.extend(render::popup_elements(
+                &mut self.renderer,
+                toplevel.wl_surface(),
+                placed.rect,
+                output,
+            ));
             elements.extend(render::window_elements(
                 &mut self.renderer,
                 toplevel.wl_surface(),
@@ -280,6 +293,7 @@ impl State {
             }
         }
         self.focus_keyboard();
+        self.clear_urgency_of_focused();
         self.arm_hidden_frames();
     }
 
@@ -298,24 +312,31 @@ impl State {
         }
         if let Some(index) = output.and_then(|output| self.output_index(output)) {
             let smithay_output = &self.outputs[index].output;
-            with_surfaces_surface_tree(root, |surface, _| smithay_output.enter(surface));
+            for tree in window_surface_trees(root) {
+                with_surfaces_surface_tree(&tree, |surface, _| smithay_output.enter(surface));
+            }
         }
     }
 
-    /// Sends `wl_surface.leave` for `output` to every surface of the toplevel of `root`.
+    /// Sends `wl_surface.leave` for `output` to every surface of the toplevel of `root` and of
+    /// its popups.
     pub(crate) fn leave_output(&mut self, root: &WlSurface, output: OutputId) {
         if let Some(index) = self.output_index(output) {
             let smithay_output = &self.outputs[index].output;
-            with_surfaces_surface_tree(root, |surface, _| smithay_output.leave(surface));
+            for tree in window_surface_trees(root) {
+                with_surfaces_surface_tree(&tree, |surface, _| smithay_output.leave(surface));
+            }
         }
     }
 
-    /// Gives the keyboard to the window the owner's seat focuses.
-    fn focus_keyboard(&mut self) {
-        let focus = self
+    /// Gives the keyboard to the window the owner's seat focuses, or to the topmost popup of a
+    /// grab on it.
+    pub(crate) fn focus_keyboard(&mut self) {
+        let window = self
             .layout
             .focused(OWNER_SEAT)
             .and_then(|window| self.root_of(window));
+        let focus = self.keyboard_focus(window);
         if self.keyboard.current_focus() != focus {
             let keyboard = self.keyboard.clone();
             keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
@@ -377,7 +398,8 @@ fn hidden_frame_due(last: Option<Duration>, now: Duration) -> Duration {
     })
 }
 
-/// Whether any surface of the tree under `root` that is drawn waits for a frame callback.
+/// Whether any drawn surface of the window whose toplevel surface is `root`, its popups included,
+/// waits for a frame callback.
 fn waits_for_frame(root: &WlSurface) -> bool {
     let mut waits = false;
     for_each_drawn_surface(root, |attributes| {
@@ -386,8 +408,9 @@ fn waits_for_frame(root: &WlSurface) -> bool {
     waits
 }
 
-/// Sends every frame callback the drawn surfaces of the tree under `root` wait for, with `time`
-/// in milliseconds as `wl_callback.done` carries it, and returns how many were sent.
+/// Sends every frame callback the drawn surfaces of the window whose toplevel surface is `root`
+/// wait for, its popups' included, with `time` in milliseconds as `wl_callback.done` carries it,
+/// and returns how many were sent.
 fn send_frame_callbacks(root: &WlSurface, time: Duration) -> u64 {
     // wl_callback's time is milliseconds in 32 bits, which wrap, as Wayland intends.
     let millis = time.as_millis() as u32;
@@ -401,29 +424,31 @@ fn send_frame_callbacks(root: &WlSurface, time: Duration) -> u64 {
     sent
 }
 
-/// Runs `f` on the current state of each surface of the tree under `root` that has a buffer.
-/// A surface without one is not drawn, nor are the surfaces under it: their frame callbacks
-/// wait, as Smithay's own helpers have them wait.
+/// Runs `f` on the current state of each surface that has a buffer, in the tree under `root`
+/// and in its popups' trees. A surface without one is not drawn, nor are the surfaces under it:
+/// their frame callbacks wait, as Smithay's own helpers have them wait.
 fn for_each_drawn_surface(root: &WlSurface, mut f: impl FnMut(&mut SurfaceAttributes)) {
-    // The walk holds each surface's state while it visits it: the callbacks read the state they
-    // are given, never through `with_states` again, which would wait for itself.
-    with_surface_tree_downward(
-        root,
-        (),
-        |_, states, ()| {
-            if is_drawn(states) {
-                TraversalAction::DoChildren(())
-            } else {
-                TraversalAction::SkipChildren
-            }
-        },
-        |_, states, ()| {
-            if is_drawn(states) {
-                f(states.cached_state.get::<SurfaceAttributes>().current());
-            }
-        },
-        |_, _, ()| true,
-    );
+    for tree in window_surface_trees(root) {
+        // The walk holds each surface's state while it visits it: the callbacks read the state
+        // they are given, never through `with_states` again, which would wait for itself.
+        with_surface_tree_downward(
+            &tree,
+            (),
+            |_, states, ()| {
+                if is_drawn(states) {
+                    TraversalAction::DoChildren(())
+                } else {
+                    TraversalAction::SkipChildren
+                }
+            },
+            |_, states, ()| {
+                if is_drawn(states) {
+                    f(states.cached_state.get::<SurfaceAttributes>().current());
+                }
+            },
+            |_, _, ()| true,
+        );
+    }
 }
 
 /// Whether a surface has something to draw: a buffer, its size known.
@@ -435,12 +460,16 @@ fn is_drawn(states: &SurfaceData) -> bool {
         .unwrap_or(false)
 }
 
-/// Tells the clients of the tree under `root` that their content updates were not shown.
+/// Tells the clients of the window whose toplevel surface is `root`, its popups included, that
+/// their content updates were not shown.
 fn discard_presentation_feedback(root: &WlSurface) {
-    with_surfaces_surface_tree(root, |_, states| {
-        if let Some(mut feedback) = SurfacePresentationFeedback::from_states(states, Kind::empty())
-        {
-            feedback.discarded();
-        }
-    });
+    for tree in window_surface_trees(root) {
+        with_surfaces_surface_tree(&tree, |_, states| {
+            if let Some(mut feedback) =
+                SurfacePresentationFeedback::from_states(states, Kind::empty())
+            {
+                feedback.discarded();
+            }
+        });
+    }
 }
