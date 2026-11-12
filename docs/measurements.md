@@ -114,6 +114,13 @@ median, 15.7 to 24.2 µs, leaves too little room under its budget: it stays debt
 ([debt](debt.md)). At 1,000 windows every run of every row meets its budget; the worst, 270 µs.
 In runs 2 and 3, the medians at 100 windows are within a few percent of Phase A's below.
 
+### CI
+
+On GitHub's `ubuntu-24.04` runner, for commit `a29bca8`, one run each: CI's one job took 2 min
+47 s (run 43306298277), the applications' test 15.7 s of it, against 2 min 41 s at B3;
+SlimeEngine's workflow, which the push started since it changes the drawing path, 1 min 32 s
+with the example's binary from its cache (run 43306298246).
+
 ## M1.4, Phase B3 — Real applications in CI (2026-11-12)
 
 Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), not alone on the machine; one
