@@ -20,6 +20,10 @@ at 1920 × 1080 at 60 Hz, scale 1, and at 2880 × 1620 at 60 Hz, scale 1.5, 3 fr
 then 0 context switches in 10 s for every thread of Yuna and of Alacritty. Alacritty draws
 through `wl_shm` and takes the fractional scale (120, then 180) and a viewport.
 
+CI's one job on GitHub's `ubuntu-24.04` runner, without a cache: 3 min 23 s for commit
+`0b398f0` (run 43192826739), against 2 min 47 s at B1; the B2 tests and their proptests run
+in it.
+
 ## M1.4, Phase B1 — CI with Smithay (2026-11-12)
 
 CI's one job on GitHub's `ubuntu-24.04` runner, without a cache, from its start to its end:
