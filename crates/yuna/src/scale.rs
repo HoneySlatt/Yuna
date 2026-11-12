@@ -6,11 +6,13 @@
 //!
 //! A surface is told the scale of the output its window is shown on: when its fractional scale
 //! object is created, at its commits (in practice its first: a new surface, a new subsurface),
-//! and when its window enters an output. Only a change sends anything. A surface whose window is
-//! on no output keeps the last value it was told. One never told anything learns what the root
-//! of its tree was last told, so that a subsurface added to a hidden window matches its window;
-//! else, as a new window, the scale of the owner seat's active output, where a new window opens,
-//! else the first output's, so that a window's first buffer is drawn at the right scale.
+//! when its window enters an output, and, for a popup, when it is created. A popup's surfaces
+//! are told what their window is told. Only a change sends anything. A surface whose window is
+//! on no output keeps the last value it was told. One never told anything learns what its
+//! window's surface was last told, so that a subsurface or a popup added to a hidden window
+//! matches its window; else, as a new window, the scale of the owner seat's active output, where
+//! a new window opens, else the first output's, so that a window's first buffer is drawn at the
+//! right scale.
 
 use std::cell::Cell;
 
@@ -22,6 +24,7 @@ use smithay::wayland::compositor::{SurfaceData, send_surface_state, with_states}
 use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
 use yuna_layout::OutputId;
 
+use crate::popups::popup_toplevel;
 use crate::state::{OWNER_SEAT, State, tree_root};
 
 /// What a surface is told of its output.
@@ -47,25 +50,27 @@ impl State {
         with_surfaces_surface_tree(root, |surface, states| tell(surface, states, preferred));
     }
 
-    /// Tells `surface`, in the tree under `root`, the scale of the output the tree is shown on.
-    /// Shown nowhere, the surface keeps what it was told, or, never told anything, learns
-    /// `preferred_never_told`. Called at each commit: a surface never told its scale, a new
-    /// subsurface most often, learns it then; for the others nothing changed, and nothing is sent.
+    /// Tells `surface`, in the tree under `root`, the scale of the output the tree is shown on:
+    /// its window's, a popup's tree being shown with its window. Shown nowhere, the surface keeps
+    /// what it was told, or, never told anything, learns `preferred_never_told`. Called at each
+    /// commit: a surface never told its scale, a new subsurface most often, learns it then; for
+    /// the others nothing changed, and nothing is sent.
     pub(crate) fn tell_surface_preferred_scale(&self, root: &WlSurface, surface: &WlSurface) {
-        let preferred = match self.output_showing(root) {
+        let window = popup_toplevel(root).unwrap_or_else(|| root.clone());
+        let preferred = match self.output_showing(&window) {
             Some(output) => self.preferred_on(output),
             None if with_states(surface, last_told).is_some() => return,
-            None => self.preferred_never_told(root),
+            None => self.preferred_never_told(&window),
         };
         if let Some(preferred) = preferred {
             with_states(surface, |states| tell(surface, states, preferred));
         }
     }
 
-    /// The output the tree under `root` is shown on: its toplevel's, from the last arrangement.
-    fn output_showing(&self, root: &WlSurface) -> Option<OutputId> {
+    /// The output the toplevel whose surface is `window` is shown on, from the last arrangement.
+    fn output_showing(&self, window: &WlSurface) -> Option<OutputId> {
         self.toplevels
-            .get(&root.id())
+            .get(&window.id())
             .and_then(|toplevel| toplevel.shown_on)
     }
 
@@ -77,11 +82,11 @@ impl State {
         })
     }
 
-    /// What a surface of the tree under `root`, shown nowhere and never told anything, learns:
-    /// what `root` was last told; else, as a new window, the owner seat's active output, where
-    /// new windows open; else the first output.
-    fn preferred_never_told(&self, root: &WlSurface) -> Option<Preferred> {
-        with_states(root, last_told)
+    /// What a surface of the window whose surface is `window`, shown nowhere and never told
+    /// anything, learns: what `window` was last told; else, as a new window, the owner seat's
+    /// active output, where new windows open; else the first output.
+    fn preferred_never_told(&self, window: &WlSurface) -> Option<Preferred> {
+        with_states(window, last_told)
             .or_else(|| {
                 self.layout
                     .active_output(OWNER_SEAT)

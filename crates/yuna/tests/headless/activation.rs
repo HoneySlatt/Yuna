@@ -265,3 +265,164 @@ fn an_activation_before_mapping_behind_a_game_marks_it_urgent() {
     assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
     assert_rests(&mut compositor);
 }
+
+/// A token lasts [`TOKEN_LIFETIME`], 10 s: used 1 ms before its end, it still activates.
+#[test]
+fn a_token_lasts_ten_seconds() {
+    assert_eq!(TOKEN_LIFETIME, Duration::from_secs(10));
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let (a, b) = two_windows(&mut compositor, &mut client, start);
+    let token = client.request_token(&mut compositor, Some(client.enter_serial()), Some(b));
+    let asked_at = compositor.now();
+
+    let last_moment = asked_at + TOKEN_LIFETIME - Duration::from_millis(1);
+    advance_to(&mut compositor, &mut client, last_moment);
+    client.activate(&token, a);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
+    assert!(!compositor.is_urgent(WindowId(1)));
+    let past_next_boundary = compositor.now() + Duration::from_millis(5);
+    advance_to(&mut compositor, &mut client, past_next_boundary);
+    let last_a = client.window(a).configures.last().expect("a configure");
+    assert_eq!(last_a.states, tiled_and(&[State::Activated]));
+    assert_rests(&mut compositor);
+}
+
+/// An activation waiting for its window keeps the time its token was asked, and is judged when
+/// the window maps: a valid token that expired by then marks the window urgent, and moves
+/// nothing. The window is a dialog of a window without the focus, which opens without it.
+#[test]
+fn an_activation_waiting_for_its_window_expires_with_its_token() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let (parent, focused) = two_windows(&mut compositor, &mut client, start);
+
+    let dialog = client.create_window();
+    client.set_parent(dialog, parent);
+    client.commit(dialog);
+    client.roundtrip(&mut compositor);
+    let token = client.request_token(&mut compositor, Some(client.enter_serial()), Some(focused));
+    let asked_at = compositor.now();
+    client.activate(&token, dialog);
+    client.roundtrip(&mut compositor);
+
+    advance_to(&mut compositor, &mut client, asked_at + TOKEN_LIFETIME);
+    client.ack(dialog);
+    client.attach(dialog, 400, 300, RED);
+    client.commit(dialog);
+    client.roundtrip(&mut compositor);
+    assert!(compositor.is_urgent(WindowId(3)));
+    assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(2)));
+    let past_next_boundary = compositor.now() + Duration::from_millis(5);
+    advance_to(&mut compositor, &mut client, past_next_boundary);
+    assert!(compositor.is_urgent(WindowId(3)));
+    let last = client
+        .window(dialog)
+        .configures
+        .last()
+        .expect("a configure");
+    assert!(!last.states.contains(&State::Activated));
+    assert_rests(&mut compositor);
+}
+
+/// The tokens Yuna keeps are counted per client: one that asks 64 tokens pushes out only its
+/// own, and another client's valid token, asked 1 ms before them and so the oldest, still
+/// activates.
+#[test]
+fn a_clients_tokens_never_push_out_another_clients() {
+    let mut compositor = manual_compositor();
+    let mut flood = Client::connect(&mut compositor);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let (a, b) = two_windows(&mut compositor, &mut client, start);
+    let token = client.request_token(&mut compositor, Some(client.enter_serial()), Some(b));
+
+    let later = compositor.now() + Duration::from_millis(1);
+    advance_to(&mut compositor, &mut flood, later);
+    for _ in 0..64 {
+        flood.request_token(&mut compositor, None, None);
+    }
+    client.activate(&token, a);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
+    let past_next_boundary = compositor.now() + Duration::from_millis(5);
+    advance_to(&mut compositor, &mut client, past_next_boundary);
+    let last_a = client.window(a).configures.last().expect("a configure");
+    assert_eq!(last_a.states, tiled_and(&[State::Activated]));
+    flood.roundtrip(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// Between refresh boundaries the keyboard stays in the window it is on. While a popup of b
+/// holds a grab, a valid token asked from that popup activates a: the layout focuses a at once.
+/// The popup's destruction gives the keyboard back to b, not to a, and a new grab on b takes it.
+/// At the next boundary the grab ends, its popup dismissed, and the keyboard goes to a, which is
+/// told it is activated.
+#[test]
+fn the_keyboard_changes_window_only_at_a_boundary() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let (a, b) = two_windows(&mut compositor, &mut client, start);
+    let menu = Placement::below_right((200, 100), (10, 10, 1, 1));
+    let grabbing_popup = |compositor: &mut Compositor, client: &mut Client| {
+        let popup = client.create_popup(Parent::Window(b), menu);
+        client.grab_popup(popup, client.enter_serial());
+        client.commit_popup(popup);
+        client.roundtrip(compositor);
+        popup
+    };
+    let first = grabbing_popup(&mut compositor, &mut client);
+    let first_surface = client.popup(first).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(first_surface.clone()));
+
+    let token = client.request_token_for_surface(
+        &mut compositor,
+        Some(client.enter_serial()),
+        Some(&first_surface),
+    );
+    client.activate(&token, a);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
+    assert_eq!(client.keyboard_focus().surface, Some(first_surface));
+    let configures = (
+        client.window(a).configures.len(),
+        client.window(b).configures.len(),
+    );
+
+    client.destroy_popup(first);
+    client.roundtrip(&mut compositor);
+    let b_surface = client.window(b).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(b_surface));
+
+    let second = grabbing_popup(&mut compositor, &mut client);
+    assert!(!client.popup(second).done);
+    let second_surface = client.popup(second).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(second_surface));
+    assert_eq!(
+        (
+            client.window(a).configures.len(),
+            client.window(b).configures.len()
+        ),
+        configures
+    );
+
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert!(client.popup(second).done);
+    assert_eq!(
+        client.keyboard_focus().surface,
+        Some(client.window(a).surface.clone())
+    );
+    let last_a = client.window(a).configures.last().expect("a configure");
+    assert_eq!(last_a.states, tiled_and(&[State::Activated]));
+    let last_b = client.window(b).configures.last().expect("a configure");
+    assert_eq!(last_b.states, tiled());
+    client.destroy_popup(second);
+    client.roundtrip(&mut compositor);
+    // A popup's destruction arms its window's next boundary.
+    advance_to(&mut compositor, &mut client, boundary(start, 3));
+    assert_rests(&mut compositor);
+}

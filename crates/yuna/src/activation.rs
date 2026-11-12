@@ -13,13 +13,15 @@
 //! Refused, or with a token that is not valid, the window is marked urgent and nothing else
 //! changes, so that no program takes a game's screen. Urgent is the compositor's state, kept on
 //! the toplevel: it ends when the window gets the seat's focus, or closes. A request for a
-//! toplevel not mapped yet waits for its mapping.
+//! toplevel not mapped yet waits for its mapping, and is judged then: a token that expired
+//! meanwhile only marks the window urgent.
 //!
 //! [`Layout::request_activation`]: yuna_layout::Layout::request_activation
 
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
@@ -31,25 +33,34 @@ use crate::state::{OWNER_SEAT, State};
 /// How long a valid token stays valid after it was asked, on Yuna's clock.
 pub const TOKEN_LIFETIME: Duration = Duration::from_secs(10);
 
-/// The most tokens kept. A token is kept until it is used or this many newer ones were asked, so
-/// that a client asking tokens in a loop cannot fill memory, and without a timer, so that nothing
-/// runs at rest. Until then an expired token is still known, and marks its window urgent.
-const MAX_KEPT_TOKENS: usize = 64;
+/// The most tokens kept for one client. A token is kept until it is used or its client asked
+/// this many newer ones, so that a client asking tokens in a loop can neither fill memory nor
+/// push out another client's tokens; and without a timer, so that nothing runs at rest. Until
+/// then an expired token is still known, and marks its window urgent.
+const MAX_KEPT_TOKENS_PER_CLIENT: usize = 64;
 
-/// What Yuna noted of a token it gave, kept in the token's data.
-#[derive(Debug)]
-struct TokenOrigin {
+/// What Yuna noted of a token it gave, kept in the token's data, and on a toplevel whose
+/// activation waits for its mapping.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TokenOrigin {
     /// When it was asked, on Yuna's clock.
     asked_at: Duration,
     /// Whether it was asked as a valid token must be.
     asked_validly: bool,
 }
 
-/// Whether an activation may take the focus, or only mark its window urgent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TokenValidity {
-    Valid,
-    Invalid,
+impl TokenOrigin {
+    /// A token Yuna noted nothing of: never valid.
+    const UNKNOWN: TokenOrigin = TokenOrigin {
+        asked_at: Duration::ZERO,
+        asked_validly: false,
+    };
+
+    /// Whether an activation with this token at `now` may take the focus: asked validly, less
+    /// than [`TOKEN_LIFETIME`] before `now`.
+    fn is_valid_at(&self, now: Duration) -> bool {
+        self.asked_validly && now < self.asked_at.saturating_add(TOKEN_LIFETIME)
+    }
 }
 
 impl XdgActivationHandler for State {
@@ -67,7 +78,7 @@ impl XdgActivationHandler for State {
         };
         // The data is shared with the copy Smithay keeps.
         data.user_data.insert_if_missing_threadsafe(|| origin);
-        self.forget_oldest_tokens();
+        self.forget_oldest_tokens_of(data.client_id.as_ref());
         true
     }
 
@@ -79,24 +90,28 @@ impl XdgActivationHandler for State {
     ) {
         // A token is used once.
         self.xdg_activation_state.remove_token(&token);
-        let validity = self.token_validity(&token_data);
+        let origin = token_data
+            .user_data
+            .get::<TokenOrigin>()
+            .copied()
+            .unwrap_or(TokenOrigin::UNKNOWN);
         let Some(toplevel) = self.toplevels.get_mut(&surface.id()) else {
             tracing::debug!("an activation of a surface that is not a toplevel is ignored");
             return;
         };
         match toplevel.window {
-            Some(window) => self.activate(window, validity),
-            // Applied when it maps (`shell.rs`).
-            None => toplevel.waiting_activation = Some(validity),
+            Some(window) => self.activate(window, origin),
+            // Judged when it maps (`shell.rs`), by when its token was asked.
+            None => toplevel.waiting_activation = Some(origin),
         }
     }
 }
 
 impl State {
-    /// An activation of a mapped window: the layout decides with a valid token; refused, or
-    /// without one, the window is urgent.
-    pub(crate) fn activate(&mut self, window: WindowId, validity: TokenValidity) {
-        if validity == TokenValidity::Valid {
+    /// An activation of a mapped window with `token`: the layout decides if the token is valid
+    /// now; refused, or without a valid token, the window is urgent.
+    pub(crate) fn activate(&mut self, window: WindowId, token: TokenOrigin) {
+        if token.is_valid_at(self.clock.now()) {
             match self.layout.request_activation(window) {
                 Ok(true) => {
                     self.mark_layout_changed();
@@ -157,30 +172,22 @@ impl State {
             && self.keyboard.last_enter() == Some(*serial)
     }
 
-    /// Whether a token used now is valid: asked validly, less than [`TOKEN_LIFETIME`] ago.
-    fn token_validity(&self, data: &XdgActivationTokenData) -> TokenValidity {
-        let now = self.clock.now();
-        match data.user_data.get::<TokenOrigin>() {
-            Some(origin)
-                if origin.asked_validly && now < origin.asked_at.saturating_add(TOKEN_LIFETIME) =>
-            {
-                TokenValidity::Valid
-            }
-            _ => TokenValidity::Invalid,
-        }
-    }
-
-    /// Forgets the oldest tokens until there is room for one more within [`MAX_KEPT_TOKENS`].
-    fn forget_oldest_tokens(&mut self) {
+    /// Forgets the oldest tokens of `client`, the client asking a new one, until it has room for
+    /// one more within [`MAX_KEPT_TOKENS_PER_CLIENT`]. Other clients' tokens are left alone.
+    fn forget_oldest_tokens_of(&mut self, client: Option<&ClientId>) {
         let asked_at = |data: &XdgActivationTokenData| {
             data.user_data
                 .get::<TokenOrigin>()
                 .map_or(Duration::ZERO, |origin| origin.asked_at)
         };
-        while self.xdg_activation_state.tokens().count() >= MAX_KEPT_TOKENS {
+        let of_client = |data: &XdgActivationTokenData| data.client_id.as_ref() == client;
+        let kept =
+            |state: &XdgActivationState| state.tokens().filter(|(_, data)| of_client(data)).count();
+        while kept(&self.xdg_activation_state) >= MAX_KEPT_TOKENS_PER_CLIENT {
             let oldest = self
                 .xdg_activation_state
                 .tokens()
+                .filter(|(_, data)| of_client(data))
                 .min_by_key(|(_, data)| asked_at(data))
                 .map(|(token, _)| token.clone());
             match oldest {

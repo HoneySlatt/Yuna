@@ -4,7 +4,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
 - **Activation token**: a string a client asks Yuna for and hands on, a launcher to the program
   it starts, so that a window can be activated with it (`xdg-activation-v1`); valid only when
-  asked from the window that has the keyboard focus.
+  asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s.
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
@@ -19,6 +19,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   toolchain and every tool the checks use; CI runs in it too.
 - **Dialog**: a window that names a parent, as xdg-shell's `set_parent`; it opens floating, centred
   on its parent, and takes the focus only from it.
+- **Dismissed popup**: a popup Yuna told `popup_done`, as xdg-shell lets a compositor do: it
+  leaves its window, is no longer drawn, takes no keyboard grab, and waits for its client to
+  destroy it.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
@@ -51,7 +54,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for the keyboard until it is dismissed, as an open menu
-  holds it; granted only with a serial Yuna's seat sent.
+  holds it; granted only with a serial Yuna's seat sent, and only to a popup not dismissed. While
+  it holds, the keyboard stays within its window.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.

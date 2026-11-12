@@ -14,16 +14,20 @@
 //! A popup that asks an explicit grab gets it when the grab's serial is the last keyboard `enter`
 //! the owner's seat sent to the popup's window, or the serial of the grab its parent holds; there
 //! is no pointer input before M1.5. The keyboard then goes to the topmost grabbing popup, until
-//! the grab ends: when its popups are gone, or when the focus leaves their window. A grab asked
-//! otherwise is refused by dismissing the popup, as xdg-shell allows.
+//! the grab ends: when its popups are gone or dismissed, or when the focus leaves their window. A
+//! grab asked otherwise is refused by dismissing the popup, as xdg-shell allows; a popup
+//! dismissed already takes none. Between refresh boundaries the keyboard moves only within the
+//! window it is on; a move to another window waits for the next boundary (`frames.rs`).
 //!
-//! A popup is dismissed (`popup_done`) when its window unmaps or goes, and at once when it is
-//! created for a window that is not mapped, a parent popup already dismissed, a chain of parents
-//! that is broken or deeper than [`MAX_POPUP_DEPTH`], or a positioner with nonsense values.
+//! A popup is dismissed (`popup_done`) when its window unmaps or goes, when it commits without a
+//! buffer, and at once when it is created for a window that is not mapped or has
+//! [`MAX_POPUPS_PER_WINDOW`] popups, a parent popup already dismissed, a chain of parents that is
+//! broken or deeper than [`MAX_POPUP_DEPTH`], or a positioner with nonsense values.
 
 use smithay::desktop::{
     PopupGrab, PopupGrabError, PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy,
 };
+use smithay::input::Seat;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -41,6 +45,11 @@ use crate::state::State;
 /// popup's parents and down a window's tree have no bound.
 pub const MAX_POPUP_DEPTH: usize = 32;
 
+/// The most popups one window may have, all depths together. Smithay's walks over a window's
+/// popups, and Yuna's, are linear and run at each of its commits and refresh boundaries; a client
+/// that opened popups without end would slow every one. Menus and their submenus stay far below.
+pub const MAX_POPUPS_PER_WINDOW: usize = 64;
+
 /// The largest coordinate or size, in logical units, a positioner may hold. Placing a popup adds a
 /// few of them; within this bound the sums stay far from `i32`'s limits.
 const MAX_POSITIONER_VALUE: u32 = 1 << 20;
@@ -52,9 +61,20 @@ pub(crate) struct ActivePopupGrab {
 }
 
 impl State {
-    /// A new popup: placed and tracked, or dismissed when it cannot be placed.
+    /// A new popup: placed, tracked and told its window's scale, or dismissed when its window
+    /// has too many popups or it cannot be placed.
     pub(crate) fn popup_created(&mut self, popup: PopupSurface, positioner: PositionerState) {
-        let Some(geometry) = self.place_popup(&popup, &positioner) else {
+        let Some(toplevel) = popup_toplevel(popup.wl_surface()) else {
+            tracing::debug!("a popup whose chain of parents is broken is dismissed");
+            popup.send_popup_done();
+            return;
+        };
+        if PopupManager::popups_for_surface(&toplevel).count() >= MAX_POPUPS_PER_WINDOW {
+            tracing::debug!("a window has its most popups; a new one is dismissed");
+            popup.send_popup_done();
+            return;
+        }
+        let Some(geometry) = self.place_popup(&toplevel, &popup, &positioner) else {
             tracing::debug!(
                 "a popup without a mapped window, or with nonsense values, is dismissed"
             );
@@ -68,7 +88,10 @@ impl State {
         if let Err(error) = self.popups.track_popup(PopupKind::Xdg(popup.clone())) {
             tracing::debug!(%error, "a popup could not be tracked; it is dismissed");
             popup.send_popup_done();
+            return;
         }
+        // So that its first buffer is drawn at its window's scale (`scale.rs`).
+        self.tell_surface_preferred_scale(popup.wl_surface(), popup.wl_surface());
     }
 
     /// A commit of `surface`, part of the popup whose surface is `popup_surface`. Its initial
@@ -79,6 +102,12 @@ impl State {
         let Some(PopupKind::Xdg(popup)) = self.popups.find_popup(popup_surface) else {
             return;
         };
+        // Smithay resets the role of a popup that commits without a buffer, its parent included,
+        // before this handler runs.
+        if popup.get_parent_surface().is_none() {
+            self.popup_unmapped(&popup);
+            return;
+        }
         if !popup.is_initial_configure_sent() {
             match popup.send_configure() {
                 Ok(_) => self.counters.configures += 1,
@@ -100,7 +129,10 @@ impl State {
         if self.popups.find_popup(popup.wl_surface()).is_none() {
             return;
         }
-        match self.place_popup(&popup, &positioner) {
+        let Some(toplevel) = popup_toplevel(popup.wl_surface()) else {
+            return;
+        };
+        match self.place_popup(&toplevel, &popup, &positioner) {
             Some(geometry) => {
                 popup.with_pending_state(|state| {
                     state.geometry = geometry;
@@ -109,11 +141,18 @@ impl State {
                 popup.send_repositioned(token);
                 self.counters.configures += 1;
             }
-            None => {
-                if let Some(toplevel) = popup_toplevel(popup.wl_surface()) {
-                    self.dismiss_popup(&toplevel, &popup);
-                }
-            }
+            None => self.dismiss_popup(&toplevel, &popup),
+        }
+    }
+
+    /// A popup committed without a buffer. Smithay took it as its unmapping and reset its role,
+    /// its parent included, so that it cannot be shown again: any later commit of it is its
+    /// client's protocol error. It is dismissed with the popups over it, without a configure, and
+    /// its window's output draws again without them.
+    fn popup_unmapped(&mut self, popup: &PopupSurface) {
+        match self.window_holding(popup.wl_surface()) {
+            Some(toplevel) => self.dismiss_popup(&toplevel, popup),
+            None => popup.send_popup_done(),
         }
     }
 
@@ -123,9 +162,7 @@ impl State {
         if let Some(toplevel) = popup_toplevel(popup_surface) {
             self.refresh_output_of(&toplevel);
         }
-        if self.popup_grab.is_some() {
-            self.focus_keyboard();
-        }
+        self.refocus_within_grab_window();
     }
 
     /// An explicit grab asked by a popup: granted, or refused by dismissing the popup. See the
@@ -140,6 +177,12 @@ impl State {
             popup.send_popup_done();
             return;
         };
+        // A popup Yuna no longer tracks was told `popup_done` when it was left: at its creation,
+        // or with its parent or its window. It takes no grab.
+        if !is_tracked(&toplevel, popup.wl_surface()) {
+            tracing::debug!("a grab asked by a popup dismissed already is refused");
+            return;
+        }
         let seat = self.owner_seat_of(&seat);
         let Some(seat) = seat.filter(|_| self.grab_serial_is_valid(&toplevel, serial)) else {
             tracing::debug!("a popup grab with a serial Yuna's seat did not send is refused");
@@ -156,16 +199,36 @@ impl State {
         {
             self.end_popup_grab();
         }
+        // The older grab's popups are dismissed, and this one with them if one was its parent.
+        if is_tracked(&toplevel, popup.wl_surface()) {
+            self.start_popup_grab(&toplevel, &popup, &seat, serial);
+        } else {
+            tracing::debug!("a popup dismissed with the older grab takes no grab");
+        }
+        // The keyboard stays in this window until the next boundary: on the topmost popup of the
+        // grab, or back on the window when there is none.
+        self.give_keyboard_to(Some(toplevel));
+    }
+
+    /// Asks Smithay for the grab of `popup`, a popup Yuna tracks on the toplevel whose surface is
+    /// `toplevel`, and sets its keyboard grab; the caller then moves the keyboard. A refusal
+    /// dismisses the popup.
+    fn start_popup_grab(
+        &mut self,
+        toplevel: &WlSurface,
+        popup: &PopupSurface,
+        seat: &Seat<State>,
+        serial: Serial,
+    ) {
         let kind = PopupKind::Xdg(popup.clone());
-        match self
-            .popups
-            .grab_popup(toplevel.clone(), kind, &seat, serial)
-        {
+        match self.popups.grab_popup(toplevel.clone(), kind, seat, serial) {
             Ok(grab) => {
                 let keyboard = self.keyboard.clone();
                 keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
-                self.popup_grab = Some(ActivePopupGrab { toplevel, grab });
-                self.focus_keyboard();
+                self.popup_grab = Some(ActivePopupGrab {
+                    toplevel: toplevel.clone(),
+                    grab,
+                });
             }
             // Smithay dismissed the popup already.
             Err(PopupGrabError::ParentDismissed) => {}
@@ -173,15 +236,15 @@ impl State {
             Err(PopupGrabError::NotTheTopmostPopup) => {}
             Err(error) => {
                 tracing::debug!(%error, "a popup grab is refused");
-                self.dismiss_popup(&toplevel, &popup);
+                self.dismiss_popup(toplevel, popup);
             }
         }
     }
 
-    /// What the keyboard focuses, given the toplevel surface the layout focuses: the topmost
-    /// popup of a grab on that window, or the window. A grab whose popups are gone, or whose
-    /// window no longer has the focus, ends here: its popups are dismissed and the keyboard is let
-    /// go.
+    /// What the keyboard focuses, given the toplevel surface it is to be on: the topmost popup of
+    /// a grab on that window, or the window. A grab whose popups are gone, whose topmost popup was
+    /// dismissed, or whose window is not the one given, ends here: its popups are dismissed and
+    /// the keyboard is let go.
     pub(crate) fn keyboard_focus(&mut self, window: Option<WlSurface>) -> Option<WlSurface> {
         let Some(active) = &self.popup_grab else {
             return window;
@@ -189,12 +252,27 @@ impl State {
         let topmost = active.grab.current_grab();
         let holds = !active.grab.has_ended()
             && window.as_ref() == Some(&active.toplevel)
-            && topmost.as_ref() != Some(&active.toplevel);
+            && topmost.as_ref().is_some_and(|topmost| {
+                *topmost != active.toplevel && is_tracked(&active.toplevel, topmost)
+            });
         if holds {
             return topmost;
         }
         self.end_popup_grab();
         window
+    }
+
+    /// Moves the keyboard within the window of the popup grab, between refresh boundaries: to the
+    /// grab's topmost popup while it holds, else back to the window. Without a grab, nothing
+    /// moves.
+    fn refocus_within_grab_window(&mut self) {
+        if let Some(toplevel) = self
+            .popup_grab
+            .as_ref()
+            .map(|active| active.toplevel.clone())
+        {
+            self.give_keyboard_to(Some(toplevel));
+        }
     }
 
     /// Dismisses every popup of the toplevel whose surface is `toplevel`, which unmaps or goes,
@@ -221,26 +299,27 @@ impl State {
         }
     }
 
-    /// Where a popup goes, relative to its parent's window geometry: by its positioner, kept
-    /// within the output its window is shown on as its constraint adjustments allow. None when it
-    /// cannot be placed: nonsense values, no mapped window, or a parent popup no longer tracked.
+    /// Where a popup of the toplevel whose surface is `toplevel_surface` goes, relative to its
+    /// parent's window geometry: by its positioner, kept within the output its window is shown on
+    /// as its constraint adjustments allow. None when it cannot be placed: nonsense values, no
+    /// mapped window, or a parent popup no longer tracked.
     fn place_popup(
         &self,
+        toplevel_surface: &WlSurface,
         popup: &PopupSurface,
         positioner: &PositionerState,
     ) -> Option<Rectangle<i32, Logical>> {
         if !positioner_is_sane(positioner) {
             return None;
         }
-        let toplevel_surface = popup_toplevel(popup.wl_surface())?;
         let toplevel = self.toplevels.get(&toplevel_surface.id())?;
         let window = toplevel.window?;
         let parent = popup.get_parent_surface()?;
         // Where the parent's window geometry is, relative to the toplevel's.
-        let parent_offset = if parent == toplevel_surface {
+        let parent_offset = if parent == *toplevel_surface {
             Point::default()
         } else {
-            PopupManager::popups_for_surface(&toplevel_surface)
+            PopupManager::popups_for_surface(toplevel_surface)
                 .find(|(tracked, _)| *tracked.wl_surface() == parent)
                 .map(|(_, at)| at)?
         };
@@ -282,19 +361,36 @@ impl State {
             && (self.keyboard.last_enter() == Some(serial) || self.keyboard.has_grab(serial))
     }
 
-    /// Dismisses `popup` and the popups over it, which leave their window's tree.
+    /// Dismisses `popup` and the popups over it, which leave their window's tree. A grab whose
+    /// topmost popup was among them ends, and the keyboard goes back to the window.
     fn dismiss_popup(&mut self, toplevel: &WlSurface, popup: &PopupSurface) {
         let kind = PopupKind::Xdg(popup.clone());
-        let tracked =
-            PopupManager::popups_for_surface(toplevel).any(|(tracked, _)| tracked == kind);
-        if !tracked || PopupManager::dismiss_popup(toplevel, &kind).is_err() {
+        if !is_tracked(toplevel, popup.wl_surface())
+            || PopupManager::dismiss_popup(toplevel, &kind).is_err()
+        {
             popup.send_popup_done();
         }
         self.refresh_output_of(toplevel);
+        self.refocus_within_grab_window();
+    }
+
+    /// The toplevel surface whose popup tree holds the popup of `popup_surface`, searched among
+    /// its client's windows: for a popup whose chain of parents is gone. Popups are tracked only
+    /// on mapped windows, so at most [`crate::MAX_WINDOWS_PER_CLIENT`] trees of at most
+    /// [`MAX_POPUPS_PER_WINDOW`] popups are read.
+    fn window_holding(&self, popup_surface: &WlSurface) -> Option<WlSurface> {
+        let popup_id = popup_surface.id();
+        self.windows
+            .values()
+            .filter(|surface| surface.same_client_as(&popup_id))
+            .filter_map(|surface| self.toplevels.get(surface))
+            .map(|toplevel| toplevel.wl_surface())
+            .find(|toplevel| is_tracked(toplevel, popup_surface))
+            .cloned()
     }
 
     /// Ends the popup grab: its popups still open are dismissed, and the keyboard is let go. The
-    /// focus moves at the next call of `focus_keyboard`.
+    /// focus moves at the next call of `give_keyboard_to`.
     fn end_popup_grab(&mut self) {
         if let Some(mut active) = self.popup_grab.take() {
             active.grab.ungrab(PopupUngrabStrategy::All);
@@ -324,6 +420,12 @@ pub(crate) fn window_surface_trees(toplevel: &WlSurface) -> Vec<WlSurface> {
             PopupManager::popups_for_surface(toplevel).map(|(popup, _)| popup.wl_surface().clone()),
         )
         .collect()
+}
+
+/// Whether the popup of `popup_surface` is in the popup tree of the toplevel whose surface is
+/// `toplevel`, alive and not dismissed. Walks at most [`MAX_POPUPS_PER_WINDOW`] popups.
+fn is_tracked(toplevel: &WlSurface, popup_surface: &WlSurface) -> bool {
+    PopupManager::popups_for_surface(toplevel).any(|(popup, _)| popup.wl_surface() == popup_surface)
 }
 
 /// The toplevel surface a popup belongs to, through its parent popups. None for a surface that

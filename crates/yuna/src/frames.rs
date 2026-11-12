@@ -334,15 +334,22 @@ impl State {
         }
     }
 
-    /// Gives the keyboard to the window the owner's seat focuses, or to the topmost popup of a
-    /// grab on it, and the selections with it: the selections first, for `wl_data_device` asks
-    /// that a client be told the selection just before its keyboard `enter`. Every change of the
-    /// keyboard focus goes through here.
-    pub(crate) fn focus_keyboard(&mut self) {
+    /// At a refresh boundary, gives the keyboard to the window the owner's seat focuses, or to the
+    /// topmost popup of a grab on it. Only here does the keyboard change window: between
+    /// boundaries, `popups.rs` moves it within the window it is on.
+    fn focus_keyboard(&mut self) {
         let window = self
             .layout
             .focused(OWNER_SEAT)
             .and_then(|window| self.root_of(window));
+        self.give_keyboard_to(window);
+    }
+
+    /// Gives the keyboard to the toplevel surface `window`, or to the topmost popup of a grab on
+    /// it, and the selections with it: the selections first, for `wl_data_device` asks that a
+    /// client be told the selection just before its keyboard `enter`. Every change of the
+    /// keyboard focus goes through here.
+    pub(crate) fn give_keyboard_to(&mut self, window: Option<WlSurface>) {
         let focus = self.keyboard_focus(window);
         if self.keyboard.current_focus() != focus {
             self.give_selections_to(focus.as_ref());

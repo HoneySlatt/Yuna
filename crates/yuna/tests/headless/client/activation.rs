@@ -17,6 +17,18 @@ impl Client {
         serial: Option<u32>,
         window: Option<usize>,
     ) -> String {
+        let surface = window.map(|window| self.state.windows[window].surface.clone());
+        self.request_token_for_surface(compositor, serial, surface.as_ref())
+    }
+
+    /// Asks an activation token, with the seat's `serial` and for `surface` when given, whatever
+    /// the surface is (a popup's), and waits for it.
+    pub fn request_token_for_surface(
+        &mut self,
+        compositor: &mut Compositor,
+        serial: Option<u32>,
+        surface: Option<&wl_surface::WlSurface>,
+    ) -> String {
         let qh = self.queue.handle();
         let index = self.state.tokens.len();
         self.state.tokens.push(None);
@@ -29,8 +41,8 @@ impl Client {
         if let Some(serial) = serial {
             token.set_serial(serial, self.state.seat.as_ref().expect("wl_seat"));
         }
-        if let Some(window) = window {
-            token.set_surface(&self.state.windows[window].surface);
+        if let Some(surface) = surface {
+            token.set_surface(surface);
         }
         token.commit();
         self.roundtrip(compositor);

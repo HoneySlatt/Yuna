@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use smithay::utils::Rectangle;
 use yuna::yuna_layout::WindowId;
-use yuna::{Compositor, MAX_POPUP_DEPTH, OWNER_SEAT};
+use yuna::{Compositor, MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW, OWNER_SEAT};
 
 use crate::client::{Client, ConstraintAdjustment, Feedback, Kind, Parent, Placement};
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
 const GREEN: u32 = 0xFF_00_FF_00;
 const RED_PIXEL: [u8; 4] = [255, 0, 0, 255];
 const GREEN_PIXEL: [u8; 4] = [0, 255, 0, 255];
+const BLUE_PIXEL: [u8; 4] = [0, 0, 255, 255];
 
 /// A menu of 200 × 100 under a 1 × 1 button at (10, 10) of its parent: at (11, 11).
 fn menu() -> Placement {
@@ -31,6 +32,16 @@ fn pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
         .read_pixels(OUTPUT, Rectangle::new((x, y).into(), (1, 1).into()))
         .expect("the pixel reads");
     bytes.try_into().expect("four bytes")
+}
+
+/// Creates a menu on `parent` that asks a grab with the client's last keyboard `enter` serial,
+/// and makes its initial commit.
+fn open_grabbing_popup(compositor: &mut Compositor, client: &mut Client, parent: Parent) -> usize {
+    let popup = client.create_popup(parent, menu());
+    client.grab_popup(popup, client.enter_serial());
+    client.commit_popup(popup);
+    client.roundtrip(compositor);
+    popup
 }
 
 /// Opens a window, draws it at boundary 1, and checks it is where these stories expect it.
@@ -429,5 +440,240 @@ fn a_popup_nested_past_the_limit_is_dismissed() {
     assert_eq!(MAX_POPUP_DEPTH, 32);
     assert!(!client.popup(too_deep - 1).done);
     assert!(client.popup(too_deep).done);
+    assert_rests(&mut compositor);
+}
+
+/// A window has at most [`MAX_POPUPS_PER_WINDOW`] popups, 64, all depths together: four nested
+/// and sixty beside them make 64, and none is dismissed; a 65th, nested under the deepest, is
+/// dismissed at once. A second client keeps getting its frame callbacks.
+#[test]
+fn a_window_has_at_most_64_popups() {
+    assert_eq!(MAX_POPUPS_PER_WINDOW, 64);
+    let mut compositor = manual_compositor();
+    let mut other = Client::connect(&mut compositor);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let steady = open_and_commit(&mut compositor, &mut other, BLUE);
+    let w = open_and_commit(&mut compositor, &mut client, RED);
+    advance_to(&mut compositor, &mut other, boundary(start, 1));
+    client.roundtrip(&mut compositor);
+
+    let mut popups = Vec::new();
+    let mut parent = Parent::Window(w);
+    for _ in 0..4 {
+        let popup = client.create_popup(parent, menu());
+        parent = Parent::Popup(popup);
+        popups.push(popup);
+    }
+    for _ in 0..60 {
+        popups.push(client.create_popup(Parent::Window(w), menu()));
+    }
+    client.roundtrip(&mut compositor);
+    assert_eq!(popups.len(), 64);
+    assert!(popups.iter().all(|&popup| !client.popup(popup).done));
+
+    let too_many = client.create_popup(parent, menu());
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(too_many).done);
+    assert!(popups.iter().all(|&popup| !client.popup(popup).done));
+
+    other.request_frame(steady);
+    other.commit(steady);
+    other.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut other, boundary(start, 2));
+    assert_eq!(
+        other.window(steady).frames,
+        vec![millis(boundary(start, 1)), millis(boundary(start, 2))]
+    );
+    client.roundtrip(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A popup dismissed at its creation, here for a positioner 2^21 wide, past the values Yuna
+/// places, takes no grab, even with its window's keyboard `enter` serial: the keyboard stays on
+/// the window, and the popup gets no configure.
+#[test]
+fn a_popup_dismissed_at_its_creation_takes_no_grab() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    client.bind_keyboard(&mut compositor);
+    let window_surface = client.window(w).surface.clone();
+
+    let too_wide = Placement::below_right((1 << 21, 100), (10, 10, 1, 1));
+    let p = client.create_popup(Parent::Window(w), too_wide);
+    client.grab_popup(p, client.enter_serial());
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(p).done);
+    assert!(client.popup(p).configures.is_empty());
+    assert_eq!(
+        client.keyboard_focus().surface,
+        Some(window_surface.clone())
+    );
+
+    client.destroy_popup(p);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.keyboard_focus().surface, Some(window_surface));
+    // A popup's destruction arms its window's next boundary.
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_rests(&mut compositor);
+}
+
+/// A grab asked by a popup whose parent is not the topmost grabbing popup ends the older grab,
+/// and dismisses its popups. The third popup here hangs from the first, under the second's grab:
+/// it is dismissed with the first and takes no grab; the keyboard goes back to the window.
+#[test]
+fn a_popup_dismissed_with_the_older_grab_takes_no_grab() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    client.bind_keyboard(&mut compositor);
+    let window_surface = client.window(w).surface.clone();
+
+    let first = open_grabbing_popup(&mut compositor, &mut client, Parent::Window(w));
+    let second = open_grabbing_popup(&mut compositor, &mut client, Parent::Popup(first));
+    let second_surface = client.popup(second).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(second_surface));
+
+    let third = open_grabbing_popup(&mut compositor, &mut client, Parent::Popup(first));
+    for popup in [first, second, third] {
+        assert!(client.popup(popup).done);
+    }
+    assert!(client.popup(third).configures.is_empty());
+    assert_eq!(client.keyboard_focus().surface, Some(window_surface));
+
+    for popup in [third, second, first] {
+        client.destroy_popup(popup);
+    }
+    client.roundtrip(&mut compositor);
+    // The popups' commits and their destruction armed their window's next boundary.
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_rests(&mut compositor);
+}
+
+/// A popup that commits without a buffer is unmapped, which Smithay takes as the end of its role,
+/// its parent forgotten, before Yuna sees the commit. Yuna dismisses it with the popup over it,
+/// sends neither a configure, gives the keyboard its grab held back to the window, and the next
+/// boundary draws the window without them.
+#[test]
+fn a_popup_that_commits_without_a_buffer_is_dismissed_and_drawn_away() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    client.bind_keyboard(&mut compositor);
+    let window_surface = client.window(w).surface.clone();
+
+    let p = open_grabbing_popup(&mut compositor, &mut client, Parent::Window(w));
+    client.ack_popup(p);
+    client.attach_popup(p, 200, 100, GREEN);
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    // Over the first, at (11, 11) of it: 16 + 11 + 11 = 38 logical units, 57 pixels.
+    let over = client.map_popup(&mut compositor, Parent::Popup(p), menu(), BLUE);
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_eq!(pixel(&mut compositor, 41, 41), GREEN_PIXEL);
+    assert_eq!(pixel(&mut compositor, 60, 60), BLUE_PIXEL);
+    let popup_surface = client.popup(p).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(popup_surface));
+    let configures = (
+        client.popup(p).configures.len(),
+        client.popup(over).configures.len(),
+    );
+
+    client.unmap_popup(p);
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(p).done);
+    assert!(client.popup(over).done);
+    assert_eq!(
+        (
+            client.popup(p).configures.len(),
+            client.popup(over).configures.len()
+        ),
+        configures
+    );
+    assert_eq!(client.keyboard_focus().surface, Some(window_surface));
+
+    advance_to(&mut compositor, &mut client, boundary(start, 3));
+    assert_eq!(pixel(&mut compositor, 41, 41), RED_PIXEL);
+    assert_eq!(pixel(&mut compositor, 60, 60), RED_PIXEL);
+    client.destroy_popup(over);
+    client.destroy_popup(p);
+    client.roundtrip(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A grab asked while the keyboard is on another window is refused, even with the last `enter`
+/// serial: the popup is dismissed without a configure, and the keyboard stays where it is.
+#[test]
+fn a_grab_is_refused_while_the_keyboard_is_on_another_window() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let a = open_and_commit(&mut compositor, &mut client, RED);
+    let b = open_and_commit(&mut compositor, &mut client, BLUE);
+    advance_to(&mut compositor, &mut client, boundary(start, 1));
+    client.bind_keyboard(&mut compositor);
+    let b_surface = client.window(b).surface.clone();
+    assert_eq!(client.keyboard_focus().surface, Some(b_surface.clone()));
+
+    let p = client.create_popup(Parent::Window(a), menu());
+    client.grab_popup(p, client.enter_serial());
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    assert!(client.popup(p).done);
+    assert!(client.popup(p).configures.is_empty());
+    assert_eq!(client.keyboard_focus().surface, Some(b_surface));
+    client.destroy_popup(p);
+    client.roundtrip(&mut compositor);
+    // Its dismissal and its destruction armed its window's next boundary.
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_rests(&mut compositor);
+}
+
+/// A nested popup asks to be placed again: it is placed relative to its parent popup, at (11, 11)
+/// of the window, and kept within the output from there. 2,000 wide, hanging from (1200, 10) of
+/// its parent, it would end at 16 + 11 + 1201 + 2,000 = 3,228, past the output's edge at 2,560:
+/// `slide_x` moves it left by 668, to x 533 of its parent, 560 logical units, 840 pixels.
+#[test]
+fn a_nested_popup_is_placed_again_relative_to_its_parent() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = mapped_window(&mut compositor, &mut client, start);
+    let parent = client.map_popup(&mut compositor, Parent::Window(w), menu(), GREEN);
+    let nested = client.map_popup(&mut compositor, Parent::Popup(parent), menu(), BLUE);
+    let first = client.popup(nested).configures[0];
+    assert_eq!(
+        (first.x, first.y, first.width, first.height),
+        (11, 11, 200, 100)
+    );
+
+    let wide = Placement {
+        adjustment: ConstraintAdjustment::SlideX,
+        ..Placement::below_right((2000, 100), (1200, 10, 1, 1))
+    };
+    client.reposition_popup(nested, wide, 3);
+    client.roundtrip(&mut compositor);
+    let popup = client.popup(nested);
+    assert_eq!(popup.repositioned, vec![3]);
+    let moved = popup.configures.last().expect("a configure");
+    assert_eq!(
+        (moved.x, moved.y, moved.width, moved.height),
+        (533, 11, 2000, 100)
+    );
+
+    client.ack_popup(nested);
+    client.attach_popup(nested, 2000, 100, BLUE);
+    client.commit_popup(nested);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    // 16 + 11 + 11 = 38 logical units down: 57 pixels.
+    assert_eq!(pixel(&mut compositor, 839, 60), RED_PIXEL);
+    assert_eq!(pixel(&mut compositor, 840, 60), BLUE_PIXEL);
+    assert_eq!(pixel(&mut compositor, 3839, 60), BLUE_PIXEL);
     assert_rests(&mut compositor);
 }

@@ -1,7 +1,7 @@
 //! The program run as a user runs it: its output and its exit status.
 
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -133,7 +133,9 @@ impl Dispatch<wl_output::WlOutput, ()> for Globals {
 }
 
 /// `yuna --headless` as an agent runs it: it prints its socket, a client sees the globals of
-/// M1.4's first part and the output asked, and SIGTERM stops it cleanly, its socket removed.
+/// M1.4 and the output asked, and SIGTERM stops it cleanly, its socket removed. `linux-dmabuf` is
+/// offered only when the renderer, llvmpipe here, imports a format: the program's log says which,
+/// and the globals must agree with it.
 #[test]
 fn headless_serves_its_globals_and_stops_on_sigterm() {
     let runtime_dir = std::env::temp_dir().join(format!("yuna-test-{}", std::process::id()));
@@ -141,13 +143,15 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
     let child = Command::new(env!("CARGO_BIN_EXE_yuna"))
         .args(["--headless", "--output", "1920x1080@60,1"])
         .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("YUNA_LOG", "warn")
+        // Info, for the line that says whether linux-dmabuf is offered: a few lines in all.
+        .env("YUNA_LOG", "info")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("the yuna binary runs");
     let mut running = Running { child, runtime_dir };
 
+    let mut stderr = running.child.stderr.take().expect("its standard error");
     let stdout = running.child.stdout.take().expect("its standard output");
     let mut line = String::new();
     BufReader::new(stdout)
@@ -182,6 +186,10 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         "wl_data_device_manager",
         "zwp_primary_selection_device_manager_v1",
         "ext_data_control_manager_v1",
+        "xdg_activation_v1",
+        "xdg_wm_dialog_v1",
+        "wp_viewporter",
+        "wp_fractional_scale_manager_v1",
     ] {
         assert!(
             globals.interfaces.contains(interface),
@@ -204,6 +212,21 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
     };
     assert!(status.success(), "{status}");
     assert!(!socket_path.exists(), "the socket was left behind");
+
+    let mut log = String::new();
+    stderr.read_to_string(&mut log).expect("its log reads");
+    let dmabuf_offered = log.contains("linux-dmabuf offered");
+    assert!(
+        dmabuf_offered || log.contains("the renderer imports no dmabuf"),
+        "the log does not say whether linux-dmabuf is offered: {log}"
+    );
+    eprintln!("linux-dmabuf offered on the software device: {dmabuf_offered}");
+    assert_eq!(
+        globals.interfaces.contains("zwp_linux_dmabuf_v1"),
+        dmabuf_offered,
+        "the globals {:?} disagree with the log: {log}",
+        globals.interfaces
+    );
 }
 
 #[test]

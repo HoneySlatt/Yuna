@@ -194,25 +194,37 @@ its place relative to the toplevel's window geometry.
    positioner's rules, then its constraint adjustments (`PositionerState::get_unconstrained_geometry`)
    against the output its window is shown on, in the coordinates of its parent's window geometry.
    A window shown on no output places its popups without constraint. A popup is dismissed
-   (`popup_done`) at once when its window is not mapped, its parent popup was dismissed, its chain
-   of parents is broken, cyclic or deeper than 32 (`MAX_POPUP_DEPTH`), or its positioner holds
-   nonsense values.
+   (`popup_done`) at once when its window is not mapped or has 64 popups already, all depths
+   together (`MAX_POPUPS_PER_WINDOW`), its parent popup was dismissed, its chain of parents is
+   broken, cyclic or deeper than 32 (`MAX_POPUP_DEPTH`), or its positioner holds nonsense values.
+   The cap on popups bounds Smithay's walks over a window's popups, and Yuna's, which are linear
+   and run at each of its commits and refresh boundaries. A new popup is told its window's scale
+   at once ([Scale](#scale)).
 2. Its initial commit gets its configure; its first buffer shows it. A `reposition` request
    places it again and is answered with `repositioned` and a configure, or dismisses it when it
-   can no longer be placed.
+   can no longer be placed. A commit without a buffer unmaps it: Smithay resets its role, its
+   parent included, before Yuna sees the commit, so that it can never be shown again. Yuna then
+   dismisses it with the popups over it, without a configure, and arms its window's output, which
+   draws them away at the next boundary. Any later commit of that popup is its client's protocol
+   error.
 3. Its commits arm what its window's commits arm (`schedule_for_commit`), and its frame callbacks
    and presentation feedback go out with its window's.
 4. An explicit grab (`xdg_popup.grab`) is granted when the owner's keyboard is on the popup's
    window, or one of its popups, and the grab's serial is the last `enter` that keyboard sent, or
    the serial of the grab a parent popup holds. Until M1.5 brings input, an `enter` is the only
    serial a client can have. A grab asked otherwise is refused by dismissing the popup, as
-   xdg-shell allows. A granted grab sets Smithay's keyboard grab for popups, and the keyboard goes
-   to the topmost grabbing popup. The grab ends when its popups are gone, the keyboard then
-   returning to the layout's focused window, or when the focus moves to another window, its
-   popups then dismissed. A new grabbing popup on the window, not on the topmost grabbing one,
-   ends the older grab first: Smithay would answer it with a protocol error, which xdg-shell does
-   not ask.
-5. Its window unmapping or going dismisses it. A client that destroys a parent popup before its
+   xdg-shell allows. A popup dismissed already, at its creation or with its parent, takes no
+   grab. A granted grab sets Smithay's keyboard grab for popups, and the keyboard goes to the
+   topmost grabbing popup. The grab ends when its popups are gone, or its topmost popup is
+   dismissed, its other popups then dismissed too and the keyboard returning to the window; or
+   when the focus moves to another window, at a refresh boundary. A new grabbing popup on the
+   window, not on the topmost grabbing one, ends the older grab first: Smithay would answer it
+   with a protocol error, which xdg-shell does not ask. If the new popup hung from one of the
+   older grab's popups, it is dismissed with them and takes no grab.
+5. Between refresh boundaries the keyboard moves only within the window it is on: to the popup
+   that takes a grab there, or back to the window when the grab ends. A move to another window,
+   such as an activation asks, waits for the next boundary ([A frame](#a-frame), step 1).
+6. Its window unmapping or going dismisses it. A client that destroys a parent popup before its
    child gets xdg-shell's `not_the_topmost_popup` error from Smithay, and leaves.
 
 ### Activation and dialogs
@@ -222,7 +234,8 @@ launcher does for the program it starts (`activation.rs`). A token is valid when
 the owner's seat, for the surface that has the keyboard focus, and the serial of the `enter` the
 keyboard sent that surface; it lasts 10 s of Yuna's clock and is used once. Tokens asked
 otherwise are given, as the protocol requires, but are not valid. Yuna keeps the 64 newest
-tokens not used yet, without a timer.
+tokens of each client not used yet, without a timer, so that one client's tokens never push out
+another's.
 
 With a valid token, `Layout::request_activation` decides: the window takes the focus at the next
 refresh boundary, unless a fullscreen window holds the screen
@@ -230,7 +243,9 @@ refresh boundary, unless a fullscreen window holds the screen
 or expired, the window is marked urgent and nothing else changes. Urgent is the compositor's
 state, kept on the toplevel: it ends when the window gets the seat's focus, at the arrangement
 that gives it, or closes; a window that has the focus is not marked. A request for a toplevel not
-mapped yet waits for its mapping; one for a surface that is not a toplevel is ignored.
+mapped yet waits for its mapping, and is judged then, by when its token was asked: a token that
+expired meanwhile marks the window urgent. A request for a surface that is not a toplevel is
+ignored.
 
 `xdg-dialog-v1` is offered. Dialogs already open on their parent through `xdg_toplevel.set_parent`;
 the modal hint (`dialog.rs`) is read from Smithay's record of the toplevel, and nothing uses it
@@ -244,8 +259,8 @@ At an output's refresh boundary:
    size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
    is shown on no output. A configure goes out only when its size or states changed, or when a
    request of its client is owed one. The keyboard focus follows `Layout::focused`, or the
-   topmost popup of a grab on that window; the selections follow the keyboard focus; the
-   focused window is no longer urgent.
+   topmost popup of a grab on that window: only here does it change window. The selections
+   follow the keyboard focus; the focused window is no longer urgent.
 2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
    surface tree with its window geometry at its rectangle's corner, cut to the rectangle, then
    its popups just above it, over a plain background. Surfaces sit on whole pixels: where the
@@ -270,10 +285,11 @@ layout refused is treated the same way.
 Each surface is told the scale of the output its window is shown on: `wp_fractional_scale_v1`'s
 preferred scale, in 120ths, and `wl_surface.preferred_buffer_scale`, that scale's integer
 ceiling. It is told when its fractional scale object is created, at its first commit, and when
-its window enters an output; only a change sends anything. A surface whose window is shown on no
-output keeps the last value. One never told anything learns what the root of its surface tree
-was last told, so that a subsurface added to a hidden window matches its window; a new window
-learns the scale of the owner seat's active output, where it opens, else the first output's.
+its window enters an output; only a change sends anything. A popup's surfaces are told what
+their window is told, from the popup's creation on. A surface whose window is shown on no output
+keeps the last value. One never told anything learns what its window's surface was last told, so
+that a subsurface or a popup added to a hidden window matches its window; a new window learns the
+scale of the owner seat's active output, where it opens, else the first output's.
 When a window moves to another output, it is told the new scale before the configure that gives
 its size there, so that its client draws the buffer that acknowledges it at that scale.
 
@@ -312,7 +328,7 @@ Yuna holds no selection of its own.
 1. When the keyboard focus moves to another client's window, that client gets the selections
    just before its keyboard `enter`, as `wl_data_device` asks: each device it has is told what
    they hold, an offer with its MIME types, or nothing. When no window has the focus, no client
-   has them. The frame loop does both where it moves the keyboard focus (`focus_keyboard`).
+   has them. The frame loop does both where it moves the keyboard focus (`give_keyboard_to`).
 2. Only the client with the focus may set them: Smithay ignores the request of any other. It does
    not check the serial the request names ([debt](debt.md)).
 3. A new selection is offered to the client with the focus, and to every `ext-data-control-v1`

@@ -1,9 +1,10 @@
 //! The test client's popups: created on a window or on another popup through an
 //! `xdg_positioner`, and what each received: configures, `repositioned`, `popup_done`, frame
-//! callbacks and presentation feedback.
+//! callbacks, presentation feedback and the scale it is told.
 
 use wayland_client::protocol::{wl_callback, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1;
 use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback;
 use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface};
 use yuna::Compositor;
@@ -71,6 +72,12 @@ pub struct Popup {
     /// The time each frame callback carried, in milliseconds.
     pub frames: Vec<u32>,
     pub feedback: Vec<Feedback>,
+    /// Its `wp_fractional_scale_v1`, once made.
+    pub fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    /// Each `wp_fractional_scale_v1.preferred_scale`, in 120ths.
+    pub preferred_scales: Vec<u32>,
+    /// Each `wl_surface.preferred_buffer_scale`.
+    pub preferred_buffer_scales: Vec<i32>,
 }
 
 impl Popup {
@@ -89,6 +96,9 @@ impl Popup {
             done: false,
             frames: Vec::new(),
             feedback: Vec::new(),
+            fractional_scale: None,
+            preferred_scales: Vec::new(),
+            preferred_buffer_scales: Vec::new(),
         }
     }
 }
@@ -208,6 +218,26 @@ impl Client {
 
     pub fn commit_popup(&mut self, popup: usize) {
         self.state.popups[popup].surface.commit();
+    }
+
+    /// Unmaps the popup: a commit without a buffer.
+    pub fn unmap_popup(&mut self, popup: usize) {
+        let surface = &self.state.popups[popup].surface;
+        surface.attach(None, 0, 0);
+        surface.commit();
+    }
+
+    /// Creates the popup's `wp_fractional_scale_v1`; its preferred scales are recorded.
+    pub fn get_popup_fractional_scale(&mut self, popup: usize) {
+        let qh = self.queue.handle();
+        let manager = self
+            .state
+            .fractional_scale_manager
+            .as_ref()
+            .expect("wp_fractional_scale_manager_v1");
+        let popup_state = &mut self.state.popups[popup];
+        popup_state.fractional_scale =
+            Some(manager.get_fractional_scale(&popup_state.surface, &qh, PopupIndex(popup)));
     }
 
     /// Asks a frame callback with the popup's next commit.
@@ -354,13 +384,31 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, PopupIndex> for 
 
 impl Dispatch<wl_surface::WlSurface, PopupIndex> for ClientState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &wl_surface::WlSurface,
-        _: wl_surface::Event,
-        _: &PopupIndex,
+        event: wl_surface::Event,
+        index: &PopupIndex,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wl_surface::Event::PreferredBufferScale { factor } = event {
+            state.popups[index.0].preferred_buffer_scales.push(factor);
+        }
+    }
+}
+
+impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, PopupIndex> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        index: &PopupIndex,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            state.popups[index.0].preferred_scales.push(scale);
+        }
     }
 }
 

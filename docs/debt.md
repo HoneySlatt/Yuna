@@ -49,11 +49,17 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - A popup is placed when it is created and when it asks again; a reactive popup
   (`set_reactive`) is not placed again when its window moves or resizes. A popup of a window
   shown on no output is placed without constraint.
-- Smithay resets a popup's role when it commits without a buffer, its parent included: mapping
-  it again is then a protocol error for its client. Clients destroy their popups rather than
-  unmap them.
+- Smithay resets a popup's role when it commits without a buffer, its parent included, before
+  Yuna sees the commit. Yuna dismisses that popup, but cannot let its client show it again: any
+  later commit of it is a protocol error for its client (Smithay `8fd9fe0`,
+  `src/wayland/shell/xdg/mod.rs:1974`), which xdg-shell does not ask. Clients destroy their
+  popups rather than unmap them.
+- `MAX_POPUPS_PER_WINDOW` bounds the popups Yuna tracks on a window, not every `xdg_popup` a
+  client keeps: Smithay lists every live one, dismissed or not, and walks that list, all clients
+  together, when a popup is destroyed or asks a grab. A client that keeps thousands of dismissed
+  popups slows those two requests for every client, until it destroys them.
 - Smithay passes on only the activation tokens it keeps: a token used already, or pushed out by
-  64 newer ones, is ignored without marking its window urgent.
+  64 newer ones of its client, is ignored without marking its window urgent.
 - Until M1.5 brings input, only a keyboard `enter` serial makes an activation token or a popup
   grab valid; key, button and touch serials come with input.
 - The modal hint of `xdg-dialog-v1` is read but not used: a modal dialog does not yet keep its

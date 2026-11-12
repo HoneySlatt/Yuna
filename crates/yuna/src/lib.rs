@@ -39,7 +39,7 @@ pub use clock::{Clock, ClockMode};
 pub use compositor::{Compositor, Config, Counters};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use output::{InvalidOutput, OutputMode};
-pub use popups::MAX_POPUP_DEPTH;
+pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use render::Device;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;

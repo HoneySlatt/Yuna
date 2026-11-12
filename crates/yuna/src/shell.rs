@@ -32,7 +32,7 @@ use smithay::wayland::shell::xdg::{
 use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 
-use crate::activation::TokenValidity;
+use crate::activation::TokenOrigin;
 use crate::state::{ClientState, OWNER_SEAT, State};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
@@ -72,8 +72,8 @@ pub(crate) struct Toplevel {
     /// An activation was refused, or came without a valid token, and the window has not had the
     /// seat's focus since (`activation.rs`).
     pub urgent: bool,
-    /// An activation asked before it was mapped, applied when it is.
-    pub waiting_activation: Option<TokenValidity>,
+    /// The token of an activation asked before it was mapped: judged when it is.
+    pub waiting_activation: Option<TokenOrigin>,
 }
 
 impl Toplevel {
@@ -295,8 +295,8 @@ impl State {
         let waiting_activation = toplevel.waiting_activation.take();
         tracing::debug!(window = window.0, "window opened");
         self.mark_layout_changed();
-        if let Some(validity) = waiting_activation {
-            self.activate(window, validity);
+        if let Some(token) = waiting_activation {
+            self.activate(window, token);
         }
     }
 

@@ -11,7 +11,7 @@ use wayland_protocols::wp::viewporter::client::wp_viewport;
 use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 
-use crate::client::{Client, ProtocolError, State};
+use crate::client::{Client, Parent, Placement, ProtocolError, State};
 use crate::{
     BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, open_and_commit,
 };
@@ -363,6 +363,86 @@ fn a_subsurface_of_a_hidden_window_is_told_its_windows_last_scale() {
     assert_eq!(client.subsurface(sub).preferred_buffer_scales, vec![2]);
     assert_eq!(client.window(w).preferred_buffer_scales, vec![2]);
     assert_rests(&mut compositor);
+}
+
+/// A menu of 200 × 100 under a 1 × 1 button at (10, 10) of its window.
+fn menu() -> Placement {
+    Placement::below_right((200, 100), (10, 10, 1, 1))
+}
+
+/// On the default output, at scale 1.5, a popup is told its window's scale when it is created:
+/// its `wl_surface` a preferred buffer scale of 2, before any commit; its fractional scale object,
+/// made then, 180. Its initial commit, its first buffer and rest send neither again.
+#[test]
+fn a_popup_is_told_its_windows_scale_once() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = open_and_commit(&mut compositor, &mut client, RED);
+    advance_to(&mut compositor, &mut client, boundary(start, 1));
+
+    let p = client.create_popup(Parent::Window(w), menu());
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.popup(p).preferred_buffer_scales, vec![2]);
+    client.get_popup_fractional_scale(p);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.popup(p).preferred_scales, vec![180]);
+
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    client.ack_popup(p);
+    client.attach_popup(p, 200, 100, BLUE);
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_rests(&mut compositor);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.popup(p).preferred_scales, vec![180]);
+    assert_eq!(client.popup(p).preferred_buffer_scales, vec![2]);
+}
+
+/// Two outputs side by side, of scale 1 and 2, each 1920 × 1080 at 60 Hz. A window opens on the
+/// first; then the second becomes the owner seat's active output, where new windows would open.
+/// A popup of the window is told its window's scale, 120, not the active output's 240, and no
+/// buffer scale, 1 being `wl_surface`'s default.
+#[test]
+fn a_popup_is_told_its_windows_scale_not_the_active_outputs() {
+    let mut compositor = compositor_with(vec![hd_output(1.0), hd_output(2.0)]);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = client.open_window(&mut compositor);
+    let asked = client.window(w).configures[0].clone();
+    client.ack(w);
+    client.attach(w, asked.width, asked.height, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 1));
+    compositor.change_layout(|layout| {
+        layout
+            .focus_output(OWNER_SEAT, OutputId(2))
+            .expect("the second output is active");
+    });
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 2));
+    let info = compositor.layout().window(WindowId(1)).expect("the window");
+    assert_eq!(info.output, Some(OutputId(1)));
+
+    let p = client.create_popup(Parent::Window(w), menu());
+    client.get_popup_fractional_scale(p);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.popup(p).preferred_scales, vec![120]);
+    assert!(client.popup(p).preferred_buffer_scales.is_empty());
+
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    client.ack_popup(p);
+    client.attach_popup(p, 200, 100, BLUE);
+    client.commit_popup(p);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 3));
+    assert_rests(&mut compositor);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.popup(p).preferred_scales, vec![120]);
+    assert!(client.popup(p).preferred_buffer_scales.is_empty());
 }
 
 /// What a misbehaving client asks of its viewport.
