@@ -4,6 +4,13 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.4, Phase B1 — CI with Smithay (2026-11-12)
+
+CI's one job on GitHub's `ubuntu-24.04` runner, without a cache, from its start to its end:
+2 min 47 s for commit `2850e0b`, the first that builds Smithay's `wayland_frontend`,
+`desktop` and `renderer_gl` and runs the compositor's 20 in-process stories on llvmpipe; 1 min
+35 s to 1 min 51 s for the commits before it. The applications of B3 are not in the shell yet.
+
 ## M1.4, Phase A — The layout model with real clients (2026-11-12)
 
 The same measure as M1.2's below, after the model learned clients' limits and committed sizes
