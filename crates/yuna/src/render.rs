@@ -5,6 +5,7 @@
 //! This is the only module that knows OpenGL; the layout and the frame loop do not.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use smithay::backend::allocator::Fourcc;
@@ -42,14 +43,23 @@ const BACKGROUND: Color32F = Color32F::new(0.08, 0.08, 0.1, 1.0);
 /// output for a popup.
 pub(crate) type WindowElement = CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>;
 
+/// Every EGL display Yuna opened, one per device, kept until the process ends. Smithay shares one
+/// display handle among the `EGLDisplay`s of a device and terminates it when the last one is
+/// dropped, without a lock against another thread that is initialising the same handle for a new
+/// renderer: that renderer then fails to start. Tests start and drop compositors on several
+/// threads at once; the program has one, and loses nothing by keeping its display.
+static OPENED_DISPLAYS: Mutex<Vec<EGLDisplay>> = Mutex::new(Vec::new());
+
 /// Opens the renderer on `device`, and reads the largest renderbuffer it allocates.
 pub(crate) fn open_renderer(device: Device) -> Result<(GlesRenderer, u32), Error> {
     let egl_device = find_device(device)?;
     // SAFETY: Smithay keeps a registry of the EGL displays it opens, so that two `EGLDisplay`s
-    // on one device share one handle and the last one dropped terminates it. That holds as long as
-    // no code outside Smithay opens EGL displays in this process, and Yuna has no other EGL user.
+    // on one device share one handle, and the last one dropped terminates it; Yuna keeps one of
+    // them for ever (`OPENED_DISPLAYS`). That holds as long as no code outside Smithay opens EGL
+    // displays in this process, and Yuna has no other EGL user.
     let display = unsafe { EGLDisplay::new(egl_device) }
         .map_err(|e| Error::Renderer(format!("cannot open the EGL display: {e}")))?;
+    keep_display(&display);
     let context = EGLContext::new(&display)
         .map_err(|e| Error::Renderer(format!("cannot create an EGL context: {e}")))?;
     // SAFETY: the context was created just above on this thread and is current on no other. The
@@ -59,6 +69,22 @@ pub(crate) fn open_renderer(device: Device) -> Result<(GlesRenderer, u32), Error
         .map_err(|e| Error::Renderer(format!("cannot start the GLES renderer: {e}")))?;
     let max_size = max_renderbuffer_size(&mut renderer)?;
     Ok((renderer, max_size))
+}
+
+/// Keeps `display` until the process ends, unless a display kept already shares its handle: a
+/// device's later displays get the kept one's handle from Smithay, so the list holds one per
+/// device.
+fn keep_display(display: &EGLDisplay) {
+    let mut kept = OPENED_DISPLAYS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let handle = display.get_display_handle();
+    if !kept
+        .iter()
+        .any(|other| Arc::ptr_eq(&other.get_display_handle(), &handle))
+    {
+        kept.push(display.clone());
+    }
 }
 
 fn find_device(device: Device) -> Result<EGLDevice, Error> {

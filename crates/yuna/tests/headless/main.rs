@@ -616,6 +616,58 @@ fn a_new_subsurface_enters_its_output_while_the_layout_waits() {
     assert_eq!(client.subsurface(sub).enters, 1);
 }
 
+/// A compositor started on one thread while another thread drops the last one starts. Smithay
+/// shares one EGL display per device among compositors, and terminated it when the last one
+/// went, even while another thread was initialising it again: tests run compositors on several
+/// threads at once. Each thread in turn drops its compositor while the other starts one; a
+/// compositor that fails to start is recorded, never a panic, so that the other thread is never
+/// left waiting.
+#[test]
+fn a_compositor_starts_while_another_thread_drops_the_last_one() {
+    let mode = OutputMode::new(64, 64, 60.0, 1.0).expect("a valid mode");
+    let start = || {
+        Compositor::new(Config {
+            outputs: vec![mode],
+            clock: ClockMode::Manual,
+            listen: false,
+            ..Config::default()
+        })
+    };
+    let rounds = 100;
+    let barrier = std::sync::Barrier::new(2);
+    let failures = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for thread in 0..2 {
+            let (barrier, failures) = (&barrier, &failures);
+            scope.spawn(move || {
+                let mut held = None;
+                for round in 0..rounds {
+                    barrier.wait();
+                    // One thread drops its compositor as the other starts one, then the roles
+                    // swap at the next round.
+                    if round % 2 == thread {
+                        drop(held.take());
+                    } else {
+                        match start() {
+                            Ok(compositor) => held = Some(compositor),
+                            Err(error) => failures
+                                .lock()
+                                .expect("the failures")
+                                .push(format!("round {round}: {error}")),
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().expect("the failures");
+    assert!(
+        failures.is_empty(),
+        "{} failed: {failures:#?}",
+        failures.len()
+    );
+}
+
 /// A compositor without an output is refused.
 #[test]
 fn a_compositor_without_an_output_is_refused() {

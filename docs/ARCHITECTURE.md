@@ -147,7 +147,9 @@ operation, and an example measures the model:
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
   damage tracker; their refresh boundaries.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
-  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)).
+  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)). It keeps each EGL
+  display it opens until the process ends, so that compositors started and dropped on several
+  threads, as tests run them, never lose the display Smithay shares among them.
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, and SIGTERM.
 
