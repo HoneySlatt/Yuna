@@ -170,7 +170,8 @@ from the rate each time, so that errors never add up.
    applied now. A window is refused when its client has 1,000 windows already
    (`MAX_WINDOWS_PER_CLIENT`) or the layout holds 10,000 (`MAX_WINDOWS`): the layout walks a
    dwindle tree by recursion, and 10,000 windows in one tree work where 100,000 overflow the stack
-   ([ADR-0020](adr/0020-the-layout-models-shape.md)). A refusal for a cap is logged once per
+   ([ADR-0020](adr/0020-the-layout-models-shape.md), [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)).
+   A refusal for a cap is logged once per
    client. Should the layout itself refuse it, which a client's values cannot cause, that is
    logged once per window. A refused window is not shown, and its client gets frame callbacks at
    the hidden windows' rate, never left waiting; its next buffer tries again.
@@ -198,7 +199,8 @@ its place relative to the toplevel's window geometry.
    together (`MAX_POPUPS_PER_WINDOW`), its parent popup was dismissed, its chain of parents is
    broken, cyclic or deeper than 32 (`MAX_POPUP_DEPTH`), or its positioner holds nonsense values.
    The cap on popups bounds Smithay's walks over a window's popups, and Yuna's, which are linear
-   and run at each of its commits and refresh boundaries. A new popup is told its window's scale
+   and run at each of its commits and refresh boundaries
+   ([ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)). A new popup is told its window's scale
    at once ([Scale](#scale)).
 2. Its initial commit gets its configure; its first buffer shows it. A `reposition` request
    places it again and is answered with `repositioned` and a configure, or dismisses it when it

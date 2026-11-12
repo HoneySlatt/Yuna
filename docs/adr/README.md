@@ -35,3 +35,5 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
+| [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Accepted |
+| [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted |
