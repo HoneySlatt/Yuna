@@ -39,6 +39,8 @@ The owner chose the first two on 2026-11-12.
   done at once, but a Vulkan client that rests with its window open would never be checked.
 - **Asking SlimeEngine for an on-demand option in its example**: SlimeEngine's rest with its
   window open checked sooner, at the cost of a change in another project, outside M1.4.
+- **SlimeEngine's job in CI's workflow**, filtered by event: one file, but a path filter applies
+  to a whole workflow, so CI's job would run less often or the second job at every push.
 
 ## Consequences
 

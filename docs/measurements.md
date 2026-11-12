@@ -4,6 +4,35 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.4, Phase B3 — Real applications in CI (2026-11-12)
+
+Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), not alone on the machine; one
+measurement at a time. Build: debug for the tests, release for SlimeEngine's example. Each
+application in its own `yuna --headless` at 1920 × 1080, 60 Hz, scale 1, on llvmpipe, through
+`agent-headless`.
+
+| Application | Shown after | Before going quiet | Then, in 10 s |
+|---|---|---|---|
+| Alacritty 0.17 | 0.4 s | 3 frames, 2 callbacks, 2 configures, 3 commits | 0 context switches in Yuna's 34 threads; no frame, callback, configure, commit or wake-up |
+| `gtk4-demo` (GTK 4.24, Vulkan on lavapipe) | 1.1 s | 2 frames, 1 callback, 2 configures, 3 commits | the same, 35 threads |
+| `qml` (Qt 6.12, EGL on llvmpipe), still file | 0.4 s | 3 frames, 2 callbacks, 2 configures, 3 commits | the same, 34 threads |
+| `vkcube` 1.4.363, 120 frames, then leaves | | 121 commits, 120 frames, 119 callbacks | the same, 35 threads, after it left |
+| SlimeEngine's `window` (`dc4ceaa`), 120 frames, then leaves | | 121 commits, 121 frames, 119 callbacks | the same, 35 threads, after it left |
+| `vkcube` left to draw (the proof) | | | 600 frames, 600 callbacks, 600 commits, 1,200 wake-ups, 33,770 context switches: the check fails |
+
+All five draw through `wl_shm`; none uses `linux-dmabuf`.
+
+| What | Runs | Measured |
+|---|---|---|
+| `cargo test --test applications`, its two tests at once | 5 | 15.3 s each |
+| The same, on two cores (`taskset -c 0,1`), within `scripts/check.sh` | 2 | 15.7 and 16.1 s |
+| `scripts/check.sh`, warm, on two cores | 1 | 1 min 11 s |
+| The EGL race test before its fix, on two cores, 100 rounds a run | 20 | failed 9 times, hung once |
+| The same, on sixteen threads | 20 | never failed |
+| The same after the fix, on two cores | 27 | never failed |
+| SlimeEngine's `window` example, release, from nothing, in Yuna's shell | 1 | 58 s; a 26 MB binary |
+| What the applications add to the shell | 1 | 403 store paths, 1.34 GB unpacked |
+
 ## M1.4, Phase B2 — The protocols and the robustness tests (2026-11-12)
 
 Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), load average 6 to 9 from other
@@ -29,7 +58,7 @@ in it.
 CI's one job on GitHub's `ubuntu-24.04` runner, without a cache, from its start to its end:
 2 min 47 s for commit `2850e0b`, the first that builds Smithay's `wayland_frontend`,
 `desktop` and `renderer_gl` and runs the compositor's 20 in-process stories on llvmpipe; 1 min
-35 s to 1 min 51 s for the commits before it. The applications of B3 are not in the shell yet.
+35 s to 1 min 51 s for the commits before it. The applications of B3 were not in the shell yet.
 
 ## M1.4, Phase A — The layout model with real clients (2026-11-12)
 

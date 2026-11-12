@@ -24,7 +24,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0025](adr/0025-applications-in-ci.md)); B2's bounds in
   [ADR-0027](adr/0027-smithay-without-overflow-checks.md) and
-  [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md). Current: M1.4, Phase B3.
+  [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md); B3's in
+  [ADR-0029](adr/0029-the-rest-of-animated-applications.md). Current: M1.4, Phase B4.
 
 ## Status
 
@@ -120,22 +121,24 @@ milestone first needs it.
   frames and clock (ADR-0023), `xdg-shell`, `xdg-decoration` (ADR-0024), `wl_shm`, presentation
   time, a seat with a keyboard. B2 (done): popups, `xdg-activation`, `xdg-dialog`, `linux-dmabuf`,
   viewporter, fractional scale, data device, primary selection, `ext-data-control`; a cap on a
-  client's windows; misbehaving clients and random requests in tests. B3: the applications in CI
-  and the rest check on the program, the weekly SlimeEngine job (ADR-0025). B4: the measures.
+  client's windows; misbehaving clients and random requests in tests. B3 (done): the
+  applications in CI and the rest check on the program, the weekly SlimeEngine job (ADR-0025).
+  B4: the measures.
 - **Done when.** Alacritty, `gtk4-demo`, Qt's `qml` and `vkcube` run in Yuna in CI at each push, and
   SlimeEngine's `window` example in the weekly job; each draws nothing at rest by ADR-0025's
-  check; misbehaving clients never take Yuna down.
+  check, `vkcube` and `window` once they leave (ADR-0029); misbehaving clients never take Yuna
+  down.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
   machine ([measurements](measurements.md)).
-- **Where it stands** (2026-11-12). Phases A, B1 and B2 are done. B2's tests (89 in-process
-  stories, two proptests of 80 random request sequences each) found and fixed four defects: a
-  client that shrank a memfd it passed as a dmabuf killed Yuna with SIGBUS; a second role on one
-  surface, or a toplevel on a destroyed surface, corrupted Yuna's records; a client ended outside
-  a dispatch stayed shown and focused. llvmpipe imports dmabufs, so CI draws one. Alacritty ran in
-  `yuna --headless` at scales 1 and 1.5, told 180/120: 0 context switches in 10 s for both. What
-  falls short is in [debt](debt.md). Next: B3, in a new session. Delegated briefs and their
-  proofs are in `.delegation/` (local).
+- **Where it stands** (2026-11-12). Phases A, B1, B2 and B3 are done. B2's tests found and
+  fixed four defects: SIGBUS from a shrunk dmabuf memfd, corrupted records from second roles, a
+  client ended outside a dispatch left shown. In B3, each application runs in its own
+  `yuna --headless` in CI's job, all in about 15 s; Yuna then has 0 context switches in 10 s, and
+  `vkcube` left to draw fails the check. All draw through `wl_shm`. SlimeEngine's example runs in
+  a weekly workflow. A race that let Smithay terminate a shared EGL display under a starting
+  compositor is fixed. What falls short is in [debt](debt.md). Next: B4, in a new session.
+  Delegated briefs and their proofs are in `.delegation/` (local).
 
 ### M1.5 — Agents' control
 
@@ -149,7 +152,9 @@ milestone first needs it.
   ([ADR-0020](adr/0020-the-layout-models-shape.md)).
 - **Done when.** An agent, through MCP alone, opens one of SlimeEngine's examples (uwui's once it has
   some, [ADR-0025](adr/0025-applications-in-ci.md)), types, clicks and checks
-  the result by capture.
+  the result by capture. `vkcube`, paused by its space key, and SlimeEngine's `window` rest with
+  their window open, or the reason one cannot is written
+  ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - **Measured.** An MCP call's time; a capture's time on a 4K output.
 
 ### M1.6 — Emulated VRR and HDR
