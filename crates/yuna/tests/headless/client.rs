@@ -7,7 +7,7 @@
 
 mod buffers;
 
-pub use buffers::{ProtocolError, memory_file};
+pub use buffers::{ProtocolError, memory_file, sealed_memory_file};
 
 use std::fs::File;
 use std::io::Write;
@@ -45,6 +45,10 @@ pub struct Configure {
     pub height: i32,
     /// Sorted, so that tests compare sets.
     pub states: Vec<State>,
+    /// How many `preferred_scale` and `preferred_buffer_scale` events its window had when it
+    /// came: whether the window knew a new scale before the configure it draws for.
+    pub preferred_scales_before: usize,
+    pub preferred_buffer_scales_before: usize,
 }
 
 /// What `wp_presentation_feedback` said of one content update.
@@ -481,6 +485,8 @@ impl Dispatch<xdg_surface::XdgSurface, usize> for ClientState {
             let window = &mut state.windows[*index];
             let mut configure = window.pending.clone();
             configure.serial = serial;
+            configure.preferred_scales_before = window.preferred_scales.len();
+            configure.preferred_buffer_scales_before = window.preferred_buffer_scales.len();
             window.configures.push(configure);
         }
     }
@@ -510,10 +516,10 @@ impl Dispatch<xdg_toplevel::XdgToplevel, usize> for ClientState {
                 .collect();
             states.sort_by_key(|state| *state as u32);
             state.windows[*index].pending = Configure {
-                serial: 0,
                 width,
                 height,
                 states,
+                ..Configure::default()
             };
         }
     }

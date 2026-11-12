@@ -3,9 +3,10 @@
 //! (`linux-dmabuf`); and the protocol errors a misbehaving client gets.
 
 use std::fs::File;
+use std::io::Write;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
+use smithay::reexports::rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use wayland_client::protocol::wl_buffer;
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop, event_created_child};
 use wayland_protocols::wp::fractional_scale::v1::client::{
@@ -80,6 +81,45 @@ impl Client {
         dmabuf.create_params(&qh, ())
     }
 
+    /// Creates the `wl_buffer` of `params` at once (`create_immed`), `width` × `height` pixels of
+    /// `format`: a compositor that cannot use it ends the client with a protocol error.
+    pub fn create_dmabuf_buffer_at_once(
+        &mut self,
+        params: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
+        (width, height): (i32, i32),
+        format: u32,
+    ) -> wl_buffer::WlBuffer {
+        let qh = self.queue.handle();
+        params.create_immed(
+            width,
+            height,
+            format,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &qh,
+            (),
+        )
+    }
+
+    /// Attaches `buffer`, made elsewhere than `wl_shm` (a dmabuf's), of `width` × `height`
+    /// pixels, damaged whole.
+    pub fn attach_buffer(
+        &mut self,
+        window: usize,
+        buffer: &wl_buffer::WlBuffer,
+        width: i32,
+        height: i32,
+    ) {
+        let surface = &self.state.windows[window].surface;
+        surface.attach(Some(buffer), 0, 0);
+        surface.damage_buffer(0, 0, width, height);
+    }
+
+    /// Sends what the client wrote, without waiting for an answer: for requests the compositor
+    /// may answer with a protocol error, which a round trip cannot survive.
+    pub fn send(&mut self) {
+        self.queue.flush().expect("the client sends");
+    }
+
     /// Lets the compositor handle what the client sent until it answers with a protocol error,
     /// and returns it. Panics if none comes.
     pub fn protocol_error(&mut self, compositor: &mut Compositor) -> ProtocolError {
@@ -105,11 +145,31 @@ impl Client {
     }
 }
 
-/// A file of `size` bytes in memory, as a client hands it to the compositor.
+/// A file of `size` bytes in memory, as a client hands it to the compositor. Not sealed: its
+/// client may shrink it at any time.
 pub fn memory_file(size: u64) -> File {
     let fd = memfd_create("yuna-test-dmabuf", MemfdFlags::CLOEXEC).expect("a memfd");
     let file = File::from(fd);
     file.set_len(size).expect("the memfd takes its size");
+    file
+}
+
+/// A file in memory that holds `pixels`, `0xAARRGGBB` row by row, sealed so that it can never
+/// shrink (`F_SEAL_SHRINK`) nor take or lose a seal (`F_SEAL_SEAL`), as a client that shares
+/// memory safely seals it. Its content may still change.
+pub fn sealed_memory_file(pixels: &[u32]) -> File {
+    let fd = memfd_create(
+        "yuna-test-dmabuf",
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )
+    .expect("a memfd");
+    let mut file = File::from(fd);
+    let bytes: Vec<u8> = pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_le_bytes())
+        .collect();
+    file.write_all(&bytes).expect("the pixels are written");
+    fcntl_add_seals(&file, SealFlags::SHRINK | SealFlags::SEAL).expect("the memfd is sealed");
     file
 }
 

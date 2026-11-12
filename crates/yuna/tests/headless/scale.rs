@@ -11,7 +11,7 @@ use wayland_protocols::wp::viewporter::client::wp_viewport;
 use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 
-use crate::client::{Client, ProtocolError};
+use crate::client::{Client, ProtocolError, State};
 use crate::{
     BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, open_and_commit,
 };
@@ -222,7 +222,8 @@ fn a_viewport_destination_is_the_windows_size() {
 /// Story 4: two outputs side by side, of scale 1 and 2, each 1920 × 1080 at 60 Hz. A window
 /// opens on the first: its surface is told 120 (1 × 120), and no buffer scale, 1 being
 /// `wl_surface`'s default. Moved to the second through the layout, it is told 240 and a buffer
-/// scale of 2, once each.
+/// scale of 2, once each, before the one configure that gives its size there, so that its client
+/// draws the buffer that acknowledges it at scale 2.
 #[test]
 fn moving_to_an_output_of_another_scale_tells_the_new_scale_once() {
     let mut compositor = compositor_with(vec![hd_output(1.0), hd_output(2.0)]);
@@ -243,6 +244,7 @@ fn moving_to_an_output_of_another_scale_tells_the_new_scale_once() {
     assert_eq!(client.window(w).preferred_scales, vec![120]);
     assert!(client.window(w).preferred_buffer_scales.is_empty());
 
+    let configures = client.window(w).configures.len();
     compositor.change_layout(|layout| {
         layout
             .add_workspace(OWNER_SEAT, "two", Some(OutputId(2)))
@@ -256,6 +258,15 @@ fn moving_to_an_output_of_another_scale_tells_the_new_scale_once() {
     assert_eq!(info.output, Some(OutputId(2)));
     assert_eq!(client.window(w).preferred_scales, vec![120, 240]);
     assert_eq!(client.window(w).preferred_buffer_scales, vec![2]);
+    assert_eq!(client.window(w).configures.len(), configures + 1);
+    let moved = client.window(w).configures.last().expect("a configure");
+    assert_eq!(
+        (
+            moved.preferred_scales_before,
+            moved.preferred_buffer_scales_before
+        ),
+        (2, 1)
+    );
 
     // As a client at scale 2: it acknowledges its new size and draws at it.
     let asked = client
@@ -298,6 +309,60 @@ fn a_new_subsurface_is_told_its_windows_scale_at_its_first_commit() {
     client.roundtrip(&mut compositor);
     assert_eq!(client.subsurface(sub).preferred_buffer_scales, vec![2]);
     assert_eq!(client.window(a).preferred_buffer_scales, vec![2]);
+}
+
+/// Two outputs side by side, of scale 1 and 2, each 1920 × 1080 at 60 Hz. A window moved to the
+/// second is told a buffer scale of 2; then the second output shows another workspace, which
+/// hides the window, and the owner seat's active output becomes the first. A subsurface added to
+/// the hidden window is told, at its first commit, what its window was last told, a buffer scale
+/// of 2, rather than the active output's 1.
+#[test]
+fn a_subsurface_of_a_hidden_window_is_told_its_windows_last_scale() {
+    let mut compositor = compositor_with(vec![hd_output(1.0), hd_output(2.0)]);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = client.open_window(&mut compositor);
+    let asked = client.window(w).configures[0].clone();
+    client.ack(w);
+    client.attach(w, asked.width, asked.height, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 1));
+    compositor.change_layout(|layout| {
+        layout
+            .add_workspace(OWNER_SEAT, "two", Some(OutputId(2)))
+            .expect("the workspace is added");
+        layout
+            .move_to_workspace(OWNER_SEAT, "two")
+            .expect("the window moves");
+    });
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 2));
+    assert_eq!(client.window(w).preferred_buffer_scales, vec![2]);
+
+    compositor.change_layout(|layout| {
+        layout
+            .add_workspace(OWNER_SEAT, "three", Some(OutputId(2)))
+            .expect("the workspace is added");
+        layout
+            .focus_workspace(OWNER_SEAT, "three")
+            .expect("the workspace is shown");
+        layout
+            .focus_output(OWNER_SEAT, OutputId(1))
+            .expect("the first output is active");
+    });
+    advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 3));
+    let hidden = client.window(w).configures.last().expect("a configure");
+    assert!(hidden.states.contains(&State::Suspended));
+    assert_eq!(
+        compositor.layout().active_output(OWNER_SEAT),
+        Some(OutputId(1))
+    );
+
+    let sub = client.add_subsurface(w);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.subsurface(sub).preferred_buffer_scales, vec![2]);
+    assert_eq!(client.window(w).preferred_buffer_scales, vec![2]);
+    assert_rests(&mut compositor);
 }
 
 /// What a misbehaving client asks of its viewport.

@@ -64,8 +64,8 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
-    /// Whether a window closed, or a surface or a dmabuf's buffer was destroyed, since the last
-    /// round: their textures wait to be freed.
+    /// Whether a window closed, a surface or a dmabuf's buffer was destroyed, or a dmabuf was
+    /// imported for a client that left, since the last round: their textures wait to be freed.
     pub surfaces_gone: bool,
     pub counters: Counters,
     pub draw_hook: Option<DrawHook>,
@@ -159,8 +159,8 @@ impl State {
     }
 
     /// Frees the renderer's textures of the surfaces and dmabufs that went since the last round,
-    /// without drawing. A frame frees them too, but nothing draws for a hidden window that closes, and
-    /// its textures would stay in memory at rest.
+    /// without drawing. A frame frees them too, but nothing draws for a hidden window that closes,
+    /// and its textures would stay in memory at rest.
     pub(crate) fn release_textures(&mut self) {
         if std::mem::take(&mut self.surfaces_gone)
             && let Err(error) = self.renderer.cleanup_texture_cache()
@@ -202,10 +202,7 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
         on_commit_buffer_handler::<State>(surface);
-        let mut root = surface.clone();
-        while let Some(parent) = get_parent(&root) {
-            root = parent;
-        }
+        let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);
         if self.toplevels.contains_key(&root.id()) {
             self.toplevel_committed(&root, surface);
@@ -219,6 +216,16 @@ impl CompositorHandler for State {
             self.toplevel_gone(surface);
         }
     }
+}
+
+/// The root of the surface tree `surface` belongs to: itself, or the surface its subsurfaces
+/// hang from.
+pub(crate) fn tree_root(surface: &WlSurface) -> WlSurface {
+    let mut root = surface.clone();
+    while let Some(parent) = get_parent(&root) {
+        root = parent;
+    }
+    root
 }
 
 impl BufferHandler for State {

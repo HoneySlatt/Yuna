@@ -7,19 +7,22 @@
 //! A surface is told the scale of the output its window is shown on: when its fractional scale
 //! object is created, at its commits (in practice its first: a new surface, a new subsurface),
 //! and when its window enters an output. Only a change sends anything. A surface whose window is
-//! on no output keeps the last value it was told; before any, it is told the scale of the owner
-//! seat's active output, where a new window opens, else the first output's, so that a window's
-//! first buffer is drawn at the right scale.
+//! on no output keeps the last value it was told. One never told anything learns what the root
+//! of its tree was last told, so that a subsurface added to a hidden window matches its window;
+//! else, as a new window, the scale of the owner seat's active output, where a new window opens,
+//! else the first output's, so that a window's first buffer is drawn at the right scale.
+
+use std::cell::Cell;
 
 use smithay::desktop::utils::with_surfaces_surface_tree;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
-use smithay::wayland::compositor::{SurfaceData, get_parent, send_surface_state, with_states};
+use smithay::wayland::compositor::{SurfaceData, send_surface_state, with_states};
 use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
 use yuna_layout::OutputId;
 
-use crate::state::{OWNER_SEAT, State};
+use crate::state::{OWNER_SEAT, State, tree_root};
 
 /// What a surface is told of its output.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,29 +32,34 @@ struct Preferred {
     transform: Transform,
 }
 
+/// The last `Preferred` a surface was told, kept in its state's data map.
+#[derive(Debug, Default)]
+struct LastTold(Cell<Option<Preferred>>);
+
 impl State {
-    /// Tells every surface of the tree under `root` the scale of `output`, the output it is shown
-    /// on; with none, a surface keeps the last value it was told, or, never told any, learns the
-    /// active output's. It takes any tree's root, so that a popup's surfaces can be told the
-    /// output of their toplevel.
-    pub(crate) fn tell_preferred_scale(&self, root: &WlSurface, output: Option<OutputId>) {
-        let shown = output.and_then(|output| self.preferred_on(output));
-        let before_any = self.preferred_before_any();
-        with_surfaces_surface_tree(root, |surface, states| {
-            tell(surface, states, shown, before_any);
-        });
+    /// Tells every surface of the tree under `root` the scale of `output`, the output the tree is
+    /// shown on. It takes any tree's root, so that a popup's surfaces can be told the output of
+    /// their toplevel.
+    pub(crate) fn tell_preferred_scale(&self, root: &WlSurface, output: OutputId) {
+        let Some(preferred) = self.preferred_on(output) else {
+            return;
+        };
+        with_surfaces_surface_tree(root, |surface, states| tell(surface, states, preferred));
     }
 
-    /// Tells `surface` alone, in the tree under `root`, the scale of the output its tree is shown
-    /// on, as `tell_preferred_scale` does. Called at each commit: a surface never told its scale,
-    /// a new subsurface most often, learns it then; for the others nothing changed, and nothing
-    /// is sent.
+    /// Tells `surface`, in the tree under `root`, the scale of the output the tree is shown on.
+    /// Shown nowhere, the surface keeps what it was told, or, never told anything, learns
+    /// `preferred_never_told`. Called at each commit: a surface never told its scale, a new
+    /// subsurface most often, learns it then; for the others nothing changed, and nothing is sent.
     pub(crate) fn tell_surface_preferred_scale(&self, root: &WlSurface, surface: &WlSurface) {
-        let shown = self
-            .output_showing(root)
-            .and_then(|output| self.preferred_on(output));
-        let before_any = self.preferred_before_any();
-        with_states(surface, |states| tell(surface, states, shown, before_any));
+        let preferred = match self.output_showing(root) {
+            Some(output) => self.preferred_on(output),
+            None if with_states(surface, last_told).is_some() => return,
+            None => self.preferred_never_told(root),
+        };
+        if let Some(preferred) = preferred {
+            with_states(surface, |states| tell(surface, states, preferred));
+        }
     }
 
     /// The output the tree under `root` is shown on: its toplevel's, from the last arrangement.
@@ -69,12 +77,16 @@ impl State {
         })
     }
 
-    /// What a surface shown nowhere yet is told: the owner seat's active output, where new
-    /// windows open, else the first output.
-    fn preferred_before_any(&self) -> Option<Preferred> {
-        self.layout
-            .active_output(OWNER_SEAT)
-            .and_then(|output| self.preferred_on(output))
+    /// What a surface of the tree under `root`, shown nowhere and never told anything, learns:
+    /// what `root` was last told; else, as a new window, the owner seat's active output, where
+    /// new windows open; else the first output.
+    fn preferred_never_told(&self, root: &WlSurface) -> Option<Preferred> {
+        with_states(root, last_told)
+            .or_else(|| {
+                self.layout
+                    .active_output(OWNER_SEAT)
+                    .and_then(|output| self.preferred_on(output))
+            })
             .or_else(|| {
                 let first = self.outputs.first()?;
                 self.preferred_on(first.id)
@@ -82,21 +94,21 @@ impl State {
     }
 }
 
-/// Tells one surface `shown`, what the output its window is shown on prefers; with none,
-/// `before_any` if the surface was never told anything, and nothing otherwise. Each event goes
-/// out only when its value changes.
-fn tell(
-    surface: &WlSurface,
-    states: &SurfaceData,
-    shown: Option<Preferred>,
-    before_any: Option<Preferred>,
-) {
-    // The fractional scale state records the last scale told, whether or not the client made a
-    // fractional scale object; Yuna sets both events together, so it stands for both.
-    let told_before = with_fractional_scale(states, |state| state.preferred_scale().is_some());
-    let Some(preferred) = shown.or(if told_before { None } else { before_any }) else {
-        return;
-    };
+/// What the surface whose state is `states` was last told; none if it was never told anything.
+fn last_told(states: &SurfaceData) -> Option<Preferred> {
+    states
+        .data_map
+        .get::<LastTold>()
+        .and_then(|last| last.0.get())
+}
+
+/// Tells one surface `preferred`. Each event goes out only when its value changes.
+fn tell(surface: &WlSurface, states: &SurfaceData, preferred: Preferred) {
+    states
+        .data_map
+        .get_or_insert(LastTold::default)
+        .0
+        .set(Some(preferred));
     with_fractional_scale(states, |state| state.set_preferred_scale(preferred.scale));
     send_surface_state(
         surface,
@@ -110,16 +122,6 @@ fn tell(
 fn buffer_scale(scale: f64) -> i32 {
     // An output's scale is checked to lie within 0.25–8 when it is created.
     (scale.ceil() as i32).max(1)
-}
-
-/// The root of the surface tree `surface` belongs to: itself, or the surface its subsurfaces
-/// hang from.
-fn tree_root(surface: &WlSurface) -> WlSurface {
-    let mut root = surface.clone();
-    while let Some(parent) = get_parent(&root) {
-        root = parent;
-    }
-    root
 }
 
 impl FractionalScaleHandler for State {
