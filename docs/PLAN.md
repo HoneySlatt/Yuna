@@ -215,6 +215,3 @@ milestone first needs it.
   size it is given, and a deep dwindle tree can give windows a size of zero.
 - A scrolling column whose gaps leave no room gives all its windows a height of zero; M1.4, with
   clients' minimum sizes, decides what happens then.
-- The dwindle tree is walked by recursion: one tree of 100,000 windows overflows the stack and
-  takes the process down (10,000 work). M1.4 bounds a client's windows or removes the recursion
-  ([ADR-0020](adr/0020-the-layout-models-shape.md)).

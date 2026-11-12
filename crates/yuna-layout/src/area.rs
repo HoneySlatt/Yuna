@@ -9,7 +9,7 @@ pub(crate) struct Area {
     /// The whole output, in logical coordinates. Fullscreen windows take it.
     pub output: Rect,
     /// The part of the output tiled windows go in. The whole output today; panels' reserved
-    /// zones will narrow it when layer shell arrives (M1.4).
+    /// zones will narrow it when layer shell arrives.
     pub working: Rect,
     /// The output's scale.
     pub scale: Scale,

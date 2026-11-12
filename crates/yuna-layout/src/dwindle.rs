@@ -4,9 +4,8 @@
 //! The windows are the leaves of a binary tree; each inner node splits its rectangle in two at a
 //! ratio, side by side when the rectangle is wider than tall, one above the other otherwise. The
 //! direction is chosen from the shape at every arrangement, so a workspace moved to an output of
-//! another shape splits to suit it. The tree is as deep as it has windows at most, and the
-//! functions below recurse that deep: 10,000 windows in one tree work, 100,000 overflow the stack
-//! (debt in `docs/PLAN.md`).
+//! another shape splits to suit it. The tree is as deep as it has windows at most, so it is
+//! never walked by recursion ([`Tree`]).
 
 use crate::area::Area;
 use crate::geometry::{Rect, nearest_in_direction};
@@ -19,6 +18,9 @@ fn distance_to_rect(point: crate::geometry::Point, rect: &Rect) -> f64 {
     dx.hypot(dy)
 }
 
+/// The index of a node in its [`Tree`]'s vector.
+type NodeIndex = usize;
+
 /// A node of the tree.
 #[derive(Debug, Clone)]
 enum Node {
@@ -27,174 +29,323 @@ enum Node {
         /// The first child's share of the space, gap aside; strictly between 0 and 1.
         ratio: f64,
         /// Left or top.
-        first: Box<Node>,
+        first: NodeIndex,
         /// Right or bottom.
-        second: Box<Node>,
+        second: NodeIndex,
     },
 }
 
-impl Node {
-    fn split(first: Node, second: Node) -> Node {
-        Node::Split {
-            ratio: 0.5,
-            first: Box::new(first),
-            second: Box::new(second),
+/// A node and the split that holds it; none for the root.
+#[derive(Debug, Clone)]
+struct Slot {
+    node: Node,
+    parent: Option<NodeIndex>,
+}
+
+/// A binary tree whose nodes live in one vector and name each other by index. It is as deep as
+/// it has windows, so it is walked with loops and an explicit stack, never by recursion: its depth
+/// is bounded by memory alone, and dropping it frees one vector.
+#[derive(Debug, Clone, Default)]
+struct Tree {
+    /// Every node; a removed node leaves `None` until a new one takes its place.
+    slots: Vec<Option<Slot>>,
+    /// The indices of the `None` slots.
+    free: Vec<NodeIndex>,
+    root: Option<NodeIndex>,
+}
+
+impl Tree {
+    /// A chain of the windows in order: the first window, then a split of the second and the
+    /// rest, and so on, as if each split the one before. Built from the end, in linear time.
+    fn from_windows(windows: &[WindowId]) -> Tree {
+        let mut tree = Tree::default();
+        let mut rest = windows.iter().rev();
+        if let Some(&last) = rest.next() {
+            let mut chain = tree.insert(Node::Leaf(last), None);
+            for &window in rest {
+                let leaf = tree.insert(Node::Leaf(window), None);
+                chain = tree.join(leaf, chain);
+            }
+            tree.root = Some(chain);
+        }
+        tree
+    }
+
+    fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    fn slot(&self, index: NodeIndex) -> &Slot {
+        self.slots[index]
+            .as_ref()
+            .expect("a tree links only to live nodes")
+    }
+
+    fn slot_mut(&mut self, index: NodeIndex) -> &mut Slot {
+        self.slots[index]
+            .as_mut()
+            .expect("a tree links only to live nodes")
+    }
+
+    fn insert(&mut self, node: Node, parent: Option<NodeIndex>) -> NodeIndex {
+        let slot = Some(Slot { node, parent });
+        match self.free.pop() {
+            Some(index) => {
+                self.slots[index] = slot;
+                index
+            }
+            None => {
+                self.slots.push(slot);
+                self.slots.len() - 1
+            }
         }
     }
 
-    /// Pushes the leaves, left or top first.
-    fn collect_leaves(&self, out: &mut Vec<WindowId>) {
-        match self {
-            Node::Leaf(window) => out.push(*window),
-            Node::Split { first, second, .. } => {
-                first.collect_leaves(out);
-                second.collect_leaves(out);
-            }
-        }
+    fn remove(&mut self, index: NodeIndex) {
+        self.slots[index] = None;
+        self.free.push(index);
+    }
+
+    /// A new split of `first` and `second`, at half; they must have no parent yet.
+    fn join(&mut self, first: NodeIndex, second: NodeIndex) -> NodeIndex {
+        let split = self.insert(
+            Node::Split {
+                ratio: 0.5,
+                first,
+                second,
+            },
+            None,
+        );
+        self.slot_mut(first).parent = Some(split);
+        self.slot_mut(second).parent = Some(split);
+        split
+    }
+
+    /// The leaf that holds `window`, by a scan of the vector.
+    fn leaf(&self, window: WindowId) -> Option<NodeIndex> {
+        self.slots
+            .iter()
+            .position(|slot| matches!(slot, Some(Slot { node: Node::Leaf(w), .. }) if *w == window))
     }
 
     fn contains(&self, window: WindowId) -> bool {
-        match self {
-            Node::Leaf(w) => *w == window,
-            Node::Split { first, second, .. } => first.contains(window) || second.contains(window),
+        self.leaf(window).is_some()
+    }
+
+    /// The windows, left or top first.
+    fn windows(&self) -> Vec<WindowId> {
+        let mut out = Vec::new();
+        let mut stack: Vec<NodeIndex> = self.root.into_iter().collect();
+        while let Some(index) = stack.pop() {
+            match self.slot(index).node {
+                Node::Leaf(window) => out.push(window),
+                Node::Split { first, second, .. } => {
+                    stack.push(second);
+                    stack.push(first);
+                }
+            }
+        }
+        out
+    }
+
+    /// The window of the first (`first` true) or last leaf under `index`.
+    fn edge_leaf(&self, mut index: NodeIndex, first_side: bool) -> WindowId {
+        loop {
+            match self.slot(index).node {
+                Node::Leaf(window) => return window,
+                Node::Split { first, second, .. } => {
+                    index = if first_side { first } else { second };
+                }
+            }
         }
     }
 
-    fn first_leaf(&self) -> WindowId {
-        match self {
-            Node::Leaf(window) => *window,
-            Node::Split { first, .. } => first.first_leaf(),
-        }
+    /// Adds `window` as the root, the tree being empty.
+    fn set_only_leaf(&mut self, window: WindowId) {
+        let leaf = self.insert(Node::Leaf(window), None);
+        self.root = Some(leaf);
     }
 
-    fn last_leaf(&self) -> WindowId {
-        match self {
-            Node::Leaf(window) => *window,
-            Node::Split { second, .. } => second.last_leaf(),
-        }
-    }
-
-    /// Replaces the leaf `target` by a split of it and `new`, `new` second. Returns whether the
-    /// leaf was found.
+    /// Replaces the leaf of `target` by a split of it and `new`, `new` second. Returns whether
+    /// the leaf was found.
     fn split_leaf(&mut self, target: WindowId, new: WindowId) -> bool {
-        match self {
-            Node::Leaf(window) if *window == target => {
-                let old = std::mem::replace(self, Node::Leaf(new));
-                *self = Node::split(old, Node::Leaf(new));
-                true
-            }
-            Node::Leaf(_) => false,
-            Node::Split { first, second, .. } => {
-                first.split_leaf(target, new) || second.split_leaf(target, new)
-            }
-        }
+        let Some(leaf) = self.leaf(target) else {
+            return false;
+        };
+        // The leaf's slot becomes the split, so its parent's link stays right.
+        let first = self.insert(Node::Leaf(target), Some(leaf));
+        let second = self.insert(Node::Leaf(new), Some(leaf));
+        self.slot_mut(leaf).node = Node::Split {
+            ratio: 0.5,
+            first,
+            second,
+        };
+        true
     }
 
-    /// The tree without the leaf `window`: the leaf's sibling takes their parent's place.
-    fn without(self, window: WindowId) -> Option<Node> {
-        match self {
-            Node::Leaf(w) if w == window => None,
-            Node::Leaf(w) => Some(Node::Leaf(w)),
-            Node::Split {
-                ratio,
-                first,
-                second,
-            } => match (first.without(window), second.without(window)) {
-                (Some(first), Some(second)) => Some(Node::Split {
-                    ratio,
-                    first: Box::new(first),
-                    second: Box::new(second),
-                }),
-                (Some(only), None) | (None, Some(only)) => Some(only),
-                (None, None) => None,
-            },
+    /// Removes the leaf of `window`: its sibling takes their parent's place. Returns whether the
+    /// leaf was found.
+    fn remove_leaf(&mut self, window: WindowId) -> bool {
+        let Some(leaf) = self.leaf(window) else {
+            return false;
+        };
+        let Some(parent) = self.slot(leaf).parent else {
+            self.root = None;
+            self.remove(leaf);
+            return true;
+        };
+        let Node::Split { first, second, .. } = self.slot(parent).node else {
+            unreachable!("a parent is a split");
+        };
+        let sibling = if first == leaf { second } else { first };
+        let grandparent = self.slot(parent).parent;
+        self.slot_mut(sibling).parent = grandparent;
+        match grandparent {
+            None => self.root = Some(sibling),
+            Some(grandparent) => {
+                if let Node::Split { first, second, .. } = &mut self.slot_mut(grandparent).node {
+                    if *first == parent {
+                        *first = sibling;
+                    } else {
+                        *second = sibling;
+                    }
+                }
+            }
         }
+        self.remove(leaf);
+        self.remove(parent);
+        true
     }
 
     /// The leaf of `window`'s sibling subtree nearest to it: the sibling's last leaf when the
     /// window is second, its first leaf when the window is first.
     fn nearest_sibling_leaf(&self, window: WindowId) -> Option<WindowId> {
-        let Node::Split { first, second, .. } = self else {
+        let leaf = self.leaf(window)?;
+        let parent = self.slot(leaf).parent?;
+        let Node::Split { first, second, .. } = self.slot(parent).node else {
             return None;
         };
-        if matches!(**first, Node::Leaf(w) if w == window) {
-            return Some(second.first_leaf());
-        }
-        if matches!(**second, Node::Leaf(w) if w == window) {
-            return Some(first.last_leaf());
-        }
-        first
-            .nearest_sibling_leaf(window)
-            .or_else(|| second.nearest_sibling_leaf(window))
+        Some(if first == leaf {
+            self.edge_leaf(second, true)
+        } else {
+            self.edge_leaf(first, false)
+        })
     }
 
-    /// Exchanges the leaves `a` and `b`.
+    /// Exchanges the leaves of `a` and `b`.
     fn swap_leaves(&mut self, a: WindowId, b: WindowId) {
-        match self {
-            Node::Leaf(window) if *window == a => *window = b,
-            Node::Leaf(window) if *window == b => *window = a,
-            Node::Leaf(_) => {}
-            Node::Split { first, second, .. } => {
-                first.swap_leaves(a, b);
-                second.swap_leaves(a, b);
-            }
-        }
+        let (Some(leaf_a), Some(leaf_b)) = (self.leaf(a), self.leaf(b)) else {
+            return;
+        };
+        self.slot_mut(leaf_a).node = Node::Leaf(b);
+        self.slot_mut(leaf_b).node = Node::Leaf(a);
     }
 
+    /// Every window with its rectangle inside `rect`, left or top first.
     fn arrange(&self, rect: Rect, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
-        match self {
-            Node::Leaf(window) => out.push((*window, area.scale.snap_rect(rect))),
-            Node::Split {
-                ratio,
-                first,
-                second,
-            } => {
-                let gap = area.gap;
-                // Each part stays inside its parent, however deep the tree: below a gap's
-                // size, parts shrink to nothing rather than spill out.
-                let (a, b) = if rect.w > rect.h {
-                    let w = area.scale.snap(((rect.w - gap) * ratio).max(0.0));
-                    let second_x = (rect.x + w + gap).min(rect.right());
-                    (
-                        Rect::new(rect.x, rect.y, w.min(rect.w), rect.h),
-                        Rect::new(second_x, rect.y, rect.right() - second_x, rect.h),
-                    )
-                } else {
-                    let h = area.scale.snap(((rect.h - gap) * ratio).max(0.0));
-                    let second_y = (rect.y + h + gap).min(rect.bottom());
-                    (
-                        Rect::new(rect.x, rect.y, rect.w, h.min(rect.h)),
-                        Rect::new(rect.x, second_y, rect.w, rect.bottom() - second_y),
-                    )
-                };
-                first.arrange(a, area, out);
-                second.arrange(b, area, out);
+        let mut stack: Vec<(NodeIndex, Rect)> =
+            self.root.into_iter().map(|root| (root, rect)).collect();
+        while let Some((index, rect)) = stack.pop() {
+            match self.slot(index).node {
+                Node::Leaf(window) => out.push((window, area.scale.snap_rect(rect))),
+                Node::Split {
+                    ratio,
+                    first,
+                    second,
+                } => {
+                    let (a, b) = split_rect(rect, ratio, area);
+                    stack.push((second, b));
+                    stack.push((first, a));
+                }
             }
         }
     }
 
+    /// Checks the links: every split's children point back to it, the root has no parent, every
+    /// live node is reachable from the root, and every ratio is strictly between 0 and 1.
     fn check(&self) -> Result<(), String> {
-        match self {
-            Node::Leaf(_) => Ok(()),
-            Node::Split {
+        let live = self.slots.iter().filter(|slot| slot.is_some()).count();
+        if live + self.free.len() != self.slots.len() {
+            return Err("the dwindle tree's free list and its slots disagree".to_owned());
+        }
+        let mut reached = 0;
+        let mut stack: Vec<(NodeIndex, Option<NodeIndex>)> =
+            self.root.into_iter().map(|root| (root, None)).collect();
+        while let Some((index, parent)) = stack.pop() {
+            reached += 1;
+            if reached > live {
+                return Err("the dwindle tree has a cycle".to_owned());
+            }
+            let Some(slot) = self.slots.get(index).and_then(Option::as_ref) else {
+                return Err(format!("the dwindle tree links to a dead node {index}"));
+            };
+            if slot.parent != parent {
+                return Err(format!("node {index} does not point back to its parent"));
+            }
+            if let Node::Split {
                 ratio,
                 first,
                 second,
-            } => {
-                if !(*ratio > 0.0 && *ratio < 1.0) {
+            } = slot.node
+            {
+                if !(ratio > 0.0 && ratio < 1.0) {
                     return Err(format!("a split has ratio {ratio}"));
                 }
-                first.check()?;
-                second.check()
+                stack.push((first, Some(index)));
+                stack.push((second, Some(index)));
             }
         }
+        if reached != live {
+            return Err("the dwindle tree holds nodes its root does not reach".to_owned());
+        }
+        Ok(())
+    }
+
+    /// The tree's shape, in prefix order: a window for a leaf, `None` for a split.
+    #[cfg(test)]
+    fn shape(&self) -> Vec<Option<WindowId>> {
+        let mut out = Vec::new();
+        let mut stack: Vec<NodeIndex> = self.root.into_iter().collect();
+        while let Some(index) = stack.pop() {
+            match self.slot(index).node {
+                Node::Leaf(window) => out.push(Some(window)),
+                Node::Split { first, second, .. } => {
+                    out.push(None);
+                    stack.push(second);
+                    stack.push(first);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Splits `rect` in two at `ratio`, side by side when it is wider than tall, one above the other
+/// otherwise. Each part stays inside `rect`, however deep the tree: below a gap's size, parts
+/// shrink to nothing rather than spill out.
+fn split_rect(rect: Rect, ratio: f64, area: &Area) -> (Rect, Rect) {
+    let gap = area.gap;
+    if rect.w > rect.h {
+        let w = area.scale.snap(((rect.w - gap) * ratio).max(0.0));
+        let second_x = (rect.x + w + gap).min(rect.right());
+        (
+            Rect::new(rect.x, rect.y, w.min(rect.w), rect.h),
+            Rect::new(second_x, rect.y, rect.right() - second_x, rect.h),
+        )
+    } else {
+        let h = area.scale.snap(((rect.h - gap) * ratio).max(0.0));
+        let second_y = (rect.y + h + gap).min(rect.bottom());
+        (
+            Rect::new(rect.x, rect.y, rect.w, h.min(rect.h)),
+            Rect::new(rect.x, second_y, rect.w, rect.bottom() - second_y),
+        )
     }
 }
 
 /// The dwindle tree of one workspace, with its focus and its fullscreen or maximised window.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Dwindle {
-    root: Option<Node>,
+    tree: Tree,
     focused: Option<WindowId>,
     /// The window that covers the output, the tree left as it is beneath. One at most.
     fullscreen: Option<WindowId>,
@@ -205,21 +356,14 @@ pub(crate) struct Dwindle {
 
 impl Dwindle {
     /// Builds a tree from windows in order, each splitting the one before, the window at `focus`
-    /// focused (the last one without it). Each new window splits the previous one, so the tree is
-    /// a chain: the first window, then a split of the second and the rest, and so on. Built from
-    /// the end, in time linear in the windows.
+    /// focused (the last one without it), in time linear in the windows.
     pub fn from_windows(windows: &[WindowId], focus: Option<WindowId>) -> Dwindle {
-        let mut rest = windows.iter().rev();
-        let root = rest.next().map(|&last| {
-            rest.fold(Node::Leaf(last), |chain, &window| {
-                Node::split(Node::Leaf(window), chain)
-            })
-        });
+        let tree = Tree::from_windows(windows);
         let focused = focus
             .filter(|f| windows.contains(f))
             .or(windows.last().copied());
         Dwindle {
-            root,
+            tree,
             focused,
             ..Dwindle::default()
         }
@@ -227,21 +371,17 @@ impl Dwindle {
 
     /// Whether the tree holds no window.
     pub fn is_empty(&self) -> bool {
-        self.root.is_none()
+        self.tree.is_empty()
     }
 
     /// Every window, left or top first.
     pub fn windows(&self) -> Vec<WindowId> {
-        let mut out = Vec::new();
-        if let Some(root) = &self.root {
-            root.collect_leaves(&mut out);
-        }
-        out
+        self.tree.windows()
     }
 
     /// Whether `window` is a leaf.
     pub fn contains(&self, window: WindowId) -> bool {
-        self.root.as_ref().is_some_and(|root| root.contains(window))
+        self.tree.contains(window)
     }
 
     /// The focused window.
@@ -263,14 +403,14 @@ impl Dwindle {
     /// it, ending a maximised window; unless a window is fullscreen: then the new window opens
     /// behind it and focus stays, so that nothing takes a game's screen.
     pub fn add_window(&mut self, window: WindowId) {
-        match (&mut self.root, self.focused) {
-            (None, _) => self.root = Some(Node::Leaf(window)),
-            (Some(root), Some(focused)) => {
-                root.split_leaf(focused, window);
+        match (self.tree.root, self.focused) {
+            (None, _) => self.tree.set_only_leaf(window),
+            (Some(_), Some(focused)) => {
+                self.tree.split_leaf(focused, window);
             }
             (Some(root), None) => {
-                let last = root.last_leaf();
-                root.split_leaf(last, window);
+                let last = self.tree.edge_leaf(root, false);
+                self.tree.split_leaf(last, window);
             }
         }
         if self.fullscreen.is_none() {
@@ -285,23 +425,19 @@ impl Dwindle {
     /// is nearest the closed window's centre (Hyprland's `input:focus_on_close` 0); without an
     /// area to measure, to the nearest window of the sibling's part.
     pub fn remove_window(&mut self, window: WindowId, area: Option<&Area>) -> bool {
-        let Some(root) = self.root.take() else {
+        if !self.tree.contains(window) {
             return false;
-        };
+        }
         let mut before = Vec::new();
         if let Some(area) = area {
-            root.arrange(area.working.shrunk(area.gap), area, &mut before);
+            self.arrange_tree(area, &mut before);
         }
         let closed_centre = before
             .iter()
             .find(|(w, _)| *w == window)
             .map(|(_, r)| r.center());
-        let sibling_leaf = root.nearest_sibling_leaf(window);
-        let found = root.contains(window);
-        self.root = root.without(window);
-        if !found {
-            return false;
-        }
+        let sibling_leaf = self.tree.nearest_sibling_leaf(window);
+        self.tree.remove_leaf(window);
         if self.focused == Some(window) {
             // Hyprland lays the tree out again first, then takes the window nearest the closed
             // one's centre: the one now covering it, if any.
@@ -380,9 +516,7 @@ impl Dwindle {
         let (Some(focused), Some(next)) = (self.focused, self.neighbour(direction, area)) else {
             return;
         };
-        if let Some(root) = &mut self.root {
-            root.swap_leaves(focused, next);
-        }
+        self.tree.swap_leaves(focused, next);
     }
 
     /// Makes `window` fullscreen or not; returns whether it is here. One window at most covers
@@ -427,9 +561,7 @@ impl Dwindle {
 
     /// The tree's rectangles alone, before fullscreen and maximise.
     fn arrange_tree(&self, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
-        if let Some(root) = &self.root {
-            root.arrange(area.working.shrunk(area.gap), area, out);
-        }
+        self.tree.arrange(area.working.shrunk(area.gap), area, out);
     }
 
     /// Every window with its rectangle, in drawing order: the tree, then the maximised window
@@ -453,9 +585,7 @@ impl Dwindle {
     /// Checks the tree's own rules.
     pub fn check(&self) -> Result<(), String> {
         let windows = self.windows();
-        if let Some(root) = &self.root {
-            root.check()?;
-        }
+        self.tree.check()?;
         let mut sorted = windows.clone();
         sorted.sort_unstable_by_key(|w| w.0);
         sorted.dedup();
@@ -505,10 +635,38 @@ mod tests {
             one_by_one.add_window(window);
         }
         let at_once = Dwindle::from_windows(&windows, None);
-        assert_eq!(
-            format!("{:?}", at_once.root),
-            format!("{:?}", one_by_one.root)
-        );
+        assert_eq!(at_once.tree.shape(), one_by_one.tree.shape());
         assert_eq!(at_once.focused, one_by_one.focused);
+    }
+
+    /// Each new window splits the focused one, so a tree is as deep as it has windows. Nothing
+    /// walks it by recursion: a tree of 100,000 windows is built, arranged, checked, changed,
+    /// cloned and dropped without overflowing the stack.
+    #[test]
+    fn a_tree_as_deep_as_100_000_windows_does_not_overflow_the_stack() {
+        let count = 100_000;
+        let windows: Vec<WindowId> = (1..=count).map(WindowId).collect();
+        let mut tree = Dwindle::from_windows(&windows, None);
+        let area = Area {
+            output: Rect::new(0.0, 0.0, 2560.0, 1440.0),
+            working: Rect::new(0.0, 0.0, 2560.0, 1440.0),
+            gap: 16.0,
+            scale: crate::geometry::Scale::new(1.5).unwrap(),
+        };
+        let mut placed = Vec::new();
+        tree.arrange(&area, &mut placed);
+        assert_eq!(placed.len(), windows.len());
+        assert_eq!(tree.windows(), windows);
+        tree.check().unwrap();
+        tree.add_window(WindowId(count + 1));
+        assert!(tree.contains(WindowId(count + 1)));
+        assert!(tree.remove_window(WindowId(count + 1), Some(&area)));
+        // Past a dozen windows, sizes are zero: focus goes to the nearest by Hyprland's rule.
+        assert!(tree.focused_window().is_some_and(|w| tree.contains(w)));
+        tree.move_focused(Direction::Left, &area);
+        tree.check().unwrap();
+        let copy = tree.clone();
+        drop(tree);
+        drop(copy);
     }
 }
