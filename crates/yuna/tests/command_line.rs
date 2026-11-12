@@ -179,6 +179,9 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         "xdg_wm_base",
         "zxdg_decoration_manager_v1",
         "wp_presentation",
+        "wl_data_device_manager",
+        "zwp_primary_selection_device_manager_v1",
+        "ext_data_control_manager_v1",
     ] {
         assert!(
             globals.interfaces.contains(interface),

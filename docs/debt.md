@@ -47,3 +47,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Drag and drop is refused until the pointer comes (M1.5), with no answer to the client: its
   source is not cancelled. With a pointer, Smithay's default `dnd_requested` would cancel every
   drag; M1.5 implements it.
+- Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
+  loses the focus, and a device created after its client got the focus is told the selection
+  only at the next change. Both are Smithay's; neither leaks across seats.

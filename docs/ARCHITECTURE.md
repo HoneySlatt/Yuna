@@ -199,10 +199,10 @@ treated the same way.
 The clipboard and the primary selection belong to the owner's seat and follow its keyboard focus.
 Yuna holds no selection of its own.
 
-1. When a window gets the keyboard focus, its client gets the selections: each of its devices is
-   told what they hold, an offer with its MIME types, or nothing. When no window has the focus,
-   no client has them. Smithay reports only a new focus, so the frame loop gives them to no one
-   itself when the focus is cleared.
+1. When the keyboard focus moves to another client's window, that client gets the selections
+   just before its keyboard `enter`, as `wl_data_device` asks: each device it has is told what
+   they hold, an offer with its MIME types, or nothing. When no window has the focus, no client
+   has them. The frame loop does both where it moves the keyboard focus (`focus_keyboard`).
 2. Only the client with the focus may set them: Smithay ignores the request of any other. It does
    not check the serial the request names ([debt](debt.md)).
 3. A new selection is offered to the client with the focus, and to every `ext-data-control-v1`

@@ -226,12 +226,6 @@ impl SeatHandler for State {
     fn seat_state(&mut self) -> &mut SeatState<State> {
         &mut self.seat_state
     }
-
-    /// Smithay calls it when a surface gets the keyboard focus, not when the focus is cleared:
-    /// `focus_keyboard` (frames.rs) gives the selections to no one then.
-    fn focus_changed(&mut self, seat: &Seat<State>, focused: Option<&WlSurface>) {
-        self.give_selections_to(seat, focused);
-    }
 }
 
 /// Needed by Smithay's pointer on a `WlSurface`; no pointer constraint is offered yet.

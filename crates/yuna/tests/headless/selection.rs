@@ -396,6 +396,19 @@ fn a_data_control_client_that_breaks_the_protocol_leaves_alone() {
             Clipboard(None)
         ]
     );
+    // The manager reads what Yuna sent last: `used_source` (1), on its device.
+    if let Some(guard) = manager.client.connection().prepare_read() {
+        assert!(guard.read().is_err(), "the manager's connection ends");
+    }
+    let error = manager
+        .client
+        .connection()
+        .protocol_error()
+        .expect("the manager got a protocol error");
+    assert_eq!(
+        (error.object_interface.as_str(), error.code),
+        ("ext_data_control_device_v1", 1)
+    );
 
     let window = 0;
     focused.client.request_frame(window);
@@ -459,5 +472,54 @@ fn a_client_whose_window_closed_is_offered_nothing() {
         [Clipboard(Some(0)), Primary(None)]
     );
     assert_eq!(client.state.offers[0].mime_types, [TEXT]);
+    assert_rests(&mut compositor);
+}
+
+/// The client with the focus, whose sources hold both selections, leaves. Its window closes, so
+/// the focus goes to the other client's window at the next boundary: that client is told both
+/// selections are empty, as is the data-control client, and Yuna rests.
+#[test]
+fn the_selections_empty_when_the_focused_client_leaves() {
+    let mut compositor = manual_compositor();
+    let mut other = SelectionClient::connect(&mut compositor);
+    let mut focused = SelectionClient::connect(&mut compositor);
+    let mut manager = SelectionClient::connect_data_control(&mut compositor);
+    let start = compositor.now();
+    open_with_focus(&mut compositor, &mut other, BLUE, boundary(start, 1));
+    open_with_focus(&mut compositor, &mut focused, RED, boundary(start, 2));
+    focused.set_clipboard(&[TEXT], focused.enter_serial());
+    focused.set_primary(&[TEXT], focused.enter_serial());
+    focused.roundtrip(&mut compositor);
+    manager.roundtrip(&mut compositor);
+    assert_eq!(
+        manager.state.events,
+        [
+            ControlClipboard(None),
+            ControlPrimary(None),
+            ControlClipboard(Some(0)),
+            ControlPrimary(Some(1))
+        ]
+    );
+
+    drop(focused);
+    other.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut other.client, boundary(start, 3));
+    other.roundtrip(&mut compositor);
+    manager.roundtrip(&mut compositor);
+    assert_eq!(other.state.enters.len(), 2);
+    // Told at its first focus, then again when the focus came back.
+    assert_eq!(
+        other.state.events,
+        [
+            Clipboard(None),
+            Primary(None),
+            Clipboard(None),
+            Primary(None)
+        ]
+    );
+    assert_eq!(
+        manager.state.events[4..],
+        [ControlClipboard(None), ControlPrimary(None)]
+    );
     assert_rests(&mut compositor);
 }

@@ -310,22 +310,18 @@ impl State {
         }
     }
 
-    /// Gives the keyboard to the window the owner's seat focuses, and the selections with it.
+    /// Gives the keyboard to the window the owner's seat focuses, and the selections with it:
+    /// the selections first, for `wl_data_device` asks that a client be told the selection
+    /// just before its keyboard `enter`. Every change of the keyboard focus goes through here.
     fn focus_keyboard(&mut self) {
         let focus = self
             .layout
             .focused(OWNER_SEAT)
             .and_then(|window| self.root_of(window));
         if self.keyboard.current_focus() != focus {
+            self.give_selections_to(focus.as_ref());
             let keyboard = self.keyboard.clone();
-            let cleared = focus.is_none();
             keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
-            // Smithay's `focus_changed` gives the selections to a new focus, but is not called
-            // when the focus is cleared.
-            if cleared {
-                let seat = self.seat.clone();
-                self.give_selections_to(&seat, None);
-            }
         }
     }
 
