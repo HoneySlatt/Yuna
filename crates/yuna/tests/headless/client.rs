@@ -25,7 +25,9 @@ use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm,
     wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop};
+use wayland_client::{
+    Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
+};
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
 };
@@ -44,7 +46,7 @@ pub use wayland_protocols::wp::presentation_time::client::wp_presentation_feedba
 pub use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
 pub use wayland_protocols::xdg::shell::client::xdg_toplevel::State;
 
-pub use popups::{ConstraintAdjustment, Parent, Placement};
+pub use popups::{Anchor, ConstraintAdjustment, Gravity, Parent, Placement};
 
 /// One `xdg_surface.configure`, with the `xdg_toplevel.configure` that came before it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -81,6 +83,8 @@ pub struct Window {
     /// The toplevel configure waiting for its `xdg_surface.configure`.
     pending: Configure,
     pub configures: Vec<Configure>,
+    /// The serial it last acknowledged.
+    pub acked: Option<u32>,
     pub decoration_mode: Option<Mode>,
     /// The time each frame callback carried, in milliseconds.
     pub frames: Vec<u32>,
@@ -185,12 +189,21 @@ impl Client {
     /// Sends what the client wrote, lets the compositor handle it, and reads every event, until
     /// the compositor has answered all that came before.
     pub fn roundtrip(&mut self, compositor: &mut Compositor) {
+        if let Err(error) = self.try_roundtrip(compositor) {
+            panic!("the client's connection failed: {error}");
+        }
+    }
+
+    /// A roundtrip for a client that may break the protocol: the error that ended its
+    /// connection, a protocol error or another, rather than a panic. The compositor must still
+    /// dispatch.
+    pub fn try_roundtrip(&mut self, compositor: &mut Compositor) -> Result<(), DispatchError> {
         let target = self.state.syncs + 1;
         self.connection
             .display()
             .sync(&self.queue.handle(), CallbackKind::Sync);
         for _ in 0..100 {
-            self.queue.flush().expect("the client sends");
+            self.queue.flush()?;
             compositor
                 .dispatch(Some(Duration::ZERO))
                 .expect("the compositor dispatches");
@@ -199,17 +212,24 @@ impl Client {
                     Ok(_) => {}
                     Err(WaylandError::Io(error))
                         if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(error) => panic!("the client cannot read: {error}"),
+                    Err(error) => return Err(error.into()),
                 }
             }
-            self.queue
-                .dispatch_pending(&mut self.state)
-                .expect("the client dispatches");
+            self.queue.dispatch_pending(&mut self.state)?;
             if self.state.syncs >= target {
-                return;
+                return Ok(());
             }
         }
         panic!("the compositor did not answer");
+    }
+
+    /// Asks the compositor for an answer it writes into the socket, without ever reading it, as
+    /// a client that no longer reads does; false once the compositor has closed the connection.
+    pub fn sync_without_reading(&mut self) -> bool {
+        self.connection
+            .display()
+            .sync(&self.queue.handle(), CallbackKind::Sync);
+        self.queue.flush().is_ok()
     }
 
     /// Sends what the client wrote, without waiting for an answer: for a client that a protocol
@@ -251,8 +271,47 @@ impl Client {
             .as_ref()
             .expect("xdg_wm_base")
             .get_xdg_surface(&surface, &qh, index);
+        self.add_toplevel(surface, xdg_surface)
+    }
+
+    /// Gives the window's surface a second `xdg_toplevel`, on its own `xdg_surface` again when
+    /// `same_xdg_surface`, else on a second one: while its first lives, the client's protocol
+    /// error. The second toplevel is recorded as a window of its own. None when the client itself
+    /// destroyed the object it would be made from, and `wayland-client` cannot send the request.
+    pub fn create_second_toplevel(
+        &mut self,
+        window: usize,
+        same_xdg_surface: bool,
+    ) -> Option<usize> {
+        let qh = self.queue.handle();
+        let index = self.state.windows.len();
+        let first = &self.state.windows[window];
+        let surface = first.surface.clone();
+        let xdg_surface = if same_xdg_surface {
+            first.xdg_surface.clone()
+        } else {
+            self.state
+                .wm_base
+                .as_ref()
+                .expect("xdg_wm_base")
+                .get_xdg_surface(&surface, &qh, index)
+        };
+        xdg_surface
+            .is_alive()
+            .then(|| self.add_toplevel(surface, xdg_surface))
+    }
+
+    /// Records a new window: an `xdg_toplevel` on `xdg_surface`, with a decoration object.
+    fn add_toplevel(
+        &mut self,
+        surface: wl_surface::WlSurface,
+        xdg_surface: xdg_surface::XdgSurface,
+    ) -> usize {
+        let qh = self.queue.handle();
+        let index = self.state.windows.len();
         let toplevel = xdg_surface.get_toplevel(&qh, index);
-        let decoration = state
+        let decoration = self
+            .state
             .decorations
             .as_ref()
             .expect("zxdg_decoration_manager_v1")
@@ -264,6 +323,7 @@ impl Client {
             decoration,
             pending: Configure::default(),
             configures: Vec::new(),
+            acked: None,
             decoration_mode: None,
             frames: Vec::new(),
             feedback: Vec::new(),
@@ -277,9 +337,12 @@ impl Client {
 
     /// Acknowledges the window's last configure.
     pub fn ack(&mut self, window: usize) {
-        let window = &self.state.windows[window];
-        let serial = window.configures.last().expect("a configure").serial;
-        window.xdg_surface.ack_configure(serial);
+        let serial = self.state.windows[window]
+            .configures
+            .last()
+            .expect("a configure")
+            .serial;
+        self.ack_serial(window, serial);
     }
 
     /// Attaches a new buffer of `width` × `height` pixels of one colour, `0xAARRGGBB`, damaged
@@ -329,19 +392,23 @@ impl Client {
 
     /// A shared-memory buffer of `pixels`, `0xAARRGGBB`, row by row.
     fn buffer(&mut self, width: i32, height: i32, pixels: &[u32]) -> wl_buffer::WlBuffer {
+        let file = pixel_file(pixels);
+        self.shm_buffer(&file, (width, height), wl_shm::Format::Argb8888)
+    }
+
+    /// A shared-memory buffer of `width` × `height` pixels of `format`, four bytes each, from
+    /// the start of `file`. Its pool is destroyed at once: the buffer keeps the memory mapped.
+    fn shm_buffer(
+        &mut self,
+        file: &File,
+        (width, height): (i32, i32),
+        format: wl_shm::Format,
+    ) -> wl_buffer::WlBuffer {
         let qh = self.queue.handle();
         let stride = width * 4;
-        let fd = memfd_create("yuna-test-buffer", MemfdFlags::CLOEXEC).expect("a memfd");
-        let mut file = File::from(fd);
-        let bytes: Vec<u8> = pixels
-            .iter()
-            .flat_map(|pixel| pixel.to_le_bytes())
-            .collect();
-        file.write_all(&bytes).expect("the buffer is written");
         let shm = self.state.shm.as_ref().expect("wl_shm");
         let pool = shm.create_pool(file.as_fd(), stride * height, &qh, ());
-        let buffer =
-            pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &qh, ());
+        let buffer = pool.create_buffer(0, width, height, stride, format, &qh, ());
         pool.destroy();
         buffer
     }
@@ -404,11 +471,41 @@ impl Client {
         self.state.windows[window].surface.commit();
     }
 
+    /// Damages `width` × `height` pixels of the window's buffer, for the next commit, without a
+    /// new buffer: its content changed in place.
+    pub fn damage(&mut self, window: usize, width: i32, height: i32) {
+        self.state.windows[window]
+            .surface
+            .damage_buffer(0, 0, width, height);
+    }
+
+    /// Acknowledges `serial`, whatever it is: one never sent, or acknowledged already, is the
+    /// client's protocol error.
+    pub fn ack_serial(&mut self, window: usize, serial: u32) {
+        let window = &mut self.state.windows[window];
+        window.xdg_surface.ack_configure(serial);
+        window.acked = Some(serial);
+    }
+
     /// Asks a minimum size, for the next commit.
     pub fn set_min_size(&mut self, window: usize, width: i32, height: i32) {
         self.state.windows[window]
             .toplevel
             .set_min_size(width, height);
+    }
+
+    /// Asks a maximum size, for the next commit.
+    pub fn set_max_size(&mut self, window: usize, width: i32, height: i32) {
+        self.state.windows[window]
+            .toplevel
+            .set_max_size(width, height);
+    }
+
+    /// Sets the window geometry, for the next commit, whatever its values.
+    pub fn set_window_geometry(&mut self, window: usize, (x, y): (i32, i32), (w, h): (i32, i32)) {
+        self.state.windows[window]
+            .xdg_surface
+            .set_window_geometry(x, y, w, h);
     }
 
     /// Asks for fullscreen, or to leave it.
@@ -419,6 +516,11 @@ impl Client {
         } else {
             toplevel.unset_fullscreen();
         }
+    }
+
+    /// Asks to be maximised.
+    pub fn set_maximized(&mut self, window: usize) {
+        self.state.windows[window].toplevel.set_maximized();
     }
 
     /// Asks to leave the maximised state.
@@ -436,6 +538,23 @@ impl Client {
     /// Destroys the window's `wl_surface` alone, before its toplevel, as a client may.
     pub fn destroy_surface(&mut self, window: usize) {
         self.state.windows[window].surface.destroy();
+    }
+
+    /// Destroys the window's `xdg_surface` alone, before its toplevel: the client's protocol
+    /// error.
+    pub fn destroy_xdg_surface(&mut self, window: usize) {
+        self.state.windows[window].xdg_surface.destroy();
+    }
+
+    /// Destroys the window's `xdg_toplevel` alone: before its decoration object, the client's
+    /// protocol error; after it, the window is unmapped.
+    pub fn destroy_toplevel(&mut self, window: usize) {
+        self.state.windows[window].toplevel.destroy();
+    }
+
+    /// Destroys the window's decoration object alone.
+    pub fn destroy_decoration(&mut self, window: usize) {
+        self.state.windows[window].decoration.destroy();
     }
 
     /// Closes the window as a client does: its decoration object, then its toplevel, then its
@@ -683,4 +802,16 @@ impl Dispatch<wl_surface::WlSurface, SurfaceOwner> for ClientState {
 
 fn pixel_count(width: i32, height: i32) -> usize {
     usize::try_from(width * height).expect("a positive size")
+}
+
+/// A file in memory that holds `pixels`, `0xAARRGGBB` row by row, as `wl_shm` takes them.
+fn pixel_file(pixels: &[u32]) -> File {
+    let fd = memfd_create("yuna-test-buffer", MemfdFlags::CLOEXEC).expect("a memfd");
+    let mut file = File::from(fd);
+    let bytes: Vec<u8> = pixels
+        .iter()
+        .flat_map(|pixel| pixel.to_le_bytes())
+        .collect();
+    file.write_all(&bytes).expect("the buffer is written");
+    file
 }

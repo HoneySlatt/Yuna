@@ -16,6 +16,7 @@ tracing-subscriber.workspace = true
 yuna-layout = { path = "../yuna-layout" }
 
 [dev-dependencies]
+proptest.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 

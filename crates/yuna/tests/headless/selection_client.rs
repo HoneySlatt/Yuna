@@ -19,7 +19,8 @@ use wayland_client::protocol::{
     wl_registry, wl_seat, wl_surface,
 };
 use wayland_client::{
-    Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child,
+    Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, delegate_noop,
+    event_created_child,
 };
 use wayland_protocols::ext::data_control::v1::client::{
     ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_offer_v1,
@@ -198,11 +199,18 @@ impl SelectionClient {
 
     /// A roundtrip of the client, then the selection events it read.
     pub fn roundtrip(&mut self, compositor: &mut Compositor) {
+        if let Err(error) = self.try_roundtrip(compositor) {
+            panic!("the client's connection failed: {error}");
+        }
+    }
+
+    /// A roundtrip for a client that may break the protocol: the error that ended its
+    /// connection rather than a panic, as [`Client::try_roundtrip`].
+    pub fn try_roundtrip(&mut self, compositor: &mut Compositor) -> Result<(), DispatchError> {
         // The client's roundtrip reads every event sent before its answer, this queue's too.
-        self.client.roundtrip(compositor);
-        self.queue
-            .dispatch_pending(&mut self.state)
-            .expect("the client dispatches");
+        self.client.try_roundtrip(compositor)?;
+        self.queue.dispatch_pending(&mut self.state)?;
+        Ok(())
     }
 
     /// The serial of the last `wl_keyboard.enter`.

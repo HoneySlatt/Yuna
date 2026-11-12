@@ -280,6 +280,14 @@ impl Compositor {
         self.state.is_urgent(window)
     }
 
+    /// Checks that the layout and the shell agree on windows: each window Yuna gave an id is in
+    /// the layout exactly while a live toplevel holds it, and the reverse. For tests, beside
+    /// [`Layout::check_invariants`]; its cost grows with the windows.
+    #[doc(hidden)]
+    pub fn check_windows(&self) -> Result<(), String> {
+        self.state.check_windows()
+    }
+
     /// Whether the client of `window` said, with `xdg-dialog-v1`, that it is a modal dialog.
     /// False for a window that is not mapped.
     pub fn is_modal(&self, window: WindowId) -> bool {

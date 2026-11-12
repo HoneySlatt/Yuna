@@ -13,6 +13,11 @@ impl Client {
         self.state.windows[window].toplevel.set_parent(Some(parent));
     }
 
+    /// Makes `window` a dialog of no window.
+    pub fn clear_parent(&mut self, window: usize) {
+        self.state.windows[window].toplevel.set_parent(None);
+    }
+
     /// Gets `window`'s `xdg_dialog_v1` object.
     pub fn get_dialog(&mut self, window: usize) -> usize {
         let qh = self.queue.handle();

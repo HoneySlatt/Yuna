@@ -29,6 +29,19 @@ impl Client {
         serial: Option<u32>,
         surface: Option<&wl_surface::WlSurface>,
     ) -> String {
+        let index = self.ask_token(serial, surface);
+        self.roundtrip(compositor);
+        self.token(index).expect("a token").to_owned()
+    }
+
+    /// Asks an activation token, with the seat's `serial` and for `surface` when given, without
+    /// waiting for it, and returns its index for [`Client::token`]. Its object is destroyed once
+    /// the token comes.
+    pub fn ask_token(
+        &mut self,
+        serial: Option<u32>,
+        surface: Option<&wl_surface::WlSurface>,
+    ) -> usize {
         let qh = self.queue.handle();
         let index = self.state.tokens.len();
         self.state.tokens.push(None);
@@ -45,9 +58,17 @@ impl Client {
             token.set_surface(surface);
         }
         token.commit();
-        self.roundtrip(compositor);
-        token.destroy();
-        self.state.tokens[index].clone().expect("a token")
+        index
+    }
+
+    /// The token asked `index`th, once it came.
+    pub fn token(&self, index: usize) -> Option<&str> {
+        self.state.tokens.get(index)?.as_deref()
+    }
+
+    /// How many tokens the client asked.
+    pub fn tokens_asked(&self) -> usize {
+        self.state.tokens.len()
     }
 
     /// Asks that `window` be activated with `token`.
@@ -68,7 +89,7 @@ impl Client {
 impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, usize> for ClientState {
     fn event(
         state: &mut Self,
-        _: &xdg_activation_token_v1::XdgActivationTokenV1,
+        proxy: &xdg_activation_token_v1::XdgActivationTokenV1,
         event: xdg_activation_token_v1::Event,
         index: &usize,
         _: &Connection,
@@ -76,6 +97,7 @@ impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, usize> for ClientSt
     ) {
         if let xdg_activation_token_v1::Event::Done { token } = event {
             state.tokens[*index] = Some(token);
+            proxy.destroy();
         }
     }
 }

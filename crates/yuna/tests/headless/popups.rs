@@ -27,7 +27,8 @@ fn menu() -> Placement {
     Placement::below_right((200, 100), (10, 10, 1, 1))
 }
 
-fn pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
+/// The pixel at (`x`, `y`) of the default output's last frame: R, G, B, A.
+pub(crate) fn pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
     let bytes = compositor
         .read_pixels(OUTPUT, Rectangle::new((x, y).into(), (1, 1).into()))
         .expect("the pixel reads");

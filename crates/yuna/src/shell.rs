@@ -11,7 +11,9 @@
 //! a configure, as xdg-shell asks, even when the layout refuses them or nothing changes. A window
 //! the layout refuses to open, or that would pass a cap on windows ([`MAX_WINDOWS_PER_CLIENT`],
 //! [`MAX_WINDOWS`]), is not shown; its client gets frame callbacks at the hidden windows' rate.
-//! Popups are in `popups.rs`; activation requests, in `activation.rs`.
+//! A second `xdg_toplevel` on a surface whose first lives ends its client with xdg-shell's
+//! `already_constructed`, which Smithay does not send; one on a surface its client destroyed is
+//! ignored. Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -19,7 +21,7 @@ use std::time::Duration;
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::utils::bbox_from_surface_tree;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{Logical, Rectangle, Serial};
@@ -27,7 +29,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelStateSet, ToplevelSurface,
-    XdgShellHandler, XdgShellState,
+    XdgShellHandler, XdgShellState, XdgShellSurfaceUserData,
 };
 use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
@@ -181,6 +183,19 @@ fn committed_size(geometry: Rectangle<i32, Logical>) -> Option<Size> {
     };
     let valid = |side: f64| side > 0.0 && side <= MAX_SIZE;
     (valid(size.w) && valid(size.h)).then_some(size)
+}
+
+/// Ends the client that gave a surface a second role object of a kind it has a live one of
+/// already, an `xdg_toplevel` or an `xdg_popup`, with xdg-shell's `already_constructed` on the
+/// new object's `xdg_surface`. Smithay refuses a surface another role, but gives it the one it
+/// has again, while xdg-shell allows one role object at a time.
+pub(crate) fn refuse_second_role(role: &impl Resource) {
+    if let Some(data) = role.data::<XdgShellSurfaceUserData>() {
+        data.xdg_surface().post_error(
+            xdg_surface::Error::AlreadyConstructed,
+            "the surface has a live role object of this kind already",
+        );
+    }
 }
 
 fn has_buffer(surface: &WlSurface) -> bool {
@@ -523,6 +538,53 @@ impl State {
         }
     }
 
+    /// Checks that the layout and the shell agree, for tests: each window Yuna gave an id holds
+    /// it in the layout exactly while a live toplevel holds it, each output's workspaces hold
+    /// only such windows, and each toplevel Yuna keeps is alive. Says which rule is broken.
+    pub(crate) fn check_windows(&self) -> Result<(), String> {
+        for (&window, surface) in &self.windows {
+            let toplevel = self
+                .toplevels
+                .get(surface)
+                .ok_or_else(|| format!("window {} has no toplevel", window.0))?;
+            if toplevel.window != Some(window) {
+                return Err(format!(
+                    "window {}'s toplevel holds {:?}",
+                    window.0, toplevel.window
+                ));
+            }
+            if self.layout.window(window).is_none() {
+                return Err(format!("window {} is not in the layout", window.0));
+            }
+        }
+        for (surface, toplevel) in &self.toplevels {
+            if !toplevel.surface.alive() {
+                return Err(format!("the toplevel of {surface} is dead"));
+            }
+            if let Some(window) = toplevel.window
+                && self.windows.get(&window) != Some(surface)
+            {
+                return Err(format!("{surface}'s window {} is not recorded", window.0));
+            }
+        }
+        let given = (1..self.next_window_id).map(WindowId);
+        let listed = self
+            .outputs
+            .iter()
+            .filter_map(|output| self.layout.workspaces(output.id).ok())
+            .flatten()
+            .flat_map(|workspace| workspace.windows);
+        for window in given.chain(listed) {
+            if self.layout.window(window).is_some() && !self.windows.contains_key(&window) {
+                return Err(format!(
+                    "the layout holds window {}, which no toplevel has",
+                    window.0
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Answers a request made before the window is mapped: after its first configure, with a new
     /// one that carries what it asked; before, the first configure will.
     fn answer_before_mapping(&mut self, root: &WlSurface) {
@@ -542,13 +604,32 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        // The configure waits for the initial commit, where the client's limits are known.
         let id = surface.wl_surface().id();
+        // A second toplevel would replace Yuna's record of the first, whose window would then
+        // stay in the layout for ever.
+        if self.toplevels.contains_key(&id) {
+            refuse_second_role(surface.xdg_toplevel());
+            return;
+        }
+        // Smithay makes a toplevel on an `xdg_surface` whose surface its client destroyed: there
+        // is nothing to show, and a record of it would outlive the surface.
+        if !surface.wl_surface().is_alive() {
+            tracing::debug!("a toplevel on a destroyed surface is ignored");
+            return;
+        }
+        // The configure waits for the initial commit, where the client's limits are known.
         self.toplevels.insert(id, Toplevel::new(surface));
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        self.toplevel_gone(surface.wl_surface());
+        // A second toplevel Yuna refused is not the one it keeps for the surface.
+        let kept = self
+            .toplevels
+            .get(&surface.wl_surface().id())
+            .is_some_and(|toplevel| toplevel.surface.xdg_toplevel() == surface.xdg_toplevel());
+        if kept {
+            self.toplevel_gone(surface.wl_surface());
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {

@@ -58,6 +58,21 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   popups slows those two requests for every client, until it destroys them.
 - Smithay passes on only the activation tokens it keeps: a token used already, or pushed out by
   64 newer ones of its client, is ignored without marking its window urgent.
+- Activation tokens of a client that left are kept, as a launcher's must be for the program it
+  starts, and nothing bounds them: Yuna's bound of 64 is per client, and Smithay keeps a token
+  until it is used. A client that connects again and again, asking 64 tokens each time, grows
+  them without end, against [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)'s intent.
+  A bound on the tokens of clients gone, the oldest pushed out, would close it; it changes
+  ADR-0028, so it waits for the owner's decision.
+- A client the display ends outside a dispatch, when Yuna draws its buffer (SIGBUS) or sends it
+  an event its full buffer cannot take, is freed only at the next dispatch that reads a client:
+  its windows stay in the layout, and the focus with them, until any client sends something.
+  wayland-backend frees ended clients only after reading one; `Backend::dispatch_single_client`
+  frees them at once, and could be called after the deadlines run.
+- Smithay `8fd9fe0` gives a surface the role it has again: a second `xdg_toplevel` or
+  `xdg_popup` while the first lives, which xdg-shell forbids. Yuna refuses it itself, with
+  `xdg_surface.already_constructed`; for a second `xdg_surface` on the surface, xdg-shell names
+  `xdg_wm_base.role`, which Yuna cannot send: Smithay keeps the `xdg_wm_base` to itself.
 - Until M1.5 brings input, only a keyboard `enter` serial makes an activation token or a popup
   grab valid; key, button and touch serials come with input.
 - The modal hint of `xdg-dialog-v1` is read but not used: a modal dialog does not yet keep its

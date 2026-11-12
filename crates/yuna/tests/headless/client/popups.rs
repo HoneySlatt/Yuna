@@ -35,6 +35,8 @@ pub struct Placement {
     pub anchor: Anchor,
     pub gravity: Gravity,
     pub adjustment: ConstraintAdjustment,
+    /// Added to the place the rules give.
+    pub offset: (i32, i32),
 }
 
 impl Placement {
@@ -47,6 +49,7 @@ impl Placement {
             anchor: Anchor::BottomRight,
             gravity: Gravity::BottomRight,
             adjustment: ConstraintAdjustment::empty(),
+            offset: (0, 0),
         }
     }
 }
@@ -56,6 +59,9 @@ impl Placement {
 pub enum Parent {
     Window(usize),
     Popup(usize),
+    /// None given: the popup must get one before its first commit, else that commit is its
+    /// client's protocol error.
+    Unset,
 }
 
 /// A popup and what it received.
@@ -66,6 +72,8 @@ pub struct Popup {
     /// The popup configure waiting for its `xdg_surface.configure`.
     pending: PopupConfigure,
     pub configures: Vec<PopupConfigure>,
+    /// The serial it last acknowledged.
+    pub acked: Option<u32>,
     pub repositioned: Vec<u32>,
     /// Whether it got `popup_done`.
     pub done: bool,
@@ -92,6 +100,7 @@ impl Popup {
             popup,
             pending: PopupConfigure::default(),
             configures: Vec::new(),
+            acked: None,
             repositioned: Vec::new(),
             done: false,
             frames: Vec::new(),
@@ -112,6 +121,11 @@ impl Client {
         &self.state.popups[index]
     }
 
+    /// How many popups the client created.
+    pub fn popup_count(&self) -> usize {
+        self.state.popups.len()
+    }
+
     /// Creates a popup on `parent`, placed as `placement` says, before its initial commit.
     pub fn create_popup(&mut self, parent: Parent, placement: Placement) -> usize {
         let qh = self.queue.handle();
@@ -125,12 +139,8 @@ impl Client {
             .expect("wl_compositor")
             .create_surface(&qh, PopupIndex(index));
         let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, PopupIndex(index));
-        let parent_xdg_surface = match parent {
-            Parent::Window(window) => &state.windows[window].xdg_surface,
-            Parent::Popup(popup) => &state.popups[popup].xdg_surface,
-        };
         let popup = xdg_surface.get_popup(
-            Some(parent_xdg_surface),
+            self.parent_xdg_surface(parent),
             &positioner,
             &qh,
             PopupIndex(index),
@@ -202,9 +212,10 @@ impl Client {
 
     /// Acknowledges the popup's last configure.
     pub fn ack_popup(&mut self, popup: usize) {
-        let popup = &self.state.popups[popup];
+        let popup = &mut self.state.popups[popup];
         let serial = popup.configures.last().expect("a configure").serial;
         popup.xdg_surface.ack_configure(serial);
+        popup.acked = Some(serial);
     }
 
     /// Attaches a new buffer of `width` × `height` pixels of one colour, `0xAARRGGBB`.
@@ -289,7 +300,17 @@ impl Client {
         positioner.set_anchor(placement.anchor);
         positioner.set_gravity(placement.gravity);
         positioner.set_constraint_adjustment(placement.adjustment);
+        positioner.set_offset(placement.offset.0, placement.offset.1);
         positioner
+    }
+
+    /// The `xdg_surface` a popup on `parent` names; none for [`Parent::Unset`].
+    fn parent_xdg_surface(&self, parent: Parent) -> Option<&xdg_surface::XdgSurface> {
+        match parent {
+            Parent::Window(window) => Some(&self.state.windows[window].xdg_surface),
+            Parent::Popup(popup) => Some(&self.state.popups[popup].xdg_surface),
+            Parent::Unset => None,
+        }
     }
 
     /// Destroys the popup as a client does: its `xdg_popup`, then its `xdg_surface`, then its
@@ -299,6 +320,64 @@ impl Client {
         popup.popup.destroy();
         popup.xdg_surface.destroy();
         popup.surface.destroy();
+    }
+
+    /// Destroys the popup's `xdg_popup` alone, its role object: the popup is gone, its surface
+    /// and `xdg_surface` stay.
+    pub fn destroy_popup_role(&mut self, popup: usize) {
+        self.state.popups[popup].popup.destroy();
+    }
+
+    /// Destroys the popup's `xdg_surface` alone: before its `xdg_popup`, the client's protocol
+    /// error.
+    pub fn destroy_popup_xdg_surface(&mut self, popup: usize) {
+        self.state.popups[popup].xdg_surface.destroy();
+    }
+
+    /// Destroys the popup's surface alone.
+    pub fn destroy_popup_surface(&mut self, popup: usize) {
+        self.state.popups[popup].surface.destroy();
+    }
+
+    /// Asks a popup role for the surface of `window`, a toplevel's already, on `parent`: a
+    /// second role on one surface, the client's protocol error. The popup is recorded as one of
+    /// its own.
+    pub fn create_popup_on_window_surface(&mut self, window: usize, parent: Parent) -> usize {
+        let window = &self.state.windows[window];
+        let (surface, xdg_surface) = (window.surface.clone(), window.xdg_surface.clone());
+        self.create_popup_role_on(surface, xdg_surface, parent)
+    }
+
+    /// Asks a second popup role for the surface of `popup`, while its first lives, on `parent`:
+    /// the client's protocol error. The second is recorded as a popup of its own.
+    pub fn create_popup_on_popup_surface(&mut self, popup: usize, parent: Parent) -> usize {
+        let popup = &self.state.popups[popup];
+        let (surface, xdg_surface) = (popup.surface.clone(), popup.xdg_surface.clone());
+        self.create_popup_role_on(surface, xdg_surface, parent)
+    }
+
+    /// An `xdg_popup` of 10 × 10 on `xdg_surface`, the `xdg_surface` of `surface`, which has a
+    /// role already.
+    fn create_popup_role_on(
+        &mut self,
+        surface: wl_surface::WlSurface,
+        xdg_surface: xdg_surface::XdgSurface,
+        parent: Parent,
+    ) -> usize {
+        let qh = self.queue.handle();
+        let index = self.state.popups.len();
+        let positioner = self.positioner(Placement::below_right((10, 10), (0, 0, 1, 1)));
+        let popup = xdg_surface.get_popup(
+            self.parent_xdg_surface(parent),
+            &positioner,
+            &qh,
+            PopupIndex(index),
+        );
+        positioner.destroy();
+        self.state
+            .popups
+            .push(Popup::new(surface, xdg_surface, popup));
+        index
     }
 }
 

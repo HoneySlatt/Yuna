@@ -23,7 +23,7 @@ One Cargo workspace; its crates live in `crates/`.
   `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
   its logs; `yuna-layout`. Its tests use `wayland-client` and `wayland-protocols`' client side,
-  staging protocols included.
+  staging protocols included, and proptest, without its default features.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers.
@@ -160,7 +160,11 @@ from the rate each time, so that errors never add up.
 
 ### A window's life
 
-1. A client creates an `xdg_toplevel`; Yuna records it and waits.
+1. A client creates an `xdg_toplevel`; Yuna records it and waits. A second `xdg_toplevel` on a
+   surface whose first lives ends its client with xdg-shell's `already_constructed`: Smithay
+   gives a surface its role again ([debt](debt.md)), and Yuna's record of the first would be
+   lost, its window left in the layout for ever. A toplevel on an `xdg_surface` whose surface
+   its client destroyed has nothing to show, and is not recorded.
 2. Its initial commit: Yuna reads its limits and parent, asks `Layout::size_on_open` and sends
    the first configure: that size, tiled on all four edges
    ([ADR-0024](adr/0024-no-title-bars.md)), decorations on the server's side.
@@ -201,7 +205,8 @@ its place relative to the toplevel's window geometry.
    The cap on popups bounds Smithay's walks over a window's popups, and Yuna's, which are linear
    and run at each of its commits and refresh boundaries
    ([ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)). A new popup is told its window's scale
-   at once ([Scale](#scale)).
+   at once ([Scale](#scale)). A second `xdg_popup` on a surface whose first lives ends its client,
+   as a second toplevel does.
 2. Its initial commit gets its configure; its first buffer shows it. A `reposition` request
    places it again and is answered with `repositioned` and a configure, or dismisses it when it
    can no longer be placed. A commit without a buffer unmaps it: Smithay resets its role, its
@@ -360,6 +365,26 @@ the event loop watches, so that the loop returns and the socket is removed.
   selections), each test a short story with exact figures: the windows' in `main.rs`, then one
   file per subject (`popups.rs`, `activation.rs`, `dialogs.rs`, `window_cap.rs`, `scale.rs`,
   `dmabuf.rs`, `selection.rs`).
+- `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
+  pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
+  (SIGBUS, which Smithay turns into a protocol error), leave mid-frame or holding a grab, a
+  selection and tokens, flood with 10,000 commits, or never read their socket. Each story ends
+  the same way: Yuna still dispatches, the layout keeps its invariants and agrees with the shell
+  (`Compositor::check_windows`, hidden from the documentation, for tests), a well-behaved
+  *sentinel* client gets its next frame callback at the exact boundary, and Yuna rests.
+- `random_requests.rs` in it: proptest's random sequences of up to 99 steps. Up to three clients
+  send any request with any values: toplevels, acknowledgements, buffers of 1 to 2,048 pixels a
+  side, limits, geometry, fullscreen, maximise, parents, popups with any positioner, grabs,
+  activation tokens, viewports, fractional scale, selections, destruction in any order,
+  departure, second roles; the test moves the clock by up to 2 s and presses key bindings. A
+  request that breaks the protocol ends its client, which is allowed. Half the sequences start
+  from a busy state: three clients with a window, a dialog and a menu each. After each step Yuna
+  must dispatch, and the layout keep its invariants and agree with the shell; after the
+  sequence, the sentinel, focused by a key binding, gets its frame callback at the next
+  boundary, and Yuna rests once every client has gone. It runs the seeds kept in
+  `random_requests.proptest-regressions`, then 160 cases, which took 9.5 to 10.0 s in three runs
+  of a debug build on the development machine (16 threads; alone among measurements, but other
+  work ran); `PROPTEST_CASES=<n>` runs more ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 

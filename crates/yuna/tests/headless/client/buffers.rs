@@ -1,13 +1,14 @@
 //! The test client's side of how buffers are sized and shared beyond plain shared memory:
 //! viewports (`wp_viewporter`), fractional scale (`wp_fractional_scale_v1`) and dmabufs
-//! (`linux-dmabuf`); and the protocol errors a misbehaving client gets.
+//! (`linux-dmabuf`); the buffers a misbehaving client attaches (of any size, at an offset, in a
+//! pool it shrinks); and the protocol errors it gets.
 
 use std::fs::File;
 use std::io::Write;
 use std::time::Duration;
 
 use smithay::reexports::rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
-use wayland_client::protocol::wl_buffer;
+use wayland_client::protocol::{wl_buffer, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop, event_created_child};
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
@@ -59,6 +60,20 @@ impl Client {
     /// Sets the source of the window's viewport, in buffer pixels, for the next commit.
     pub fn set_viewport_source(&mut self, window: usize, (x, y): (f64, f64), (w, h): (f64, f64)) {
         self.viewport(window).set_source(x, y, w, h);
+    }
+
+    /// Destroys the window's `wp_viewport`, if it has one.
+    pub fn destroy_viewport(&mut self, window: usize) {
+        if let Some(viewport) = self.state.windows[window].viewport.take() {
+            viewport.destroy();
+        }
+    }
+
+    /// Destroys the window's `wp_fractional_scale_v1`, if it has one.
+    pub fn destroy_fractional_scale(&mut self, window: usize) {
+        if let Some(fractional_scale) = self.state.windows[window].fractional_scale.take() {
+            fractional_scale.destroy();
+        }
     }
 
     fn viewport(&self, window: usize) -> &wp_viewport::WpViewport {
@@ -114,6 +129,48 @@ impl Client {
         surface.damage_buffer(0, 0, width, height);
     }
 
+    /// Attaches a new buffer of `width` × `height` opaque black pixels to `surface`, a window's or
+    /// a popup's, damaged whole: `Xrgb8888` zeros, in a file never written, so that its cost does
+    /// not grow with its size on the client's side.
+    pub fn attach_black(&mut self, surface: &wl_surface::WlSurface, width: i32, height: i32) {
+        let file = memory_file(byte_count(width, height));
+        let buffer = self.shm_buffer(&file, (width, height), wl_shm::Format::Xrgb8888);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, width, height);
+    }
+
+    /// Attaches a new buffer of `width` × `height` pixels of `argb` to `surface` at `offset`, as
+    /// `wl_surface.attach` takes one: from `wl_surface` version 5 on, any offset but (0, 0) is
+    /// the client's protocol error.
+    pub fn attach_at_offset(
+        &mut self,
+        surface: &wl_surface::WlSurface,
+        (width, height): (i32, i32),
+        argb: u32,
+        (dx, dy): (i32, i32),
+    ) {
+        let pixels = vec![argb; super::pixel_count(width, height)];
+        let buffer = self.buffer(width, height, &pixels);
+        surface.attach(Some(&buffer), dx, dy);
+        surface.damage_buffer(0, 0, width, height);
+    }
+
+    /// Attaches a new buffer of `width` × `height` pixels of `argb` to `surface`, damaged whole,
+    /// and returns the file its pool maps, which the client can then shrink under the
+    /// compositor's reads.
+    pub fn attach_shrinkable(
+        &mut self,
+        surface: &wl_surface::WlSurface,
+        (width, height): (i32, i32),
+        argb: u32,
+    ) -> File {
+        let file = super::pixel_file(&vec![argb; super::pixel_count(width, height)]);
+        let buffer = self.shm_buffer(&file, (width, height), wl_shm::Format::Argb8888);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, width, height);
+        file
+    }
+
     /// Lets the compositor handle what the client sent until it answers with a protocol error,
     /// and returns it. Panics if none comes.
     pub fn protocol_error(&mut self, compositor: &mut Compositor) -> ProtocolError {
@@ -137,6 +194,11 @@ impl Client {
         }
         panic!("the compositor sent no protocol error");
     }
+}
+
+/// The bytes of `width` × `height` pixels of four bytes.
+fn byte_count(width: i32, height: i32) -> u64 {
+    u64::try_from(super::pixel_count(width, height)).expect("a size in memory") * 4
 }
 
 /// A file of `size` bytes in memory, as a client hands it to the compositor. Not sealed: its

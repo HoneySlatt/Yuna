@@ -58,10 +58,19 @@ the tests. SIGTERM or Ctrl-C stops it and removes its socket.
 The compositor's tests (`crates/yuna/tests/headless/`) run it in their own process, on the manual
 clock, with clients written with `wayland-client`; they need the shell's Mesa.
 
-The layout model's property tests (`crates/yuna-layout/tests/properties.rs`) shrink a failure to
-the shortest sequence of operations that still fails, and keep its seed in a
-`.proptest-regressions` file beside the test. Commit that file with the fix: the case then runs
-at every check. The timings are measured on an idle machine, one measurement at a time, and go to
+The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
+compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
+to the shortest sequence that still fails, and keep its seed in a `.proptest-regressions` file
+beside the test. Commit that file with the fix: the case then runs at every check. The random
+requests run as many cases as fit about 10 s of the check ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests));
+`PROPTEST_CASES` runs more, for a search before a release or after a change to the protocols'
+handling:
+
+```sh
+PROPTEST_CASES=5000 nix develop -c cargo test -p yuna --test headless random_requests
+```
+
+The timings are measured on an idle machine, one measurement at a time, and go to
 [`docs/measurements.md`](docs/measurements.md).
 
 `scripts/check.sh` runs, in order, and stops at the first failure:
@@ -95,10 +104,11 @@ times are in [`docs/measurements.md`](docs/measurements.md).
 ## Dependencies
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
-licence. The owner accepted proptest, for the layout model's tests only, on 2026-11-11, and, for
+licence. The owner accepted proptest, for the layout model's tests, on 2026-11-11, and, for
 the HDR prototype's branch only (M1.3, deleted since), the same day, Smithay's `backend_drm`, `backend_gbm`,
 `backend_egl`, `renderer_gl`, `backend_session_libseat` and `backend_libinput` features with the
-system libraries they link. For the headless compositor (M1.4), the owner accepted on 2026-11-12
+system libraries they link. Proptest serves the compositor's tests too since 2026-11-12
+([ADR-0025](docs/adr/0025-applications-in-ci.md)). For the headless compositor (M1.4), the owner accepted on 2026-11-12
 Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` and
 `tracing-subscriber` with its `fmt` and `std` features alone; `wayland-client` and the client side
 of `wayland-protocols`, for tests only; and, in the shell, Mesa, libglvnd, libxkbcommon,

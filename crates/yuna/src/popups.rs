@@ -22,7 +22,9 @@
 //! A popup is dismissed (`popup_done`) when its window unmaps or goes, when it commits without a
 //! buffer, and at once when it is created for a window that is not mapped or has
 //! [`MAX_POPUPS_PER_WINDOW`] popups, a parent popup already dismissed, a chain of parents that is
-//! broken or deeper than [`MAX_POPUP_DEPTH`], or a positioner with nonsense values.
+//! broken or deeper than [`MAX_POPUP_DEPTH`], or a positioner with nonsense values. A second
+//! `xdg_popup` on a surface whose first lives ends its client, as a second toplevel does
+//! (`shell.rs`).
 
 use smithay::desktop::{
     PopupGrab, PopupGrabError, PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy,
@@ -38,6 +40,7 @@ use smithay::wayland::shell::xdg::{
 };
 use yuna_layout::{OutputId, WindowId};
 
+use crate::shell::refuse_second_role;
 use crate::state::State;
 
 /// The deepest chain of popups accepted: menus nest a few levels. A deeper chain is a client's
@@ -64,6 +67,10 @@ impl State {
     /// A new popup: placed, tracked and told its window's scale, or dismissed when its window
     /// has too many popups or it cannot be placed.
     pub(crate) fn popup_created(&mut self, popup: PopupSurface, positioner: PositionerState) {
+        if self.has_another_popup_role(&popup) {
+            refuse_second_role(popup.xdg_popup());
+            return;
+        }
         let Some(toplevel) = popup_toplevel(popup.wl_surface()) else {
             tracing::debug!("a popup whose chain of parents is broken is dismissed");
             popup.send_popup_done();
@@ -92,6 +99,17 @@ impl State {
         }
         // So that its first buffer is drawn at its window's scale (`scale.rs`).
         self.tell_surface_preferred_scale(popup.wl_surface(), popup.wl_surface());
+    }
+
+    /// Whether the surface of `popup` has another live `xdg_popup`: Smithay gives it the role
+    /// again, and tracking both would put the surface twice in its window's tree. Walks every
+    /// live popup, all clients together, as Smithay does when one is destroyed.
+    fn has_another_popup_role(&self, popup: &PopupSurface) -> bool {
+        self.xdg_shell_state.popup_surfaces().iter().any(|other| {
+            other.wl_surface() == popup.wl_surface()
+                && other.xdg_popup() != popup.xdg_popup()
+                && other.alive()
+        })
     }
 
     /// A commit of `surface`, part of the popup whose surface is `popup_surface`. Its initial

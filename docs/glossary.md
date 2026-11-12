@@ -67,6 +67,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   one, apart from the owner's.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
+- **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
+  well-behaved client that joined first; its frame callbacks, at the exact boundary, show that the
+  others did not stop its frames.
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.
