@@ -46,8 +46,9 @@ pub(crate) type WindowElement = CropRenderElement<WaylandSurfaceRenderElement<Gl
 /// Every EGL display Yuna opened, one per device, kept until the process ends. Smithay shares one
 /// display handle among the `EGLDisplay`s of a device and terminates it when the last one is
 /// dropped, without a lock against another thread that is initialising the same handle for a new
-/// renderer: that renderer then fails to start. Tests start and drop compositors on several
-/// threads at once; the program has one, and loses nothing by keeping its display.
+/// renderer: that renderer then fails to start, or Smithay panics. Tests start and drop
+/// compositors on several threads at once; the program has one, and loses nothing by keeping its
+/// display.
 static OPENED_DISPLAYS: Mutex<Vec<EGLDisplay>> = Mutex::new(Vec::new());
 
 /// Opens the renderer on `device`, and reads the largest renderbuffer it allocates.
