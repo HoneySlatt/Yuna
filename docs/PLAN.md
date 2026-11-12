@@ -24,7 +24,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   failure on Smithay's side would reopen [ADR-0011](adr/0011-built-on-smithay.md).
 - [M1.4](#m14--the-headless-compositor) designed on 2026-11-12
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
-  [ADR-0025](adr/0025-applications-in-ci.md)). Current: M1.4, Phase A.
+  [ADR-0025](adr/0025-applications-in-ci.md)). Current: M1.4, Phase B.
 
 ## Status
 
@@ -128,7 +128,9 @@ milestone first needs it.
   check; misbehaving clients never take Yuna down.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent, on the GPU; CI's time.
-- **Where it stands** (2026-11-12). Designed; Phase A starts.
+- **Where it stands** (2026-11-12). Phase A is done: the client side
+  ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Its timings wait for a quiet machine:
+  M1.2's figures no longer describe the code. Phase B next.
 
 ### M1.5 — Agents' control
 
@@ -214,7 +216,5 @@ milestone first needs it.
   previous state back. Check it at Stage 2, with a `tracing` subscriber, which the prototype lacks.
 - Smithay's connector property patch has debt to pay before main uses it
   ([patches](smithay-patches.md)).
-- The layout model's client side waits for M1.4 (above): today a window is assumed to take the
-  size it is given, and a deep dwindle tree can give windows a size of zero.
-- A scrolling column whose gaps leave no room gives all its windows a height of zero; M1.4, with
-  clients' minimum sizes, decides what happens then.
+- A dwindle tree deeper than its space gives its last windows empty slots: they are asked 1 × 1
+  and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).

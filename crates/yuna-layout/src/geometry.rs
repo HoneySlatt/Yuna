@@ -81,6 +81,32 @@ impl Rect {
         }
     }
 
+    /// The part of this rectangle inside `other`; an empty rectangle on `other`'s nearest edge
+    /// when they do not meet.
+    pub(crate) fn clipped_to(&self, other: &Rect) -> Rect {
+        let x = self.x.max(other.x).min(other.right());
+        let y = self.y.max(other.y).min(other.bottom());
+        Rect {
+            x,
+            y,
+            w: (self.right().min(other.right()) - x).max(0.0),
+            h: (self.bottom().min(other.bottom()) - y).max(0.0),
+        }
+    }
+
+    /// Whether this rectangle lies inside `other`, to `EPSILON`.
+    pub(crate) fn is_inside(&self, other: &Rect) -> bool {
+        self.x >= other.x - EPSILON
+            && self.y >= other.y - EPSILON
+            && self.right() <= other.right() + EPSILON
+            && self.bottom() <= other.bottom() + EPSILON
+    }
+
+    /// Whether this rectangle has an area: both its sides longer than `EPSILON`.
+    pub(crate) fn has_area(&self) -> bool {
+        self.w > EPSILON && self.h > EPSILON
+    }
+
     /// Whether the two rectangles share an area larger than `EPSILON` on both axes. Rectangles that
     /// only touch along an edge do not overlap.
     pub fn overlaps(&self, other: &Rect) -> bool {
@@ -244,6 +270,17 @@ mod tests {
         let (left, right) = (scale.snap_rect(left), scale.snap_rect(right));
         assert!((left.right() - right.x).abs() < EPSILON);
         assert!(scale.is_rect_on_grid(&left) && scale.is_rect_on_grid(&right));
+    }
+
+    #[test]
+    fn clipping_keeps_the_part_inside_and_empties_what_misses() {
+        let slot = Rect::new(10.0, 10.0, 100.0, 50.0);
+        let inside = Rect::new(10.0, 10.0, 40.0, 30.0);
+        assert_eq!(inside.clipped_to(&slot), inside);
+        let larger = Rect::new(10.0, 10.0, 500.0, 500.0);
+        assert_eq!(larger.clipped_to(&slot), slot);
+        let away = Rect::new(500.0, 0.0, 20.0, 20.0).clipped_to(&slot);
+        assert!(!away.has_area() && away.is_inside(&slot));
     }
 
     #[test]

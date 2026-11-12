@@ -5,16 +5,20 @@
 //! - every invariant of [`Layout::check_invariants`] holds;
 //! - what every other seat's outputs show, and what it focuses, is unchanged: one seat never
 //!   reaches another (ADR-0015);
-//! - an operation that returns an error leaves the model exactly as it was.
+//! - an operation that returns an error leaves the model exactly as it was;
+//! - a window opening is asked the size [`Layout::size_on_open`] gave just before.
+//!
+//! Clients are random too: they ask minimum and maximum sizes, commit sizes other than the ones
+//! they are asked, and open dialogs, with sizes of 1, small, typical, huge and nonsense.
 //!
 //! A failure shrinks to the shortest sequence that still fails; proptest keeps its seed in
 //! `properties.proptest-regressions`, which is committed so that the case runs again every time.
 
 use proptest::prelude::*;
-use yuna_layout::geometry::{Point, Rect};
+use yuna_layout::geometry::{Point, Rect, Size};
 use yuna_layout::{
-    ColumnWidth, Direction, Layout, OpenOptions, Options, OutputConfig, OutputId, SeatId, Tiling,
-    WindowId,
+    ColumnWidth, Direction, Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId,
+    SeatId, Tiling, WindowId,
 };
 
 /// The seats that exist from the start; seat 3 never does, to exercise unknown ids.
@@ -96,6 +100,11 @@ enum Op {
         fullscreen: bool,
         width: Option<ColumnWidth>,
         workspace: Option<usize>,
+        parent: Option<u64>,
+        limits: Option<(Size, Size)>,
+        committed: Option<Size>,
+        /// A rule's size.
+        size: Option<Size>,
     },
     Close(u64),
     FocusWindow(u64),
@@ -113,6 +122,17 @@ enum Op {
     CyclePresetWidth(u64, bool),
     ChangeWidth(u64, i8),
     SetPinned(u64, bool),
+    CommitSize {
+        window: u64,
+        w: f64,
+        h: f64,
+    },
+    SetSizeLimits {
+        window: u64,
+        min: Size,
+        max: Size,
+    },
+    RequestActivation(u64),
 }
 
 fn seat() -> impl Strategy<Value = u64> {
@@ -144,6 +164,45 @@ fn width() -> impl Strategy<Value = ColumnWidth> {
     ]
 }
 
+/// A length a client gives: 1, small (a fraction of a unit included), typical, huge up to
+/// 100,000, or nonsense the model refuses.
+fn length() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        2 => Just(1.0),
+        2 => 0.25..50.0f64,
+        6 => (50..4000u32).prop_map(f64::from),
+        1 => 4000.0..=100_000.0f64,
+        1 => prop_oneof![
+            Just(0.0),
+            Just(-1.0),
+            Just(f64::NAN),
+            Just(f64::INFINITY),
+            Just(100_001.0),
+        ],
+    ]
+}
+
+/// A size a client commits.
+fn client_size() -> impl Strategy<Value = Size> {
+    (length(), length()).prop_map(|(w, h)| Size { w, h })
+}
+
+/// A minimum or maximum size, 0 on an axis for none.
+fn limit() -> impl Strategy<Value = Size> {
+    let axis = || prop_oneof![1 => Just(0.0), 1 => length()];
+    (axis(), axis()).prop_map(|(w, h)| Size { w, h })
+}
+
+/// Minimum and maximum sizes: drawn apart, so that some are refused; fixed in both axes; or of a
+/// fixed height alone, which opens floating.
+fn limits() -> impl Strategy<Value = (Size, Size)> {
+    prop_oneof![
+        3 => (limit(), limit()),
+        1 => limit().prop_map(|size| (size, size)),
+        1 => length().prop_map(|h| (Size { w: 0.0, h }, Size { w: 0.0, h })),
+    ]
+}
+
 fn op() -> impl Strategy<Value = Op> {
     let name = 0..NAMES.len();
     prop_oneof![
@@ -169,21 +228,30 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(seat, direction)| Op::MoveToWorkspaceRelative { seat, direction }),
         1 => (seat(), name.clone()).prop_map(|(seat, name)| Op::MoveToSpecial { seat, name }),
         8 => (
-            seat(),
-            window(),
-            prop::bool::weighted(0.25),
-            prop::bool::weighted(0.1),
+            (seat(), window(), prop::bool::weighted(0.25), prop::bool::weighted(0.1)),
             proptest::option::weighted(0.2, width()),
             proptest::option::weighted(0.2, name.clone()),
+            proptest::option::weighted(0.25, window()),
+            proptest::option::weighted(0.3, limits()),
+            proptest::option::weighted(0.3, client_size()),
+            proptest::option::weighted(0.1, client_size()),
         )
-            .prop_map(|(seat, window, floating, fullscreen, width, workspace)| Op::Open {
-                seat,
-                window,
-                floating,
-                fullscreen,
-                width,
-                workspace,
-            }),
+            .prop_map(
+                |((seat, window, floating, fullscreen), width, workspace, parent, limits, committed, size)| {
+                    Op::Open {
+                        seat,
+                        window,
+                        floating,
+                        fullscreen,
+                        width,
+                        workspace,
+                        parent,
+                        limits,
+                        committed,
+                        size,
+                    }
+                },
+            ),
         4 => window().prop_map(Op::Close),
         2 => window().prop_map(Op::FocusWindow),
         2 => (window(), any::<bool>()).prop_map(|(w, on)| Op::SetFloating(w, on)),
@@ -195,6 +263,9 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (window(), any::<bool>()).prop_map(|(w, on)| Op::CyclePresetWidth(w, on)),
         1 => (window(), any::<i8>()).prop_map(|(w, d)| Op::ChangeWidth(w, d)),
         2 => (window(), any::<bool>()).prop_map(|(w, on)| Op::SetPinned(w, on)),
+        4 => (window(), length(), length()).prop_map(|(window, w, h)| Op::CommitSize { window, w, h }),
+        2 => (window(), limits()).prop_map(|(window, (min, max))| Op::SetSizeLimits { window, min, max }),
+        2 => window().prop_map(Op::RequestActivation),
     ]
 }
 
@@ -254,7 +325,10 @@ fn acting_seat(layout: &Layout, op: &Op) -> Option<SeatId> {
         | Op::SetFullWidth(w, _)
         | Op::CyclePresetWidth(w, _)
         | Op::ChangeWidth(w, _)
-        | Op::SetPinned(w, _) => window_seat(w),
+        | Op::SetPinned(w, _)
+        | Op::CommitSize { window: w, .. }
+        | Op::SetSizeLimits { window: w, .. }
+        | Op::RequestActivation(w) => window_seat(w),
     }
 }
 
@@ -336,24 +410,10 @@ fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
             layout.move_to_workspace_relative(s(seat), direction)
         }
         Op::MoveToSpecial { seat, name } => layout.move_to_special(s(seat), NAMES[name]),
-        Op::Open {
-            seat,
-            window,
-            floating,
-            fullscreen,
-            width,
-            workspace,
-        } => layout.open_window(
-            s(seat),
-            WindowId(window),
-            OpenOptions {
-                floating,
-                fullscreen,
-                size: None,
-                width,
-                workspace: workspace.map(|i| NAMES[i].to_owned()),
-            },
-        ),
+        Op::Open { seat, window, .. } => {
+            let options = open_options(op).expect("an Open operation");
+            layout.open_window(s(seat), WindowId(window), options)
+        }
         Op::Close(w) => layout.close_window(WindowId(w)),
         Op::FocusWindow(w) => layout.focus_window(WindowId(w)),
         Op::SetFloating(w, on) => layout.set_floating(WindowId(w), on),
@@ -367,7 +427,85 @@ fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
         Op::CyclePresetWidth(w, forward) => layout.cycle_preset_width(WindowId(w), forward),
         Op::ChangeWidth(w, delta) => layout.change_width(WindowId(w), f64::from(delta) / 50.0),
         Op::SetPinned(w, on) => layout.set_pinned(WindowId(w), on),
+        Op::CommitSize { window, w, h } => layout.commit_size(WindowId(window), Size { w, h }),
+        Op::SetSizeLimits { window, min, max } => {
+            layout.set_size_limits(WindowId(window), min, max)
+        }
+        // A refused activation is checked like a refused operation: it must change nothing.
+        Op::RequestActivation(w) => match layout.request_activation(WindowId(w)) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(LayoutError::Refused("activation refused")),
+            Err(error) => Err(error),
+        },
     }
+}
+
+/// The options of an `Open` operation.
+fn open_options(op: &Op) -> Option<OpenOptions> {
+    let Op::Open {
+        floating,
+        fullscreen,
+        width,
+        workspace,
+        parent,
+        limits,
+        committed,
+        size,
+        ..
+    } = *op
+    else {
+        return None;
+    };
+    let (min_size, max_size) = limits.unwrap_or_default();
+    Some(OpenOptions {
+        floating,
+        fullscreen,
+        size,
+        width,
+        workspace: workspace.map(|i| NAMES[i].to_owned()),
+        parent: parent.map(WindowId),
+        min_size,
+        max_size,
+        committed,
+    })
+}
+
+/// What [`Layout::size_on_open`] says a new window of an `Open` operation will be asked, when its
+/// id is free: the same refusal as opening it, or the size it is then asked.
+fn predicted_size(layout: &Layout, op: &Op) -> Option<Result<Size, LayoutError>> {
+    let Op::Open { seat, window, .. } = *op else {
+        return None;
+    };
+    if layout.window(WindowId(window)).is_some() {
+        return None;
+    }
+    Some(layout.size_on_open(SeatId(seat), &open_options(op)?))
+}
+
+/// Checks that a window just opened is asked the size predicted, if its output shows it.
+fn check_prediction(
+    layout: &Layout,
+    op: &Op,
+    result: &Result<(), LayoutError>,
+    predicted: Result<Size, LayoutError>,
+) -> Result<(), TestCaseError> {
+    let Op::Open { window, .. } = *op else {
+        return Ok(());
+    };
+    prop_assert_eq!(result.as_ref().err(), predicted.as_ref().err());
+    let shown = layout
+        .window(WindowId(window))
+        .and_then(|info| info.output)
+        .and_then(|output| layout.arrange(output).ok())
+        .and_then(|placed| placed.into_iter().find(|p| p.window == WindowId(window)));
+    if let (Some(placed), Ok(size)) = (shown, predicted) {
+        prop_assert_eq!(
+            placed.configure,
+            size,
+            "size_on_open predicted another size"
+        );
+    }
+    Ok(())
 }
 
 /// Runs `ops` from two seats without outputs, checking every property after each step.
@@ -384,6 +522,7 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
             .map(|s| (s, seat_state(&layout, s)))
             .collect();
         let before = format!("{layout:?}");
+        let predicted = predicted_size(&layout, op);
         let result = apply(&mut layout, op);
         if let Err(error) = layout.check_invariants() {
             return Err(TestCaseError::fail(format!(
@@ -398,6 +537,10 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
                 step,
                 op
             );
+        }
+        if let Some(predicted) = predicted {
+            check_prediction(&layout, op, &result, predicted)
+                .map_err(|e| TestCaseError::fail(format!("step {step}, {op:?}: {e}")))?;
         }
         for (seat, view) in others {
             prop_assert_eq!(
@@ -462,6 +605,10 @@ fn operations_from_a_busy_state_keep_every_property() {
             fullscreen: false,
             width: None,
             workspace: None,
+            parent: None,
+            limits: None,
+            committed: None,
+            size: None,
         });
     }
     let mut runner = proptest::test_runner::TestRunner::new(ProptestConfig {

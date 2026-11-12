@@ -4,9 +4,19 @@
 //! Positions on the strip start at 0 at the left edge of the first column; the view is a window of
 //! the working area's width onto the strip, at `view_x`. A column's screen position is the working
 //! area's left edge plus its strip position minus `view_x`.
+//!
+//! Each window is asked a size by niri's rules: its column's width, within its windows' minimum
+//! and maximum widths, floored, and a share of the column's height, rounded
+//! ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)). Columns and windows are
+//! placed from the sizes their clients committed: a column is as wide as its widest window, and
+//! windows stack by their committed heights. Before its first commit, a window counts at the
+//! size it is asked. When a column changes width, the focused column stays where it is on
+//! screen and the columns on its left move, as in niri.
 
 use crate::area::Area;
-use crate::geometry::Rect;
+use crate::geometry::{Rect, Size};
+use crate::sizing::{Sizing, whole, whole_floor};
+use crate::workspace::Arranged;
 use crate::{Direction, WindowId};
 
 /// How wide a column is.
@@ -49,7 +59,7 @@ impl ColumnWidth {
     }
 }
 
-/// One column: windows stacked from top to bottom, at equal heights.
+/// One column: windows stacked from top to bottom.
 #[derive(Debug, Clone)]
 struct Column {
     /// Never empty.
@@ -86,8 +96,9 @@ impl Column {
         }
     }
 
-    /// The column's width on screen, in logical units.
-    fn tile_width(&self, area: &Area) -> f64 {
+    /// The width the column is given, in logical units, before its windows' limits: the
+    /// output's when fullscreen, the working area's when full width, else its own width.
+    fn given_width(&self, area: &Area) -> f64 {
         if self.fullscreen {
             area.output.w
         } else if self.full_width {
@@ -95,6 +106,125 @@ impl Column {
         } else {
             self.width.resolve(area)
         }
+    }
+
+    /// Its windows' sizings, top to bottom, into `out`: each window's record is read once, and
+    /// the column's sizes are computed from these.
+    fn read_sizings(&self, area: &Area, out: &mut Vec<Sizing>) {
+        out.clear();
+        out.extend(self.windows.iter().map(|&window| area.sizing(window)));
+    }
+
+    /// The width its windows are asked: its set width within the largest of its windows'
+    /// minimum widths and the smallest of their maximum ones, a minimum winning over a smaller
+    /// maximum (niri: `src/layout/scrolling.rs:4634-4665`); floored to whole logical units, so
+    /// that proportional columns fit the screen exactly (`src/layout/tile.rs:955-959`). Limits
+    /// count in whole units, as Wayland carries them. `sizings` are its windows'. Not for a
+    /// fullscreen column, whose window is asked the output's size.
+    fn asked_width(&self, area: &Area, sizings: &[Sizing]) -> f64 {
+        let mut min = 1.0_f64;
+        let mut max = f64::INFINITY;
+        for sizing in sizings {
+            min = min.max(whole(sizing.min.w));
+            if sizing.max.w > 0.0 {
+                max = max.min(whole(sizing.max.w));
+            }
+        }
+        whole_floor(self.given_width(area).min(max.max(min)).max(min))
+    }
+
+    /// The height each of its windows is asked, top to bottom, into `out`, in whole logical units
+    /// (niri: `src/layout/scrolling.rs:4757-4865`). `sizings` are its windows'. A window whose
+    /// minimum and maximum heights are equal keeps that height. The others share the rest in
+    /// order, each share rounded in turn; a window whose share is below its minimum gets its
+    /// minimum, and the rest is shared again. Other maximum heights are ignored, as in niri.
+    /// Minimums that do not fit overflow the working area. Not for a fullscreen column.
+    ///
+    /// Linear in the column's windows, times one more pass for each window whose minimum exceeds
+    /// its share: quadratic at worst, in a column whose minimums overflow it.
+    fn asked_heights(&self, area: &Area, sizings: &[Sizing], out: &mut Vec<f64>) {
+        // 0 marks a window that still shares the rest: every height given is at least 1.
+        out.clear();
+        out.extend(sizings.iter().map(|sizing| {
+            if sizing.fixed_height() {
+                whole(sizing.min.h)
+            } else {
+                0.0
+            }
+        }));
+        let gaps = (sizings.len() + 1) as f64 * area.gap;
+        let mut left = area.working.h - gaps - out.iter().sum::<f64>();
+        let mut sharing = out.iter().filter(|&&height| height == 0.0).count();
+        'share: while sharing > 0 {
+            // A trial: the shares as they will be rounded, each checked against its minimum.
+            let (mut trial_left, mut trial_sharing) = (left, sharing);
+            for (height, sizing) in out.iter_mut().zip(sizings) {
+                if *height != 0.0 {
+                    continue;
+                }
+                let min = whole(sizing.min.h);
+                let share = trial_left / trial_sharing as f64;
+                if min > share {
+                    *height = min;
+                    left -= min;
+                    sharing -= 1;
+                    continue 'share;
+                }
+                trial_left -= whole(share);
+                trial_sharing -= 1;
+            }
+            // Every share holds its window's minimum: give them out.
+            for height in out.iter_mut().filter(|height| **height == 0.0) {
+                let share = whole(left / sharing as f64);
+                *height = share;
+                left -= share;
+                sharing -= 1;
+            }
+        }
+    }
+
+    /// The column's width on the strip: the output's when fullscreen, else that of its widest
+    /// window as drawn (niri: `src/layout/scrolling.rs:4888-4895`). `sizings` are its windows'.
+    /// Columns are placed by it, and the view keeps the focused column whole by it.
+    fn width_on_strip(&self, area: &Area, sizings: &[Sizing]) -> f64 {
+        if self.fullscreen {
+            return area.output.w;
+        }
+        let asked = self.asked_width(area, sizings);
+        sizings
+            .iter()
+            .map(|sizing| area.drawn_width(sizing, asked))
+            .fold(0.0, f64::max)
+    }
+
+    /// Checks the sizes its windows are asked: never below their minimums, and, when their
+    /// minimums fit, within the working area's height to the half unit a rounding may add.
+    fn check_sizes(&self, area: &Area) -> Result<(), String> {
+        let mut sizings = Vec::new();
+        self.read_sizings(area, &mut sizings);
+        let largest_min_width = sizings
+            .iter()
+            .map(|sizing| whole(sizing.min.w))
+            .fold(1.0, f64::max);
+        if self.asked_width(area, &sizings) < largest_min_width {
+            return Err("a window is asked less than its minimum width".to_owned());
+        }
+        let mins: Vec<f64> = sizings.iter().map(|sizing| whole(sizing.min.h)).collect();
+        let mut heights = Vec::new();
+        self.asked_heights(area, &sizings, &mut heights);
+        if heights.iter().zip(&mins).any(|(height, min)| height < min) {
+            return Err("a window is asked less than its minimum height".to_owned());
+        }
+        let gaps = (self.windows.len() + 1) as f64 * area.gap;
+        let fits = mins.iter().sum::<f64>() + gaps <= area.working.h;
+        let asked = heights.iter().sum::<f64>() + gaps;
+        if fits && asked > area.working.h + 0.5 + crate::geometry::EPSILON {
+            return Err(format!(
+                "its windows are asked {asked} high, though their minimums fit in {}",
+                area.working.h
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -193,10 +323,35 @@ impl Scrolling {
 
     /// The strip position of the left edge of column `index`.
     fn column_x(&self, index: usize, area: &Area) -> f64 {
+        let mut sizings = Vec::new();
         self.columns[..index]
             .iter()
-            .map(|c| c.tile_width(area) + area.gap)
+            .map(|column| {
+                column.read_sizings(area, &mut sizings);
+                column.width_on_strip(area, &sizings) + area.gap
+            })
             .sum()
+    }
+
+    /// Where the view is from the focused column's left edge on the strip. Kept across a change
+    /// of width on the focused column's left, by [`Scrolling::set_view_from_focused`], it keeps
+    /// the focused column where it is on screen while the columns on its left move, as niri does
+    /// (`src/layout/scrolling.rs:1308-1343`).
+    pub fn view_from_focused(&self, area: &Area) -> f64 {
+        self.view_x - self.column_x(self.focused, area)
+    }
+
+    /// Puts the view at `offset` from the focused column's left edge on the strip.
+    pub fn set_view_from_focused(&mut self, offset: f64, area: &Area) {
+        self.view_x = self.column_x(self.focused, area) + offset;
+    }
+
+    /// The width on the strip of column `index`.
+    fn strip_width(&self, index: usize, area: &Area) -> f64 {
+        let column = &self.columns[index];
+        let mut sizings = Vec::new();
+        column.read_sizings(area, &mut sizings);
+        column.width_on_strip(area, &sizings)
     }
 
     /// Focus moved on by the user: a window that opens and closes no longer brings focus back.
@@ -237,17 +392,22 @@ impl Scrolling {
             return false;
         };
         let reopen = self.before_open.filter(|b| b.window == window);
-        let column = &mut self.columns[ci];
-        if column.windows.len() > 1 {
+        if self.columns[ci].windows.len() > 1 {
+            // Its column may narrow: the focused column stays where it is on screen.
+            let held = area.map(|a| self.view_from_focused(a));
+            let column = &mut self.columns[ci];
             column.windows.remove(wi);
             if column.focused > wi || column.focused == column.windows.len() {
                 column.focused -= 1;
             }
+            if let (Some(held), Some(area)) = (held, area) {
+                self.set_view_from_focused(held, area);
+            }
             self.fit_view(area);
             return true;
         }
-        let removed_width = area.map(|a| column.tile_width(a) + a.gap);
-        let was_fullscreen_focus = ci == self.focused && column.fullscreen;
+        let removed_width = area.map(|a| self.strip_width(ci, a) + a.gap);
+        let was_fullscreen_focus = ci == self.focused && self.columns[ci].fullscreen;
         self.columns.remove(ci);
         if let Some(before) = reopen {
             // The window that just opened closes again: focus and view go back as they were.
@@ -440,6 +600,11 @@ impl Scrolling {
         }
         // Extracting the window moves column indices that a just-opened window would go back to.
         self.forget_before_open();
+        // Another column changes width: the focused column stays where it is on screen.
+        let held = match area {
+            Some(area) if ci != self.focused => Some(self.view_from_focused(area)),
+            _ => None,
+        };
         if on {
             if self.columns[ci].windows.len() > 1 {
                 let column = &mut self.columns[ci];
@@ -463,6 +628,9 @@ impl Scrolling {
             self.columns[ci].fullscreen = true;
         } else {
             self.leave_fullscreen_at(ci, area);
+        }
+        if let (Some(held), Some(area)) = (held, area) {
+            self.set_view_from_focused(held, area);
         }
         self.fit_view(area);
         true
@@ -499,7 +667,7 @@ impl Scrolling {
             return true;
         }
         let column = &self.columns[ci];
-        let current = column.tile_width(area);
+        let current = column.given_width(area);
         let next = match (column.preset, forward) {
             (Some(i), true) if !column.full_width => (i + 1) % presets.len(),
             (Some(i), false) if !column.full_width => (i + presets.len() - 1) % presets.len(),
@@ -536,20 +704,19 @@ impl Scrolling {
         true
     }
 
-    /// Applies `change` to column `index`; if the column is left of the focused one, shifts the
-    /// view by the change in width so that the focused column stays still on screen.
+    /// Applies `change` to column `index`, keeping the focused column where it is on screen. A
+    /// column whose windows committed their sizes changes width only when they commit again;
+    /// `Layout::commit_size` keeps the focused column in place then.
     fn change_width_keeping_focus(
         &mut self,
         index: usize,
         area: Option<&Area>,
         change: impl FnOnce(&mut Column),
     ) {
-        let before = area.map(|a| self.columns[index].tile_width(a));
+        let held = area.map(|a| self.view_from_focused(a));
         change(&mut self.columns[index]);
-        if let (Some(before), Some(area)) = (before, area)
-            && index < self.focused
-        {
-            self.view_x += self.columns[index].tile_width(area) - before;
+        if let (Some(held), Some(area)) = (held, area) {
+            self.set_view_from_focused(held, area);
         }
         self.fit_view(area);
     }
@@ -570,10 +737,9 @@ impl Scrolling {
             return;
         }
         let x = self.column_x(self.focused, area);
-        let column = &self.columns[self.focused];
-        let width = column.tile_width(area);
+        let width = self.strip_width(self.focused, area);
         let view_width = area.working.w;
-        if column.fullscreen {
+        if self.columns[self.focused].fullscreen {
             self.view_x = x - (area.output.x - area.working.x);
         } else if width >= view_width {
             self.view_x = x;
@@ -596,7 +762,7 @@ impl Scrolling {
             return true;
         };
         let x = self.column_x(self.focused, area) - self.view_x;
-        let width = column.tile_width(area);
+        let width = self.strip_width(self.focused, area);
         let view_width = area.working.w;
         let tolerance = 1.0 / area.scale.get() + crate::geometry::EPSILON;
         if column.fullscreen {
@@ -609,31 +775,85 @@ impl Scrolling {
         x - padding > -tolerance && x + width + padding < view_width + tolerance
     }
 
-    /// Every window with its rectangle and whether it is fullscreen, left to right and top to
-    /// bottom, snapped to the grid. Columns scrolled out of view are included, outside the output.
-    /// A column whose gaps leave no room gives all its windows no height, rather than letting
-    /// them leave the working area (debt in `docs/PLAN.md`).
-    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect, bool)>) {
+    /// Every window with its rectangle and the size it is asked, left to right and top to bottom.
+    /// Columns sit side by side by their widths on the strip, and windows one below the other by
+    /// their drawn heights, gaps between; each window is drawn at its committed size from its
+    /// tile's top-left corner (niri: `src/layout/scrolling.rs:5380-5410`), a fullscreen one
+    /// centred on its output-sized tile. Columns scrolled out of view are included, outside the
+    /// output. A column whose minimum heights do not fit overflows the working area downwards.
+    pub fn arrange(&self, area: &Area, out: &mut Vec<Arranged>) {
         let mut x = area.working.x - self.view_x;
-        let bottom = area.working.bottom();
+        // Reused from column to column, so that arranging allocates nothing per column.
+        let (mut sizings, mut heights) = (Vec::new(), Vec::new());
         for column in &self.columns {
-            let width = column.tile_width(area);
-            if column.fullscreen {
-                let rect = Rect::new(x, area.output.y, width, area.output.h);
-                out.push((column.windows[0], area.scale.snap_rect(rect), true));
+            column.read_sizings(area, &mut sizings);
+            let width_on_strip = if column.fullscreen {
+                let window = column.windows[0];
+                let tile = Rect::new(x, area.output.y, area.output.w, area.output.h);
+                let (rect, configure) = area.place_fullscreen(window, tile);
+                out.push(Arranged {
+                    window,
+                    rect,
+                    configure,
+                    tiled: true,
+                    fullscreen: true,
+                    pinned: false,
+                });
+                area.output.w
             } else {
-                let count = column.windows.len() as f64;
-                let usable = area.working.h - (count + 1.0) * area.gap;
-                let height = (usable / count).max(0.0);
-                for (i, &window) in column.windows.iter().enumerate() {
-                    let y =
-                        (area.working.y + area.gap + i as f64 * (height + area.gap)).min(bottom);
-                    let rect = Rect::new(x, y, width, height.min(bottom - y));
-                    out.push((window, area.scale.snap_rect(rect), false));
+                let width = column.asked_width(area, &sizings);
+                column.asked_heights(area, &sizings, &mut heights);
+                let mut y = area.working.y + area.gap;
+                // The widest window as drawn: `Column::width_on_strip`, from the sizes at hand.
+                let mut widest = 0.0_f64;
+                for ((&window, sizing), &height) in
+                    column.windows.iter().zip(&sizings).zip(&heights)
+                {
+                    let configure = Size {
+                        w: width,
+                        h: height,
+                    };
+                    let drawn = area.drawn_size(sizing, configure);
+                    // The size is on the grid: the corner alone is snapped.
+                    let corner = (area.scale.snap(x), area.scale.snap(y));
+                    out.push(Arranged {
+                        window,
+                        rect: Rect::new(corner.0, corner.1, drawn.w, drawn.h),
+                        configure,
+                        tiled: true,
+                        fullscreen: false,
+                        pinned: false,
+                    });
+                    y += drawn.h + area.gap;
+                    widest = widest.max(drawn.w);
                 }
-            }
-            x += width + area.gap;
+                widest
+            };
+            x += width_on_strip + area.gap;
         }
+    }
+
+    /// Checks that `arrange` draws each column where the view logic places it, by
+    /// [`Column::width_on_strip`]: the two compute a column's width apart, `arrange` from the
+    /// sizes it draws.
+    fn check_placed_where_the_view_has_them(&self, area: &Area) -> Result<(), String> {
+        let mut placed = Vec::new();
+        self.arrange(area, &mut placed);
+        // `arrange` gives each column's windows in a row, top to bottom.
+        let mut first = 0;
+        let mut x = area.working.x - self.view_x;
+        for (i, column) in self.columns.iter().enumerate() {
+            let drawn_x = placed.get(first).map(|p| p.rect.x);
+            let expected = area.scale.snap(x);
+            if !column.fullscreen && drawn_x.is_none_or(|drawn| (drawn - expected).abs() > 1e-6) {
+                return Err(format!(
+                    "column {i} is drawn at {drawn_x:?}, not {expected}"
+                ));
+            }
+            first += column.windows.len();
+            x += self.strip_width(i, area) + area.gap;
+        }
+        Ok(())
     }
 
     /// Checks this strip's own rules; `area` is given when the workspace is shown.
@@ -662,10 +882,18 @@ impl Scrolling {
                 "a view is kept for leaving fullscreen, but the focused column is not".into(),
             );
         }
-        if let Some(area) = area
-            && !self.focused_is_in_view(area)
-        {
-            return Err("the focused column is not fully in view".to_owned());
+        if let Some(area) = area {
+            if !self.focused_is_in_view(area) {
+                return Err("the focused column is not fully in view".to_owned());
+            }
+            self.check_placed_where_the_view_has_them(area)?;
+            for (i, column) in self.columns.iter().enumerate() {
+                if !column.fullscreen {
+                    column
+                        .check_sizes(area)
+                        .map_err(|e| format!("column {i}: {e}"))?;
+                }
+            }
         }
         Ok(())
     }

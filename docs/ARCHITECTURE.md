@@ -31,7 +31,8 @@ One Cargo workspace; its crates live in `crates/`.
 ```text
 Layout
 ├── options: gaps, widths, default tiling, dynamic workspaces
-├── windows: what is known of each window beyond its place (fake fullscreen, last floating place)
+├── windows: what is known of each window beyond its place (its sizes, its parent, fake
+│   fullscreen, last floating place)
 └── seats
     └── Seat (the owner's, or an agent's)
         ├── outputs
@@ -62,9 +63,32 @@ The flow of an operation:
    its focused column.
 
 The compositor then reads `Layout::arrange(output)`: the windows that output shows, bottom to top,
-each with its rectangle in logical coordinates on the output's physical pixel grid, whether it is
-told it is fullscreen, and whether it has its seat's focus. Nothing in the model runs between
-operations.
+each with the size its client is asked, its rectangle in logical coordinates on the output's
+physical pixel grid, whether it is told it is fullscreen, and whether it has its seat's focus.
+Nothing in the model runs between operations.
+
+Clients do not always take the size they are given
+([ADR-0026](adr/0026-real-clients-in-the-layout.md)). The compositor passes on each client's
+minimum and maximum sizes (`Layout::set_size_limits`) and the window geometry it commits
+(`Layout::commit_size`); each window's record keeps them (`sizing.rs`). A window then has two
+sizes:
+
+- **Asked**: its configure, in whole logical units, never 0 for a tiled window. In scrolling
+  columns, by niri's rules: its column's width within its windows' limits, floored so that
+  proportional columns fit the screen exactly, and a share of the column's height, rounded. In
+  dwindle, its slot, whatever its minimum; fullscreen, the output's size; both rounded. Floating,
+  0 on each axis its minimum and maximum leave free, to let the client choose, unless a rule or
+  the compositor set its size.
+- **Drawn**: what its client committed, or what it is asked before its first commit. Scrolling
+  columns are as wide as their widest window and stack windows by their drawn heights; minimums
+  that do not fit overflow the column. When a column changes width, for a commit or any other
+  reason, the focused column stays where it is on screen and the columns on its left move, as in
+  niri. A dwindle window is drawn from its slot's top-left corner, clipped to the slot; a
+  fullscreen one is centred on its output; a floating one keeps its top-left corner.
+
+Dialogs (`OpenOptions::parent`) open floating, centred on their parent, and take the focus only
+from it; a fullscreen game's own dialog shows over it. `Layout::size_on_open` gives a new window's
+first configure, by opening it on a copy of its seat.
 
 Coordinates are logical and shared by all outputs, as `f64`; rectangles are snapped to the
 physical pixels of their output, so that they stay crisp at scale 1.5
@@ -76,8 +100,9 @@ operation, and an example measures the model:
 - `crates/yuna-layout/tests/scenarios/`: one test per behaviour; those that rewrite niri's or
   Hyprland's name their source ([ADR-0019](adr/0019-the-layouts-behaviours.md));
 - `crates/yuna-layout/tests/properties.rs`: random sequences of operations over two seats and up
-  to three outputs, checking the invariants, that one seat never changes another's, and that a
-  refused operation changes nothing;
+  to three outputs, with clients that ask limits, commit sizes of their own and open dialogs,
+  checking the invariants, that one seat never changes another's, that a refused operation
+  changes nothing, and that `Layout::size_on_open` foretells a new window's size;
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 

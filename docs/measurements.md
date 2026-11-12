@@ -6,6 +6,9 @@ section names the machine, the build, the command, and the figures with their sp
 
 ## M1.2 — The layout model (2026-11-11)
 
+These figures describe the model before M1.4 gave it real clients' sizes; they are measured
+again once the machine is quiet.
+
 What one operation of the layout model costs, followed by `arrange`, which a compositor calls to
 draw the result: what a key press costs the model. No budget of the bar names it; it is measured
 against the frame at 240 Hz, 4.17 ms on the high tier.

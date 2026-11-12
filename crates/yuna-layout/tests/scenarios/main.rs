@@ -5,6 +5,7 @@
 //! behaviours name the page of its wiki or its source they were read in
 //! ([ADR-0019](../../../../docs/adr/0019-the-layouts-behaviours.md)).
 
+mod clients;
 mod dwindle;
 mod floating;
 mod fullscreen;

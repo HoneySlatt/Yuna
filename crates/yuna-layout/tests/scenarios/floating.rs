@@ -145,3 +145,53 @@ fn a_window_opened_floating_and_fullscreen_floats_back_at_the_size_it_asked() {
     m.ok(|l| l.set_fullscreen(w(1), false));
     assert_rect(m.rect(1), rect(640.0, 300.0, 640.0, 480.0));
 }
+
+/// niri: src/layout/floating.rs:431-449, a floating window is asked 0 × 0 and takes the size its
+/// client commits, keeping its top-left corner. Yuna's rule (ADR-0026): a resize by the
+/// compositor is asked of the client, which is drawn at what it commits, as niri draws a tile.
+#[test]
+fn a_floating_window_follows_its_commits_until_the_compositor_resizes_it() {
+    let mut m = Model::new();
+    m.open_with(OWNER, 1, floating(None));
+    assert_eq!(m.placement(1).configure, Size::default());
+    // Opened centred at the default 800 × 600.
+    m.ok(|l| l.commit_size(w(1), Size { w: 500.0, h: 400.0 }));
+    assert_rect(m.rect(1), rect(560.0, 240.0, 500.0, 400.0));
+    m.ok(|l| l.set_floating_rect(w(1), rect(100.0, 50.0, 500.0, 400.0)));
+    m.ok(|l| l.commit_size(w(1), Size { w: 600.0, h: 450.0 }));
+    assert_rect(m.rect(1), rect(100.0, 50.0, 600.0, 450.0));
+    m.ok(|l| l.set_floating_rect(w(1), rect(100.0, 50.0, 640.0, 480.0)));
+    assert_eq!(m.placement(1).configure, Size { w: 640.0, h: 480.0 });
+    m.ok(|l| l.commit_size(w(1), Size { w: 700.0, h: 500.0 }));
+    assert_rect(m.rect(1), rect(100.0, 50.0, 700.0, 500.0));
+    assert_eq!(m.placement(1).configure, Size { w: 640.0, h: 480.0 });
+}
+
+/// Yuna's rule (ADR-0026): a rule's size is asked of a floating window and kept asked, whatever
+/// its client commits; the window is drawn at what it commits (niri: src/layout/tile.rs).
+#[test]
+fn a_floating_window_sized_by_a_rule_is_asked_that_size_and_keeps_it() {
+    let mut m = Model::new();
+    m.open_with(OWNER, 1, floating(Some(Size { w: 640.0, h: 480.0 })));
+    assert_eq!(m.placement(1).configure, Size { w: 640.0, h: 480.0 });
+    m.ok(|l| l.commit_size(w(1), Size { w: 300.0, h: 200.0 }));
+    assert_rect(m.rect(1), rect(640.0, 300.0, 300.0, 200.0));
+    assert_eq!(m.placement(1).configure, Size { w: 640.0, h: 480.0 });
+}
+
+/// The checker's case: a rule's size given to a window that opens tiled is not a floating size;
+/// floated later, it keeps following its client's commits.
+#[test]
+fn a_rule_size_on_a_tiled_window_does_not_pin_it_when_it_floats() {
+    let mut m = Model::new();
+    let sized = yuna_layout::OpenOptions {
+        size: Some(Size { w: 640.0, h: 480.0 }),
+        ..yuna_layout::OpenOptions::default()
+    };
+    m.open_with(OWNER, 1, sized);
+    assert!(m.placement(1).tiled);
+    m.ok(|l| l.set_floating(w(1), true));
+    m.ok(|l| l.commit_size(w(1), Size { w: 300.0, h: 200.0 }));
+    assert_eq!(m.rect(1).w, 300.0);
+    assert_eq!(m.rect(1).h, 200.0);
+}

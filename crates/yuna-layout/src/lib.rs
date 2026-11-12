@@ -16,6 +16,12 @@
 //! error rather than a panic; none leaves the model inconsistent, which
 //! [`Layout::check_invariants`] checks.
 //!
+//! Clients do not always take the size they are given. The compositor passes on what each one
+//! asks and does: its minimum and maximum sizes ([`Layout::set_size_limits`]) and the size it
+//! commits ([`Layout::commit_size`]). [`Layout::arrange`] gives each window the size it is asked,
+//! for its configure, and the rectangle it is drawn in; [`Layout::size_on_open`] gives a new
+//! window's first configure ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)).
+//!
 //! Behaviours follow niri for scrolling columns, focus, fullscreen and floating windows, and
 //! Hyprland for dwindle, special workspaces and the pinned window
 //! ([ADR-0019](../../../docs/adr/0019-the-layouts-behaviours.md)); workspaces are named, with
@@ -28,6 +34,7 @@ mod dwindle;
 mod floating;
 mod layout;
 mod scrolling;
+mod sizing;
 mod workspace;
 
 pub use layout::Layout;
@@ -129,13 +136,29 @@ pub struct OpenOptions {
     pub floating: bool,
     /// Open fullscreen.
     pub fullscreen: bool,
-    /// The size a floating window opens at; [`Options::default_floating_size`] without it.
+    /// A rule's size for the window when it floats: it is asked that size and keeps it, whatever
+    /// its client commits. Without it, a floating window opens at its committed size, else at its
+    /// fixed size, else at [`Options::default_floating_size`], and follows its commits.
     pub size: Option<Size>,
     /// The width of its column; [`Options::default_width`] without it.
     pub width: Option<ColumnWidth>,
-    /// The named workspace to open on, created on the seat's active output if missing; the seat's
-    /// focused workspace without it.
+    /// The named workspace to open on, created on the seat's active output if missing; without
+    /// it, the parent's workspace for a dialog, else the seat's focused workspace.
     pub workspace: Option<String>,
+    /// The window this one is a dialog of (xdg-shell's parent), on the same seat. A dialog opens
+    /// floating, centred on its parent, and takes the focus only from it
+    /// ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)).
+    pub parent: Option<WindowId>,
+    /// The smallest size its client asks; 0 on an axis for none.
+    pub min_size: Size,
+    /// The largest size its client asks; 0 on an axis for none. A window whose minimum and
+    /// maximum heights are equal opens floating, as in niri.
+    pub max_size: Size,
+    /// The window geometry its client committed before it was mapped. Refused unless positive
+    /// and at most 100,000 on each axis. A floating window opens centred at this size: without
+    /// it, it opens at the default floating size and keeps that corner when its first commit
+    /// comes, so the compositor opens a window at its first buffer, its size known.
+    pub committed: Option<Size>,
 }
 
 /// Why an operation was refused. The model is unchanged when an operation returns one.
@@ -181,9 +204,17 @@ impl std::error::Error for LayoutError {}
 pub struct Placed {
     /// The window.
     pub window: WindowId,
-    /// Where it is drawn, in logical coordinates, on the output's physical grid. Columns scrolled
-    /// out of view lie outside the output.
+    /// Where it is drawn, in logical coordinates, on the output's physical grid: the window's
+    /// top-left corner at the rectangle's, the window clipped to it. Its size is what the client
+    /// committed; before its first commit, the size it is asked, or for a floating window that
+    /// chooses its own, the size it opened at. A dwindle window is clipped to its slot, a
+    /// fullscreen one to the output. Columns scrolled out of view lie outside the output. Empty only for a dwindle
+    /// window whose slot is empty, in a tree deeper than its space.
     pub rect: Rect,
+    /// The size its client is asked, in whole logical units: at least 1 × 1 for a tiled or
+    /// fullscreen window; for a floating window that chooses its own size, 0 on each axis not
+    /// fixed by its minimum and maximum.
+    pub configure: Size,
     /// Whether it is tiled; floating otherwise.
     pub tiled: bool,
     /// Whether its client is told it is fullscreen: it is, or it is fake fullscreen.

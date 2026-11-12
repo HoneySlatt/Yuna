@@ -2,9 +2,16 @@
 //!
 //! Rectangles are kept relative to the working area's top-left corner, so that a workspace moved
 //! to another output keeps its windows where they were on the screen.
+//!
+//! A floating window chooses its own size, as in niri: it is asked 0 on each axis not fixed, and
+//! its rectangle follows what its client commits, keeping its top-left corner. A rule's size, or
+//! a resize by the compositor, is asked instead and kept
+//! ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)).
 
 use crate::area::Area;
 use crate::geometry::{Rect, Size, nearest_in_direction};
+use crate::sizing::whole_size;
+use crate::workspace::Arranged;
 use crate::{Direction, WindowId};
 
 /// One floating window.
@@ -101,6 +108,19 @@ impl Floating {
         true
     }
 
+    /// `window`'s rectangle, relative to the working area.
+    pub fn rect(&self, window: WindowId) -> Option<Rect> {
+        self.index(window).map(|i| self.windows[i].rect)
+    }
+
+    /// Gives `window` the size its client committed, keeping its top-left corner, made to fit the
+    /// working area; nothing happens to a window that does not float here.
+    pub fn follow_commit(&mut self, window: WindowId, size: Size, area: Option<&Area>) {
+        if let Some(rect) = self.rect(window) {
+            self.set_rect(window, Rect::new(rect.x, rect.y, size.w, size.h), area);
+        }
+    }
+
     /// Moves and resizes `window` to `rect`, relative to the working area, made to fit it.
     pub fn set_rect(&mut self, window: WindowId, rect: Rect, area: Option<&Area>) -> bool {
         let Some(index) = self.index(window) else {
@@ -145,17 +165,35 @@ impl Floating {
         nearest_in_direction(from, direction, &others)
     }
 
-    /// Every window with its rectangle on the output and whether it is pinned, bottom to top,
-    /// snapped to the grid.
-    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect, bool)>) {
+    /// Every window with its rectangle on the output and the size it is asked, bottom to top,
+    /// snapped to the grid. A window is asked 0 on each axis, to choose its own size, but on an
+    /// axis whose size is fixed; or the size a rule or the compositor set. It is drawn at what its
+    /// client committed, from its corner, as niri draws a tile at its window's size.
+    pub fn arrange(&self, area: &Area, out: &mut Vec<Arranged>) {
         for f in &self.windows {
+            let sizing = area.sizing(f.window);
+            let drawn = area.drawn_size(&sizing, f.rect.size());
+            // The corner is snapped alone and the size, already on the grid, kept, so that a
+            // window of one pixel never snaps to nothing.
             let rect = Rect::new(
-                area.working.x + f.rect.x,
-                area.working.y + f.rect.y,
-                f.rect.w,
-                f.rect.h,
+                area.scale.snap(area.working.x + f.rect.x),
+                area.scale.snap(area.working.y + f.rect.y),
+                drawn.w,
+                drawn.h,
             );
-            out.push((f.window, area.scale.snap_rect(rect), f.pinned));
+            let configure = if sizing.floating_size_set {
+                whole_size(f.rect.size())
+            } else {
+                sizing.fixed_axes()
+            };
+            out.push(Arranged {
+                window: f.window,
+                rect,
+                configure,
+                tiled: false,
+                fullscreen: false,
+                pinned: f.pinned,
+            });
         }
     }
 
@@ -168,14 +206,17 @@ impl Floating {
 }
 
 /// `rect`, relative to the working area, moved so that enough of it stays on the working area to
-/// grab it, on the physical grid. Its size is kept. As niri, after Mutter: on each axis, a quarter
-/// of the window stays on, between 10 and 75 units.
+/// grab it. Its size is kept, at least a unit, on the physical grid and at least a pixel; its
+/// corner is snapped alone, so that its size does not change with its place. As niri, after
+/// Mutter: on each axis, a quarter of the window stays on, between 10 and 75 units.
 fn fit(rect: Rect, area: &Area) -> Rect {
-    let (w, h) = (rect.w.max(1.0), rect.h.max(1.0));
+    let pixel = 1.0 / area.scale.get();
+    let w = area.scale.snap(rect.w.max(1.0)).max(pixel);
+    let h = area.scale.snap(rect.h.max(1.0)).max(pixel);
     let off_x = (w - (w / 4.0).clamp(10.0, 75.0)).max(0.0);
     let off_y = (h - (h / 4.0).clamp(10.0, 75.0)).max(0.0);
     let clamp = |v: f64, low: f64, high: f64| v.max(low).min(high.max(low));
     let x = clamp(rect.x, -off_x, area.working.w - w + off_x);
     let y = clamp(rect.y, -off_y, area.working.h - h + off_y);
-    area.scale.snap_rect(Rect::new(x, y, w, h))
+    Rect::new(area.scale.snap(x), area.scale.snap(y), w, h)
 }

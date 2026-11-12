@@ -34,3 +34,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted |
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted |
+| [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |

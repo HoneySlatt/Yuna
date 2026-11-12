@@ -11,7 +11,10 @@ use crate::{Direction, OutputId, Tiling, WindowId};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Arranged {
     pub window: WindowId,
+    /// Where it is drawn, on the physical grid.
     pub rect: Rect,
+    /// The size its client is asked, in whole logical units; 0 on an axis to let it choose.
+    pub configure: Size,
     pub tiled: bool,
     pub fullscreen: bool,
     pub pinned: bool,
@@ -149,6 +152,16 @@ impl Workspace {
     /// Whether `window` is dwindle's maximised window, which lies over the other tiled ones.
     pub fn is_maximized(&self, window: WindowId) -> bool {
         matches!(&self.tiling, TilingLayout::Dwindle(d) if d.maximized_window() == Some(window))
+    }
+
+    /// The fullscreen window drawn over this workspace's tiles, whatever has the focus: a game
+    /// stays shown while its dialog or another floating window over it is focused.
+    pub fn shown_fullscreen(&self) -> Option<WindowId> {
+        match &self.tiling {
+            TilingLayout::Scrolling(s) if s.focused_is_fullscreen() => s.focused_window(),
+            TilingLayout::Scrolling(_) => None,
+            TilingLayout::Dwindle(d) => d.fullscreen_window(),
+        }
     }
 
     /// Whether a fullscreen window holds the focus, so that it covers the output and the floating
@@ -334,6 +347,22 @@ impl Workspace {
         }
     }
 
+    /// Where the view is from the focused column, in scrolling columns: see
+    /// [`Scrolling::view_from_focused`]. None in dwindle, which has no view to keep.
+    pub fn view_from_focused(&self, area: &Area) -> Option<f64> {
+        match &self.tiling {
+            TilingLayout::Scrolling(s) => Some(s.view_from_focused(area)),
+            TilingLayout::Dwindle(_) => None,
+        }
+    }
+
+    /// Puts the view at `offset` from the focused column, in scrolling columns.
+    pub fn set_view_from_focused(&mut self, offset: f64, area: &Area) {
+        if let TilingLayout::Scrolling(s) = &mut self.tiling {
+            s.set_view_from_focused(offset, area);
+        }
+    }
+
     /// Puts the view back on the focused window after the workspace's area changed.
     pub fn fit_view(&mut self, area: &Area) {
         if let TilingLayout::Scrolling(s) = &mut self.tiling {
@@ -342,49 +371,27 @@ impl Workspace {
         self.floating.refit(area);
     }
 
-    /// Every window with its rectangle, in drawing order: the tiled ones, then the floating ones,
-    /// unless a fullscreen window holds the focus. Linear in the number of windows: `arrange`
-    /// runs after every change.
+    /// Every window drawn, with its rectangle and the size it is asked, in drawing order: the
+    /// tiled ones, then the floating ones, unless a fullscreen window holds the focus. Linear in
+    /// the number of windows, save a scrolling column whose minimum heights do not fit
+    /// ([`Scrolling::arrange`]): `arrange` runs after every change.
     pub fn arrange(&self, area: &Area, out: &mut Vec<Arranged>) {
+        self.arrange_windows(area, out, false);
+    }
+
+    /// Every window, those hidden behind a fullscreen one included, with its rectangle and the
+    /// size it is asked: what a window's configure is read from, drawn or not.
+    pub fn arrange_with_hidden(&self, area: &Area, out: &mut Vec<Arranged>) {
+        self.arrange_windows(area, out, true);
+    }
+
+    fn arrange_windows(&self, area: &Area, out: &mut Vec<Arranged>, with_hidden: bool) {
         match &self.tiling {
-            TilingLayout::Scrolling(s) => {
-                let mut placed = Vec::new();
-                s.arrange(area, &mut placed);
-                out.extend(
-                    placed
-                        .into_iter()
-                        .map(|(window, rect, fullscreen)| Arranged {
-                            window,
-                            rect,
-                            tiled: true,
-                            fullscreen,
-                            pinned: false,
-                        }),
-                );
-            }
-            TilingLayout::Dwindle(d) => {
-                let mut placed = Vec::new();
-                d.arrange(area, &mut placed);
-                let fullscreen = d.fullscreen_window();
-                out.extend(placed.into_iter().map(|(window, rect)| Arranged {
-                    window,
-                    rect,
-                    tiled: true,
-                    fullscreen: fullscreen == Some(window),
-                    pinned: false,
-                }));
-            }
+            TilingLayout::Scrolling(s) => s.arrange(area, out),
+            TilingLayout::Dwindle(d) => d.arrange(area, out, with_hidden),
         }
-        if !self.fullscreen_covers() {
-            let mut placed = Vec::new();
-            self.floating.arrange(area, &mut placed);
-            out.extend(placed.into_iter().map(|(window, rect, pinned)| Arranged {
-                window,
-                rect,
-                tiled: false,
-                fullscreen: false,
-                pinned,
-            }));
+        if with_hidden || !self.fullscreen_covers() {
+            self.floating.arrange(area, out);
         }
     }
 
@@ -392,7 +399,7 @@ impl Workspace {
     pub fn check(&self, area: Option<&Area>) -> Result<(), String> {
         match &self.tiling {
             TilingLayout::Scrolling(s) => s.check(area)?,
-            TilingLayout::Dwindle(d) => d.check()?,
+            TilingLayout::Dwindle(d) => d.check(area)?,
         }
         if self.focus_floating && self.floating.is_empty() {
             return Err("focus is among floating windows, but none floats".to_owned());

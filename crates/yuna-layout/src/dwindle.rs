@@ -6,9 +6,17 @@
 //! direction is chosen from the shape at every arrangement, so a workspace moved to an output of
 //! another shape splits to suit it. The tree is as deep as it has windows at most, so it is
 //! never walked by recursion ([`Tree`]).
+//!
+//! Each window is asked its slot's size, whatever its minimum, as Hyprland does
+//! (`misc:size_limits_tiled` false), and is drawn at its committed size from the slot's top-left
+//! corner, clipped to the slot so that it never covers its neighbours
+//! ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)). A window whose maximum
+//! is smaller than the slot it would split opens floating; `Layout::open_window` decides it, from
+//! [`Dwindle::opening_slot`].
 
 use crate::area::Area;
 use crate::geometry::{Rect, nearest_in_direction};
+use crate::workspace::Arranged;
 use crate::{Direction, WindowId};
 
 /// The distance from `point` to the nearest point of `rect`; zero inside it.
@@ -559,31 +567,86 @@ impl Dwindle {
         true
     }
 
-    /// The tree's rectangles alone, before fullscreen and maximise.
+    /// The tree's slots alone, before fullscreen and maximise.
     fn arrange_tree(&self, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
         self.tree.arrange(area.working.shrunk(area.gap), area, out);
     }
 
-    /// Every window with its rectangle, in drawing order: the tree, then the maximised window
-    /// over it. With a fullscreen window, only that window, over the whole output.
-    pub fn arrange(&self, area: &Area, out: &mut Vec<(WindowId, Rect)>) {
+    /// The slot a new window would split: the focused window's, or the last window's when none
+    /// is focused, as [`Dwindle::add_window`] chooses; none when the tree is empty.
+    pub fn opening_slot(&self, area: &Area) -> Option<Rect> {
+        let root = self.tree.root?;
+        let target = self
+            .focused
+            .unwrap_or_else(|| self.tree.edge_leaf(root, false));
+        let mut slots = Vec::new();
+        self.arrange_tree(area, &mut slots);
+        slots
+            .into_iter()
+            .find(|&(window, _)| window == target)
+            .map(|(_, slot)| slot)
+    }
+
+    /// Every window's slot, as [`Dwindle::arrange`] draws it: the tree's, the maximised window's
+    /// over the working area, the fullscreen window's over the output.
+    fn slots(&self, area: &Area, with_hidden: bool) -> Vec<(WindowId, Rect)> {
+        let mut slots = Vec::new();
         if let Some(fullscreen) = self.fullscreen {
-            out.push((fullscreen, area.output));
-            return;
+            if with_hidden {
+                self.arrange_tree(area, &mut slots);
+                slots.retain(|&(window, _)| window != fullscreen);
+            }
+            slots.push((fullscreen, area.output));
+            return slots;
         }
-        let start = out.len();
-        self.arrange_tree(area, out);
+        self.arrange_tree(area, &mut slots);
         if let Some(maximized) = self.maximized
-            && let Some(index) = out[start..].iter().position(|(w, _)| *w == maximized)
+            && let Some(index) = slots.iter().position(|&(w, _)| w == maximized)
         {
-            out.remove(start + index);
+            slots.remove(index);
             let rect = area.scale.snap_rect(area.working.shrunk(area.gap));
-            out.push((maximized, rect));
+            slots.push((maximized, rect));
+        }
+        slots
+    }
+
+    /// Every window with its rectangle and the size it is asked, in drawing order: the tree, then
+    /// the maximised window over it. With a fullscreen window, only that window, centred on the
+    /// output; `with_hidden` adds the tree's windows beneath it, first.
+    pub fn arrange(&self, area: &Area, out: &mut Vec<Arranged>, with_hidden: bool) {
+        for (window, slot) in self.slots(area, with_hidden) {
+            let fullscreen = self.fullscreen == Some(window);
+            let (rect, configure) = if fullscreen {
+                area.place_fullscreen(window, slot)
+            } else {
+                area.place_in_slot(window, slot)
+            };
+            out.push(Arranged {
+                window,
+                rect,
+                configure,
+                tiled: true,
+                fullscreen,
+                pinned: false,
+            });
         }
     }
 
-    /// Checks the tree's own rules.
-    pub fn check(&self) -> Result<(), String> {
+    /// Checks the tree's own rules; with `area`, that each window drawn lies inside its slot, and
+    /// has an area whenever its slot has one.
+    pub fn check(&self, area: Option<&Area>) -> Result<(), String> {
+        if let Some(area) = area {
+            let mut placed = Vec::new();
+            self.arrange(area, &mut placed, true);
+            for (p, (window, slot)) in placed.iter().zip(self.slots(area, true)) {
+                if p.window != window || !p.rect.is_inside(&slot) {
+                    return Err(format!("{:?} is drawn outside its slot {slot:?}", p.window));
+                }
+                if slot.has_area() && !p.rect.has_area() {
+                    return Err(format!("{:?} is drawn empty in slot {slot:?}", p.window));
+                }
+            }
+        }
         let windows = self.windows();
         self.tree.check()?;
         let mut sorted = windows.clone();
@@ -647,24 +710,25 @@ mod tests {
         let count = 100_000;
         let windows: Vec<WindowId> = (1..=count).map(WindowId).collect();
         let mut tree = Dwindle::from_windows(&windows, None);
-        let area = Area {
-            output: Rect::new(0.0, 0.0, 2560.0, 1440.0),
-            working: Rect::new(0.0, 0.0, 2560.0, 1440.0),
-            gap: 16.0,
-            scale: crate::geometry::Scale::new(1.5).unwrap(),
-        };
+        let records = crate::layout::Windows::default();
+        let area = Area::new(
+            Rect::new(0.0, 0.0, 2560.0, 1440.0),
+            crate::geometry::Scale::new(1.5).unwrap(),
+            16.0,
+            &records,
+        );
         let mut placed = Vec::new();
-        tree.arrange(&area, &mut placed);
+        tree.arrange(&area, &mut placed, false);
         assert_eq!(placed.len(), windows.len());
         assert_eq!(tree.windows(), windows);
-        tree.check().unwrap();
+        tree.check(Some(&area)).unwrap();
         tree.add_window(WindowId(count + 1));
         assert!(tree.contains(WindowId(count + 1)));
         assert!(tree.remove_window(WindowId(count + 1), Some(&area)));
         // Past a dozen windows, sizes are zero: focus goes to the nearest by Hyprland's rule.
         assert!(tree.focused_window().is_some_and(|w| tree.contains(w)));
         tree.move_focused(Direction::Left, &area);
-        tree.check().unwrap();
+        tree.check(Some(&area)).unwrap();
         let copy = tree.clone();
         drop(tree);
         drop(copy);

@@ -351,10 +351,10 @@ fn leaving_fullscreen_does_not_bring_back_a_view_kept_for_another_column() {
     assert_eq!(m.rect(2).x, 16.0);
 }
 
-/// A column whose gaps leave no room gives its windows no height, inside the working area,
-/// rather than pushing them below the output.
+/// niri: src/layout/scrolling.rs:4616-4624 and 4806-4826. A column whose gaps leave no room asks
+/// each window a height of 1, never 0 (ADR-0026), and overflows the working area downwards.
 #[test]
-fn a_column_too_full_for_its_height_stays_inside_the_working_area() {
+fn a_column_too_full_for_its_height_asks_one_unit_of_each_window_and_overflows() {
     let mut m = Model::with(Options {
         gap: 300.0,
         ..Options::default()
@@ -364,12 +364,56 @@ fn a_column_too_full_for_its_height_stays_inside_the_working_area() {
         m.open(n);
         m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
     }
-    assert!(m.rect(3).bottom() <= 1080.0);
+    // (1920 − 300) × 0.5 − 300 = 510 wide; 1080 − 5 × 300 leaves no height to share.
+    let one_unit = yuna_layout::geometry::Size { w: 510.0, h: 1.0 };
+    for n in 0..4 {
+        assert_eq!(m.placement(n).configure, one_unit);
+    }
+    assert_rect(
+        m.rect(3),
+        rect(300.0, 300.0 + 3.0 * (1.0 + 300.0), 510.0, 1.0),
+    );
     let mut m = Model::new();
     m.open(0);
     for n in 1..68 {
         m.open(n);
         m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
     }
-    assert!(m.rect(67).bottom() <= 1080.0);
+    assert_rect(m.rect(67), rect(16.0, 16.0 + 67.0 * 17.0, HALF, 1.0));
+}
+
+/// niri: src/layout/scrolling.rs:1308-1343. Whatever changes the width of a column on the focused
+/// one's left, the focused column stays where it is on screen: a minimum width, a commit, a wide
+/// window leaving the column, the column going fullscreen and back.
+#[test]
+fn the_focused_column_stays_put_when_a_column_on_its_left_changes_width() {
+    use yuna_layout::geometry::Size;
+    let mut m = Model::new();
+    m.open(1);
+    m.open(2);
+    m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
+    m.open(3);
+    m.open(4);
+    // Columns [1, 2], [3], [4]; the focused one in the middle, not against an edge of the view.
+    m.ok(|l| l.focus(OWNER, Direction::Left));
+    let x = 16.0;
+    assert_eq!(m.rect(3).x, x);
+    let none = Size::default();
+    m.ok(|l| l.set_size_limits(w(1), Size { w: 1200.0, h: 0.0 }, none));
+    assert_eq!(m.rect(3).x, x);
+    let wide = Size {
+        w: 1300.0,
+        h: 516.0,
+    };
+    m.ok(|l| l.commit_size(w(2), wide));
+    assert_eq!(m.rect(3).x, x);
+    assert_eq!(m.rect(3).x - m.rect(2).right(), 16.0);
+    m.ok(|l| l.close_window(w(2)));
+    assert_eq!(m.rect(3).x, x);
+    assert_eq!(m.rect(1).w, 1200.0);
+    m.ok(|l| l.set_fullscreen(w(1), true));
+    assert_eq!(m.rect(3).x, x);
+    m.ok(|l| l.set_fullscreen(w(1), false));
+    assert_eq!(m.rect(3).x, x);
+    assert_eq!(m.rect(3).x - m.rect(1).right(), 16.0);
 }

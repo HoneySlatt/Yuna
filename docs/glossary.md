@@ -4,9 +4,16 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Column**: in scrolling columns, windows stacked from top to bottom that share one width.
+- **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
+  an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
+  the column is as wide as the widest of them as drawn.
+- **Committed size**: the window geometry a client last committed; the layout draws the window at
+  it, and places scrolling columns by it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - **Development shell**: the environment `nix develop` opens from `flake.nix`, with the pinned
   toolchain and every tool the checks use; CI runs in it too.
+- **Dialog**: a window that names a parent, as xdg-shell's `set_parent`; it opens floating, centred
+  on its parent, and takes the focus only from it.
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
 - **Dynamic workspaces**: an option of the layout: each output keeps one empty unnamed workspace
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::area::Area;
 use crate::geometry::{Rect, Scale, Size};
 use crate::scrolling::ColumnWidth;
+use crate::sizing::Sizing;
 use crate::workspace::{Arranged, TilingLayout, Workspace};
 use crate::{
     Direction, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId, Tiling,
@@ -17,13 +18,20 @@ pub struct Layout {
     options: Options,
     seats: Vec<Seat>,
     /// What the model knows of each window beyond its place.
-    windows: HashMap<WindowId, WindowRecord>,
+    windows: Windows,
 }
+
+/// Every window's record, by its id.
+pub(crate) type Windows = HashMap<WindowId, WindowRecord>;
 
 /// A window's state that does not depend on where it is.
 #[derive(Debug, Clone)]
-struct WindowRecord {
+pub(crate) struct WindowRecord {
     seat: SeatId,
+    /// The window it is a dialog of, on the same seat.
+    parent: Option<WindowId>,
+    /// What decides its size: its client's limits and commits.
+    pub sizing: Sizing,
     fake_fullscreen: bool,
     /// Where it last floated, relative to the working area, to float there again.
     floating_rect: Option<Rect>,
@@ -57,8 +65,8 @@ struct Output {
 }
 
 impl Output {
-    fn area(&self, gap: f64) -> Area {
-        Area::new(self.rect, self.scale, gap)
+    fn area<'a>(&self, gap: f64, windows: &'a Windows) -> Area<'a> {
+        Area::new(self.rect, self.scale, gap, windows)
     }
 }
 
@@ -97,7 +105,7 @@ impl Layout {
         Ok(Layout {
             options,
             seats: Vec::new(),
-            windows: HashMap::new(),
+            windows: Windows::default(),
         })
     }
 
@@ -169,18 +177,19 @@ impl Layout {
     }
 
     /// The workspace in `slot` and its area, when it has an output.
-    fn workspace_mut(&mut self, si: usize, slot: Slot) -> (&mut Workspace, Option<Area>) {
+    fn workspace_mut(&mut self, si: usize, slot: Slot) -> (&mut Workspace, Option<Area<'_>>) {
         let gap = self.options.gap;
+        let windows = &self.windows;
         let seat = &mut self.seats[si];
         match slot {
             Slot::Output { output, index } => {
                 let output = &mut seat.outputs[output];
-                let area = output.area(gap);
+                let area = output.area(gap, windows);
                 (&mut output.workspaces[index], Some(area))
             }
             Slot::ShownSpecial { output } => {
                 let output = &mut seat.outputs[output];
-                let area = output.area(gap);
+                let area = output.area(gap, windows);
                 let special = output.special.as_mut().expect(
                     "a ShownSpecial slot is made only for an output showing a special workspace",
                 );
@@ -297,7 +306,7 @@ impl Layout {
         let gap = self.options.gap;
         let output = &mut self.seats[si].outputs[oi];
         // The pinned windows stay with the output, not with the workspace leaving it.
-        gather_pinned(output, gap);
+        gather_pinned(output, gap, &self.windows);
         let workspace = output.workspaces.remove(index);
         if output.shown > index {
             output.shown -= 1;
@@ -311,7 +320,7 @@ impl Layout {
         let options = self.options.clone();
         let seat = &mut self.seats[si];
         for output in &mut seat.outputs {
-            gather_pinned(output, options.gap);
+            gather_pinned(output, options.gap, &self.windows);
             let last = output.workspaces.len().saturating_sub(1);
             for i in (0..output.workspaces.len()).rev() {
                 let ws = &output.workspaces[i];
@@ -335,7 +344,7 @@ impl Layout {
                     options.default_tiling,
                 ));
             }
-            let area = output.area(options.gap);
+            let area = output.area(options.gap, &self.windows);
             for workspace in &mut output.workspaces {
                 workspace.fit_view(&area);
             }
@@ -443,7 +452,7 @@ impl Layout {
                 }
             }
         }
-        let area = self.seats[si].outputs[new].area(self.options.gap);
+        let area = self.seats[si].outputs[new].area(self.options.gap, &self.windows);
         for workspace in &mut workspaces {
             workspace.fit_view(&area);
         }
@@ -488,7 +497,7 @@ impl Layout {
             return Ok(());
         };
         // The pinned windows go with them; `tidy` brings them over to the workspace shown.
-        let area = target.area(gap);
+        let area = target.area(gap, &self.windows);
         for mut workspace in workspaces {
             workspace.fit_view(&area);
             target.workspaces.push(workspace);
@@ -887,9 +896,18 @@ impl Layout {
 
     // ----- Windows -----
 
-    /// Opens a window for a seat: on the named workspace of `options`, else on the special
-    /// workspace shown on the seat's active output, else on the workspace that output shows. A
-    /// seat without an output keeps it on a workspace that waits for one.
+    /// Opens a window for a seat: on the named workspace of `options`; else a dialog on its
+    /// parent's workspace; else on the special workspace shown on the seat's active output, else
+    /// on the workspace that output shows. A seat without an output keeps it on a workspace that
+    /// waits for one.
+    ///
+    /// It opens floating when asked to, when it has a parent, when its height is fixed, or, in
+    /// dwindle, when its maximum is smaller than the slot it would split (niri and Hyprland,
+    /// [ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)). A dialog opens centred
+    /// on its parent, kept on the working area, and takes the focus only if its parent has its
+    /// seat's focus, a fullscreen parent's included; another window takes it unless a fullscreen
+    /// window holds it. Refused for nonsense sizes or limits, and for a parent unknown or on
+    /// another seat.
     pub fn open_window(
         &mut self,
         seat: SeatId,
@@ -910,9 +928,27 @@ impl Layout {
         {
             return Err(LayoutError::InvalidValue);
         }
-        let slot = match &options.workspace {
-            Some(name) => self.named_slot_or_create(si, name),
-            None => match self.focused_slot(si) {
+        if !valid_limits(options.min_size, options.max_size) {
+            return Err(LayoutError::InvalidValue);
+        }
+        if let Some(size) = options.committed
+            && !valid_size(size)
+        {
+            return Err(LayoutError::InvalidValue);
+        }
+        let committed = options.committed;
+        let parent_slot = match options.parent {
+            Some(parent) => match self.find_window(parent) {
+                Ok((parent_seat, slot)) if parent_seat == si => Some(slot),
+                _ => return Err(LayoutError::UnknownWindow(parent)),
+            },
+            None => None,
+        };
+        let focused_before = self.focused(seat);
+        let slot = match (&options.workspace, parent_slot) {
+            (Some(name), _) => self.named_slot_or_create(si, name),
+            (None, Some(slot)) => slot,
+            (None, None) => match self.focused_slot(si) {
                 Some(slot) => slot,
                 None => {
                     let tiling = self.options.default_tiling;
@@ -924,10 +960,19 @@ impl Layout {
                 }
             },
         };
+        let sizing = Sizing {
+            min: options.min_size,
+            max: options.max_size,
+            committed,
+            // Set below, once it is known whether the window floats.
+            floating_size_set: false,
+        };
         self.windows.insert(
             window,
             WindowRecord {
                 seat,
+                parent: options.parent,
+                sizing,
                 fake_fullscreen: false,
                 floating_rect: None,
                 float_after_fullscreen: false,
@@ -938,7 +983,16 @@ impl Layout {
             _ => None,
         };
         let default_width = self.options.default_width;
-        let size = options.size.unwrap_or(self.options.default_floating_size);
+        let size = options
+            .size
+            .or(committed)
+            .or(sizing.fixed_size())
+            .unwrap_or(self.options.default_floating_size);
+        // niri: a dialog takes the focus only from its parent (src/layout/workspace.rs:681).
+        let takes_focus = options.parent.is_none_or(|p| focused_before == Some(p));
+        let parent_here = options
+            .parent
+            .filter(|&p| self.workspace(si, slot).contains(p));
         // Behind a fullscreen game in dwindle, a window asking to open fullscreen opens normally.
         let fullscreen =
             options.fullscreen && !screen_held_by_another(self.workspace(si, slot), window);
@@ -946,16 +1000,30 @@ impl Layout {
         if let Some(home) = home {
             workspace.settle_on(home);
         }
+        let floats = options.floating
+            || options.parent.is_some()
+            || sizing.fixed_height()
+            || area
+                .as_ref()
+                .is_some_and(|area| maximum_too_small(workspace, area, sizing.max));
         // As niri: a window opened floating and fullscreen floats on leaving fullscreen, centred
         // at its size.
-        let float_after = options.floating && fullscreen;
+        let float_after = floats && fullscreen;
         let floating_rect = area.as_ref().filter(|_| float_after).map(|area| {
             let x = ((area.working.w - size.w) / 2.0).max(0.0);
             let y = ((area.working.h - size.h) / 2.0).max(0.0);
             Rect::new(x, y, size.w, size.h)
         });
-        if options.floating && !fullscreen {
-            workspace.add_floating(window, None, size, area.as_ref(), true);
+        if floats && !fullscreen {
+            let rect = parent_here
+                .zip(area.as_ref())
+                .and_then(|(parent, area)| rect_over_parent(workspace, parent, size, area));
+            workspace.add_floating(window, rect, size, area.as_ref(), takes_focus);
+            if takes_focus && parent_here.is_some() {
+                // Over a fullscreen parent too: its own dialog takes the focus and shows over it,
+                // the parent staying fullscreen (games first, ADR-0026).
+                workspace.focus_window(window, area.as_ref());
+            }
         } else {
             let width = options.width.unwrap_or(default_width);
             workspace.add_tiled(window, width, area.as_ref());
@@ -966,17 +1034,86 @@ impl Layout {
         if let Some(record) = self.windows.get_mut(&window) {
             record.float_after_fullscreen = float_after;
             record.floating_rect = floating_rect;
+            // A rule's size is a floating size: a window opening tiled keeps following commits
+            // when it floats later.
+            record.sizing.floating_size_set = options.size.is_some() && floats;
         }
         self.tidy(si);
         Ok(())
     }
 
-    /// Closes a window: it leaves the model.
+    /// The size a window would be asked in its first configure if it opened now with `options`,
+    /// so that its client draws its first frame at the size it will have (ADR-0026). Nothing
+    /// changes: the window opens on a copy of the seat, by [`Layout::open_window`]'s own path,
+    /// and is refused for the same reasons. 0 on each axis a floating window chooses itself, and
+    /// 0 × 0 on a seat without an output, to let the client choose.
+    ///
+    /// Its cost is linear in the seat's windows, which are copied, plus a scan of every window's
+    /// record.
+    pub fn size_on_open(&self, seat: SeatId, options: &OpenOptions) -> Result<Size, LayoutError> {
+        let si = self.seat_index(seat)?;
+        let mut probe = Layout {
+            options: self.options.clone(),
+            seats: vec![self.seats[si].clone()],
+            windows: self
+                .windows
+                .iter()
+                .filter(|(_, record)| record.seat == seat)
+                .map(|(&id, record)| (id, record.clone()))
+                .collect(),
+        };
+        // An id no window has; if every id were taken, opening would refuse it.
+        let window = (0..=u64::MAX)
+            .rev()
+            .map(WindowId)
+            .find(|id| !probe.windows.contains_key(id))
+            .unwrap_or(WindowId(u64::MAX));
+        probe.open_window(seat, window, options.clone())?;
+        Ok(probe.asked_size(window).unwrap_or_default())
+    }
+
+    /// The size `window` is asked, drawn or hidden: from its workspace's output, or the seat's
+    /// active output for a hidden special workspace. None on a seat without an output.
+    fn asked_size(&self, window: WindowId) -> Option<Size> {
+        let (si, slot) = self.find_window(window).ok()?;
+        let seat = &self.seats[si];
+        let output = match slot {
+            Slot::Output { output, .. } | Slot::ShownSpecial { output } => output,
+            Slot::Detached(_) | Slot::HiddenSpecial(_) => seat.active,
+        };
+        let area = seat
+            .outputs
+            .get(output)?
+            .area(self.options.gap, &self.windows);
+        let mut placed = Vec::new();
+        self.workspace(si, slot)
+            .arrange_with_hidden(&area, &mut placed);
+        placed
+            .into_iter()
+            .find(|p| p.window == window)
+            .map(|p| p.configure)
+    }
+
+    /// Closes a window: it leaves the model. A fullscreen window's dialog closing with the focus
+    /// gives the focus back to it (games first, ADR-0026). Its own dialogs become its parent's, as
+    /// xdg-shell says.
     pub fn close_window(&mut self, window: WindowId) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
+        let parent = self.windows.get(&window).and_then(|r| r.parent);
+        let workspace = self.workspace(si, slot);
+        let back_to =
+            parent.filter(|&p| workspace.focused() == Some(window) && workspace.is_fullscreen(p));
         let (workspace, area) = self.workspace_mut(si, slot);
         workspace.remove(window, area.as_ref());
+        if let Some(parent) = back_to {
+            workspace.focus_window(parent, area.as_ref());
+        }
         self.windows.remove(&window);
+        for record in self.windows.values_mut() {
+            if record.parent == Some(window) {
+                record.parent = parent;
+            }
+        }
         self.close_special_if_emptied(si, slot);
         self.tidy(si);
         Ok(())
@@ -1017,7 +1154,7 @@ impl Layout {
             set_tiled_fullscreen(workspace, window, false, area.as_ref());
             let size = area
                 .as_ref()
-                .and_then(|area| tiled_rect(workspace, window, area))
+                .and_then(|area| drawn_rect(workspace, window, area))
                 .map_or(default_size, |r| r.size());
             let was_focused = workspace.focused() == Some(window);
             workspace.remove(window, area.as_ref());
@@ -1041,18 +1178,131 @@ impl Layout {
     }
 
     /// Moves and resizes a floating window; `rect` is relative to the working area's top-left
-    /// corner; enough of the window stays on it to grab it. Refused for a tiled window.
+    /// corner; enough of the window stays on it to grab it. A new size is asked of its client and
+    /// kept from then on, rather than following its commits; a move alone keeps it following
+    /// them. Refused for a tiled window.
     pub fn set_floating_rect(&mut self, window: WindowId, rect: Rect) -> Result<(), LayoutError> {
         if !(valid_coordinate(rect.x) && valid_coordinate(rect.y) && valid_size(rect.size())) {
             return Err(LayoutError::InvalidValue);
         }
         let (si, slot) = self.find_window(window)?;
         let (workspace, area) = self.workspace_mut(si, slot);
-        if !workspace.floating.set_rect(window, rect, area.as_ref()) {
+        let Some(before) = workspace.floating.rect(window) else {
             return Err(LayoutError::Refused("the window is tiled"));
+        };
+        workspace.floating.set_rect(window, rect, area.as_ref());
+        // Compared once fitted, so that a move alone never counts as a resize.
+        let after = workspace.floating.rect(window).unwrap_or(before);
+        let resized = after.size() != before.size();
+        if let (true, Some(record)) = (resized, self.windows.get_mut(&window)) {
+            record.sizing.floating_size_set = true;
         }
         self.tidy(si);
         Ok(())
+    }
+
+    /// Records the minimum and maximum sizes a window's client asks, 0 on an axis for none.
+    /// Refused for a value not finite, negative or above 100,000, and for a maximum below the
+    /// minimum on the same axis.
+    pub fn set_size_limits(
+        &mut self,
+        window: WindowId,
+        min: Size,
+        max: Size,
+    ) -> Result<(), LayoutError> {
+        if !valid_limits(min, max) {
+            return Err(LayoutError::InvalidValue);
+        }
+        let (si, slot) = self.find_window(window)?;
+        let held = self.view_from_focused(si, slot);
+        if let Some(record) = self.windows.get_mut(&window) {
+            record.sizing.min = min;
+            record.sizing.max = max;
+        }
+        self.set_view_from_focused(si, slot, held);
+        self.tidy(si);
+        Ok(())
+    }
+
+    /// Records the window geometry a window's client committed. Scrolling columns follow it, the
+    /// focused column staying where it is on screen; a dwindle window is drawn at it inside its
+    /// slot, a fullscreen one centred on its output; and a floating one takes it, keeping its
+    /// top-left corner, unless a rule or the compositor set its size (ADR-0026). Refused for a
+    /// size zero, negative, not finite or above 100,000.
+    pub fn commit_size(&mut self, window: WindowId, size: Size) -> Result<(), LayoutError> {
+        if !valid_size(size) {
+            return Err(LayoutError::InvalidValue);
+        }
+        let (si, slot) = self.find_window(window)?;
+        let held = self.view_from_focused(si, slot);
+        let mut follows = false;
+        if let Some(record) = self.windows.get_mut(&window) {
+            record.sizing.committed = Some(size);
+            follows = !record.sizing.floating_size_set;
+        }
+        if follows {
+            let (workspace, area) = self.workspace_mut(si, slot);
+            workspace
+                .floating
+                .follow_commit(window, size, area.as_ref());
+        }
+        self.set_view_from_focused(si, slot, held);
+        self.tidy(si);
+        Ok(())
+    }
+
+    /// Where the view of the workspace in `slot` is from its focused column, when the workspace
+    /// is on an output and has scrolling columns. Read before a window's sizes change and given
+    /// back after, it keeps the focused column where it is on screen while a column on its left
+    /// changes width, as niri does (src/layout/scrolling.rs:1308-1343).
+    fn view_from_focused(&self, si: usize, slot: Slot) -> Option<f64> {
+        let output = match slot {
+            Slot::Output { output, .. } | Slot::ShownSpecial { output } => output,
+            Slot::Detached(_) | Slot::HiddenSpecial(_) => return None,
+        };
+        let area = self.seats[si].outputs[output].area(self.options.gap, &self.windows);
+        self.workspace(si, slot).view_from_focused(&area)
+    }
+
+    /// Gives back a view read by [`Layout::view_from_focused`].
+    fn set_view_from_focused(&mut self, si: usize, slot: Slot, held: Option<f64>) {
+        let (workspace, area) = self.workspace_mut(si, slot);
+        if let (Some(held), Some(area)) = (held, area) {
+            workspace.set_view_from_focused(held, &area);
+        }
+    }
+
+    /// A client's request to activate its window (xdg-activation): focuses it, as
+    /// [`Layout::focus_window`], and returns true; unless a fullscreen window holds the seat's
+    /// focus and the window is neither it nor its dialog: then returns false and changes
+    /// nothing, and the compositor marks the window urgent (games first, ADR-0026).
+    pub fn request_activation(&mut self, window: WindowId) -> Result<bool, LayoutError> {
+        let (si, _) = self.find_window(window)?;
+        // A game holds its screen while it, its dialog or a window over it has the focus.
+        if let Some(slot) = self.focused_slot(si)
+            && let Some(game) = self.workspace(si, slot).shown_fullscreen()
+            && !self.is_dialog_of(window, game)
+            && self.workspace(si, slot).focused() != Some(window)
+        {
+            return Ok(false);
+        }
+        self.focus_window(window)?;
+        Ok(true)
+    }
+
+    /// Whether `window` is `ancestor` or a dialog of it, directly or through other dialogs: a
+    /// game's settings dialog may open a file chooser of its own. The walk is bounded by the
+    /// number of windows, so a cycle of parents could not loop.
+    fn is_dialog_of(&self, window: WindowId, ancestor: WindowId) -> bool {
+        let mut current = Some(window);
+        for _ in 0..=self.windows.len() {
+            match current {
+                Some(w) if w == ancestor => return true,
+                Some(w) => current = self.windows.get(&w).and_then(|r| r.parent),
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Makes a window fullscreen, or not. A fullscreen window is always tiled, as in niri: a
@@ -1236,16 +1486,21 @@ impl Layout {
     /// The windows an output shows, in drawing order, bottom to top: the workspace it shows, its
     /// tiled windows then its floating ones; the special workspace over it; the pinned windows
     /// over everything, as in Hyprland. While a fullscreen window holds a workspace's focus, its
-    /// floating and pinned windows are not drawn.
+    /// floating and pinned windows are not drawn. Each comes with the rectangle it is drawn in
+    /// and the size its client is asked ([`Placed`]).
+    ///
+    /// Its cost is linear in the windows of the workspaces shown, save a scrolling column whose
+    /// windows' minimum heights do not fit: that column costs up to the square of its windows.
     pub fn arrange(&self, output: OutputId) -> Result<Vec<Placed>, LayoutError> {
         let (si, oi) = self.output_index(output)?;
         let seat = &self.seats[si];
         let o = &seat.outputs[oi];
-        let area = o.area(self.options.gap);
+        let area = o.area(self.options.gap, &self.windows);
         let focused = self.focused(seat.id);
         let place = |a: Arranged| Placed {
             window: a.window,
             rect: a.rect,
+            configure: a.configure,
             tiled: a.tiled,
             fullscreen: a.fullscreen
                 || self
@@ -1336,7 +1591,7 @@ impl Layout {
                 ));
             }
             for output in &seat.outputs {
-                let area = output.area(self.options.gap);
+                let area = output.area(self.options.gap, &self.windows);
                 self.check_output(output, &area)?;
                 for (i, ws) in output.workspaces.iter().enumerate() {
                     names.extend(ws.name.as_deref());
@@ -1459,8 +1714,13 @@ impl Layout {
         self.check_placed(output, area, &placed)
     }
 
-    /// Checks what an output shows: rectangles on the grid; fullscreen windows over the output;
-    /// tiled windows apart from one another, within the working area's height.
+    /// Checks what an output shows: rectangles finite and on the grid, with an area (dwindle's own
+    /// check allows an empty one in an empty slot); sizes asked finite and whole, at least 1 on
+    /// each axis but 0 on an axis a floating window chooses itself; fullscreen windows inside the
+    /// output and centred on it; tiled windows apart from one another, never above the working
+    /// area, and in dwindle inside it. Scrolling columns check their own heights
+    /// ([`Workspace::check`]): they may overflow downwards when their windows' minimums do not
+    /// fit (ADR-0026).
     fn check_placed(&self, output: &Output, area: &Area, placed: &[Placed]) -> Result<(), String> {
         let shown = &output.workspaces[output.shown];
         let layers: [(&Workspace, Vec<&Placed>); 2] = [
@@ -1480,28 +1740,31 @@ impl Layout {
             },
         ];
         for p in placed {
-            if !area.scale.is_rect_on_grid(&p.rect) {
-                return Err(format!(
-                    "{:?} at {:?} is off the physical grid",
-                    p.window, p.rect
-                ));
+            let r = &p.rect;
+            if ![r.x, r.y, r.w, r.h].iter().all(|v| v.is_finite()) {
+                return Err(format!("{:?} is at {r:?}", p.window));
             }
+            if !area.scale.is_rect_on_grid(r) {
+                return Err(format!("{:?} at {r:?} is off the physical grid", p.window));
+            }
+            check_configure(p)?;
         }
         for (workspace, placed) in layers {
+            let dwindle = workspace.tiling_kind() == Tiling::Dwindle;
+            for p in &placed {
+                if !p.rect.has_area() && !(dwindle && p.tiled) {
+                    return Err(format!("{:?} is drawn empty at {:?}", p.window, p.rect));
+                }
+            }
             let tiled: Vec<&&Placed> = placed
                 .iter()
                 .filter(|p| p.tiled && !workspace.is_maximized(p.window))
                 .collect();
             for p in &tiled {
                 if workspace.is_fullscreen(p.window) {
-                    if (p.rect.y - area.output.y).abs() > 1e-6
-                        || (p.rect.w - area.output.w).abs() > 1e-6
-                        || (p.rect.h - area.output.h).abs() > 1e-6
-                    {
-                        return Err(format!("fullscreen {:?} is at {:?}", p.window, p.rect));
-                    }
+                    check_fullscreen(p, area)?;
                 } else if p.rect.y < area.working.y - 1e-6
-                    || p.rect.bottom() > area.working.bottom() + 1e-6
+                    || (dwindle && !p.rect.is_inside(&area.working))
                 {
                     return Err(format!("tiled {:?} leaves the working area", p.window));
                 }
@@ -1518,22 +1781,53 @@ impl Layout {
     }
 }
 
+/// Checks the size a window is asked: finite and whole on each axis, at least 1, or 0 for a
+/// floating window that chooses that axis itself.
+fn check_configure(p: &Placed) -> Result<(), String> {
+    let axis = |v: f64| v.is_finite() && v == v.round() && (v >= 1.0 || (!p.tiled && v == 0.0));
+    if !(axis(p.configure.w) && axis(p.configure.h)) {
+        return Err(format!("{:?} is asked {:?}", p.window, p.configure));
+    }
+    Ok(())
+}
+
+/// Checks a fullscreen window: inside its output's height and size, centred on it vertically to
+/// a physical pixel. Horizontally, a fullscreen column out of view lies beside the output.
+fn check_fullscreen(p: &Placed, area: &Area) -> Result<(), String> {
+    let (rect, output) = (p.rect, area.output);
+    let tolerance = 1.0 / area.scale.get() + 1e-6;
+    let inside = rect.y >= output.y - 1e-6
+        && rect.bottom() <= output.bottom() + 1e-6
+        && rect.w <= output.w + 1e-6;
+    let centred = ((rect.y - output.y) - (output.bottom() - rect.bottom())).abs() <= tolerance;
+    // A fullscreen column scrolled out of view lies beside the output; one in view is centred
+    // across it too.
+    let in_view = rect.x >= output.x - 1e-6 && rect.right() <= output.right() + 1e-6;
+    let centred_across =
+        !in_view || ((rect.x - output.x) - (output.right() - rect.right())).abs() <= tolerance;
+    if !(inside && centred && centred_across) {
+        return Err(format!("fullscreen {:?} is at {rect:?}", p.window));
+    }
+    Ok(())
+}
+
 /// Why a window may not take the screen: another window's fullscreen holds it.
 const SCREEN_HELD: &str = "another window's fullscreen holds the screen";
 
-/// Whether, in dwindle, another window than `window` is fullscreen and holds the focus: a client
-/// may then not take the screen (the owner's choice: games first, ADR-0019). Scrolling columns
-/// let several windows be fullscreen, each in its own column, so nothing is taken there.
+/// Whether, in dwindle, another window than `window` is fullscreen: it holds the screen, a client
+/// may then not take it (the owner's choice: games first, ADR-0019). In dwindle a fullscreen
+/// window has the tiles' focus, so it holds the screen whether it has the seat's focus or a
+/// floating window over it has, its own dialog among them. Scrolling columns let several windows
+/// be fullscreen, each in its own column, so nothing is taken there.
 fn screen_held_by_another(workspace: &Workspace, window: WindowId) -> bool {
     matches!(&workspace.tiling, TilingLayout::Dwindle(d)
         if d.fullscreen_window().is_some_and(|f| f != window))
-        && workspace.fullscreen_covers()
 }
 
 /// Brings the pinned windows of an output's workspaces over to the workspace it shows, on top,
 /// without taking the focus: a pinned window shows over whichever workspace its output shows.
-fn gather_pinned(output: &mut Output, gap: f64) {
-    let area = output.area(gap);
+fn gather_pinned(output: &mut Output, gap: f64, windows: &Windows) {
+    let area = output.area(gap, windows);
     let shown = output.shown;
     for index in 0..output.workspaces.len() {
         if index == shown {
@@ -1585,14 +1879,43 @@ fn set_tiled_fullscreen(
     }
 }
 
-/// A tiled window's rectangle on `area`.
-fn tiled_rect(workspace: &Workspace, window: WindowId, area: &Area) -> Option<Rect> {
+/// Where `window` is drawn on `area`, if it is.
+fn drawn_rect(workspace: &Workspace, window: WindowId, area: &Area) -> Option<Rect> {
     let mut placed = Vec::new();
     workspace.arrange(area, &mut placed);
     placed
         .into_iter()
         .find(|a| a.window == window)
         .map(|a| a.rect)
+}
+
+/// Where a dialog of `size` opens, relative to the working area: centred on its parent as drawn,
+/// kept on the working area, its top-left corner first (niri: src/layout/workspace.rs:696-704,
+/// src/utils/mod.rs:521-531). None when the parent is not drawn: the dialog is then centred on
+/// the working area.
+fn rect_over_parent(
+    workspace: &Workspace,
+    parent: WindowId,
+    size: Size,
+    area: &Area,
+) -> Option<Rect> {
+    let over = drawn_rect(workspace, parent, area)?;
+    let x = over.x + (over.w - size.w) / 2.0 - area.working.x;
+    let y = over.y + (over.h - size.h) / 2.0 - area.working.y;
+    let x = x.min(area.working.w - size.w).max(0.0);
+    let y = y.min(area.working.h - size.h).max(0.0);
+    Some(Rect::new(x, y, size.w, size.h))
+}
+
+/// Whether, in dwindle, a window of maximum size `max` cannot fill the slot it would split, the
+/// working area when the tree is empty: it then opens floating, as in Hyprland
+/// (src/layout/algorithm/tiled/dwindle/DwindleAlgorithm.cpp:107-115). 0 on an axis is no maximum.
+fn maximum_too_small(workspace: &Workspace, area: &Area, max: Size) -> bool {
+    let TilingLayout::Dwindle(dwindle) = &workspace.tiling else {
+        return false;
+    };
+    let space = dwindle.opening_slot(area).unwrap_or(area.working);
+    (max.w > 0.0 && max.w < space.w) || (max.h > 0.0 && max.h < space.h)
 }
 
 /// The widest size, in logical units, a window or an output may have: 25 times a 4K output's
@@ -1606,6 +1929,17 @@ const MAX_GAP: f64 = 1_000.0;
 fn valid_size(size: Size) -> bool {
     (f64::MIN_POSITIVE..=MAX_SIZE).contains(&size.w)
         && (f64::MIN_POSITIVE..=MAX_SIZE).contains(&size.h)
+}
+
+/// Minimum and maximum sizes, 0 on an axis for none: finite, between 0 and [`MAX_SIZE`], and a
+/// maximum never below the minimum on its axis.
+fn valid_limits(min: Size, max: Size) -> bool {
+    let axis = |min: f64, max: f64| {
+        (0.0..=MAX_SIZE).contains(&min)
+            && (0.0..=MAX_SIZE).contains(&max)
+            && (max == 0.0 || max >= min)
+    };
+    axis(min.w, max.w) && axis(min.h, max.h)
 }
 
 fn valid_coordinate(value: f64) -> bool {
