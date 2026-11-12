@@ -22,7 +22,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   ([steps](hdr-prototype.md)): the prototype is built, tested and reviewed. The owner decided on
   2026-11-12 that M1.4 starts meanwhile; the verdict should come before M1.4 ends, since a
   failure on Smithay's side would reopen [ADR-0011](adr/0011-built-on-smithay.md).
-- Current: [M1.4](#m14--the-headless-compositor).
+- [M1.4](#m14--the-headless-compositor) designed on 2026-11-12
+  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
+  [ADR-0025](adr/0025-applications-in-ci.md)). Current: M1.4, Phase A.
 
 ## Status
 
@@ -107,18 +109,26 @@ milestone first needs it.
 ### M1.4 — The headless compositor
 
 - **Goal.** A Wayland application runs in Yuna without a screen.
-- **Delivers.** Yuna's headless output backend, in Yuna or its Smithay fork: virtual outputs of any
-  size, rate and scale, 3840 × 2160 at 240 Hz and 1.5 by default; a controlled clock; drawing
-  through GLES on the GPU or Mesa's CPU renderer. The protocols an application needs: `xdg-shell`,
-  `linux-dmabuf`, viewporter, fractional scale, presentation time, `xdg-decoration`, cursor shape,
-  data device, text input; the layout model of M1.2 behind them, with what it still lacks for real
-  clients ([ADR-0020](adr/0020-the-layout-models-shape.md)): sizes asked and sizes committed,
-  configure sizes in whole logical units, clients that ignore their size in the property tests;
-  dialogs opening next to their parent, and a focus policy; a minimum window size, dwindle
-  included; which windows are told they are activated.
-- **Done when.** Alacritty, a GTK 4 and a Qt 6 application, and uwui's and SlimeEngine's windowed
-  examples run in it in CI, and each draws nothing at rest.
-- **Measured.** Rest; a frame's GPU and CPU time on a 4K output.
+- **Design.** Decided with the owner on 2026-11-12: [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)
+  to [ADR-0025](adr/0025-applications-in-ci.md). Phase B starts once Phase A is done, with or
+  without M1.3's verdict.
+- **Delivers, Phase A: the layout model's client side** ([ADR-0020](adr/0020-the-layout-models-shape.md)),
+  built from traces of real clients: sizes asked and sizes committed, configure sizes in whole
+  logical units, clients that ignore their size in the property tests; minimum and maximum sizes,
+  dwindle included, and windows that do not fit; dialogs opening next to their parent; a focus
+  policy; which windows are told they are activated; dwindle walked without recursion; a cap on a
+  client's windows.
+- **Delivers, Phase B: the compositor.** `yuna --headless`, its virtual outputs (ADR-0022), its
+  frames and clock (ADR-0023). `xdg-shell`, `xdg-decoration` (ADR-0024), `xdg-activation`,
+  `xdg-dialog`, `wl_shm`, `linux-dmabuf`, viewporter, fractional scale, presentation time, data
+  device, primary selection and `ext-data-control`, a seat with a keyboard. Tests in CI
+  (ADR-0025).
+- **Done when.** Alacritty, `gtk4-demo`, Qt's `qml` and `vkcube` run in Yuna in CI at each push, and
+  SlimeEngine's `window` example in the weekly job; each draws nothing at rest by ADR-0025's
+  check; misbehaving clients never take Yuna down.
+- **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
+  consent, on the GPU; CI's time.
+- **Where it stands** (2026-11-12). Designed; Phase A starts.
 
 ### M1.5 — Agents' control
 
@@ -126,10 +136,12 @@ milestone first needs it.
   ([ADR-0015](adr/0015-agents-workspaces.md)).
 - **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
-  presentation times read, the clock stepped. One seat per agent; a test that an agent's input never
+  presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
+  so that input tests them. One seat per agent; a test that an agent's input never
   reaches another seat. The layout model arranges a workspace not shown, for the owner's peek
   ([ADR-0020](adr/0020-the-layout-models-shape.md)).
-- **Done when.** An agent, through MCP alone, opens one of uwui's examples, types, clicks and checks
+- **Done when.** An agent, through MCP alone, opens one of SlimeEngine's examples (uwui's once it has
+  some, [ADR-0025](adr/0025-applications-in-ci.md)), types, clicks and checks
   the result by capture.
 - **Measured.** An MCP call's time; a capture's time on a 4K output.
 

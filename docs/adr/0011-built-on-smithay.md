@@ -1,6 +1,6 @@
 # 0011. Built on Smithay, its patches kept in Yuna
 
-- Status: Accepted
+- Status: Accepted; amended by [0022](0022-the-headless-backend-in-yuna.md) (the headless backend is Yuna's code)
 - Date: 2026-11-11
 
 ## Context

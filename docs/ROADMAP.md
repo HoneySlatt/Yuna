@@ -109,6 +109,10 @@ it is met.
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
 | Smithay's fork | A private repository, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
+| Headless backend | Yuna's own code on upstream Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
+| Frames and clock | Drawn on damage, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)) |
+| Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
+| Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 
 ### Open
 
@@ -139,8 +143,9 @@ it is met.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
 
-**Exit.** uwui's, SlimeEngine's and Aerith's windowed examples run in Yuna headless in CI, driven by
-an agent through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
+**Exit.** SlimeEngine's and Aerith's windowed examples, and uwui's once it has some
+([ADR-0025](adr/0025-applications-in-ci.md)), run in Yuna headless in CI, driven by an agent
+through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
 and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
 verdict; the rivals' figures are in `docs/measurements.md`.
 
@@ -152,7 +157,8 @@ verdict; the rivals' figures are in `docs/measurements.md`.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5.
 - Amane on top through standard protocols.
-- The touchpad's gestures; the configuration live; per-application rules, terminal swallowing.
+- The touchpad's gestures; the configuration live; per-application rules, terminal swallowing;
+  input methods (`input-method-v2`).
 - The crash restart and session restore.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
