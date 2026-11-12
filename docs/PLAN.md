@@ -196,6 +196,9 @@ milestone first needs it.
   compositors.
 - Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
   (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
+- Idle built into Yuna rather than swayidle (the owner's idea, 2026-11-12): its own timer, outputs
+  dimmed and turned off, sleep, games, films and `idle-inhibit` keeping it awake, the shell's lock
+  client started ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)); Stage 2's design.
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
 
