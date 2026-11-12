@@ -125,6 +125,8 @@ operation, and an example measures the model:
   (the owner's), `wl_output` with `xdg-output`, presentation time.
 - `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
   `WindowId` and passes on what its client asks.
+- `selection.rs`: the clipboard (`wl_data_device`), the primary selection and
+  `ext-data-control-v1`, on Smithay's handlers.
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
   reported presented, and the hidden windows.
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
@@ -175,7 +177,8 @@ At an output's refresh boundary:
 1. If the layout changed, it is arranged once, for every output. Each window is told its asked
    size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
    is shown on no output. A configure goes out only when its size or states changed, or when a
-   request of its client is owed one. The keyboard focus follows `Layout::focused`.
+   request of its client is owed one. The keyboard focus follows `Layout::focused`, and the
+   selections follow the keyboard focus.
 2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
    surface tree with its window geometry at its rectangle's corner, cut to the rectangle, over a
    plain background. Surfaces sit on whole pixels: where the geometry's offset in its surface is
@@ -191,6 +194,31 @@ content updates are discarded, and its frame callbacks go out at most once a sec
 hidden windows' deadline, armed only while one of them waits. A window the layout refused is
 treated the same way.
 
+### Selections
+
+The clipboard and the primary selection belong to the owner's seat and follow its keyboard focus.
+Yuna holds no selection of its own.
+
+1. When a window gets the keyboard focus, its client gets the selections: each of its devices is
+   told what they hold, an offer with its MIME types, or nothing. When no window has the focus,
+   no client has them. Smithay reports only a new focus, so the frame loop gives them to no one
+   itself when the focus is cleared.
+2. Only the client with the focus may set them: Smithay ignores the request of any other. It does
+   not check the serial the request names ([debt](debt.md)).
+3. A new selection is offered to the client with the focus, and to every `ext-data-control-v1`
+   client. A data-control client, such as a clipboard manager, gets the current selections as
+   soon as it binds its device, and may set them without the focus. Every client may bind it for
+   now ([debt](debt.md)).
+4. To read a selection, a client sends the write end of a pipe with its `receive`. Yuna passes it
+   to the source's client in a `send` event, then closes its own copy once that event is sent. It
+   never reads, writes or waits on the pipe. For a MIME type the source does not offer, or a
+   source gone, Yuna closes the pipe at once: the reader sees it end, empty.
+5. A selection lasts as long as its source. When the source is destroyed, or its client leaves,
+   the selection empties, and the client with the focus and the data-control clients are told.
+
+Drag and drop waits for the pointer (M1.5). Smithay starts a drag only from a pointer or touch
+grab, and the seat has neither: it refuses every `start_drag`.
+
 ### The program
 
 `yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
@@ -200,7 +228,8 @@ the event loop watches, so that the loop returns and the socket is removed.
 ### Tests
 
 - `crates/yuna/tests/headless/`: the compositor in the test's process, manual clock, clients
-  written with `wayland-client` (`client.rs`), each test a short story with exact figures.
+  written with `wayland-client` (`client.rs`, and `selection_client.rs` for the selections), each
+  test a short story with exact figures.
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 

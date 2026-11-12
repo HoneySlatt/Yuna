@@ -37,3 +37,13 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
+- `ext-data-control-v1` is offered to every client: any client can read and set the clipboard and
+  the primary selection without the focus. It is filtered at Stage 2, through security-context or
+  a rule for privileged clients.
+- Smithay `8fd9fe0` checks that a selection request comes from the client with the keyboard
+  focus, not the serial it names: that client may set a selection with any serial, not only in
+  answer to its own input. Checking it needs a patch to Smithay; a test pins the gap down
+  (`the_serial_of_the_client_with_the_focus_is_not_checked`).
+- Drag and drop is refused until the pointer comes (M1.5), with no answer to the client: its
+  source is not cancelled. With a pointer, Smithay's default `dnd_requested` would cancel every
+  drag; M1.5 implements it.

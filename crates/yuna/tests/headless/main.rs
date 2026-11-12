@@ -7,6 +7,8 @@
 //! created, which is the clock's start: the manual clock does not move until a test moves it.
 
 mod client;
+mod selection;
+mod selection_client;
 
 use std::cell::Cell;
 use std::rc::Rc;

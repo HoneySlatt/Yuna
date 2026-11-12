@@ -34,6 +34,7 @@ use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
 use crate::output::VirtualOutput;
 use crate::render::Device;
+use crate::selection::Selections;
 use crate::shell::Toplevel;
 
 /// The owner's seat: the only one until agents get theirs (M1.5).
@@ -78,7 +79,9 @@ pub(crate) struct State {
     pub keyboard: KeyboardHandle<State>,
     _output_manager_state: OutputManagerState,
     _presentation_state: PresentationState,
-    _seat: Seat<State>,
+    /// The owner's seat.
+    pub seat: Seat<State>,
+    pub selections: Selections,
 }
 
 impl State {
@@ -127,7 +130,8 @@ impl State {
             keyboard,
             _output_manager_state: OutputManagerState::new_with_xdg_output::<State>(dh),
             _presentation_state: PresentationState::new::<State>(dh, Monotonic::ID as u32),
-            _seat: seat,
+            seat,
+            selections: Selections::new(dh),
         })
     }
 
@@ -221,6 +225,12 @@ impl SeatHandler for State {
 
     fn seat_state(&mut self) -> &mut SeatState<State> {
         &mut self.seat_state
+    }
+
+    /// Smithay calls it when a surface gets the keyboard focus, not when the focus is cleared:
+    /// `focus_keyboard` (frames.rs) gives the selections to no one then.
+    fn focus_changed(&mut self, seat: &Seat<State>, focused: Option<&WlSurface>) {
+        self.give_selections_to(seat, focused);
     }
 }
 

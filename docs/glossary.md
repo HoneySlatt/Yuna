@@ -10,6 +10,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the column is as wide as the widest of them as drawn.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
   it, and places scrolling columns by it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Data control**: `ext-data-control-v1`, which lets a client, such as a clipboard manager, read
+  and set the selections without the keyboard focus.
 - **Development shell**: the environment `nix develop` opens from `flake.nix`, with the pinned
   toolchain and every tool the checks use; CI runs in it too.
 - **Dialog**: a window that names a parent, as xdg-shell's `set_parent`; it opens floating, centred
@@ -43,10 +45,14 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
+- **Primary selection**: the text last selected, pasted with the middle button; a second selection
+  beside the clipboard, from X11.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's.
+- **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
+  primary selection. Each seat has its own.
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.

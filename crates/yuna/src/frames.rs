@@ -310,7 +310,7 @@ impl State {
         }
     }
 
-    /// Gives the keyboard to the window the owner's seat focuses.
+    /// Gives the keyboard to the window the owner's seat focuses, and the selections with it.
     fn focus_keyboard(&mut self) {
         let focus = self
             .layout
@@ -318,7 +318,14 @@ impl State {
             .and_then(|window| self.root_of(window));
         if self.keyboard.current_focus() != focus {
             let keyboard = self.keyboard.clone();
+            let cleared = focus.is_none();
             keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
+            // Smithay's `focus_changed` gives the selections to a new focus, but is not called
+            // when the focus is cleared.
+            if cleared {
+                let seat = self.seat.clone();
+                self.give_selections_to(&seat, None);
+            }
         }
     }
 

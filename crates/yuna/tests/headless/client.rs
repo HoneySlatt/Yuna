@@ -168,6 +168,11 @@ impl Client {
         &self.state.windows[index]
     }
 
+    /// Its connection, for protocols that other modules speak on event queues of their own.
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
     /// Opens a toplevel with a decoration object, makes its initial commit, and waits for its
     /// first configure.
     pub fn open_window(&mut self, compositor: &mut Compositor) -> usize {
