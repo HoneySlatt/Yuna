@@ -4,6 +4,113 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.4, Phase B4 — A frame's cost, rest at 4K, the layout again (2026-11-12)
+
+Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), RX 6900 XT, Linux 7.3.1; Mesa
+26.2.6 from the development shell, for Yuna and its clients. One measurement at a time, each
+series started after 30 s with no build, game or other measure and under 1.5 cores busy; the
+load averages below rise from the series' own runs. Everything ran through `agent-headless`;
+`--gpu` drew on the render node, never on a display device. Build: release, at commit
+`29f9f54`, with `frame_time` before its last fix, which only stops its clients at its end;
+debug for rest, as the test runs.
+
+### A frame on the 4K output
+
+Command: `nix develop -c cargo build --release -p yuna --bin yuna --example frame_time`, then
+`nix develop -c agent-headless -- target/release/examples/frame_time` with the options below:
+Yuna's default output, 3840 × 2160 at 240 Hz and scale 1.5; two `vkcube` windows, side by side
+in columns of half the width, so that the whole output changes at each frame; 10 s measured
+after 3 s of warm-up; three runs of each row, the lowest and highest given. Load average at the
+series' start 0.9, then up to 8.7.
+
+What the figures are ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)):
+
+- **A frame's time** is Yuna's own: from when it starts to build the frame, its clients' new
+  buffers imported (a `wl_shm` buffer copied into a texture), to when the drawing is done, as
+  logged in `frame drawn` (`took_us`). Its presentation follows from it
+  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+- **CPU time** is the time each of Yuna's threads ran on a core, read in
+  `/proc/<pid>/task/<tid>/schedstat` before and after, divided by the frames drawn. On llvmpipe,
+  its 16 `llvmpipe-N` threads rasterize: their time is the work a GPU would do. On the GPU,
+  `yuna:cs` and `yuna:gdrv` are radeonsi's threads, which submit Yuna's commands.
+- **GPU time** is the busy time of the GPU's engines for Yuna's DRM client, from the kernel's
+  `drm-engine-<engine>` counters in `/proc/<pid>/fdinfo`, divided by the frames drawn.
+
+| Yuna on | Clients' buffers | Frames a second | A frame's time: median | p99 | longest | Yuna's CPU per frame | GPU per frame |
+|---|---|---|---|---|---|---|---|
+| llvmpipe | `wl_shm`, from lavapipe | 115.4–117.4 | 6,851–7,225 µs | 8,572–9,108 µs | 9.3–10.7 ms | 74.3–76.4 ms: llvmpipe's threads 72.0–73.9 ms, the main thread 2.3–2.4 ms | none: llvmpipe's threads |
+| the GPU, `--gpu` | `wl_shm`, from lavapipe | 240.0 | 1,375–1,393 µs | 1,648–1,853 µs | 2.3–3.7 ms | 1,234–1,254 µs: the main thread 1,126–1,144 µs | 770–775 µs (gfx) |
+| the GPU, `--gpu` | dmabufs, from radv | 239.9–240.0 | 198–207 µs | 235–247 µs | 459–503 µs | 162–178 µs: the main thread 140–153 µs | 117 µs (gfx) |
+
+- On llvmpipe, every frame takes longer than the 4.17 ms period: each is presented a boundary
+  late, and Yuna draws about 116 frames a second for 240. Yuna then keeps 8.7 to 8.8 of the 16
+  threads busy, and its two clients 3.4 more (28.5 to 29.4 ms of CPU per frame). The bar's
+  budget for an agent's output, full rate while its programs draw, is missed there
+  ([debt](debt.md)).
+- On the GPU, no frame took longer than the period. With `wl_shm` clients, each frame copies
+  both clients' buffers into textures; with dmabufs nothing is copied, and a frame costs 0.17 ms
+  of Yuna's CPU and 0.12 ms of the GPU. The difference, about 1.1 ms of CPU and 0.65 ms of GPU,
+  is most likely the copy: not measured apart. The `vkcube` clients
+  themselves took 171 to 184 µs of CPU and 87 to 88 µs of GPU per frame on radv, 24.8 to 25.2 ms
+  of CPU on lavapipe.
+- No budget of the bar names a frame's cost yet: M1.9 sets it from the rivals'.
+
+`--gpu`, run for the first time, works: Yuna announces `zwp_linux_dmabuf_v1` version 6 with its
+default feedback. A `vkcube` on radv, with `WAYLAND_DEBUG=1`, binds it, asks the default
+feedback, gets its main device, its format table and one tranche, then creates its buffers with
+`create_params`; Yuna imports and draws them, and holds 16 dma-bufs for the two clients. With
+lavapipe's clients, it holds none, only their `wl_shm` memfds.
+
+At scale 1 (`--output 3840x2160@240,1`), on llvmpipe, one run at a load average of 5.3: 65.8
+frames a second; a frame 12.1 ms at the median, 17.8 ms at the 99th percentile; Yuna's CPU 92.6
+ms per frame, of which llvmpipe's threads 87.1 ms and the main thread 5.5 ms; the clients' 68.6
+ms. Scale 1.5 is lighter most likely because `vkcube` follows no fractional scale: it draws at its
+logical size, and Yuna scales it up. At scale 1 its buffers have 2.25 times the pixels, and the
+clients' CPU and Yuna's main thread, which copies them, take about 2.4 times as long. Not
+verified apart.
+
+### Rest on the 4K output
+
+`YUNA_APPLICATIONS_OUTPUT=3840x2160@240,1.5 nix develop -c agent-headless -- cargo test --locked
+-p yuna --test applications -- --nocapture`, one run, Steam open on the desktop with no game:
+Alacritty, `gtk4-demo` and `qml` with their windows open, and `vkcube` after it drew 120 frames
+and left, each leave Yuna with 0 context switches in its 34 or 35 threads over 10 s, and no
+frame, frame callback, configure, commit or wake-up, as at 1920 × 1080 and 60 Hz in B3.
+`vkcube` left to draw fails the check: 1,408 frames in 10 s, its window half of the output.
+
+### The layout again, on a quiet machine
+
+The command of M1.2 below: `taskset -c 6 target/release/examples/timing`, three runs, load
+average 0.6 to 0.8, nothing else running. Medians and 99th percentiles in microseconds, the
+lowest and highest of the three runs:
+
+| Operation, then `arrange` | Windows | Scrolling: median | p99 | Dwindle: median | p99 |
+|---|---|---|---|---|---|
+| Arrange alone | 100 | 6.3 | 6.5–8.8 | 6.7–9.7 | 6.8–13.0 |
+| Focus left, then right | 100 | 9.2–9.3 | 9.4 | 9.6–9.8 | 12.0–15.0 |
+| Open a window, then close it | 100 | 10.9–11.0 | 14.2–15.3 | 13.4–13.6 | 15.5–17.8 |
+| Move the focused window, then back | 100 | 9.2–9.3 | 9.4–12.4 | 10.1–10.2 | 13.1–13.8 |
+| Fullscreen on, then off | 100 | 10.8–10.9 | 14.0–17.9 | 6.9–7.0 | 7.5–10.2 |
+| Float, then tile | 100 | 15.7–24.2 | 15.9–32.1 | 18.3–18.7 | 21.5–27.6 |
+| Switch the tiling, then back | 100 | 10.8–17.2 | 11.6–21.1 | 8.6–8.7 | 8.9–13.8 |
+| Arrange alone | 1,000 | 65.1–66.1 | 71.7–112 | 63.8–65.2 | 69.3–71.4 |
+| Focus left, then right | 1,000 | 93.9–154 | 102–169 | 92.2–94.2 | 100–124 |
+| Open a window, then close it | 1,000 | 111–112 | 118–142 | 126–127 | 143–154 |
+| Move the focused window, then back | 1,000 | 93.9–95.5 | 101–162 | 93.5–95.2 | 103–106 |
+| Fullscreen on, then off | 1,000 | 110–111 | 119–184 | 65.9–67.6 | 72.8–88.8 |
+| Float, then tile | 1,000 | 159–161 | 169–251 | 175–178 | 186–212 |
+| Switch the tiling, then back | 1,000 | 108–109 | 118–121 | 83.3 | 90.6–97.8 |
+
+Against [ADR-0020](adr/0020-the-layout-models-shape.md)'s budgets at the 99th percentile,
+25 µs at 100 windows and 300 µs at 1,000: runs 2 and 3 meet them on every row. Run 1 misses
+"float, then tile" at 100 windows, 32.1 µs in scrolling columns and 27.6 µs in dwindle, and is
+slower on other rows too, for a cause not found. Two more runs, right after a frame measure on
+llvmpipe, at a load average of 7 to 8 and with every median about 15 % higher, missed that row
+again, 28.2 µs in scrolling columns, 30.5 and 31.1 µs in dwindle, and no other. That row's
+median, 15.7 to 21.5 µs, leaves too little room under its budget: it stays debt
+([debt](debt.md)). At 1,000 windows every run of every row meets its budget; the worst, 270 µs.
+In runs 2 and 3, the medians at 100 windows are within a few percent of Phase A's below.
+
 ## M1.4, Phase B3 — Real applications in CI (2026-11-12)
 
 Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), not alone on the machine; one

@@ -20,9 +20,11 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 - A dwindle tree deeper than its space gives its last windows empty slots: they are asked 1 × 1
   and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
-- Its timings were measured beside another build, and some 99th percentiles miss
-  [ADR-0020](adr/0020-the-layout-models-shape.md)'s budgets ([measurements](measurements.md)):
-  measured again on a quiet machine in M1.4.
+- "Float, then tile" on a workspace of 100 windows misses
+  [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile in 3 of 5
+  runs measured in M1.4's B4, up to 32 µs; its median is 15.7 to 21.5 µs. Every other row met
+  its budget on a quiet machine ([measurements](measurements.md)). The cause is not found; the
+  operation is to be profiled before M1.7 animates the layout's moves.
 
 ## The headless compositor
 
@@ -34,11 +36,19 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Virtual time is not kept from running ahead of real time while real clients are connected
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
   clock.
-- `--gpu`, and with it the dmabuf feedback, has not been run yet
-  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). The stories draw a client's dmabuf on
-  llvmpipe alone, from a sealed memfd; a real GPU's dmabufs are tested nowhere, in CI or out. No
-  real application in CI uses `linux-dmabuf`: on llvmpipe, Mesa's clients draw through `wl_shm`
+- `--gpu`, its dmabuf feedback and a GPU's dmabufs were checked once, by hand, on the owner's
+  RX 6900 XT ([measurements](measurements.md)); no test covers them: CI has no GPU, and the
+  tests never use `--gpu` ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). The stories
+  draw a client's dmabuf on llvmpipe alone, from a sealed memfd. No real application in CI uses
+  `linux-dmabuf`: on llvmpipe, Mesa's clients draw through `wl_shm`
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
+- On llvmpipe, Yuna's default output, 3840 × 2160 at 240 Hz, does not hold its rate when the
+  whole output changes at each frame: with two `vkcube` covering it, a frame takes about 7 ms,
+  and Yuna draws 116 a second, keeping 8.7 to 8.8 of the desktop's 16 threads busy
+  ([measurements](measurements.md)). The bar's budget for an agent's output, full rate while
+  its programs draw, is missed there; `--gpu` holds it, as ADR-0022 foresaw.
+- On llvmpipe, Smithay logs `Erroneous EGL call didn't set EGLError` once at start (seen since
+  M1.4's B1); its cause is not read.
 - Every output draws one background frame when it is created, even with no client.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
