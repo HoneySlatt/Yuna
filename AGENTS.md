@@ -112,7 +112,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
   - `docs/ARCHITECTURE.md`: flows across parts;
   - ADRs: why a decision was taken, what was rejected; only their status changes later;
   - `docs/survey.md`: facts of the field, with their sources and dates;
-  - `docs/PLAN.md`: status and known debt;
+  - `docs/PLAN.md`: status; `docs/debt.md`: known debt;
   - `CHANGELOG.md`: what changed for users.
 - A change that leaves a document wrong is not finished.
 

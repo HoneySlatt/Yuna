@@ -112,26 +112,23 @@ milestone first needs it.
 - **Design.** Decided with the owner on 2026-11-12: [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)
   to [ADR-0025](adr/0025-applications-in-ci.md). Phase B starts once Phase A is done, with or
   without M1.3's verdict.
-- **Delivers, Phase A: the layout model's client side** ([ADR-0020](adr/0020-the-layout-models-shape.md)),
-  built from traces of real clients: sizes asked and sizes committed, configure sizes in whole
-  logical units, clients that ignore their size in the property tests; minimum and maximum sizes,
-  dwindle included, and windows that do not fit; dialogs opening next to their parent; a focus
-  policy; which windows are told they are activated; dwindle walked without recursion; a cap on a
-  client's windows.
-- **Delivers, Phase B: the compositor.** `yuna --headless`, its virtual outputs (ADR-0022), its
-  frames and clock (ADR-0023). `xdg-shell`, `xdg-decoration` (ADR-0024), `xdg-activation`,
-  `xdg-dialog`, `wl_shm`, `linux-dmabuf`, viewporter, fractional scale, presentation time, data
-  device, primary selection and `ext-data-control`, a seat with a keyboard. Tests in CI
-  (ADR-0025).
+- **Delivers, Phase A: the layout model's client side** (done): asked and committed sizes,
+  limits, dialogs, focus, activation ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Delivers, Phase B: the compositor.** B1 (done): `yuna --headless`, virtual outputs (ADR-0022),
+  frames and clock (ADR-0023), `xdg-shell`, `xdg-decoration` (ADR-0024), `wl_shm`, presentation
+  time, a seat with a keyboard. B2: popups, `xdg-activation`, `xdg-dialog`, `linux-dmabuf`,
+  viewporter, fractional scale, data device, primary selection, `ext-data-control`; a cap on a
+  client's windows; misbehaving clients and random requests in tests. B3: the applications in CI
+  and the rest check on the program, the weekly SlimeEngine job (ADR-0025). B4: the measures.
 - **Done when.** Alacritty, `gtk4-demo`, Qt's `qml` and `vkcube` run in Yuna in CI at each push, and
   SlimeEngine's `window` example in the weekly job; each draws nothing at rest by ADR-0025's
   check; misbehaving clients never take Yuna down.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
-  consent, on the GPU; CI's time.
-- **Where it stands** (2026-11-12). Phase A is done: the client side
-  ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Its timings, beside another build, miss
-  ADR-0020's budgets in some runs ([measurements](measurements.md)): to measure again, quiet.
-  Phase B next.
+  consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
+  machine ([measurements](measurements.md)).
+- **Where it stands** (2026-11-12). Phases A and B1 are done. Alacritty ran in Yuna by hand
+  (1920 × 1080 at 60 Hz, real clock): drawn, then 0 context switches in 10 s for both. Next: B2,
+  in a new session. Delegated briefs and their proofs are in `.delegation/` (local).
 
 ### M1.5 — Agents' control
 
@@ -207,15 +204,4 @@ milestone first needs it.
 
 ## Known debt
 
-- The HDR metadata's primaries are sent red, green, blue; that order is not checked against
-  CTA-861-G (M1.3's prototype; Stage 5 checks it).
-- Smithay `8fd9fe0` stops reading a CRTC's properties at the first of `ACTIVE` and
-  `VRR_ENABLED` (`State::current_state`), so one of the two is not read back; it matters once
-  Yuna uses VRR (Stage 4).
-- Smithay's `DrmDevice`, dropped while active, commits back every property it read at opening,
-  immutable ones and `DPMS` among them, which the kernel likely refuses: an exit may not give the
-  previous state back. Check it at Stage 2, with a `tracing` subscriber, which the prototype lacks.
-- Smithay's connector property patch has debt to pay before main uses it
-  ([patches](smithay-patches.md)).
-- A dwindle tree deeper than its space gives its last windows empty slots: they are asked 1 × 1
-  and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+In [`debt.md`](debt.md).
