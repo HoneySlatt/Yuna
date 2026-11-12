@@ -194,6 +194,8 @@ milestone first needs it.
 - Smithay's `DrmDevice`, dropped while active, commits back every property it read at opening,
   immutable ones and `DPMS` among them, which the kernel likely refuses: an exit may not give the
   previous state back. Check it at Stage 2, with a `tracing` subscriber, which the prototype lacks.
+- Smithay's connector property patch has debt to pay before main uses it
+  ([patches](smithay-patches.md)).
 - The layout model's client side waits for M1.4 (above): today a window is assumed to take the
   size it is given, and a deep dwindle tree can give windows a size of zero.
 - A scrolling column whose gaps leave no room gives all its windows a height of zero; M1.4, with
