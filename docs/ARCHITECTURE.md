@@ -8,21 +8,24 @@ comes next is in [`PLAN.md`](PLAN.md).
 
 One Cargo workspace; its crates live in `crates/`.
 
-- **`yuna`** (`crates/yuna`): the program. Today it reads its command line, answers `--help` and
-  `--version`, and refuses to start a session, since no backend exists yet. It depends on Smithay
-  without using it, so that the pinned revision is locked and checked
-  ([ADR-0017](adr/0017-smithays-revision.md)).
+- **`yuna`** (`crates/yuna`): the compositor. Its library is the headless compositor, which the
+  program runs and tests drive in their own process; its binary, `src/main.rs`, reads the command
+  line and runs `yuna --headless` until SIGTERM. The desktop session does not exist yet (Stage 2).
 - **`yuna-layout`** (`crates/yuna-layout`): the layout model. It knows seats, outputs, workspaces
   and windows by plain ids, decides where every window goes, and holds no Wayland or Smithay
   object, so that every behaviour is a test without a compositor
   ([ADR-0005](adr/0005-the-layouts.md), [ADR-0020](adr/0020-the-layout-models-shape.md)). The
-  program does not use it yet; the headless compositor (M1.4) puts it behind the protocols.
+  compositor puts it behind the protocols.
 
 ## Dependencies
 
-- `yuna` → Smithay, at a pinned git revision, without its default features
-  ([ADR-0011](adr/0011-built-on-smithay.md)).
+- `yuna` → Smithay, at a pinned git revision, with only its `wayland_frontend`, `desktop` and
+  `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
+  [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
+  its logs; `yuna-layout`. Its tests use `wayland-client` and `wayland-protocols`' client side.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
+- At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
+  own Mesa, loaded, never the host's drivers.
 
 ## The layout model
 
@@ -106,9 +109,100 @@ operation, and an example measures the model:
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 
-## Main flows
+## The headless compositor
 
-The program itself has none yet: it starts, reads its arguments and exits.
+`crates/yuna/src`, one job per module:
+
+- `compositor.rs`: the public face, `Compositor`, which has at least one output. It holds
+  calloop's event loop, the Wayland display and the state, and runs them: `dispatch` for one
+  round, `run_until` for the program, `advance` to move the manual clock. Each round ends by
+  freeing what went away, without drawing: the outputs forget the surfaces destroyed
+  (`Output::cleanup`), and the renderer frees the textures of closed windows and destroyed
+  surfaces. Then it sends the events written. Its `Counters` count frames drawn, frame callbacks,
+  configures, commits and wake-ups, for tests.
+- `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
+  are not the shell's: `wl_compositor` and `wl_subcompositor`, `wl_shm`, one seat with a keyboard
+  (the owner's), `wl_output` with `xdg-output`, presentation time.
+- `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
+  `WindowId` and passes on what its client asks.
+- `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
+  reported presented, and the hidden windows.
+- `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
+  damage tracker; their refresh boundaries.
+- `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
+  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)).
+- `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+- `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, and SIGTERM.
+
+### Time and deadlines
+
+The clock owns every deadline of the frame loop: one per output, its next refresh boundary, and
+one for the hidden windows. In real mode, time is `CLOCK_MONOTONIC`, and the compositor keeps one
+calloop timer armed at the earliest deadline, armed again before each wait; with no deadline,
+no timer. In manual mode, for tests, time starts at the real monotonic time and moves only through
+`Compositor::advance`, which runs each deadline it passes at its own time, in order. A draw hook
+can pass manual time while a frame draws, to make drawing late.
+
+An output's refresh boundary `k` comes `k / rate` seconds after the output was created, computed
+from the rate each time, so that errors never add up.
+
+### A window's life
+
+1. A client creates an `xdg_toplevel`; Yuna records it and waits.
+2. Its initial commit: Yuna reads its limits and parent, asks `Layout::size_on_open` and sends
+   the first configure: that size, tiled on all four edges
+   ([ADR-0024](adr/0024-no-title-bars.md)), decorations on the server's side.
+3. Its first buffer: `Layout::open_window`, with its parent, its limits and its window geometry,
+   clamped to the layout's `MAX_SIZE`; the window gets the next `WindowId`, never reused. The
+   layout changed: every output's next boundary is armed. Should the layout refuse it, which a
+   client's values cannot cause, the refusal is logged once, the window is not shown, and its
+   client gets frame callbacks at the hidden windows' rate, never left waiting.
+4. Each later commit passes its limits (`set_size_limits`) and its geometry (`commit_size`) on
+   when they changed, and arms its output's next boundary when it is shown.
+5. Fullscreen and maximise requests become `set_fullscreen` and `set_full_width`, and each gets a
+   configure, as xdg-shell asks: at the next arrangement when the layout takes it, even if
+   nothing changes; at once, with the state the window has, when the layout refuses it. Before
+   the window is mapped, it will open so, and a configure says it if the first one is past.
+6. A commit without a buffer, the toplevel's destruction, or its surface's, closes it in the
+   layout. A client that leaves has its toplevels destroyed by the display, the same way.
+
+Popups are not shown yet: each is dismissed at once (`xdg_popup.popup_done`).
+
+### A frame
+
+At an output's refresh boundary:
+
+1. If the layout changed, it is arranged once, for every output. Each window is told its asked
+   size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
+   is shown on no output. A configure goes out only when its size or states changed, or when a
+   request of its client is owed one. The keyboard focus follows `Layout::focused`.
+2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
+   surface tree with its window geometry at its rectangle's corner, cut to the rectangle, over a
+   plain background. Surfaces sit on whole pixels: where the geometry's offset in its surface is
+   not a whole number of pixels, it is rounded up, so that the cut takes a sliver of content
+   rather than show the window's margin. Yuna waits until the drawing is done.
+3. The surfaces shown there get their frame callbacks, and their presentation feedback: a frame
+   whose drawing takes no time, as on the manual clock, is presented at its own boundary;
+   otherwise at the first boundary after its drawing ended; never at the boundary of the frame
+   before. `seq` is the boundary's number, the flags VSYNC, the refresh the output's period.
+
+A window shown on no output, on a workspace not shown or scrolled out of view, is hidden: its
+content updates are discarded, and its frame callbacks go out at most once a second, through the
+hidden windows' deadline, armed only while one of them waits. A window the layout refused is
+treated the same way.
+
+### The program
+
+`yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
+`WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM or SIGINT. The signal handler writes to a pipe
+the event loop watches, so that the loop returns and the socket is removed.
+
+### Tests
+
+- `crates/yuna/tests/headless/`: the compositor in the test's process, manual clock, clients
+  written with `wayland-client` (`client.rs`), each test a short story with exact figures.
+- `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
+  included.
 
 ## The tools around the code
 
@@ -123,5 +217,8 @@ The program itself has none yet: it starts, reads its arguments and exits.
    [`layout.rs`](../crates/yuna-layout/src/layout.rs) for the operations.
 2. A few scenarios, for example
    [`scrolling.rs`](../crates/yuna-layout/tests/scenarios/scrolling.rs).
-3. [`../crates/yuna/src/main.rs`](../crates/yuna/src/main.rs).
-4. [`../scripts/check.sh`](../scripts/check.sh).
+3. [`../crates/yuna/src/lib.rs`](../crates/yuna/src/lib.rs), then
+   [`frames.rs`](../crates/yuna/src/frames.rs) and
+   [`shell.rs`](../crates/yuna/src/shell.rs).
+4. A story of [`../crates/yuna/tests/headless/main.rs`](../crates/yuna/tests/headless/main.rs).
+5. [`../scripts/check.sh`](../scripts/check.sh).

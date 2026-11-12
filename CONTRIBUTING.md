@@ -21,7 +21,17 @@ The shell gives:
 - `cargo deny`, which checks the dependencies against [`deny.toml`](deny.toml);
 - `lychee`, which checks the links between the Markdown files;
 - git, which the link check uses to list the Markdown files;
-- `YUNA_DEV_SHELL`, which `scripts/check.sh` requires.
+- libxkbcommon, which Smithay's keyboard links;
+- `YUNA_DEV_SHELL`, which `scripts/check.sh` requires;
+- what Yuna draws with, loaded at run time: `LD_LIBRARY_PATH` names libglvnd's EGL, and
+  `__EGL_VENDOR_LIBRARY_FILENAMES` the shell's own Mesa, so that Yuna and its tests draw on that
+  Mesa's llvmpipe, never on the host's drivers
+  ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
+- `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from.
+
+Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
+`yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
+`warn`, `info` (the default), `debug` (one line per frame drawn) or `trace`.
 
 Nix sees only the files git knows: `git add` a new file before `nix develop` reads it. Plain
 `nix develop`, never `nix develop path:.`, which copies the whole folder, `target/` included, into
@@ -35,10 +45,18 @@ pin the versions of `cargo deny` and `lychee`, and a check could pass for the wr
 
 ```sh
 nix develop -c scripts/check.sh           # every check; what CI runs
-nix develop -c cargo run -- --help        # run Yuna
+nix develop -c cargo run -- --help        # Yuna's options
+nix develop -c cargo run -- --headless --output 1920x1080@60,1   # Yuna without a screen
 nix develop -c cargo test --workspace     # the tests alone
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
+
+`yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
+to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
+the tests. SIGTERM or Ctrl-C stops it and removes its socket.
+
+The compositor's tests (`crates/yuna/tests/headless/`) run it in their own process, on the manual
+clock, with clients written with `wayland-client`; they need the shell's Mesa.
 
 The layout model's property tests (`crates/yuna-layout/tests/properties.rs`) shrink a failure to
 the shortest sequence of operations that still fails, and keep its seed in a

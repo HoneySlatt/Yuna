@@ -34,8 +34,18 @@
           pkgs.git
         ];
 
+        # Linked by Smithay's keyboard (xkbcommon).
+        buildInputs = [ pkgs.libxkbcommon ];
+
         # Tells scripts/check.sh that it runs in this shell.
         YUNA_DEV_SHELL = "1";
+
+        # Yuna draws with EGL, loaded at run time (ADR-0022): libglvnd's dispatcher, which this
+        # file points at the shell's own Mesa only, so that Yuna never loads the host's drivers.
+        LD_LIBRARY_PATH = "${pkgs.libglvnd}/lib";
+        __EGL_VENDOR_LIBRARY_FILENAMES = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
+        # The keyboard's default keymap.
+        XKB_CONFIG_ROOT = "${pkgs.xkeyboard_config}/share/X11/xkb";
       };
     };
 }

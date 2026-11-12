@@ -1,0 +1,353 @@
+//! The headless compositor as a library: what the `yuna` program runs, and what tests drive in
+//! their own process ([ADR-0025](../../../docs/adr/0025-applications-in-ci.md)).
+
+use std::ffi::{OsStr, OsString};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction, RegistrationToken};
+use smithay::reexports::wayland_server::{BindError, Display};
+use smithay::utils::{Physical, Rectangle};
+use smithay::wayland::socket::ListeningSocketSource;
+use yuna_layout::{Layout, OutputId};
+
+use crate::Error;
+use crate::clock::{Clock, ClockMode};
+use crate::output::OutputMode;
+use crate::render::Device;
+use crate::state::{ClientState, State};
+
+/// How to start a compositor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Config {
+    /// Its virtual outputs, laid out left to right; their ids are 1, 2, … in this order.
+    pub outputs: Vec<OutputMode>,
+    /// The EGL device it draws on.
+    pub device: Device,
+    /// How its time moves.
+    pub clock: ClockMode,
+    /// Whether it listens on a Wayland socket in `XDG_RUNTIME_DIR`. Without one, clients come
+    /// only through [`Compositor::connect_client`].
+    pub listen: bool,
+}
+
+impl Default for Config {
+    /// What `yuna --headless` runs: one default output, llvmpipe, real time, a socket.
+    fn default() -> Config {
+        Config {
+            outputs: vec![OutputMode::default()],
+            device: Device::Software,
+            clock: ClockMode::Real,
+            listen: true,
+        }
+    }
+}
+
+/// What the compositor did, counted since it started, for tests and measures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counters {
+    /// Frames drawn, on every output: refresh boundaries where something was damaged.
+    pub frames_drawn: u64,
+    /// `wl_callback.done` events sent for frame callbacks.
+    pub frame_callbacks: u64,
+    /// `xdg_toplevel` configures sent.
+    pub configures: u64,
+    /// `wl_surface.commit` requests received.
+    pub commits: u64,
+    /// Times the event loop woke: a dispatch in which a client, a new connection or the clock's
+    /// timer had something; with the manual clock, each distinct time at which an advance ran
+    /// deadlines, as the timer would have woken it.
+    pub wakeups: u64,
+}
+
+/// A headless compositor: its event loop, its Wayland display and its state.
+///
+/// Everything runs on the thread that created it: drive it with [`Compositor::dispatch`] and,
+/// with the manual clock, [`Compositor::advance`], or let [`Compositor::run_until`] run it.
+pub struct Compositor {
+    event_loop: EventLoop<'static, State>,
+    display: Display<State>,
+    state: State,
+    socket_name: Option<OsString>,
+    /// The calloop timer armed at the clock's earliest deadline, in real mode, and its time.
+    timer: Option<(RegistrationToken, Duration)>,
+}
+
+impl Compositor {
+    /// Starts a compositor: its renderer, its globals, its outputs, and its socket if
+    /// `config.listen`. Each output's first frame is armed. Refused without an output.
+    pub fn new(config: Config) -> Result<Compositor, Error> {
+        // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
+        // starts.
+        let socket = if config.listen {
+            Some(ListeningSocketSource::new_auto().map_err(|e| {
+                match e {
+                    BindError::RuntimeDirNotSet => Error::Socket(
+                        "XDG_RUNTIME_DIR is not set, or not an absolute path; \
+                     Yuna creates its Wayland socket there"
+                            .to_owned(),
+                    ),
+                    e => Error::Socket(e.to_string()),
+                }
+            })?)
+        } else {
+            None
+        };
+        let event_loop: EventLoop<'static, State> =
+            EventLoop::try_new().map_err(|e| Error::EventLoop(e.to_string()))?;
+        let mut display: Display<State> =
+            Display::new().map_err(|e| Error::EventLoop(e.to_string()))?;
+        if config.outputs.is_empty() {
+            return Err(Error::Refused(
+                "a compositor needs at least one output".to_owned(),
+            ));
+        }
+        let mut state = State::new(display.handle(), config.clock, config.device)?;
+        for mode in config.outputs {
+            state.add_output(mode)?;
+        }
+        let handle = event_loop.handle();
+        // The display is read after each dispatch, outside the event loop's callbacks, so that it
+        // can borrow the state.
+        let display_fd = display
+            .backend()
+            .poll_fd()
+            .try_clone_to_owned()
+            .map_err(|e| Error::EventLoop(e.to_string()))?;
+        handle
+            .insert_source(
+                Generic::new(display_fd, Interest::READ, Mode::Level),
+                |_, _, state| {
+                    state.clients_readable = true;
+                    state.woke = true;
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        let socket_name = match socket {
+            Some(socket) => {
+                let name = socket.socket_name().to_os_string();
+                handle
+                    .insert_source(socket, |stream, _, state| {
+                        state.woke = true;
+                        let client = Arc::new(ClientState::default());
+                        if let Err(error) = state.display_handle.insert_client(stream, client) {
+                            tracing::warn!(%error, "a client could not connect");
+                        }
+                    })
+                    .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+                tracing::info!(socket = ?name, "listening");
+                Some(name)
+            }
+            None => None,
+        };
+        Ok(Compositor {
+            event_loop,
+            display,
+            state,
+            socket_name,
+            timer: None,
+        })
+    }
+
+    /// The name of its Wayland socket in `XDG_RUNTIME_DIR`, for `WAYLAND_DISPLAY`.
+    pub fn socket_name(&self) -> Option<&OsStr> {
+        self.socket_name.as_deref()
+    }
+
+    /// Connects a client through a socket pair, without the socket file: its end, for
+    /// `wayland-client`'s `Connection::from_socket`.
+    pub fn connect_client(&mut self) -> Result<UnixStream, Error> {
+        let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
+        self.state
+            .display_handle
+            .insert_client(ours, Arc::new(ClientState::default()))
+            .map_err(|e| Error::EventLoop(e.to_string()))?;
+        Ok(theirs)
+    }
+
+    /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
+    /// the clock's timer (`None`: as long as it takes), handles what came, runs the deadlines due
+    /// in real mode, and sends the events written.
+    pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
+        self.arm_timer()?;
+        self.event_loop
+            .dispatch(timeout, &mut self.state)
+            .map_err(|e| Error::EventLoop(e.to_string()))?;
+        if std::mem::take(&mut self.state.timer_fired) {
+            // A timer that fired has removed itself.
+            self.timer = None;
+        }
+        if std::mem::take(&mut self.state.clients_readable) {
+            self.display
+                .dispatch_clients(&mut self.state)
+                .map_err(|e| Error::EventLoop(e.to_string()))?;
+        }
+        if self.state.clock.mode() == ClockMode::Real {
+            let now = self.state.clock.now();
+            while let Some((_, deadline)) = self.state.clock.take_due(now) {
+                self.state.fire(deadline);
+            }
+        }
+        if std::mem::take(&mut self.state.woke) {
+            self.state.counters.wakeups += 1;
+        }
+        self.flush();
+        Ok(())
+    }
+
+    /// Runs until `stop` can be read, then returns: the program's loop. `stop` is the read end
+    /// of the pipe its signal handler writes to.
+    pub fn run_until(&mut self, stop: OwnedFd) -> Result<(), Error> {
+        self.event_loop
+            .handle()
+            .insert_source(
+                Generic::new(stop, Interest::READ, Mode::Level),
+                |_, _, state| {
+                    state.stop_requested = true;
+                    state.woke = true;
+                    Ok(PostAction::Remove)
+                },
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        while !self.state.stop_requested {
+            self.dispatch(None)?;
+        }
+        tracing::info!("stopping");
+        Ok(())
+    }
+
+    /// With the manual clock, moves time forward by `by`, running every deadline it passes in
+    /// order, each at its own time, then sends the events written. Refused with the real clock.
+    pub fn advance(&mut self, by: Duration) -> Result<(), Error> {
+        if self.state.clock.mode() != ClockMode::Manual {
+            return Err(Error::NotManual);
+        }
+        let target = self.state.clock.now().saturating_add(by);
+        let mut last_wakeup = None;
+        while let Some((at, deadline)) = self.state.clock.take_due(target) {
+            self.state.clock.move_to(at);
+            if last_wakeup != Some(at) {
+                self.state.counters.wakeups += 1;
+                last_wakeup = Some(at);
+            }
+            self.state.fire(deadline);
+        }
+        self.state.clock.move_to(target);
+        self.flush();
+        Ok(())
+    }
+
+    /// The clock's time, on `CLOCK_MONOTONIC`'s scale.
+    pub fn now(&self) -> Duration {
+        self.state.clock.now()
+    }
+
+    /// The clock's earliest armed deadline; none at rest.
+    pub fn next_deadline(&self) -> Option<Duration> {
+        self.state.clock.next_deadline()
+    }
+
+    /// What it did so far.
+    pub fn counters(&self) -> Counters {
+        self.state.counters
+    }
+
+    /// Its outputs' ids, in the order they were created.
+    pub fn outputs(&self) -> Vec<OutputId> {
+        self.state.outputs.iter().map(|o| o.id).collect()
+    }
+
+    /// The layout model, to read. Windows' ids start at 1 and increase in the order they map.
+    pub fn layout(&self) -> &Layout {
+        &self.state.layout
+    }
+
+    /// Changes the layout model, as a key binding would: every output arranges it again at its
+    /// next refresh boundary.
+    pub fn change_layout<R>(&mut self, change: impl FnOnce(&mut Layout) -> R) -> R {
+        let result = change(&mut self.state.layout);
+        self.state.mark_layout_changed();
+        result
+    }
+
+    /// Sets the hook run each time a frame's drawing ends, before Yuna reads the time it ended
+    /// at. With the manual clock, a hook that passes time ([`Clock::pass`]) makes drawing
+    /// take that long.
+    pub fn set_draw_hook(&mut self, hook: impl FnMut(&mut Clock) + 'static) {
+        self.state.draw_hook = Some(Box::new(hook));
+    }
+
+    /// The pixels of `region` of `output`'s last frame, in physical pixels from its top-left
+    /// corner, as bytes R, G, B, A, row by row from the top. Refused for a region not wholly on
+    /// the output.
+    pub fn read_pixels(
+        &mut self,
+        output: OutputId,
+        region: Rectangle<i32, Physical>,
+    ) -> Result<Vec<u8>, Error> {
+        let index = self
+            .state
+            .output_index(output)
+            .ok_or_else(|| Error::Refused(format!("no output {}", output.0)))?;
+        let virtual_output = &mut self.state.outputs[index];
+        let (width, height) = (virtual_output.mode.width(), virtual_output.mode.height());
+        let fits = |start: i32, length: i32, side: u32| {
+            start >= 0 && length > 0 && i64::from(start) + i64::from(length) <= i64::from(side)
+        };
+        if !fits(region.loc.x, region.size.w, width) || !fits(region.loc.y, region.size.h, height) {
+            return Err(Error::Refused(format!(
+                "the region {region:?} is not wholly on output {}",
+                output.0
+            )));
+        }
+        crate::render::read_pixels(&mut self.state.renderer, virtual_output, region)
+    }
+
+    /// Arms the calloop timer at the clock's earliest deadline, in real mode; with the manual
+    /// clock, deadlines run only when a test advances it.
+    fn arm_timer(&mut self) -> Result<(), Error> {
+        if self.state.clock.mode() != ClockMode::Real {
+            return Ok(());
+        }
+        let next = self.state.clock.next_deadline();
+        if next == self.timer.map(|(_, at)| at) {
+            return Ok(());
+        }
+        let handle = self.event_loop.handle();
+        if let Some((token, _)) = self.timer.take() {
+            handle.remove(token);
+        }
+        if let Some(at) = next {
+            // calloop's timers take an `Instant`, which reads the same CLOCK_MONOTONIC.
+            let deadline = Instant::now() + at.saturating_sub(self.state.clock.now());
+            let token = handle
+                .insert_source(Timer::from_deadline(deadline), |_, _, state| {
+                    state.timer_fired = true;
+                    state.woke = true;
+                    TimeoutAction::Drop
+                })
+                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+            self.timer = Some((token, at));
+        }
+        Ok(())
+    }
+
+    /// Ends a round: frees what closed windows and destroyed surfaces left behind, then sends
+    /// the events written to every client. A client that cannot take them is dropped by the
+    /// display; the others go on.
+    fn flush(&mut self) {
+        // Each output forgets the surfaces destroyed since, which it keeps to send `enter` once.
+        for output in &self.state.outputs {
+            output.output.cleanup();
+        }
+        self.state.release_textures();
+        if let Err(error) = self.display.flush_clients() {
+            tracing::debug!(%error, "flushing the clients failed");
+        }
+    }
+}

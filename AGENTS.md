@@ -8,7 +8,7 @@ Yuna is a Wayland compositor in Rust, for Linux, in two modes: headless, where a
 drive it, and the desktop, its owner's daily compositor ([ADR-0001](docs/adr/0001-what-yuna-is.md)).
 It is built on Smithay ([ADR-0011](docs/adr/0011-built-on-smithay.md)), headless first
 ([ADR-0002](docs/adr/0002-the-headless-mode-first.md)). It is under GPL-3.0-or-later and private
-until its owner decides otherwise. Today it has its checks and its layout model; no backend yet.
+until its owner decides otherwise. Today it has its checks, its layout model and a headless compositor.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
 understand it from the repository alone. Documentation is part of every deliverable.

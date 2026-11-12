@@ -8,9 +8,16 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Not used yet: depending on it makes Cargo.lock hold the exact revision, and cargo deny check its
-# licences and advisories, from the start (ADR-0017). The headless backend (M1.4) is its first use.
-smithay.workspace = true
+# The protocols' server side (`wayland_frontend`), its helpers for surfaces (`desktop`), and the
+# GLES renderer on EGL (`renderer_gl`); no DRM, no input backend (ADR-0022).
+smithay = { workspace = true, features = ["wayland_frontend", "desktop", "renderer_gl"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+yuna-layout = { path = "../yuna-layout" }
+
+[dev-dependencies]
+wayland-client.workspace = true
+wayland-protocols.workspace = true
 
 [lints]
 workspace = true

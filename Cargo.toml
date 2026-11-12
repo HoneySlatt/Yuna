@@ -17,6 +17,15 @@ smithay = { git = "https://github.com/Smithay/smithay.git", rev = "8fd9fe0c74e5c
 # Property tests of the layout model (M1.2), in tests only. Without its default features: no
 # forking, no timeouts, no temporary files.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+# The compositor's logs (M1.4). Smithay logs through `tracing` already.
+tracing = "0.1.44"
+# Writes the logs to standard error. Only its formatter: no filter language, no ANSI colours, no
+# time crate; the level comes from YUNA_LOG.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+# Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
+# Wayland protocol and of the protocols beyond the core one.
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

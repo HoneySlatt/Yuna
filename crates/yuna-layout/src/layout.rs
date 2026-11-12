@@ -1916,8 +1916,9 @@ fn maximum_too_small(workspace: &Workspace, area: &Area, max: Size) -> bool {
 }
 
 /// The widest size, in logical units, a window or an output may have: 25 times a 4K output's
-/// width at scale 1. Beyond it, numbers mean nothing and only push other windows away.
-const MAX_SIZE: f64 = 100_000.0;
+/// width at scale 1. Beyond it, numbers mean nothing and only push other windows away. Sizes and
+/// limits above it are refused; the compositor clamps what clients ask to it.
+pub const MAX_SIZE: f64 = 100_000.0;
 /// The farthest an output or a floating window may lie from the origin, in logical units.
 const MAX_COORDINATE: f64 = 1_000_000.0;
 /// The widest gap.

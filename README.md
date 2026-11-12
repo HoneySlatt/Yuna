@@ -10,8 +10,10 @@ tests drive it.
 
 ## State
 
-Designed on 2026-11-11. The workspace, its checks and the layout model exist; no backend yet, so
-Yuna cannot start a session. The first stage builds the headless core.
+Designed on 2026-11-11. The first stage builds the headless core. Today Yuna runs without a screen:
+virtual outputs drawn offscreen, `xdg-shell` windows placed by its layout model, frames that
+follow damage and report when they could show. Popups, input and most protocols come next; the
+desktop session does not exist yet.
 
 ## Build
 
@@ -20,6 +22,7 @@ On Linux, with Nix:
 ```sh
 nix develop -c scripts/check.sh    # build, test and check everything
 nix develop -c cargo run -- --help
+nix develop -c cargo run -- --headless    # prints WAYLAND_DISPLAY=<socket>; Ctrl-C stops it
 ```
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) gives the detail.

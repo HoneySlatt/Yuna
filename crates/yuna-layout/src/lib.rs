@@ -37,7 +37,7 @@ mod scrolling;
 mod sizing;
 mod workspace;
 
-pub use layout::Layout;
+pub use layout::{Layout, MAX_SIZE};
 pub use scrolling::ColumnWidth;
 
 use geometry::{Rect, Size};

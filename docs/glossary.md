@@ -36,6 +36,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
+- **Manual clock**: the compositor's clock in tests: it starts at the real monotonic time and moves
+  only when a test advances it, running each deadline it passes, in order
+  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
@@ -47,9 +50,13 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.
+- **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it
+  to hidden windows, to clients whose `xdg_wm_base` version has it (6 and later).
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed
   rate.
+- **Wake-up**: a round of the compositor's event loop in which something had work for it: a
+  client, a new connection or the clock's timer. At rest there are none.
 - **Working area**: the part of an output tiled windows go in; the whole output until panels
   reserve zones of it.
