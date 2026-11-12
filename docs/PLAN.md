@@ -22,7 +22,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   the owner's monitor; [ADR-0011](adr/0011-built-on-smithay.md) holds.
 - [M1.4](#m14--the-headless-compositor) designed on 2026-11-12
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
-  [ADR-0025](adr/0025-applications-in-ci.md)). Current: M1.4, Phase B.
+  [ADR-0025](adr/0025-applications-in-ci.md)); B2's bounds in
+  [ADR-0027](adr/0027-smithay-without-overflow-checks.md) and
+  [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md). Current: M1.4, Phase B3.
 
 ## Status
 
@@ -116,7 +118,7 @@ milestone first needs it.
   limits, dialogs, focus, activation ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - **Delivers, Phase B: the compositor.** B1 (done): `yuna --headless`, virtual outputs (ADR-0022),
   frames and clock (ADR-0023), `xdg-shell`, `xdg-decoration` (ADR-0024), `wl_shm`, presentation
-  time, a seat with a keyboard. B2: popups, `xdg-activation`, `xdg-dialog`, `linux-dmabuf`,
+  time, a seat with a keyboard. B2 (done): popups, `xdg-activation`, `xdg-dialog`, `linux-dmabuf`,
   viewporter, fractional scale, data device, primary selection, `ext-data-control`; a cap on a
   client's windows; misbehaving clients and random requests in tests. B3: the applications in CI
   and the rest check on the program, the weekly SlimeEngine job (ADR-0025). B4: the measures.
@@ -126,9 +128,14 @@ milestone first needs it.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
   machine ([measurements](measurements.md)).
-- **Where it stands** (2026-11-12). Phases A and B1 are done. Alacritty ran in Yuna by hand
-  (1920 × 1080 at 60 Hz, real clock): drawn, then 0 context switches in 10 s for both. Next: B2,
-  in a new session. Delegated briefs and their proofs are in `.delegation/` (local).
+- **Where it stands** (2026-11-12). Phases A, B1 and B2 are done. B2's tests (89 in-process
+  stories, two proptests of 80 random request sequences each) found and fixed four defects: a
+  client that shrank a memfd it passed as a dmabuf killed Yuna with SIGBUS; a second role on one
+  surface, or a toplevel on a destroyed surface, corrupted Yuna's records; a client ended outside
+  a dispatch stayed shown and focused. llvmpipe imports dmabufs, so CI draws one. Alacritty ran in
+  `yuna --headless` at scales 1 and 1.5, told 180/120: 0 context switches in 10 s for both. What
+  falls short is in [debt](debt.md). Next: B3, in a new session. Delegated briefs and their
+  proofs are in `.delegation/` (local).
 
 ### M1.5 — Agents' control
 

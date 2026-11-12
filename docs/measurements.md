@@ -4,6 +4,22 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.4, Phase B2 — The protocols and the robustness tests (2026-11-12)
+
+Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), load average 6 to 9 from other
+work; one measurement at a time. Build: debug, at the commit that adds this section.
+
+| What | Runs | Measured |
+|---|---|---|
+| The two random-request tests, 80 cases each | 1 | 5.8 s |
+| The compositor's in-process tests (89), `cargo test --test headless` | 3 | 8.8 to 9.3 s |
+| The same, before the random tests were split in two | 3 | 16.1 to 17.4 s |
+
+`yuna --headless` (release) with Alacritty 0.17 inside, through `agent-headless`, on llvmpipe:
+at 1920 × 1080 at 60 Hz, scale 1, and at 2880 × 1620 at 60 Hz, scale 1.5, 3 frames drawn,
+then 0 context switches in 10 s for every thread of Yuna and of Alacritty. Alacritty draws
+through `wl_shm` and takes the fractional scale (120, then 180) and a viewport.
+
 ## M1.4, Phase B1 — CI with Smithay (2026-11-12)
 
 CI's one job on GitHub's `ubuntu-24.04` runner, without a cache, from its start to its end:
