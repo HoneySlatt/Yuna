@@ -1800,12 +1800,9 @@ fn check_fullscreen(p: &Placed, area: &Area) -> Result<(), String> {
         && rect.bottom() <= output.bottom() + 1e-6
         && rect.w <= output.w + 1e-6;
     let centred = ((rect.y - output.y) - (output.bottom() - rect.bottom())).abs() <= tolerance;
-    // A fullscreen column scrolled out of view lies beside the output; one in view is centred
-    // across it too.
-    let in_view = rect.x >= output.x - 1e-6 && rect.right() <= output.right() + 1e-6;
-    let centred_across =
-        !in_view || ((rect.x - output.x) - (output.right() - rect.right())).abs() <= tolerance;
-    if !(inside && centred && centred_across) {
+    // Across, a fullscreen window is centred on its column's tile, which the view may shift off
+    // the output; the scenarios check that centring.
+    if !(inside && centred) {
         return Err(format!("fullscreen {:?} is at {rect:?}", p.window));
     }
     Ok(())
