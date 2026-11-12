@@ -31,7 +31,8 @@ The shell gives:
 
 Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
 `yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
-`warn`, `info` (the default), `debug` (one line per frame drawn) or `trace`.
+`warn`, `info` (the default), `debug` (a line per frame drawn, and per round of the loop with its
+counters) or `trace`.
 
 Nix sees only the files git knows: `git add` a new file before `nix develop` reads it. Plain
 `nix develop`, never `nix develop path:.`, which copies the whole folder, `target/` included, into

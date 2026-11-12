@@ -365,7 +365,10 @@ grab, and the seat has neither: it refuses every `start_drag`.
 
 `yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
 `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM or SIGINT. The signal handler writes to a pipe
-the event loop watches, so that the loop returns and the socket is removed.
+the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
+`window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
+loop that woke, its counters in a line whose message is `counters`: what a test outside the
+process reads.
 
 ### Tests
 

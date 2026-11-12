@@ -202,7 +202,8 @@ impl Compositor {
     }
 
     /// Runs until `stop` can be read, then returns: the program's loop. `stop` is the read end
-    /// of the pipe its signal handler writes to.
+    /// of the pipe its signal handler writes to. After each round that woke, it logs its
+    /// [`Counters`] at the `debug` level, in one line whose message is `counters`.
     pub fn run_until(&mut self, stop: OwnedFd) -> Result<(), Error> {
         self.event_loop
             .handle()
@@ -216,7 +217,21 @@ impl Compositor {
             )
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         while !self.state.stop_requested {
+            let wakeups = self.state.counters.wakeups;
             self.dispatch(None)?;
+            if self.state.counters.wakeups != wakeups {
+                // One line per round that woke, so that a test outside the process reads what
+                // the program did, and that nothing was done at rest.
+                let counters = self.state.counters;
+                tracing::debug!(
+                    frames_drawn = counters.frames_drawn,
+                    frame_callbacks = counters.frame_callbacks,
+                    configures = counters.configures,
+                    commits = counters.commits,
+                    wakeups = counters.wakeups,
+                    "counters"
+                );
+            }
         }
         tracing::info!("stopping");
         Ok(())
