@@ -23,8 +23,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
-- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035, ADR-0037,
-  ADR-0038, ADR-0043); C1 to C5 done; its closing review comes next.
+- [M1.5](#m15--agents-control) is done (2026-11-13): ADR-0031 to ADR-0035, ADR-0037, ADR-0038,
+  ADR-0043. Next: M1.6, on the owner's go.
 
 ## Status
 
@@ -34,7 +34,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
-| [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | In progress |
+| [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
@@ -151,6 +151,9 @@ milestone first needs it.
   MCP alone. Presentation times are read through captures alone ([debt](debt.md#the-mcp-server)).
   A call takes about 60 µs; a 4K capture holds the main thread 4 ms on the GPU,
   47 ms on llvmpipe, which costs frames ([measurements](measurements.md), [debt](debt.md#captures)).
+- **Result.** Done on 2026-11-13. The closing review found three blocking defects, a NUL in
+  text or a key name that ended `yuna mcp` and a property of the peek that failed one run in
+  twenty, and six to fix; all are fixed with their tests, or written as debt.
 
 ### M1.6 — Emulated VRR and HDR
 
