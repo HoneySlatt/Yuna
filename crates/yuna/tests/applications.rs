@@ -1,5 +1,6 @@
-//! Real applications in `yuna --headless`, and Yuna's rest checked on the program, as agents run
-//! it, not in the test's process ([ADR-0025](../../../docs/adr/0025-applications-in-ci.md)).
+//! Real applications in `yuna --headless` and in `yuna mcp`, and Yuna's rest checked on the
+//! program, as agents run it, not in the test's process
+//! ([ADR-0025](../../../docs/adr/0025-applications-in-ci.md)).
 //!
 //! Each application runs in a `yuna` of its own, all at once. Yuna logs at `debug`: the line
 //! `window opened` when a window maps, `frame drawn` for each frame, and `counters` after each
@@ -7,10 +8,15 @@
 //! application has shown its window and gone quiet, 10 s with no context switch in any of Yuna's
 //! threads, and no frame, frame callback, configure, commit or wake-up.
 //!
-//! Applications that animate without end, `vkcube` and SlimeEngine's `window` example, draw a
-//! number of frames and leave; Yuna must then rest. Their rest with their window open waits for
-//! M1.5's input ([ADR-0029](../../../docs/adr/0029-the-rest-of-animated-applications.md)).
-//! `vkcube` left to run proves that a client that keeps drawing fails the check.
+//! Applications that animate without end draw a number of frames and leave; Yuna must then rest.
+//! `vkcube` left to run proves that a client that keeps drawing fails the check. Through
+//! `yuna mcp`, as an agent drives it, `vkcube` paused by its space key rests with its window open
+//! ([ADR-0029](../../../docs/adr/0029-the-rest-of-animated-applications.md)).
+//!
+//! SlimeEngine's examples run in ignored tests, which its weekly job runs: `window` draws its
+//! frames and leaves, `editor` rests with its window open, and an agent types and clicks in
+//! `interface` and checks it by capture, M1.5's done-when
+//! ([ADR-0043](../../../docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)).
 //!
 //! What makes an application draw again is pinned, so that only Yuna's behaviour decides the
 //! result. Yuna and each application get an environment of their own, nothing of the caller's:
@@ -30,20 +36,21 @@
 #[path = "common/application_environment.rs"]
 mod application_environment;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, DirBuilder, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
+use serde_json::{Value, json};
 use smithay::reexports::rustix::io::Errno;
 use smithay::reexports::rustix::process::{
     Pid, Signal, getppid, kill_process, set_parent_process_death_signal,
@@ -124,7 +131,7 @@ fn a_client_that_keeps_drawing_fails_the_rest_check() {
     yuna.wait_for_window(&mut cube)
         .unwrap_or_else(|failure| panic!("{failure}"));
 
-    let never_quiet = yuna.wait_until_quiet(Duration::from_secs(5));
+    let never_quiet = yuna.wait_until_quiet(QUIET, Duration::from_secs(5));
     assert!(never_quiet.is_err(), "vkcube went quiet: {never_quiet:?}");
     let activity = yuna
         .measure_rest()
@@ -140,34 +147,268 @@ fn a_client_that_keeps_drawing_fails_the_rest_check() {
     yuna.stop().unwrap_or_else(|failure| panic!("{failure}"));
 }
 
-/// SlimeEngine's `window` example, which draws through wgpu and Vulkan: its binary, built at the
-/// revision `.github/workflows/slimeengine.yml` pins, is named by `YUNA_SLIMEENGINE_WINDOW`. That
-/// weekly job runs it: `cargo test --test applications -- --ignored`.
+/// `vkcube`, paused by its space key through MCP, rests with its window open: Yuna has nothing
+/// to do while it shows a cube that does not turn
+/// ([ADR-0029](../../../docs/adr/0029-the-rest-of-animated-applications.md)).
 #[test]
-#[ignore = "needs SlimeEngine's window example, which the weekly job builds"]
-fn slimeengine_window_runs_and_yuna_rests_after_it() {
-    let window = std::env::var_os("YUNA_SLIMEENGINE_WINDOW")
-        .expect("YUNA_SLIMEENGINE_WINDOW names SlimeEngine's window example");
-    let frames = FRAMES.to_string();
-    let report = draw_leave_and_rest("SlimeEngine's window", |yuna| {
-        let mut command = application(yuna, &window);
-        // winit and wgpu load these libraries at run time, beside the shell's EGL.
-        let libraries = format!(
+fn vkcube_paused_by_its_space_key_rests_with_its_window_open() {
+    let report = pause_vkcube_and_rest().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+fn pause_vkcube_and_rest() -> Result<String, String> {
+    let mut yuna = Yuna::start_mcp();
+    let seat = yuna.create_seat()?;
+    let cube = yuna.start_program(seat, &["vkcube", "--wsi", "wayland"], &[])?;
+    let failure = |what: String| format!("vkcube: {what}\n{}", yuna.diagnosis(&cube.log));
+    yuna.agent_window(seat).map_err(failure)?;
+    yuna.wait_for_frames().map_err(failure)?;
+    if yuna.wait_until_quiet(QUIET, QUIET * 2).is_ok() {
+        return Err(failure("it went quiet before its pause".to_owned()));
+    }
+    yuna.call(
+        "keyboard",
+        json!({"action": "tap", "seat": seat, "keys": "space"}),
+    )
+    .map_err(failure)?;
+    let paused = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let rest = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest: {activity}")))?;
+    if !yuna.program_runs(seat, &cube).map_err(failure)? {
+        return Err(failure("it left during the rest window".to_owned()));
+    }
+    yuna.stop()?;
+    Ok(format!(
+        "vkcube, paused by its space key: quiet after {} frames drawn, {} commits; then {rest}",
+        paused.frames_drawn, paused.commits
+    ))
+}
+
+/// The folder of SlimeEngine's examples, built at the revision
+/// `.github/workflows/slimeengine.yml` pins: the `window`, `interface` and `editor` binaries,
+/// `cooked/`, the examples' cooked data, and `assets/`, their sources, the editor's yard among
+/// them. That weekly job names it in `YUNA_SLIMEENGINE_EXAMPLES` and runs the ignored tests:
+/// `cargo test --test applications -- --ignored`.
+fn slimeengine_examples() -> PathBuf {
+    std::env::var_os("YUNA_SLIMEENGINE_EXAMPLES")
+        .map(PathBuf::from)
+        .expect("YUNA_SLIMEENGINE_EXAMPLES names the folder of SlimeEngine's examples")
+}
+
+/// What SlimeEngine's examples load at run time beside the shell's EGL: winit's and wgpu's
+/// libraries, and fontconfig, through which uwui finds DejaVu.
+fn slimeengine_libraries() -> (&'static str, String) {
+    (
+        "LD_LIBRARY_PATH",
+        format!(
             "{}:{}",
             shell_variable("YUNA_CLIENT_LIBRARY_PATH"),
             shell_variable("LD_LIBRARY_PATH")
-        );
-        command
-            .env("LD_LIBRARY_PATH", libraries)
-            .args(["--frames", &frames]);
+        ),
+    )
+}
+
+/// SlimeEngine's `window` example, which draws through wgpu and Vulkan, draws its frames and
+/// leaves. It cannot rest with its window shown: it draws at its frame rate while it shows
+/// ([ADR-0043](../../../docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)).
+#[test]
+#[ignore = "needs SlimeEngine's examples, which the weekly job builds"]
+fn slimeengine_window_runs_and_yuna_rests_after_it() {
+    let window = slimeengine_examples().join("window");
+    let frames = FRAMES.to_string();
+    let report = draw_leave_and_rest("SlimeEngine's window", |yuna| {
+        let mut command = application(yuna, &window);
+        let (name, libraries) = slimeengine_libraries();
+        command.env(name, libraries).args(["--frames", &frames]);
         command
     })
     .unwrap_or_else(|failure| panic!("{failure}"));
     eprintln!("{report}");
 }
 
-/// Runs an application that draws once and goes quiet: it shows its window, goes quiet, and Yuna
-/// rests. Says what it measured, or why it failed.
+/// SlimeEngine's `editor` example, on wgpu and Vulkan, runs its frames on demand: opened on a
+/// copy of its yard, through MCP, it rests with its window shown.
+#[test]
+#[ignore = "needs SlimeEngine's examples, which the weekly job builds"]
+fn slimeengine_editor_rests_with_its_window_open() {
+    let report = editor_at_rest().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+/// How long Yuna must go without a round before the editor counts as quiet: longer than its
+/// first run's hint shows.
+const EDITOR_QUIET: Duration = Duration::from_secs(11);
+
+fn editor_at_rest() -> Result<String, String> {
+    let examples = slimeengine_examples();
+    let mut yuna = Yuna::start_mcp();
+    // The editor writes the level it edits: a copy of the yard, with its metadata file.
+    let yard = yuna.folder.join("yard");
+    fs::create_dir_all(&yard).map_err(|error| error.to_string())?;
+    for file in ["yard.scene", "yard.scene.meta"] {
+        fs::copy(examples.join("assets").join(file), yard.join(file))
+            .map_err(|error| format!("{file}: {error}"))?;
+    }
+    let seat = yuna.create_seat()?;
+    let level = yard.join("yard.scene");
+    let journal = yuna.folder.join("yard.journal");
+    let cooked = examples.join("cooked");
+    let editor = examples.join("editor");
+    let command = [
+        editor.to_str().ok_or("a path")?,
+        "--level",
+        level.to_str().ok_or("a path")?,
+        "--assets",
+        cooked.to_str().ok_or("a path")?,
+        "--journal",
+        journal.to_str().ok_or("a path")?,
+    ];
+    let program = yuna.start_program(seat, &command, &[slimeengine_libraries()])?;
+    let failure = |what: String| format!("editor: {what}\n{}", yuna.diagnosis(&program.log));
+    yuna.agent_window(seat).map_err(failure)?;
+    // Its first run shows a hint, a notification that goes after up to 10 s, uwui's longest
+    // (`Severity::Warning`): its rest is measured once Yuna has had no round for longer.
+    let quiet = yuna
+        .wait_until_quiet(EDITOR_QUIET, PATIENCE)
+        .map_err(failure)?;
+    let rest = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest: {activity}")))?;
+    if !yuna.program_runs(seat, &program).map_err(failure)? {
+        return Err(failure("it left during the rest window".to_owned()));
+    }
+    yuna.stop()?;
+    Ok(format!(
+        "SlimeEngine's editor: quiet after {} frames drawn, {} commits; then {rest}",
+        quiet.frames_drawn, quiet.commits
+    ))
+}
+
+/// Where the bar of SlimeEngine's `interface` example puts what the story uses, in logical
+/// units from its window's top-left corner, at the pinned revision, its window 936 × 1048 as the
+/// story's output tiles it: the text field, its second button, "view", and the end of the bar,
+/// which says what the last action did.
+const INTERFACE_FIELD: (f64, f64) = (572.0, 20.0);
+const INTERFACE_FIELD_AREA: (u32, u32, u32, u32) = (492, 6, 160, 28);
+const INTERFACE_VIEW_BUTTON: (f64, f64) = (152.0, 20.0);
+const INTERFACE_STATUS_AREA: (u32, u32, u32, u32) = (744, 0, 176, 46);
+/// How long the story watches those parts stay the same before its input.
+const STILL: Duration = Duration::from_secs(1);
+
+/// The done-when of M1.5: an agent, through MCP alone, opens one of SlimeEngine's examples,
+/// types, clicks, and checks the result by capture. It starts `interface`, clicks its text field
+/// and waits for the field to ask for an input method, types text with characters outside `us`,
+/// committed through `text-input-v3`, shows text being composed, and clicks a button; after each
+/// step, a capture of the part of the window it changes must differ from the one before.
+#[test]
+#[ignore = "needs SlimeEngine's examples, which the weekly job builds"]
+fn an_agent_types_and_clicks_in_slimeengines_interface_and_checks_by_capture() {
+    let report = interface_story().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+fn interface_story() -> Result<String, String> {
+    let examples = slimeengine_examples();
+    let mut yuna = Yuna::start_mcp();
+    let seat = yuna.create_seat_with(
+        json!({"action": "create", "width": 1920, "height": 1080, "rate": 60, "scale": 1}),
+    )?;
+    let interface = examples.join("interface");
+    let cooked = examples.join("cooked");
+    let command = [
+        interface.to_str().ok_or("a path")?,
+        "--assets",
+        cooked.to_str().ok_or("a path")?,
+    ];
+    let program = yuna.start_program(seat, &command, &[slimeengine_libraries()])?;
+    let failure = |what: String| format!("interface: {what}\n{}", yuna.diagnosis(&program.log));
+    let window = yuna.agent_window(seat).map_err(failure)?;
+    let origin = (
+        window["rect"]["x"].as_f64().ok_or("no rectangle")?,
+        window["rect"]["y"].as_f64().ok_or("no rectangle")?,
+    );
+    // The window is placed on whole logical units at scale 1.
+    let area = |(x, y, width, height): (u32, u32, u32, u32)| {
+        json!({
+            "x": origin.0 as u32 + x,
+            "y": origin.1 as u32 + y,
+            "width": width,
+            "height": height,
+        })
+    };
+    let field_area = area(INTERFACE_FIELD_AREA);
+    let status_area = area(INTERFACE_STATUS_AREA);
+    yuna.wait_for_frames().map_err(failure)?;
+    let field_before = yuna.capture(seat, &field_area).map_err(failure)?;
+    let status_before = yuna.capture(seat, &status_area).map_err(failure)?;
+    // Both parts are still without input, so that a change is the input's: the list beside them
+    // scrolls with time, they do not.
+    std::thread::sleep(STILL);
+    if yuna.capture(seat, &field_area).map_err(failure)? != field_before
+        || yuna.capture(seat, &status_area).map_err(failure)? != status_before
+    {
+        return Err(failure(
+            "its field or its bar changes without input".to_owned(),
+        ));
+    }
+
+    let click = |(x, y): (f64, f64)| {
+        yuna.call(
+            "pointer",
+            json!({"action": "click", "seat": seat, "x": origin.0 + x, "y": origin.1 + y}),
+        )
+    };
+    click(INTERFACE_FIELD).map_err(failure)?;
+    let started = Instant::now();
+    loop {
+        let keyboard = yuna
+            .call("keyboard", json!({"action": "get", "seat": seat}))
+            .map_err(failure)?;
+        if keyboard["structuredContent"]["text_field"] == json!(true) {
+            break;
+        }
+        if started.elapsed() > PATIENCE {
+            return Err(failure(
+                "its field never asked for an input method".to_owned(),
+            ));
+        }
+        std::thread::sleep(POLL);
+    }
+    let field_enabled = started.elapsed();
+
+    yuna.call(
+        "keyboard",
+        json!({"action": "tap", "seat": seat, "keys": "ctrl+a"}),
+    )
+    .map_err(failure)?;
+    yuna.call(
+        "keyboard",
+        json!({"action": "type", "seat": seat, "text": "Grüße"}),
+    )
+    .map_err(failure)?;
+    let typed = yuna
+        .capture_changed(seat, &field_area, &field_before)
+        .map_err(failure)?;
+    yuna.call(
+        "keyboard",
+        json!({"action": "preedit", "seat": seat, "text": "ña"}),
+    )
+    .map_err(failure)?;
+    yuna.capture_changed(seat, &field_area, &typed)
+        .map_err(failure)?;
+    click(INTERFACE_VIEW_BUTTON).map_err(failure)?;
+    yuna.capture_changed(seat, &status_area, &status_before)
+        .map_err(failure)?;
+    yuna.stop()?;
+    Ok(format!(
+        "SlimeEngine's interface through MCP: its field enabled {} ms after the click; the \
+         field changed when typed into and when text was composed, and its bar when a button \
+         was clicked",
+        field_enabled.as_millis()
+    ))
+}
+
 fn run_and_rest(name: &str, command: impl FnOnce(&Yuna) -> Command) -> Result<String, String> {
     let started = Instant::now();
     let yuna = Yuna::start();
@@ -176,7 +417,7 @@ fn run_and_rest(name: &str, command: impl FnOnce(&Yuna) -> Command) -> Result<St
     let failure = |what: String| format!("{name}: {what}\n{}", yuna.diagnosis(&app_log));
     yuna.wait_for_window(&mut app).map_err(failure)?;
     let shown = started.elapsed();
-    let quiet = yuna.wait_until_quiet(PATIENCE).map_err(failure)?;
+    let quiet = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
     let rest = yuna
         .measure_rest()
         .map_err(|activity| failure(format!("Yuna did not rest: {activity}")))?;
@@ -211,7 +452,7 @@ fn draw_leave_and_rest(
     if !status.success() {
         return Err(failure(format!("it ended with {status}")));
     }
-    let left = yuna.wait_until_quiet(PATIENCE).map_err(failure)?;
+    let left = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
     // One commit per frame it drew; Yuna draws at most one frame per refresh, 60 a second by
     // default, and drew one for each in every run measured: half of them leaves room for a slow
     // runner.
@@ -383,21 +624,84 @@ impl fmt::Display for Activity {
     }
 }
 
-/// A `yuna --headless` process with one output, in a folder of its own: its runtime folder, its
-/// log, and its application's home. The output is 1920 × 1080 at 60 Hz and scale 1, or the mode
-/// `YUNA_APPLICATIONS_OUTPUT` names, as `--output` takes it, to measure rest on another output.
+/// A `yuna` process, `yuna --headless` or `yuna mcp`, with one output, in a folder of its own:
+/// its runtime folder, its log, and its application's home. The output is 1920 × 1080 at 60 Hz
+/// and scale 1, or the mode `YUNA_APPLICATIONS_OUTPUT` names, as `--output` takes it, to measure
+/// rest on another output; `yuna mcp` gives it to the seat the test creates.
 struct Yuna {
     child: Child,
     folder: PathBuf,
     log: PathBuf,
-    /// Its Wayland socket's path.
+    /// Its Wayland socket's path: the owner's seat's for `yuna --headless`, the agent's seat's
+    /// for `yuna mcp` once [`Yuna::create_seat`] made it.
     socket: PathBuf,
+    /// The MCP connection of `yuna mcp`: its input, and its replies, read on a thread.
+    mcp: Option<RefCell<Mcp>>,
     /// Whether a failure was reported: the folder, with its logs, is then kept.
     failed: Cell<bool>,
 }
 
+/// The test's side of `yuna mcp`'s standard input and output.
+struct Mcp {
+    input: ChildStdin,
+    replies: mpsc::Receiver<Value>,
+    next_id: u64,
+}
+
+/// A program an agent started through `spawn`: its id and its log.
+struct Program {
+    id: u64,
+    log: PathBuf,
+}
+
 impl Yuna {
+    /// `yuna --headless`, its socket read from what it prints.
     fn start() -> Yuna {
+        let mut yuna = Yuna::launch(&["--headless"], Stdio::null());
+        // Read on a thread of its own, so that a Yuna that never prints fails the test in time.
+        let stdout = yuna.child.stdout.take().expect("its standard output");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(stdout).read_line(&mut line);
+            let _ = sender.send(line);
+        });
+        let line = receiver.recv_timeout(PATIENCE).unwrap_or_default();
+        let Some(name) = line.trim_end().strip_prefix("WAYLAND_DISPLAY=") else {
+            panic!("yuna printed no socket: {line:?}\n{}", yuna.log_tail());
+        };
+        yuna.socket = yuna.runtime_dir().join(name);
+        yuna
+    }
+
+    /// `yuna mcp`, driven as an agent drives it: requests on its standard input, one a line,
+    /// replies read from its standard output on a thread.
+    fn start_mcp() -> Yuna {
+        let mut yuna = Yuna::launch(&["mcp"], Stdio::piped());
+        let stdout = yuna.child.stdout.take().expect("its standard output");
+        let input = yuna.child.stdin.take().expect("its standard input");
+        let (sender, replies) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                let Ok(reply) = serde_json::from_str::<Value>(&line) else {
+                    return;
+                };
+                if sender.send(reply).is_err() {
+                    return;
+                }
+            }
+        });
+        yuna.mcp = Some(RefCell::new(Mcp {
+            input,
+            replies,
+            next_id: 1,
+        }));
+        yuna
+    }
+
+    /// Starts `yuna` with `mode`'s arguments and its output, at the `debug` level.
+    fn launch(mode: &[&str], input: Stdio) -> Yuna {
         static RUNS: AtomicU32 = AtomicU32::new(0);
         let folder = std::env::temp_dir().join(format!(
             "yuna-applications-{}-{}",
@@ -415,7 +719,8 @@ impl Yuna {
             .unwrap_or_else(|_| "1920x1080@60,1".to_owned());
         let mut command = Command::new(env!("CARGO_BIN_EXE_yuna"));
         command
-            .args(["--headless", "--output", &output])
+            .args(mode)
+            .args(["--output", &output])
             // What it draws with, from the shell; a throwaway home, so that Mesa reads none of
             // the user's settings.
             .env_clear()
@@ -428,32 +733,164 @@ impl Yuna {
             .env("HOME", folder.join("yuna-home"))
             .env("XDG_RUNTIME_DIR", folder.join("runtime"))
             .env("YUNA_LOG", "debug")
-            .stdin(Stdio::null())
+            .stdin(input)
             .stdout(Stdio::piped())
             .stderr(File::create(&log).expect("Yuna's log"));
         dies_with_test(&mut command);
         let child = command.spawn().expect("the yuna binary runs");
-        let mut yuna = Yuna {
+        Yuna {
             child,
             folder,
             log,
             socket: PathBuf::new(),
+            mcp: None,
             failed: Cell::new(false),
-        };
-        // Read on a thread of its own, so that a Yuna that never prints fails the test in time.
-        let stdout = yuna.child.stdout.take().expect("its standard output");
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let _ = BufReader::new(stdout).read_line(&mut line);
-            let _ = sender.send(line);
+        }
+    }
+
+    /// Calls an MCP tool of `yuna mcp` and gives its result, or what it refused.
+    fn call(&self, tool: &str, arguments: Value) -> Result<Value, String> {
+        let mut mcp = self.mcp.as_ref().expect("yuna mcp").borrow_mut();
+        let id = mcp.next_id;
+        mcp.next_id += 1;
+        let request = json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+                "name": tool,
+                "arguments": arguments,
+            }
         });
-        let line = receiver.recv_timeout(PATIENCE).unwrap_or_default();
-        let Some(name) = line.trim_end().strip_prefix("WAYLAND_DISPLAY=") else {
-            panic!("yuna printed no socket: {line:?}\n{}", yuna.log_tail());
-        };
-        yuna.socket = yuna.runtime_dir().join(name);
-        yuna
+        writeln!(mcp.input, "{request}").map_err(|error| format!("{tool}: {error}"))?;
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let reply = mcp
+                .replies
+                .recv_timeout(left)
+                .map_err(|_| format!("no reply to {tool} in {} s", PATIENCE.as_secs()))?;
+            if reply["id"] == json!(id) {
+                let result = reply["result"].clone();
+                if result["isError"] == json!(false) {
+                    return Ok(result);
+                }
+                return Err(format!("{tool} {arguments} failed: {reply}"));
+            }
+        }
+    }
+
+    /// Creates an agent's seat through MCP, with an output of `--output`'s mode, and gives its
+    /// handle; its socket is then the one its programs use.
+    fn create_seat(&mut self) -> Result<u64, String> {
+        self.create_seat_with(json!({"action": "create"}))
+    }
+
+    /// Creates an agent's seat through MCP with `arguments`, `action` among them.
+    fn create_seat_with(&mut self, arguments: Value) -> Result<u64, String> {
+        let created = self.call("seat", arguments)?;
+        let seat = &created["structuredContent"];
+        self.socket = PathBuf::from(seat["socket"].as_str().ok_or("no socket")?);
+        seat["seat"].as_u64().ok_or_else(|| "no handle".to_owned())
+    }
+
+    /// Starts `command` on `seat` through MCP, with the environment `application` gives, and
+    /// `variables` over it.
+    fn start_program(
+        &self,
+        seat: u64,
+        command: &[&str],
+        variables: &[(&str, String)],
+    ) -> Result<Program, String> {
+        let mut env: BTreeMap<String, String> = application_environment(&self.home())
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_string_lossy().into_owned()))
+            .collect();
+        env.extend(
+            variables
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone())),
+        );
+        let started = self.call(
+            "spawn",
+            json!({"action": "start", "seat": seat, "command": command, "env": env}),
+        )?;
+        let program = &started["structuredContent"]["program"];
+        Ok(Program {
+            id: program["id"].as_u64().ok_or("no program id")?,
+            log: PathBuf::from(program["log"].as_str().ok_or("no log")?),
+        })
+    }
+
+    /// Waits through MCP for `seat`'s first window, placed, and gives it.
+    fn agent_window(&self, seat: u64) -> Result<Value, String> {
+        let found = self.call(
+            "windows",
+            json!({"seat": seat, "wait_ms": PATIENCE.as_millis().min(50_000)}),
+        )?;
+        let window = found["structuredContent"]["windows"][0].clone();
+        if window.is_null() {
+            return Err(format!("no window in {} s", PATIENCE.as_secs()));
+        }
+        Ok(window)
+    }
+
+    /// Waits until Yuna has drawn a frame since this call: its client draws.
+    fn wait_for_frames(&self) -> Result<(), String> {
+        let before = self.counters();
+        let deadline = Instant::now() + PATIENCE;
+        while self.counters().frames_drawn == before.frames_drawn {
+            if Instant::now() > deadline {
+                return Err(format!("no frame drawn in {} s", PATIENCE.as_secs()));
+            }
+            std::thread::sleep(POLL);
+        }
+        Ok(())
+    }
+
+    /// Captures `region` of `seat`'s first output through MCP, and gives its PNG in base64: two
+    /// captures are the same image when their texts are equal.
+    fn capture(&self, seat: u64, region: &Value) -> Result<String, String> {
+        let captured = self.call("capture", json!({"seat": seat, "region": region}))?;
+        captured["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|content| content["type"] == json!("image"))
+            .and_then(|image| image["data"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("no image in {captured}"))
+    }
+
+    /// Captures `region` again and again until it differs from `before`, as an agent waits for
+    /// its application to draw what its input changed, and gives it.
+    fn capture_changed(&self, seat: u64, region: &Value, before: &str) -> Result<String, String> {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let now = self.capture(seat, region)?;
+            if now != before {
+                return Ok(now);
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "{region} did not change in {} s",
+                    PATIENCE.as_secs()
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// Whether `program` of `seat` still runs, as `spawn list` says.
+    fn program_runs(&self, seat: u64, program: &Program) -> Result<bool, String> {
+        let listed = self.call("spawn", json!({"action": "list", "seat": seat}))?;
+        Ok(listed["structuredContent"]["programs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|p| p["id"] == json!(program.id) && p["state"] == json!("running")))
     }
 
     fn runtime_dir(&self) -> PathBuf {
@@ -500,9 +937,9 @@ impl Yuna {
         }
     }
 
-    /// Waits until Yuna has had no round for [`QUIET`], at most `patience`, and gives its
-    /// counters then.
-    fn wait_until_quiet(&self, patience: Duration) -> Result<Counters, String> {
+    /// Waits until Yuna has had no round for `quiet`, at most `patience`, and gives its counters
+    /// then.
+    fn wait_until_quiet(&self, quiet: Duration, patience: Duration) -> Result<Counters, String> {
         let deadline = Instant::now() + patience;
         let mut last = self.counters();
         let mut since = Instant::now();
@@ -512,13 +949,13 @@ impl Yuna {
             if now != last {
                 last = now;
                 since = Instant::now();
-            } else if since.elapsed() >= QUIET {
+            } else if since.elapsed() >= quiet {
                 return Ok(now);
             }
             if Instant::now() > deadline {
                 return Err(format!(
                     "never quiet for {} s in {} s: {last:?}",
-                    QUIET.as_secs(),
+                    quiet.as_secs(),
                     patience.as_secs()
                 ));
             }

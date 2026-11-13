@@ -665,8 +665,8 @@ one it was presented at, later when the frame was late.
 and Alacritty started through `spawn`, found
   through `windows`, clicked and typed into: its shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` shares.
-- `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as
-  agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
+- `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless` or
+  `yuna mcp`, as agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
   [ADR-0029](adr/0029-the-rest-of-animated-applications.md)). One `yuna` per application, all at
   once: Alacritty, `gtk4-demo` and Qt's `qml` on a still file show their window, go quiet (no
   round for 2 s), and Yuna must then rest 10 s: no context switch in any of its threads, read in
@@ -679,16 +679,23 @@ and Alacritty started through `spawn`, found
   DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for Vulkan, without the
   machine's layers; cursors that never blink; GTK's animations off; GTK's renderer and Qt's
   pinned. What still reads the machine is listed in the file's documentation. Every process it
-  starts dies with the test's thread. The test takes about 15 s. SlimeEngine's `window` example, built
-  by the weekly job, runs in an ignored test of the same file.
+  starts dies with the test's thread. The test takes about 15 s. Through `yuna mcp`, as an agent
+  drives it, `vkcube` paused by its space key rests with its window open. SlimeEngine's examples,
+  built by the weekly job, run in ignored tests of the same file
+  ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): `window` draws
+  120 frames and leaves; `editor` rests with its window open; and M1.5's done-when, an agent
+  that opens `interface` through MCP alone, clicks its text field, types `Grüße`, shows text
+  being composed and clicks a button, a capture of the part each step changes differing after
+  it, and the same parts unchanged before any input.
 
 ## The tools around the code
 
 - `flake.nix`: the development shell; `rust-toolchain.toml`: the toolchain
   ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
-- `.github/workflows/slimeengine.yml`: SlimeEngine's `window` example in `yuna --headless`,
-  weekly, on demand and when the drawing path changes, built at a pinned revision and cached.
+- `.github/workflows/slimeengine.yml`: SlimeEngine's `window`, `editor` and `interface`
+  examples in Yuna, weekly, on demand and when the drawing path or what the agent's story uses
+  changes, built at a pinned revision with their data cooked, and cached.
 - `crates/yuna/examples/frame_time.rs`: a frame's cost while `vkcube` draws, read from outside
   the program: its frames and `took_us` from its log, each thread's CPU time from `/proc`, the
   GPU's from the kernel's DRM usage statistics

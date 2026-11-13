@@ -1,9 +1,11 @@
-# Runs SlimeEngine's `window` example, which draws through wgpu and Vulkan, in `yuna --headless`
-# (ADR-0025, ADR-0029). A workflow of its own, beside CI's one job, since it runs on other events:
-# weekly, on demand, and when Yuna's drawing path changes. The example is built at the SlimeEngine
-# revision below, in Yuna's development shell, so that it links the shell's own libraries; its
-# binary is cached per revision. SlimeEngine pins Rust 1.99.0; Yuna's 1.99.1 builds it. Actions
-# are pinned to commit SHAs, their release in a comment.
+# Runs SlimeEngine's examples, which draw through wgpu and Vulkan, in Yuna (ADR-0025, ADR-0029,
+# ADR-0043): `window` draws its frames and leaves, `editor` rests with its window open, and an
+# agent, through `yuna mcp` alone, types and clicks in `interface` and checks it by capture. A
+# workflow of its own, beside CI's one job, since it runs on other events: weekly, on demand, and
+# when Yuna's drawing path or what the agent's story uses changes. The examples are built at the
+# SlimeEngine revision below, in Yuna's development shell, so that they link the shell's own
+# libraries, and their data cooked; the folder is cached per revision. SlimeEngine pins Rust
+# 1.99.0; Yuna's 1.99.1 builds it. Actions are pinned to commit SHAs, their release in a comment.
 name: SlimeEngine
 
 on:
@@ -11,7 +13,8 @@ on:
     branches: [main]
     # The drawing path: the renderer, the outputs, the frame loop, the buffers, the clock; the
     # commits and wl_shm, the configures and the scale a client is told; the event loop and the
-    # program, whose log the test reads; the test that runs the example; what builds Yuna and the
+    # program, whose log the test reads; what the agent's story uses: the MCP server, seats,
+    # input, text input, captures; the tests that run the examples; what builds Yuna and the
     # shell.
     paths:
       - "crates/yuna/src/render.rs"
@@ -24,6 +27,11 @@ on:
       - "crates/yuna/src/state.rs"
       - "crates/yuna/src/shell.rs"
       - "crates/yuna/src/scale.rs"
+      - "crates/yuna/src/seats.rs"
+      - "crates/yuna/src/input.rs"
+      - "crates/yuna/src/text_input.rs"
+      - "crates/yuna/src/capture.rs"
+      - "crates/yuna/src/mcp/**"
       - "crates/yuna/tests/applications.rs"
       - "Cargo.lock"
       - "flake.nix"
@@ -49,7 +57,7 @@ env:
   SLIMEENGINE_REVISION: dc4ceaa30af84733d4e8bc242603f1d7df905d74
 
 jobs:
-  window:
+  examples:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -60,14 +68,14 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      # The binary depends on SlimeEngine's revision, and on the toolchain and libraries of
-      # Yuna's shell that build and link it. GitHub drops a cache unused for 7 days: a miss
-      # costs one build.
+      # The folder depends on SlimeEngine's revision, and on the toolchain and libraries of
+      # Yuna's shell that build and link its binaries. GitHub drops a cache unused for 7 days: a
+      # miss costs one build.
       - id: cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: slimeengine-window
-          key: slimeengine-window-${{ env.SLIMEENGINE_REVISION }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}
+          path: slimeengine-examples
+          key: slimeengine-examples-${{ env.SLIMEENGINE_REVISION }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,15 +84,23 @@ jobs:
           path: slimeengine
           persist-credentials: false
       # Without --no-update-lock-file, an incomplete flake.lock would be completed with an unpinned
-      # revision.
-      - name: Build SlimeEngine's window example
+      # revision. The folder holds the three examples, their cooked data and their sources, the
+      # editor's yard among them (tests/applications.rs, `slimeengine_examples`).
+      - name: Build SlimeEngine's examples and cook their data
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          nix develop --no-update-lock-file --command \
-            bash -c 'cd slimeengine && cargo build --release --locked --example window'
-          cp slimeengine/target/release/examples/window slimeengine-window
-      - name: The window example in yuna --headless
+          nix develop --no-update-lock-file --command bash -c '
+            set -euo pipefail
+            cd slimeengine
+            cargo build --release --locked -p slime-examples \
+              --example window --example interface --example editor
+            cargo run --release --locked -p slime-cook -- \
+              cook examples/assets ../slimeengine-examples/cooked
+          '
+          cp slimeengine/target/release/examples/{window,interface,editor} slimeengine-examples/
+          cp -r slimeengine/examples/assets slimeengine-examples/assets
+      - name: SlimeEngine's examples in Yuna
         run: |
           nix develop --no-update-lock-file --command \
-            env YUNA_SLIMEENGINE_WINDOW="$PWD/slimeengine-window" \
+            env YUNA_SLIMEENGINE_EXAMPLES="$PWD/slimeengine-examples" \
             cargo test --locked -p yuna --test applications -- --ignored --nocapture

@@ -75,12 +75,14 @@
         # Where Qt finds its Wayland platform, and QML its modules: qml is not wrapped.
         YUNA_QT_PLUGINS = "${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}";
         YUNA_QML_IMPORTS = "${pkgs.qt6.qtdeclarative}/${pkgs.qt6.qtbase.qtQmlPrefix}";
-        # The libraries that winit and wgpu load at run time, for SlimeEngine's `window` example,
-        # which the weekly job runs (.github/workflows/slimeengine.yml).
+        # The libraries that winit, wgpu and uwui load at run time, for SlimeEngine's examples,
+        # which the weekly job runs (.github/workflows/slimeengine.yml): uwui finds the system's
+        # fonts through fontconfig, the shell's DejaVu alone (YUNA_FONTS_CONF).
         YUNA_CLIENT_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
           pkgs.wayland
           pkgs.libxkbcommon
           pkgs.vulkan-loader
+          pkgs.fontconfig
         ];
       };
     };
