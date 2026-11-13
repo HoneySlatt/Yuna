@@ -23,8 +23,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
-- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035); C1 done. Next:
-  C2, `yuna mcp`.
+- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035); C1 and C2 done.
+  Next: C3, seats.
 
 ## Status
 
@@ -115,11 +115,10 @@ milestone first needs it.
 - **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
   consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
   machine ([measurements](measurements.md)).
-- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided. B2's and B3's
-  tests found and fixed five defects. A 4K frame with two `vkcube`: 0.2 ms on the GPU with
-  dmabufs, 7 ms on llvmpipe, which draws half the rate ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md),
-  [measurements](measurements.md)); Yuna rests on the 4K output. What fell short is in
-  [debt](debt.md).
+- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided. A 4K frame
+  with two `vkcube`: 0.2 ms on the GPU, 7 ms on llvmpipe
+  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md), [measurements](measurements.md));
+  Yuna rests on the 4K output. What fell short is in [debt](debt.md).
 
 ### M1.5 — Agents' control
 
@@ -131,8 +130,8 @@ milestone first needs it.
   with its own MCP layer ([ADR-0033](adr/0033-the-mcp-server.md)); captures
   ([ADR-0034](adr/0034-captures.md)); seats ([ADR-0035](adr/0035-agents-seats.md)).
 - **Steps.** C1: frames ahead (done). C2: `yuna mcp`, the MCP layer, `outputs`, `spawn`,
-  `windows`, `clock`. C3: seats, their sockets, pointer and keyboard input, `cursor-shape`, drag
-  and drop. C4: captures. C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
+  `windows`, `clock` (done). C3: seats, their sockets, pointer and keyboard input,
+  `cursor-shape`, drag and drop. C4: captures. C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
   `vkcube` and `window`, the measures.
 - **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
@@ -147,10 +146,7 @@ milestone first needs it.
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
   lead, on the real clock ([measurements](measurements.md)).
-- **For C2 to C5**, from the design's challenge: a bounded reply queue per client, its input
-  no longer read while full, a line over 1 MiB ending it; MCP's timeouts on real time, `wait`
-  under 60 s; programs with a clean environment (no `DISPLAY`, no D-Bus) and logs the agent
-  reads; one seat per manual-clock Yuna, an `advance` past real time refused; ids checked
+- **For C3 to C5**, from the design's challenge: one seat per manual-clock Yuna; ids checked
   against the seat that owns them; button serials for popup grabs; a capture's mapping to
   logical coordinates.
 - **C1, frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
@@ -158,6 +154,11 @@ milestone first needs it.
   boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
   1080p and 240 Hz, 0.4 to 0.9 % of frames missed, the lead at its cap; at 4K every frame late,
   as before ([measurements](measurements.md)).
+- **C2, `yuna mcp`.** Done on 2026-11-13: both revisions; `outputs`, `spawn`, `windows`,
+  `clock`; the challenge's bounds on replies, lines, waits, programs' environment and logs, and
+  the clock behind real time. Alacritty starts and is found through MCP alone. A checker's
+  review found 15 points, fixed or written as debt. Not run with a real MCP client yet
+  ([debt](debt.md#the-mcp-server)).
 
 ### M1.6 — Emulated VRR and HDR
 
