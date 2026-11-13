@@ -149,3 +149,31 @@ not published. T is the refresh period.
 - Mesa's Vulkan WSI ends `vkWaitForPresentKHR` when `wp_presentation_feedback.presented` arrives,
   whatever time it carries; its FIFO mode uses the `fifo-v1` and `commit-timing-v1` protocols
   where offered.
+
+## Agents and MCP
+
+Read on 2026-11-13 (modelcontextprotocol.io, the clients' documentation, crates.io, GitHub).
+
+- **MCP 2026-07-28** (released 2026-07-28): stateless. No `initialize`; each request carries
+  `io.modelcontextprotocol/protocolVersion` and the client's capabilities in `_meta`; servers
+  answer `server/discover`; a server must not rely on earlier requests of the same connection;
+  -32022 answers an unsupported revision. Revision 2025-11-25 and earlier open with `initialize`
+  and `notifications/initialized`.
+- **stdio**: the client starts the server; one JSON-RPC message per line; nothing but MCP on
+  standard output; logs on standard error; the server exits when its input closes.
+- **Clients**: Claude Code accepts stdio and HTTP, warns past 10,000 tokens of tool output and
+  caps it at 25,000; Codex accepts stdio and Streamable HTTP, 60 s per call by default; OpenCode
+  accepts a command or a URL and speaks the old revision by default. None documents Unix sockets.
+- **Images**: `{"type": "image", "data": <base64>, "mimeType": "image/png"}`. Claude's API takes
+  at most 5 MB of base64 and 8,000 pixels a side, and scales past 2,576 pixels on the long edge;
+  the model answers in the coordinates of the image it sees.
+- **rmcp** 3.10.0, the official Rust SDK: Apache-2.0, older contributions MIT; both revisions;
+  tokio required. Other Rust crates (rust-mcp-sdk, pmcp, turbomcp) are smaller and use tokio too.
+- **Prior art**: kwin-mcp (MIT) starts a private `kwin_wayland --virtual`, gives input through
+  KWin's EIS interface and captures through ScreenShot2, over stdio, screenshots as files by
+  default; computer-use-linux (MIT, Rust) speaks stdio or loopback HTTP with a token; swampcy
+  drives a headless sway; computer-use-mcp (Rust, rmcp) a nested sway. niri's IPC is JSON lines
+  inside calloop. gamescope makes itself subreaper to end a program's whole tree.
+- **Seats**: upstream Smithay announces each `wl_seat` global to every client, with no filter per
+  client; GLFW keeps the first seat it sees, SDL2 one input for all seats, vkcube the first
+  pointer.

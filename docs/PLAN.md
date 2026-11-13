@@ -23,9 +23,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
-- [M1.5](#m15--agents-control) started on 2026-11-13: frames ahead of their boundary done
-  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md),
-  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)). Next: the MCP server's design.
+- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035); C1 done. Next:
+  C2, `yuna mcp`.
 
 ## Status
 
@@ -74,15 +73,9 @@ milestone first needs it.
 - **Done when.** Each behaviour has its scenario; the property tests find no broken invariant over
   their runs in CI.
 - **Measured.** An operation's time on a workspace of 100 windows.
-- **Result.** Done on 2026-11-11. 97 scenarios, the two Umbriel cases among them; 70 name the
-  behaviour of niri or Hyprland they rewrite or depart from, the others test Yuna's own rules. Property
-  tests over 1,536 random sequences per run check the invariants, that one seat never changes
-  another's state, and that a refused operation changes nothing. Two rounds of closing review:
-  their defects are fixed, each with its scenario; their other findings are answered in
-  [ADR-0019](adr/0019-the-layouts-behaviours.md) and [ADR-0020](adr/0020-the-layout-models-shape.md)
-  or kept as debt below. An operation and `arrange` on 100 windows: under 25 µs at the 99th
-  percentile; linear up to 1,000 ([measurements](measurements.md)). What is not built yet is listed
-  in ADR-0019; terminal swallowing and per-application rules need clients: Stage 2.
+- **Result.** Done on 2026-11-11: 97 scenarios, the two Umbriel cases among them; property tests
+  over 1,536 random sequences per run; two rounds of closing review; an operation and `arrange` on
+  100 windows under 25 µs at the 99th percentile ([measurements](measurements.md)).
 
 ### M1.3 — HDR through Smithay, a prototype
 
@@ -123,20 +116,25 @@ milestone first needs it.
   consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
   machine ([measurements](measurements.md)).
 - **Result.** Done on 2026-11-12, its closing review's findings fixed or decided. B2's and B3's
-  tests found and fixed five defects. B4, on the 4K output with two `vkcube`: a frame takes
-  0.2 ms on the GPU with dmabufs, with 0.12 ms of GPU time and 0.17 ms of Yuna's CPU
-  (`--gpu`, run once by hand: its feedback and import work); 1.4 ms with `wl_shm`; 7 ms on
-  llvmpipe, which draws 116 frames a second for 240. GPU time is read from the kernel
-  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)). Yuna rests on the 4K output. The
-  layout meets ADR-0020's budgets but for "float, then tile" at 100 windows. Frames are
-  presented a period late headless. All four in [debt](debt.md); figures in
-  [measurements](measurements.md); briefs and proofs in `.delegation/` (local).
+  tests found and fixed five defects. A 4K frame with two `vkcube`: 0.2 ms on the GPU with
+  dmabufs, 7 ms on llvmpipe, which draws half the rate ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md),
+  [measurements](measurements.md)); Yuna rests on the 4K output. What fell short is in
+  [debt](debt.md).
 
 ### M1.5 — Agents' control
 
 - **Goal.** An agent drives an application through Yuna's MCP server, on a seat of its own
   ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Delivers.** First, frames drawn ahead of their refresh boundary: done, below. The MCP server: outputs and workspaces created and removed, programs started, windows
+- **Design.** Decided with the owner on 2026-11-13: frames ahead of their boundary
+  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md),
+  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)); `yuna mcp`, a private Yuna on stdio
+  with its own MCP layer ([ADR-0033](adr/0033-the-mcp-server.md)); captures
+  ([ADR-0034](adr/0034-captures.md)); seats ([ADR-0035](adr/0035-agents-seats.md)).
+- **Steps.** C1: frames ahead (done). C2: `yuna mcp`, the MCP layer, `outputs`, `spawn`,
+  `windows`, `clock`. C3: seats, their sockets, pointer and keyboard input, `cursor-shape`, drag
+  and drop. C4: captures. C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
+  `vkcube` and `window`, the measures.
+- **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
   presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
   so that input tests them. One seat per agent; a test that an agent's input never
@@ -149,7 +147,7 @@ milestone first needs it.
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
   lead, on the real clock ([measurements](measurements.md)).
-- **Frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
+- **C1, frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
   the boundary minus a lead measured per output, at most a period; feedback sent at its
   boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
   1080p and 240 Hz, 0.4 to 0.9 % of frames missed, the lead at its cap; at 4K every frame late,

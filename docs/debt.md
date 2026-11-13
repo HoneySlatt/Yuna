@@ -88,6 +88,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   `xdg_popup` while the first lives, which xdg-shell forbids. Yuna refuses it itself, with
   `xdg_surface.already_constructed`; for a second `xdg_surface` on the surface, xdg-shell names
   `xdg_wm_base.role`, which Yuna cannot send: Smithay keeps the `xdg_wm_base` to itself.
+- With two agents' seats in one Yuna, a program of the second may bind the first's `wl_seat`,
+  which upstream Smithay announces to every client: it then gets no input, never another seat's.
+  The filter per client comes at Stage 3 ([ADR-0035](adr/0035-agents-seats.md)).
 - Until M1.5 brings input, only a keyboard `enter` serial makes an activation token or a popup
   grab valid; key, button and touch serials come with input.
 - The modal hint of `xdg-dialog-v1` is read but not used: a modal dialog does not yet keep its

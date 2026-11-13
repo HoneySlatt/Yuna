@@ -41,3 +41,6 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023 |
 | [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; amends the ROADMAP |
+| [0033](0033-the-mcp-server.md) | The MCP server: a private Yuna on stdio, its own MCP layer | Accepted |
+| [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
+| [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted |
