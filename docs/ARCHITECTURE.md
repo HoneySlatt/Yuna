@@ -600,7 +600,9 @@ process reads. `frame drawn` gives the frame's time, `took_us`: from when its el
 built, which imports its clients' new buffers (a `wl_shm` buffer is copied then), to when its
 drawing is done. Beside it: `lead_us`, how long before its boundary the refresh was due;
 `at_once`, whether the output was idle; `boundary`, the boundary it aimed at; `presented`, the
-one it was presented at, later when the frame was late.
+one it was presented at, later when the frame was late. `capture copied` gives the time a
+capture's copy of pixels held the main thread, `capture encoded` the time its PNG took on its
+own thread, both `took_us`.
 
 ### Tests
 
@@ -700,6 +702,9 @@ and Alacritty started through `spawn`, found
   the program: its frames and `took_us` from its log, each thread's CPU time from `/proc`, the
   GPU's from the kernel's DRM usage statistics
   ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
+- `crates/yuna/examples/agent_time.rs`: what an agent's calls cost in `yuna mcp`: an MCP
+  call's time at rest and under load, and a capture's, its copy on the main thread and its
+  encoding read from the log, with the frames missed while captures run.
 - `deny.toml`: the dependency policy.
 
 ## Where to start reading

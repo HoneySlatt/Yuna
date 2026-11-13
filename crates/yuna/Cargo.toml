@@ -31,3 +31,7 @@ workspace = true
 [[example]]
 name = "frame_time"
 test = true
+
+[[example]]
+name = "agent_time"
+test = true

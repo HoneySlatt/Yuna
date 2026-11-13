@@ -16,7 +16,7 @@
 //!
 //! The only part that reads pixels from the renderer is `render::read_pixels`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::utils::{Physical, Rectangle};
 use yuna_layout::geometry::Rect;
@@ -615,12 +615,14 @@ impl State {
                     let copied = self
                         .agent_area(index, target, size)
                         .and_then(|(area, window)| {
+                            let began = Instant::now();
                             let pixels = crate::render::read_pixels(
                                 &mut self.renderer,
                                 &mut self.outputs[index],
                                 area.read,
                             )
                             .map_err(|e| e.to_string())?;
+                            log_copy(id, area.read, began);
                             Ok(CapturedFrame {
                                 mapping: area.mapping,
                                 window,
@@ -635,12 +637,15 @@ impl State {
                 }
                 Destination::Client(frame) => {
                     let pixels = whole_pixels.get_or_insert_with(|| {
-                        crate::render::read_pixels(
+                        let began = Instant::now();
+                        let pixels = crate::render::read_pixels(
                             &mut self.renderer,
                             &mut self.outputs[index],
                             whole,
                         )
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string());
+                        log_copy(id, whole, began);
+                        pixels
                     });
                     match pixels {
                         Ok(pixels) => self.finish_client_frame(
@@ -719,6 +724,18 @@ fn fail(
         Destination::Agent { ticket, .. } => captured.push((ticket, Err(why.to_owned()))),
         Destination::Client(frame) => frame.fail(failure),
     }
+}
+
+/// Logs a copy of `read`'s pixels of output `id` on the main thread, begun at `began`: what a
+/// capture costs the frame loop, which tests and measurements read at the `debug` level.
+fn log_copy(id: OutputId, read: Rectangle<i32, Physical>, began: Instant) {
+    tracing::debug!(
+        output = id.0,
+        width = read.size.w,
+        height = read.size.h,
+        took_us = began.elapsed().as_micros(),
+        "capture copied"
+    );
 }
 
 #[cfg(test)]
