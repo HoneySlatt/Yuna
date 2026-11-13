@@ -24,7 +24,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
 - [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035, ADR-0037,
-  ADR-0038); C1 to C4 done. Next: C5.
+  ADR-0038, ADR-0043); C1 to C5 done; its closing review comes next.
 
 ## Status
 
@@ -81,44 +81,24 @@ milestone first needs it.
 
 - **Goal.** Know whether Smithay's DRM backend, with Yuna's patches, can drive the owner's monitor
   in HDR ([ADR-0011](adr/0011-built-on-smithay.md)).
-- **Delivers.** A throwaway program on a branch: it takes the monitor from a text console, sets
-  `HDR_OUTPUT_METADATA`, `Colorspace` and 10-bit output, and shows test patterns of known PQ values,
-  through OpenGL ([ADR-0012](adr/0012-opengl-first.md)).
-- **Done when.** The patterns show as their values say, by the owner's eye and the monitor's own HDR
-  indicator, or the reason they cannot is written; the patches it needed are listed.
-- **By hand.** Agents have no access to the owner's display: the owner runs it from a text console.
-- **Measured.** Nothing beyond the verdict; the program is then deleted, its findings kept here.
-- **Result.** Done on 2026-11-12: Smithay, with Yuna's one patch, drives the owner's monitor in
-  HDR at 3840 × 2160 and 240 Hz; [ADR-0011](adr/0011-built-on-smithay.md) holds. The monitor
-  compresses highlights above its peak rather than clip them, which Stage 5's tone mapping must
-  know; a change of `Colorspace` is a modeset. What was set, seen and not observed is in
+- **Result.** Done on 2026-11-12, by the owner from a text console: Smithay, with Yuna's one
+  patch, drives the monitor in HDR at 3840 × 2160 and 240 Hz; ADR-0011 holds. The monitor
+  compresses highlights above its peak; a change of `Colorspace` is a modeset. Details in
   [measurements](measurements.md) and [patches](smithay-patches.md); the program is deleted.
 
 ### M1.4 — The headless compositor
 
 - **Goal.** A Wayland application runs in Yuna without a screen.
-- **Design.** Decided with the owner on 2026-11-12: [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)
-  to [ADR-0025](adr/0025-applications-in-ci.md). Phase B starts once Phase A is done, with or
-  without M1.3's verdict.
-- **Delivers, Phase A: the layout model's client side**: asked and committed sizes, limits,
-  dialogs, focus, activation ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
-- **Delivers, Phase B: the compositor.** B1: `yuna --headless`, virtual outputs (ADR-0022),
-  frames and clock (ADR-0023), `xdg-shell`, `xdg-decoration` (ADR-0024), `wl_shm`, presentation
-  time, a seat with a keyboard. B2: popups, `xdg-activation`, `xdg-dialog`, `linux-dmabuf`,
-  viewporter, fractional scale, data device, primary selection, `ext-data-control`; a cap on a
-  client's windows; misbehaving clients and random requests in tests. B3: the applications in
-  CI and the rest check on the program, the weekly SlimeEngine job (ADR-0025). B4: the measures.
-- **Done when.** Alacritty, `gtk4-demo`, Qt's `qml` and `vkcube` run in Yuna in CI at each push, and
-  SlimeEngine's `window` example in the weekly job; each draws nothing at rest by ADR-0025's
-  check, `vkcube` and `window` once they leave (ADR-0029); misbehaving clients never take Yuna
-  down.
-- **Measured.** Rest; a frame's GPU and CPU time on a 4K output, on llvmpipe and, with the owner's
-  consent (given 2026-11-12), on the GPU; CI's time; the layout's timings again, on a quiet
-  machine ([measurements](measurements.md)).
-- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided. A 4K frame
-  with two `vkcube`: 0.2 ms on the GPU, 7 ms on llvmpipe
-  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md), [measurements](measurements.md));
-  Yuna rests on the 4K output. What fell short is in [debt](debt.md).
+- **Design.** Decided with the owner on 2026-11-12:
+  [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
+  [ADR-0026](adr/0026-real-clients-in-the-layout.md).
+- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided: `yuna
+  --headless`, virtual outputs, frames and clock, the shell and the protocols of B1 and B2;
+  Alacritty, `gtk4-demo`, `qml` and `vkcube` in CI and SlimeEngine's `window` weekly, Yuna at
+  rest after each (ADR-0025, ADR-0029); misbehaving clients and random requests in tests. A 4K
+  frame with two `vkcube`: 0.2 ms on the GPU, 7 ms on llvmpipe
+  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md), [measurements](measurements.md)).
+  What fell short is in [debt](debt.md).
 
 ### M1.5 — Agents' control
 
@@ -129,10 +109,9 @@ milestone first needs it.
   [ADR-0032](adr/0032-input-to-present-read-by-mode.md)); `yuna mcp`, a private Yuna on stdio
   with its own MCP layer ([ADR-0033](adr/0033-the-mcp-server.md)); captures
   ([ADR-0034](adr/0034-captures.md)); seats ([ADR-0035](adr/0035-agents-seats.md)).
-- **Steps.** C1: frames ahead (done). C2: `yuna mcp`, the MCP layer, `outputs`, `spawn`,
-  `windows`, `clock` (done). C3: seats, their sockets, pointer and keyboard input,
-  `cursor-shape`, drag and drop (done). C4: captures (done). C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
-  `vkcube` and `window`, the measures.
+- **Steps.** C1: frames ahead. C2: `yuna mcp`, `outputs`, `spawn`, `windows`, `clock`. C3:
+  seats, input, `cursor-shape`, drag and drop. C4: captures. C5: `text-input-v3`, the owner's
+  peek, the done-when story, the rest of `vkcube` and `window`, the measures. All done.
 - **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
   presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
@@ -164,6 +143,13 @@ milestone first needs it.
   region or a window, its mapping and an id `pointer` takes; `ext-image-copy-capture-v1` on each
   client's own seat. Run with Alacritty and grim; not yet measured ([debt](debt.md#captures)).
   A checker's twelve findings are fixed or written as debt.
+- **C5, text, peek, story, measures.** Done on 2026-11-13, decided with the owner
+  ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): Yuna is the input
+  method of agents' seats, `keyboard preedit` and `get`; `Layout::arrange_workspace`, the
+  peek. `vkcube` paused and SlimeEngine's `editor` rest with their windows open; `window`
+  cannot, by its design. The story passes in the weekly job, and Claude Code ran it through
+  MCP alone. A call takes about 60 µs; a 4K capture holds the main thread 4 ms on the GPU,
+  47 ms on llvmpipe, which costs frames ([measurements](measurements.md), [debt](debt.md#captures)).
 
 ### M1.6 — Emulated VRR and HDR
 
@@ -221,6 +207,8 @@ milestone first needs it.
   client started ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)); Stage 2's design.
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
+- From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be
+  enabled, and a tool that reads a program's log, which an agent without a shell cannot.
 
 ## Known debt
 

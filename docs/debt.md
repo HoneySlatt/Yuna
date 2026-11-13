@@ -33,9 +33,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   window geometry starts inside its surface, its right and bottom edges may blend up to one pixel
   of its margin. It stays while such a client's pixels are scaled anyway
   ([Scale](ARCHITECTURE.md#scale)).
-- The lead's floor and margin, 2 ms and 1 ms, are KWin's, not set from a miss rate measured on a
-  GPU, where they matter: `--gpu` was not run for ADR-0031
-  ([measurements](measurements.md)). On llvmpipe the lead sits at its cap, one period.
+- The lead's floor and margin, 2 ms and 1 ms, are KWin's. On the GPU at 4K and 240 Hz, with
+  two `vkcube` on lavapipe, 0 or 1 frame in 2,400 was missed in C5's runs; the lead itself was
+  not read there ([measurements](measurements.md)). On llvmpipe it sits at its cap, one period.
 - `Compositor::advance`, which the tests use, may run virtual time ahead of real time, while
   [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) says never while real clients are
   connected. MCP's `clock` refuses it; in the tests, every client is the test's own.
@@ -146,15 +146,21 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0`'s `Frame::success` sends no damage for `None`, which its documentation calls
   full damage: Yuna gives the whole buffer as damage on every frame. No frame tells less, so a
   recorder copies every pixel each time.
-- A client's frame copies the whole output, about 33 MB at 4K, and an agent's capture its area,
-  on the main thread at the refresh: their time on the frame loop is not measured yet (C5). Up
-  to 16 sessions may each have a frame waiting: 16 copies at a refresh that serves them all.
+- A capture's copy holds the main thread while the renderer reads its pixels back, at the
+  refresh: 4 ms at 4K on the GPU, up to 39 ms; 47 ms on llvmpipe. An agent that captures without
+  pause costs its output 6 % of its frames on the GPU, 37 % on llvmpipe at 4K
+  ([measurements](measurements.md)): the full rate of an agent's output is missed meanwhile, and
+  on the desktop a capture would cost a game frames. A readback into a buffer the GPU fills
+  while the loop goes on, read at a later refresh, would free it: to be planned with the owner,
+  by Stage 3, when agents capture on the desktop. A client's frame copies the whole output once a refresh for all the sessions that
+  wait on it, 16 at most.
 - An agent's capture is refused past 8,000 pixels a side once its pixels are read, not when it
   is asked: one readback wasted, one capture of a seat at a time.
 - On a manual clock, a capture copied has no time limit until the clock reaches its frame's
   boundary: the agent advances it.
-- In a debug build, as the tests run, a 4K output's capture takes about 1.2 s to encode, on its
-  own thread; the release build's time is C5's measure.
+- An agent's capture of a 4K output takes 68 to 79 ms to encode in a release build, on its own
+  thread, and about 1.2 s in a debug build, as the tests run; a logical image, its pixels
+  averaged first, takes longer than a physical one.
 - Every client of `yuna --headless` may capture its seat's outputs without being asked; consent
   comes with the desktop ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)).
 - A capture waiting for its frame times out after 50 s; no test waits that long.
@@ -162,9 +168,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 ## The MCP server
 
-- No real MCP client has run `yuna mcp` yet: Claude Code, Codex and OpenCode are untested. Its
-  tests speak both revisions as the specification reads ([survey](survey.md#agents-and-mcp));
-  which revision Codex speaks is not known. The owner's check, or C5's story, pays it.
+- Claude Code 2.1.318 ran the done-when's story through `yuna mcp` alone
+  ([measurements](measurements.md)); Codex and OpenCode are untested, and which revision of MCP
+  each client speaks, Claude Code's included, is not recorded.
 - A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
   and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them.
   Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP

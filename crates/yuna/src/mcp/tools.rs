@@ -141,9 +141,10 @@ pub fn definitions() -> Value {
             "name": "windows",
             "title": "Windows",
             "description": "List a seat's windows, in the order they opened: id, application \
-                id, title, process id, output, workspace, logical rectangle (none when hidden), \
-                focus. With wait_ms, waits up to that long for a window that matches the \
-                filters, when none does yet.",
+                id (null when its client gave none), title, process id, output, workspace (null \
+                for an unnamed one), logical rectangle (null when hidden), focus. With wait_ms, \
+                waits up to that long for a window that matches the filters, when none does \
+                yet.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -207,8 +208,10 @@ pub fn definitions() -> Value {
                 pixels at the logical size; with capture, they are pixels of that capture's \
                 image, which Yuna maps to its output. press, release, click and scroll move \
                 first when x and y are given. A press focuses the window under it. Drag in \
-                several calls: press, move, release. The result tells the window and the \
-                surface position under the pointer, and the cursor its client asked for.",
+                several calls: press, move, release. The result tells where the pointer is, \
+                in the output's logical units whatever x and y were given in, the window under \
+                it and the position on its surface, and the cursor its client last asked for, \
+                before it handled this call's input.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

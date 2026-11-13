@@ -4,6 +4,68 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.5, C5 — An agent's calls and captures (2026-11-13)
+
+Machine and Mesa as in B4 below. Build: release, commit `6023949`. One series, run with
+`.delegation/m1.5-c5-measures/series.sh` (local) under the agents' lock of exclusive runs, after
+30 s with no build, game or other measure of this session; other sessions' work kept the load
+average at 3.4 to 4.1 at the start, and the series' own runs raised it to 13.5 at its end.
+Command: `nix develop -c target/release/examples/agent_time <row>`, outside `agent-headless`,
+since `yuna mcp` opens no display; three runs of each row. Two `vkcube` on lavapipe, started
+through `spawn`, cover the output; each window lasts 10 s, after 3 s of warm-up. The ranges
+give the three runs' medians, and the highest p99 and longest. `--gpu` drew on the RX 6900 XT's
+render node, with the owner's consent, no game running.
+
+An MCP call, timed by the client from its request written to its reply read, 1,000 calls of
+each, on every row:
+
+| Calls | Median | p99 | Longest |
+|---|---|---|---|
+| `clock now`, `windows`, `pointer move`, `keyboard get`, at rest | 53–70 µs | 89 µs | 442 µs, but the first call after a seat's creation, 2.3–22.6 ms |
+| `clock now`, two `vkcube` drawing, llvmpipe at 4K | 61–80 µs | 8.9 ms | 10.1 ms |
+| the same, llvmpipe at 1080p and 240 Hz | 64–69 µs | 2.1 ms | 2.8 ms |
+| the same, `--gpu` at 4K | 87–91 µs | 2.0 ms | 2.9 ms |
+
+Captures of the whole output at the logical size, one after the other for 10 s, against 10 s
+without:
+
+| Output | Frames in 10 s, without → with | Missed, without → with | A capture's call: median, p99 | Its copy on the main thread: median, p99, longest | Its encoding: median, p99 | At the physical size, 5 calls: median |
+|---|---|---|---|---|---|---|
+| llvmpipe, 3840 × 2160 at 240 Hz, scale 1.5 | 952–959 → 594–610 | all → all | 149–151 ms, 168 ms | 47.2–47.8 ms, 50.6 ms, 50.6 ms | 77.8–78.7 ms, 95.9 ms | 99–104 ms |
+| llvmpipe, 1920 × 1080 at 240 Hz, scale 1 | 2,391–2,399 → 1,901–1,909 | 0.1–0.4 % → 12.4–13.2 % | 46.0–46.4 ms, 55.3 ms | 8.3–8.4 ms, 9.9 ms, 10.6 ms | 29.6–30.1 ms, 36.8 ms | 21–24 ms |
+| `--gpu`, 3840 × 2160 at 240 Hz, scale 1.5 | 2,400–2,403 → 2,253–2,266 | 0–1 → 6–8, 0.3–0.4 % | 76.4–77.2 ms, 108 ms | 3.8–4.1 ms, 21.0 ms, 39.0 ms | 67.3–67.8 ms, 77.9 ms | 33–38 ms |
+
+- An MCP call costs about 60 µs at rest. Under load it most likely waits for the frame being
+  drawn, the loop serving calls between frames: its p99 is about one drawing, 8 ms on llvmpipe at 4K,
+  2 ms at 1080p or on the GPU. A seat's first call waits for the output's first frame.
+- A capture's copy holds the main thread for as long as the renderer reads the pixels back:
+  47 ms at 4K on llvmpipe, 8 ms at 1080p, 4 ms at 4K on the GPU, up to 39 ms. While an agent
+  captures without pause, the output draws 6 % fewer frames on the GPU, 20 % fewer at 1080p and
+  37 % fewer at 4K on llvmpipe, and misses 12 % of its frames at 1080p on llvmpipe. The bar's
+  budget for an agent's output, full rate while its programs draw, is missed while it captures
+  ([debt](debt.md#captures)).
+- The encoding, on its own thread, takes longer than the copy: 30 ms at 1080p, 68 to 79 ms at 4K.
+  At 4K a logical image, 2,560 × 1,440, takes longer than a physical one, 3,840 × 2,160: its
+  pixels are averaged over each unit first. No capture at the physical size passed 5 MB.
+- An agent waits about 150 ms for a 4K capture on llvmpipe, 77 ms on the GPU, 46 ms at 1080p.
+
+### `yuna mcp` with a real MCP client
+
+Claude Code 2.1.318, `claude -p` with Opus 5.5 and `yuna mcp` as its only MCP server, Yuna's
+release build of commit `6023949`, on llvmpipe, asked in plain words to do the done-when's
+story. In 14 turns, its own: it created a seat, started SlimeEngine's `interface`, captured its
+window, clicked its text field through that capture's id, read that a field was enabled,
+selected all, typed `Grüße`, checked it by a capture, clicked "view", read the bar's new text,
+"pressed view, 1 presses", and closed the seat; every check passed. What it asked for is in the
+PLAN's ideas; the revision of MCP it spoke was not recorded.
+
+### The weekly SlimeEngine job
+
+On GitHub's `ubuntu-24.04` runner, run 43508415512 on `m1.5` at commit `a44f801`, by hand: 7 min,
+of which 5 min 39 s built the three examples and cooked their data, its cache empty, and 70 s
+ran the tests, 40 s of them building. The story's field asked for an input method 203 ms after
+its click; `window` and `editor` left Yuna at rest.
+
 ## M1.5 — Frames drawn ahead of their boundary (2026-11-13)
 
 Machine and Mesa as in B4 below. Build: release, commit `87d0857`. One series, run with
