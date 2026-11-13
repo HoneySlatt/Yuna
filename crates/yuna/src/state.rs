@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::time::Instant;
 
 use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -13,7 +14,7 @@ use smithay::desktop::PopupManager;
 use smithay::input::keyboard::{KeyboardHandle, XkbConfig};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::backend::{
-    ClientData, ClientId, DisconnectReason, ObjectId,
+    ClientData, ClientId, DisconnectReason, GlobalId, ObjectId,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
@@ -67,6 +68,9 @@ pub(crate) struct State {
     pub max_output_side: u32,
     pub outputs: Vec<VirtualOutput>,
     next_output_id: u64,
+    /// The disabled globals of removed outputs, with when each was removed: destroyed later
+    /// (`output.rs`).
+    pub retired_globals: Vec<(Instant, GlobalId)>,
     /// Every `xdg_toplevel`, by its surface's id.
     pub toplevels: HashMap<ObjectId, Toplevel>,
     /// The surface of each window the layout holds.
@@ -139,6 +143,7 @@ impl State {
             max_output_side,
             outputs: Vec::new(),
             next_output_id: 1,
+            retired_globals: Vec::new(),
             toplevels: HashMap::new(),
             windows: HashMap::new(),
             next_window_id: 1,

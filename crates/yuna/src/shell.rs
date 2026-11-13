@@ -16,6 +16,7 @@
 //! ignored. Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
 use std::collections::HashSet;
+use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -30,12 +31,13 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelStateSet, ToplevelSurface,
-    XdgShellHandler, XdgShellState, XdgShellSurfaceUserData,
+    XdgShellHandler, XdgShellState, XdgShellSurfaceUserData, XdgToplevelSurfaceData,
 };
 use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 
 use crate::activation::TokenOrigin;
+use crate::compositor::WindowDescription;
 use crate::state::{ClientState, OWNER_SEAT, State};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
@@ -469,6 +471,56 @@ impl State {
             toplevel.send_configure();
             self.counters.configures += 1;
         }
+    }
+
+    /// Every window the layout holds, in the order they opened.
+    pub(crate) fn describe_windows(&self) -> Vec<WindowDescription> {
+        let focused = self.layout.focused(OWNER_SEAT);
+        let mut windows: Vec<WindowDescription> = self
+            .windows
+            .iter()
+            .filter_map(|(&window, surface)| {
+                let toplevel = self.toplevels.get(surface)?;
+                let info = self.layout.window(window)?;
+                let root = toplevel.wl_surface();
+                let (app_id, title) = with_states(root, |states| {
+                    states
+                        .data_map
+                        .get::<XdgToplevelSurfaceData>()
+                        .map(|data| {
+                            let data = data.lock().unwrap_or_else(PoisonError::into_inner);
+                            (data.app_id.clone(), data.title.clone())
+                        })
+                        .unwrap_or_default()
+                });
+                let pid = root
+                    .client()
+                    .and_then(|client| client.get_credentials(&self.display_handle).ok())
+                    .map(|credentials| credentials.pid);
+                let rect = toplevel.shown_on.and_then(|output| {
+                    let output = &self.outputs[self.output_index(output)?];
+                    output
+                        .placed
+                        .iter()
+                        .find(|placed| placed.window == window)
+                        .map(|placed| placed.rect)
+                });
+                Some(WindowDescription {
+                    id: window,
+                    app_id,
+                    title,
+                    pid,
+                    output: toplevel.shown_on,
+                    workspace: info.workspace,
+                    rect,
+                    focused: focused == Some(window),
+                    floating: info.floating,
+                    fullscreen: info.fullscreen,
+                })
+            })
+            .collect();
+        windows.sort_by_key(|description| description.id);
+        windows
     }
 
     fn window_of(&self, surface: &ToplevelSurface) -> Option<WindowId> {

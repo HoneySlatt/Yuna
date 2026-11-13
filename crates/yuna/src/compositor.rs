@@ -13,6 +13,7 @@ use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction, Registr
 use smithay::reexports::wayland_server::{BindError, Display};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
+use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OutputId, WindowId};
 
 use crate::Error;
@@ -62,6 +63,44 @@ pub struct Counters {
     /// timer had something; with the manual clock, each distinct time at which an advance ran
     /// deadlines, as the timer would have woken it.
     pub wakeups: u64,
+}
+
+/// A window, as [`Compositor::windows`] describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowDescription {
+    /// Its id in the layout.
+    pub id: WindowId,
+    /// The application id its client set (`xdg_toplevel.set_app_id`), if any.
+    pub app_id: Option<String>,
+    /// Its title (`xdg_toplevel.set_title`), if any.
+    pub title: Option<String>,
+    /// The process id of its client, as the kernel gives it for the client's socket.
+    pub pid: Option<i32>,
+    /// The output that shows it, as last arranged; none when it is hidden.
+    pub output: Option<OutputId>,
+    /// Its workspace's name; none for an unnamed workspace.
+    pub workspace: Option<String>,
+    /// Where it is drawn, in logical coordinates, as last arranged; none when it is hidden.
+    pub rect: Option<Rect>,
+    /// Whether the owner's seat focuses it.
+    pub focused: bool,
+    /// Whether it floats.
+    pub floating: bool,
+    /// Whether it is fullscreen.
+    pub fullscreen: bool,
+}
+
+/// An output, as [`Compositor::output_descriptions`] describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputDescription {
+    /// Its id.
+    pub id: OutputId,
+    /// Its name, as `wl_output` gives it: `HEADLESS-<id>`.
+    pub name: String,
+    /// Its size, rate and scale.
+    pub mode: OutputMode,
+    /// Its place in logical coordinates.
+    pub rect: Rect,
 }
 
 /// A headless compositor: its event loop, its Wayland display and its state.
@@ -284,6 +323,30 @@ impl Compositor {
         self.state.outputs.iter().map(|o| o.id).collect()
     }
 
+    /// Adds a virtual output of `mode`, to the right of the others, and arms its first frame.
+    /// Refused for a side beyond the renderer's limit. Its global is announced at the end of
+    /// the next round.
+    pub fn add_output(&mut self, mode: OutputMode) -> Result<OutputId, Error> {
+        self.state.add_output(mode)
+    }
+
+    /// Removes `output`: its windows go to another output, its global is disabled at once and
+    /// destroyed [`RETIRED_GLOBAL_LIFETIME`](crate::RETIRED_GLOBAL_LIFETIME) later. Refused for
+    /// an output that does not exist, and for the last one.
+    pub fn remove_output(&mut self, output: OutputId) -> Result<(), Error> {
+        self.state.remove_output(output)
+    }
+
+    /// Every output, in the order they were created.
+    pub fn output_descriptions(&self) -> Vec<OutputDescription> {
+        self.state.describe_outputs()
+    }
+
+    /// Every window the layout holds, in the order they opened, as last arranged.
+    pub fn windows(&self) -> Vec<WindowDescription> {
+        self.state.describe_windows()
+    }
+
     /// The layout model, to read. Windows' ids start at 1 and increase in the order they map.
     pub fn layout(&self) -> &Layout {
         &self.state.layout
@@ -405,6 +468,7 @@ impl Compositor {
             output.output.cleanup();
         }
         self.state.release_textures();
+        self.state.destroy_retired_globals();
         if let Err(error) = self.display.flush_clients() {
             tracing::debug!(%error, "flushing the clients failed");
         }

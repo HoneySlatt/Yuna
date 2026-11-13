@@ -37,9 +37,9 @@ use std::fmt;
 
 pub use activation::TOKEN_LIFETIME;
 pub use clock::{Clock, ClockMode};
-pub use compositor::{Compositor, Config, Counters};
+pub use compositor::{Compositor, Config, Counters, OutputDescription, WindowDescription};
 pub use frames::HIDDEN_FRAME_INTERVAL;
-pub use output::{InvalidOutput, OutputMode};
+pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use render::Device;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};

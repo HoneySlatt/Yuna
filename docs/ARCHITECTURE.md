@@ -145,7 +145,7 @@ operation, and an example measures the model:
   preferred buffer scale and transform.
 - `dmabuf.rs`: `linux-dmabuf`: its global, and the import of each client's dmabuf.
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
-  damage tracker; their refresh boundaries.
+  damage tracker; their refresh boundaries; their removal.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
   the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)). It keeps each EGL
   display it opens until the process ends, so that compositors started and dropped on several
@@ -376,6 +376,18 @@ Yuna holds no selection of its own.
 Drag and drop waits for the pointer (M1.5). Smithay starts a drag only from a pointer or touch
 grab, and the seat has neither: it refuses every `start_drag`.
 
+### Outputs added and removed
+
+An output added while Yuna runs goes to the right of the others, and its first frame is armed;
+its `wl_output` global is announced at the round's end. A removed output's workspaces go to the
+seat's active output, which keeps showing its own: their windows are hidden there until a
+workspace switch shows them ([ADR-0018](adr/0018-workspaces.md)). Its windows' surfaces leave
+it at once, and enter an output again once one shows them; the presentation feedback it
+held for a frame not yet at its boundary is discarded; its two deadlines are disarmed. Its global
+is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
+to bind it before it learnt of the removal is not ended for it. The last output is never removed,
+and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
+
 ### The program
 
 `yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
@@ -395,7 +407,7 @@ one it was presented at, later when the frame was late.
   written with `wayland-client` (`client.rs` and `client/`; `selection_client.rs` for the
   selections), each test a short story with exact figures: the windows' in `main.rs`, then one
   file per subject (`popups.rs`, `activation.rs`, `dialogs.rs`, `window_cap.rs`, `scale.rs`,
-  `dmabuf.rs`, `selection.rs`).
+  `dmabuf.rs`, `selection.rs`, `outputs.rs`).
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no

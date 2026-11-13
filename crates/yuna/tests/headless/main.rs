@@ -12,6 +12,7 @@ mod client;
 mod dialogs;
 mod dmabuf;
 mod misbehaving;
+mod outputs;
 mod popups;
 mod random_requests;
 mod scale;

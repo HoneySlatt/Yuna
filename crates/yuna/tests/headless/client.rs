@@ -97,6 +97,9 @@ pub struct Window {
     pub preferred_scales: Vec<u32>,
     /// Each `wl_surface.preferred_buffer_scale`.
     pub preferred_buffer_scales: Vec<i32>,
+    /// The registry names of the outputs its surface is on, from `wl_surface.enter` and
+    /// `leave`, in the order it entered them.
+    pub on_outputs: Vec<u32>,
 }
 
 /// What a subsurface of a window received: its `wl_surface.enter` events, and each
@@ -137,7 +140,12 @@ pub struct ClientState {
     pub dmabuf_formats: Vec<(u32, u64)>,
     /// What each `zwp_linux_buffer_params_v1.create` came to: `created` (true) or `failed`.
     pub dmabuf_results: Vec<bool>,
-    _outputs: Vec<wl_output::WlOutput>,
+    /// Each `wl_output` bound, by its registry name.
+    outputs: Vec<(u32, wl_output::WlOutput)>,
+    /// The name each output gave (`wl_output.name`), by its registry name.
+    pub output_names: Vec<(u32, String)>,
+    /// The registry names of the globals removed (`wl_registry.global_remove`).
+    pub removed_globals: Vec<u32>,
     seat: Option<wl_seat::WlSeat>,
     pub windows: Vec<Window>,
     pub subsurfaces: Vec<Subsurface>,
@@ -344,8 +352,25 @@ impl Client {
             fractional_scale: None,
             preferred_scales: Vec::new(),
             preferred_buffer_scales: Vec::new(),
+            on_outputs: Vec::new(),
         });
         index
+    }
+
+    /// Sets the window's application id and title.
+    pub fn set_app_id_and_title(&mut self, window: usize, app_id: &str, title: &str) {
+        let toplevel = &self.state.windows[window].toplevel;
+        toplevel.set_app_id(app_id.to_owned());
+        toplevel.set_title(title.to_owned());
+    }
+
+    /// The registry name of the output that called itself `name`.
+    pub fn output_named(&self, name: &str) -> Option<u32> {
+        self.state
+            .output_names
+            .iter()
+            .find(|(_, given)| given == name)
+            .map(|(global, _)| *global)
     }
 
     /// Acknowledges the window's last configure.
@@ -589,13 +614,17 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        let wl_registry::Event::Global {
-            name,
-            interface,
-            version,
-        } = event
-        else {
-            return;
+        let (name, interface, version) = match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => (name, interface, version),
+            wl_registry::Event::GlobalRemove { name } => {
+                state.removed_globals.push(name);
+                return;
+            }
+            _ => return,
         };
         match interface.as_str() {
             "wl_compositor" => {
@@ -609,8 +638,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
             }
             "wp_presentation" => state.presentation = Some(registry.bind(name, 1, qh, ())),
             "wl_output" => state
-                ._outputs
-                .push(registry.bind(name, version.min(4), qh, ())),
+                .outputs
+                .push((name, registry.bind(name, version.min(4), qh, name))),
             "wl_seat" => state.seat = Some(registry.bind(name, 1, qh, ())),
             "xdg_activation_v1" => state.activation = Some(registry.bind(name, 1, qh, ())),
             "xdg_wm_dialog_v1" => state.wm_dialog = Some(registry.bind(name, 1, qh, ())),
@@ -779,7 +808,20 @@ delegate_noop!(ClientState: ignore wl_subcompositor::WlSubcompositor);
 delegate_noop!(ClientState: ignore wl_subsurface::WlSubsurface);
 delegate_noop!(ClientState: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(ClientState: ignore wl_buffer::WlBuffer);
-delegate_noop!(ClientState: ignore wl_output::WlOutput);
+impl Dispatch<wl_output::WlOutput, u32> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wl_output::WlOutput,
+        event: wl_output::Event,
+        global: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_output::Event::Name { name } = event {
+            state.output_names.push((*global, name));
+        }
+    }
+}
 delegate_noop!(ClientState: ignore wl_seat::WlSeat);
 delegate_noop!(ClientState: ignore zxdg_decoration_manager_v1::ZxdgDecorationManagerV1);
 delegate_noop!(ClientState: ignore wp_presentation::WpPresentation);
@@ -794,6 +836,18 @@ impl Dispatch<wl_surface::WlSurface, SurfaceOwner> for ClientState {
         _: &QueueHandle<Self>,
     ) {
         match (event, owner) {
+            (wl_surface::Event::Enter { output }, SurfaceOwner::Window(index)) => {
+                if let Some(&global) = output.data::<u32>() {
+                    state.windows[*index].on_outputs.push(global);
+                }
+            }
+            (wl_surface::Event::Leave { output }, SurfaceOwner::Window(index)) => {
+                if let Some(&global) = output.data::<u32>() {
+                    state.windows[*index]
+                        .on_outputs
+                        .retain(|&entered| entered != global);
+                }
+            }
             (wl_surface::Event::Enter { .. }, SurfaceOwner::Subsurface(index)) => {
                 state.subsurfaces[*index].enters += 1;
             }

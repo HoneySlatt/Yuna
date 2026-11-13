@@ -3,17 +3,22 @@
 //! boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesRenderbuffer;
 use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::GlobalId;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
 use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{OutputConfig, OutputId, Placed};
 
 use crate::Error;
+use crate::clock::Deadline;
+use crate::compositor::OutputDescription;
 use crate::frames::Drawings;
 use crate::state::{OWNER_SEAT, State};
 
@@ -131,6 +136,8 @@ pub(crate) struct VirtualOutput {
     pub id: OutputId,
     /// Smithay's output: what `wl_output` and `xdg-output` tell clients.
     pub output: Output,
+    /// Its `wl_output` global.
+    pub global: GlobalId,
     pub mode: OutputMode,
     /// Its place in the layout's logical coordinates.
     pub rect: Rect,
@@ -161,8 +168,13 @@ pub(crate) struct VirtualOutput {
 impl State {
     /// Creates a virtual output to the right of the others, on the owner's seat, and arms its
     /// first frame. Refused, with nothing created, for a side beyond the renderer's
-    /// `GL_MAX_RENDERBUFFER_SIZE`.
+    /// `GL_MAX_RENDERBUFFER_SIZE`, and past [`MAX_OUTPUTS`].
     pub(crate) fn add_output(&mut self, mode: OutputMode) -> Result<OutputId, Error> {
+        if self.outputs.len() >= MAX_OUTPUTS {
+            return Err(Error::Refused(format!(
+                "Yuna has {MAX_OUTPUTS} outputs already, the most it keeps"
+            )));
+        }
         let limit = self.max_output_side;
         if mode.width() > limit || mode.height() > limit {
             return Err(Error::InvalidOutput(InvalidOutput(format!(
@@ -217,8 +229,7 @@ impl State {
             Some((rect.x.round() as i32, rect.y.round() as i32).into()),
         );
         output.set_preferred(smithay_mode);
-        // The global lives in the display: dropping its id does not remove it.
-        output.create_global::<State>(&self.display_handle);
+        let global = output.create_global::<State>(&self.display_handle);
         let damage = OutputDamageTracker::from_output(&output);
         let boundaries = Boundaries {
             created_at: self.clock.now(),
@@ -227,6 +238,7 @@ impl State {
         self.outputs.push(VirtualOutput {
             id,
             output,
+            global,
             mode,
             rect,
             buffer,
@@ -253,6 +265,90 @@ impl State {
         Ok(id)
     }
 }
+
+impl State {
+    /// Removes output `id`. Its windows go to another output, as the layout moves its workspaces
+    /// ([`Layout::remove_output`](yuna_layout::Layout::remove_output)); their surfaces leave it
+    /// now, and enter their new output at the arrangement. The feedback it holds is discarded,
+    /// its deadlines disarmed. Its global is disabled at once and destroyed
+    /// [`RETIRED_GLOBAL_LIFETIME`] later. Refused for an unknown output, and for the last one: a
+    /// compositor has at least one.
+    pub(crate) fn remove_output(&mut self, id: OutputId) -> Result<(), Error> {
+        let index = self
+            .output_index(id)
+            .ok_or_else(|| Error::Refused(format!("no output {}", id.0)))?;
+        if self.outputs.len() == 1 {
+            return Err(Error::Refused(format!(
+                "output {} is the last one, and a compositor keeps at least one",
+                id.0
+            )));
+        }
+        self.layout
+            .remove_output(id)
+            .map_err(|e| Error::Layout(e.to_string()))?;
+        let leaving: Vec<WlSurface> = self
+            .toplevels
+            .values()
+            .filter(|toplevel| toplevel.shown_on == Some(id))
+            .map(|toplevel| toplevel.wl_surface().clone())
+            .collect();
+        for root in leaving {
+            self.leave_output(&root, id);
+            if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
+                toplevel.shown_on = None;
+            }
+        }
+        self.clock.disarm(Deadline::Refresh(id));
+        self.clock.disarm(Deadline::Presentation(id));
+        let removed = self.outputs.remove(index);
+        for (_, mut feedback) in removed.held_feedback {
+            feedback.discarded();
+        }
+        self.display_handle
+            .disable_global::<State>(removed.global.clone());
+        self.retired_globals.push((Instant::now(), removed.global));
+        tracing::info!(output = id.0, "virtual output removed");
+        self.mark_layout_changed();
+        Ok(())
+    }
+
+    /// Every output, in the order they were created.
+    pub(crate) fn describe_outputs(&self) -> Vec<OutputDescription> {
+        self.outputs
+            .iter()
+            .map(|output| OutputDescription {
+                id: output.id,
+                name: output.output.name(),
+                mode: output.mode,
+                rect: output.rect,
+            })
+            .collect()
+    }
+
+    /// Destroys the globals of outputs removed at least [`RETIRED_GLOBAL_LIFETIME`] ago. Run at
+    /// the end of each round: at rest, a disabled global waits for the next round, which costs
+    /// a little memory and no wake-up.
+    pub(crate) fn destroy_retired_globals(&mut self) {
+        let now = Instant::now();
+        let display_handle = &self.display_handle;
+        self.retired_globals.retain(|(retired_at, global)| {
+            let keep = now.duration_since(*retired_at) < RETIRED_GLOBAL_LIFETIME;
+            if !keep {
+                display_handle.remove_global::<State>(global.clone());
+            }
+            keep
+        });
+    }
+}
+
+/// The most outputs a compositor keeps: an agent creates them through MCP, and each costs its
+/// buffer, about 33 MB at 3840 × 2160, so 16 of them about 530 MB.
+pub const MAX_OUTPUTS: usize = 16;
+
+/// How long the global of a removed output stays, disabled, before it is destroyed: a client
+/// that asked to bind it before it was told of its removal must not be ended for it, as it
+/// would be for binding a global that no longer exists.
+pub const RETIRED_GLOBAL_LIFETIME: Duration = Duration::from_secs(10);
 
 /// A side or a rate as Smithay takes it, as an `i32`: sides are checked against the renderer's
 /// limit, and rates against 1,000 Hz, far below `i32::MAX`, before they get here.
