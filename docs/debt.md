@@ -33,6 +33,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   window geometry starts inside its surface, its right and bottom edges may blend up to one pixel
   of its margin. It stays while such a client's pixels are scaled anyway
   ([Scale](ARCHITECTURE.md#scale)).
+- The lead's floor and margin, 2 ms and 1 ms, are KWin's, not set from a miss rate measured on a
+  GPU, where they matter: `--gpu` was not run for ADR-0031
+  ([measurements](measurements.md)). On llvmpipe the lead sits at its cap, one period.
 - Virtual time is not kept from running ahead of real time while real clients are connected
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
   clock.

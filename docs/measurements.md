@@ -4,6 +4,36 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.5 — Frames drawn ahead of their boundary (2026-11-13)
+
+Machine and Mesa as in B4 below. Build: release, commit `87d0857`. One series, run with
+`.delegation/m1.5-frames-measures/series.sh` (local), after 30 s under 1.5 cores busy with no
+build, game or other measure; the machine had started 10 minutes before, and the load average
+was 6.4 at the series' start, up to 10.1 at its end, from the series' own runs. Command:
+`nix develop -c agent-headless -- target/release/examples/frame_time --output <mode>`, on
+llvmpipe, two `vkcube` on lavapipe covering the output, 10 s measured after 3 s of warm-up, three
+runs of each row. A frame *missed* was presented after the boundary it aimed at; the lead is the
+log's `lead_us` ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)).
+
+| Output | Frames a second | A frame's time: median | p99 | longest | Lead: median | Missed |
+|---|---|---|---|---|---|---|
+| 1920 × 1080 at 240 Hz, scale 1 | 237.2–239.1 | 1,986–2,280 µs | 3,443–3,994 µs | 6.0–7.3 ms | 4,097–4,166 µs | 9–21 of 2,373–2,392, 0.4–0.9 % |
+| 3840 × 2160 at 240 Hz, scale 1.5 | 103.2–108.4 | 7,518–7,689 µs | 9,154–9,537 µs | 11.3–15.3 ms | 4,166 µs | all |
+
+- At 1080p the output holds its rate. Its lead sits at its cap, one period: within any half
+  second, one drawing, timed from its deadline, took longer than 3.17 ms, the period minus the
+  margin. The frames missed are those whose drawing took longer than the period; no margin within
+  the cap would have saved them. [ADR-0032](adr/0032-input-to-present-read-by-mode.md)'s count,
+  zero, is missed here; its high tier draws on the GPU, not measured. An animating client's commit is then presented about two
+  periods after it, as before ADR-0031: on llvmpipe, drawing time varies too much for less.
+- At 4K every drawing takes longer than the period, as B4 found: every frame is presented late,
+  and the feedback says so. 103 to 108 frames a second here against B4's 115 to 117: the drawings
+  took 7.5 to 7.7 ms here, 6.9 to 7.2 ms in B4, at a higher load. Not compared under the same
+  conditions; no cause found beyond the load.
+- Floor and margin stay KWin's, 2 ms and 1 ms: where they matter, on a GPU, where a drawing takes
+  0.2 ms, nothing was measured; `--gpu` waits for the owner's consent ([debt](debt.md)).
+- Nothing was drawn at once but one frame: the clients draw continuously.
+
 ## M1.4, Phase B4 — A frame's cost, rest at 4K, the layout again (2026-11-12)
 
 Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), RX 6900 XT, Linux 7.3.1; Mesa

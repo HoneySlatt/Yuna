@@ -20,14 +20,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
 - [M1.3](#m13--hdr-through-smithay-a-prototype) is done (2026-11-12): HDR through Smithay works on
   the owner's monitor; [ADR-0011](adr/0011-built-on-smithay.md) holds.
-- [M1.4](#m14--the-headless-compositor) designed on 2026-11-12
-  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
-  [ADR-0025](adr/0025-applications-in-ci.md)); B2's bounds in
-  [ADR-0027](adr/0027-smithay-without-overflow-checks.md) and
-  [ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md); B3's in
-  [ADR-0029](adr/0029-the-rest-of-animated-applications.md); B4's in
-  [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md). M1.4 is done (2026-11-12). Next:
-  M1.5, opening with frames drawn ahead of their boundary.
+- [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
+  [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
+  [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
+- [M1.5](#m15--agents-control) started on 2026-11-13: frames ahead of their boundary done
+  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md),
+  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)). Next: the MCP server's design.
 
 ## Status
 
@@ -37,7 +35,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.2](#m12--the-layout-model) | Every layout behaviour is a test, without a compositor | Done |
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
-| [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Planned |
+| [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | In progress |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
@@ -138,9 +136,7 @@ milestone first needs it.
 
 - **Goal.** An agent drives an application through Yuna's MCP server, on a seat of its own
   ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Delivers.** First, frames drawn ahead of their refresh boundary, so that a frame drawn in
-  time is presented at it, in an ADR that amends ADR-0023 (the owner's choice, 2026-11-12;
-  [debt](debt.md)). The MCP server: outputs and workspaces created and removed, programs started, windows
+- **Delivers.** First, frames drawn ahead of their refresh boundary: done, below. The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
   presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
   so that input tests them. One seat per agent; a test that an agent's input never
@@ -151,7 +147,13 @@ milestone first needs it.
   the result by capture. `vkcube`, paused by its space key, and SlimeEngine's `window` rest with
   their window open, or the reason one cannot is written
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
-- **Measured.** An MCP call's time; a capture's time on a 4K output.
+- **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
+  lead, on the real clock ([measurements](measurements.md)).
+- **Frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
+  the boundary minus a lead measured per output, at most a period; feedback sent at its
+  boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
+  1080p and 240 Hz, 0.4 to 0.9 % of frames missed, the lead at its cap; at 4K every frame late,
+  as before ([measurements](measurements.md)).
 
 ### M1.6 — Emulated VRR and HDR
 
