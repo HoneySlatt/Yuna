@@ -136,7 +136,12 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   full damage: Yuna gives the whole buffer as damage on every frame. No frame tells less, so a
   recorder copies every pixel each time.
 - A client's frame copies the whole output, about 33 MB at 4K, and an agent's capture its area,
-  on the main thread at the refresh: their time on the frame loop is not measured yet (C5).
+  on the main thread at the refresh: their time on the frame loop is not measured yet (C5). Up
+  to 16 sessions may each have a frame waiting: 16 copies at a refresh that serves them all.
+- An agent's capture is refused past 8,000 pixels a side once its pixels are read, not when it
+  is asked: one readback wasted, one capture of a seat at a time.
+- On a manual clock, a capture copied has no time limit until the clock reaches its frame's
+  boundary: the agent advances it.
 - In a debug build, as the tests run, a 4K output's capture takes about 1.2 s to encode, on its
   own thread; the release build's time is C5's measure.
 - Every client of `yuna --headless` may capture its seat's outputs without being asked; consent

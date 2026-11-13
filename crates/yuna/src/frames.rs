@@ -12,9 +12,10 @@
 //!
 //! At the refresh, in order: the layout is arranged once if it changed, and the configures that
 //! changed are sent; the output is drawn if anything on it is damaged; its shown surfaces get
-//! their frame callbacks; the captures that waited for it are copied (`capture.rs`). Their presentation feedback is taken then and held until the boundary
+//! their frame callbacks. Their presentation feedback is taken then and held until the boundary
 //! the frame is presented at: the one it aimed at if its drawing ended by then, else the first
-//! after. It is sent at that boundary, through a deadline of its own.
+//! after. It is sent at that boundary, through a deadline of its own. The captures that waited
+//! for the refresh are copied after its drawing (`capture.rs`).
 //!
 //! A window shown on no output is hidden: it is told `suspended`, its content updates are
 //! discarded, and its frame callbacks go out at most once a second, through one deadline armed
@@ -42,6 +43,7 @@ use smithay::wayland::compositor::{
 use smithay::wayland::presentation::{PresentationFeedbackCachedState, Refresh};
 use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 
+use crate::capture::Failure;
 use crate::clock::Deadline;
 use crate::output::VirtualOutput;
 use crate::popups::window_surface_trees;
@@ -198,7 +200,7 @@ impl State {
                         discard_presentation_feedback(&root);
                     }
                 }
-                self.fail_captures(output_id, "its frame could not be drawn");
+                self.fail_captures(output_id, "its frame could not be drawn", Failure::ForNow);
                 return;
             }
         };
@@ -298,6 +300,7 @@ impl State {
         match render::draw(&mut self.renderer, output, &elements) {
             Ok(Some(damaged)) => {
                 self.counters.frames_drawn += 1;
+                self.outputs[index].drawn_frames += 1;
                 if let Some(hook) = &mut self.draw_hook {
                     hook(&mut self.clock);
                 }

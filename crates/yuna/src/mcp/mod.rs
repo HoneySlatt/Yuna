@@ -78,6 +78,10 @@ pub const MAX_QUEUED_OUTPUT: usize = 16 << 20;
 /// ([ADR-0038](../../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)).
 pub const RECENT_CAPTURES: usize = 16;
 
+/// How many captures' images may be encoded at once, each on a thread of its own with its
+/// pixels, about 33 MB at 4K's physical size.
+pub const MAX_ENCODERS: usize = 4;
+
 /// How much of the client's input is read at a time.
 const READ_SIZE: usize = 64 * 1024;
 
@@ -182,6 +186,8 @@ pub struct Server {
     recent_captures: HashMap<SeatId, VecDeque<(u64, CaptureMapping)>>,
     /// The next capture's id: ids increase and are never reused.
     next_capture: u64,
+    /// The encoders' threads running, those of captures cancelled included.
+    encoders_running: usize,
     /// The mode of a new seat's output, unless `seat create` says.
     seat_output: OutputMode,
     /// The programs, when the server may start some, with SIGCHLD's pipe.
@@ -321,6 +327,7 @@ impl Server {
             encoder_results,
             recent_captures: HashMap::new(),
             next_capture: 1,
+            encoders_running: 0,
             seat_output: OutputMode::default(),
             programs,
             throttle_armed: false,
@@ -1420,6 +1427,12 @@ impl Server {
             Ok(seat) => seat,
             Err(failed) => return Some(failed),
         };
+        // A capture cancelled while encoding leaves its encoder running, out of `captures`.
+        if self.encoders_running >= MAX_ENCODERS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_ENCODERS} captures are being encoded: wait for them"
+            )));
+        }
         if self.captures.iter().any(|capture| capture.seat == seat) {
             return Some(ToolResult::failed(format!(
                 "a capture of seat {} is in flight: wait for its answer",
@@ -1504,7 +1517,10 @@ impl Server {
                 .name("yuna-capture".to_owned())
                 .spawn(move || {
                     let began = Instant::now();
-                    let encoded = image::encode(&frame);
+                    // A panic here is a bug of Yuna's; it fails this capture, not the seat's
+                    // next ones, which would wait on it for ever.
+                    let encoded = std::panic::catch_unwind(|| image::encode(&frame))
+                        .unwrap_or_else(|_| Err("the capture's encoder failed".to_owned()));
                     tracing::debug!(
                         width = frame.mapping.width,
                         height = frame.mapping.height,
@@ -1515,7 +1531,10 @@ impl Server {
                     let _ = results.send((key, encoded));
                 });
             match started {
-                Ok(_) => self.captures[index].stage = CaptureStage::Encoding(copied),
+                Ok(_) => {
+                    self.encoders_running += 1;
+                    self.captures[index].stage = CaptureStage::Encoding(copied);
+                }
                 Err(error) => self.answer_capture(
                     index,
                     ToolResult::failed(format!("the capture could not be encoded: {error}")),
@@ -1527,6 +1546,7 @@ impl Server {
     /// Records the images the encoders finished.
     fn note_encoded(&mut self, encoded: Vec<(u64, Result<Encoded, String>)>) {
         for (key, result) in encoded {
+            self.encoders_running = self.encoders_running.saturating_sub(1);
             if let Some(capture) = self.captures.iter_mut().find(|capture| capture.key == key)
                 && let CaptureStage::Encoding(copied) = capture.stage
             {

@@ -3,10 +3,13 @@
 //! ([ADR-0038](../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)).
 //!
 //! Every client sees the globals; a client captures only its own seat's outputs: a session of
-//! another seat's output is stopped. A session's first frame is the output's newest; each later
-//! one waits for a refresh that draws something, so that a recorder waiting costs nothing at
-//! rest. Each frame copies the whole output, at its physical size, into the client's `wl_shm`
-//! buffer, and is ready at once, with the time of the boundary it is presented at and full
+//! another seat's output is stopped. A frame is copied at an output's refresh, never at once,
+//! so that a client asking frames again and again costs one copy a refresh at most. A session's
+//! frame is the output's newest, at its next refresh, armed if needed, when the output drew since
+//! the session's last frame, or for its first; otherwise it waits for a refresh that draws
+//! something, so that a recorder waiting costs nothing at rest. Each frame copies the whole
+//! output, at its physical size, into the client's `wl_shm` buffer, and is ready as soon as it
+//! is copied, as the protocol asks, with the time of the boundary it is presented at and full
 //! damage. No cursor is captured, Yuna drawing none, and no window: a toplevel source needs
 //! `ext-foreign-toplevel-list-v1`, which Yuna does not offer.
 
@@ -26,14 +29,19 @@ use smithay::wayland::image_copy_capture::{
 use smithay::wayland::shm::with_buffer_contents_mut;
 use yuna_layout::OutputId;
 
-use crate::capture::Destination;
+use crate::capture::{Destination, Failure};
 use crate::output::to_i32;
 use crate::seats::seat_of_client;
 use crate::state::State;
 
 /// The most capture sessions one client keeps; past it, a new one is stopped at once
-/// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)).
-pub const MAX_CAPTURE_SESSIONS_PER_CLIENT: usize = 16;
+/// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)). A recorder or
+/// grim keeps one.
+pub const MAX_CAPTURE_SESSIONS_PER_CLIENT: usize = 4;
+
+/// The most capture sessions all clients keep together: each frame waiting on an output costs
+/// a copy of the whole output, about 33 MB at 4K, at each refresh that serves it.
+pub const MAX_CAPTURE_SESSIONS: usize = 16;
 
 /// The `wl_shm` formats a client's buffer may have: those every compositor's `wl_shm` takes,
 /// and Yuna's offers alone, B, G, R, A in memory; the renderer's R, G, B, A are swapped into it.
@@ -44,8 +52,9 @@ pub(crate) struct ScreencopyState {
     _sources: ImageCaptureSourceState,
     output_sources: OutputCaptureSourceState,
     copy: ImageCopyCaptureState,
-    /// Each live session, its output, and whether it has captured a frame yet.
-    sessions: Vec<(Session, OutputId, bool)>,
+    /// Each live session, its output, and how many frames that output had drawn at the
+    /// session's last frame; none before its first.
+    sessions: Vec<(Session, OutputId, Option<u64>)>,
 }
 
 impl ScreencopyState {
@@ -84,23 +93,28 @@ pub(crate) struct ClientFrame {
 }
 
 impl ClientFrame {
-    /// Tells the client its frame failed: its session stopped, or its output went.
-    pub(crate) fn fail(self) {
-        self.frame.fail(CaptureFailureReason::Stopped);
+    /// Tells the client its frame failed: as stopped when its output went, as a failure it may
+    /// retry when the frame could not be drawn or read.
+    pub(crate) fn fail(self, failure: Failure) {
+        self.frame.fail(match failure {
+            Failure::OutputGone => CaptureFailureReason::Stopped,
+            Failure::ForNow => CaptureFailureReason::Unknown,
+        });
     }
 }
 
 impl State {
     /// Copies an output's whole frame, `pixels` of R, G, B, A at `width` × `height`, into the
     /// buffer of a client's frame, in the buffer's format, and tells the client it is ready,
-    /// presented at `presented_at`. A buffer that no longer holds the frame fails it.
+    /// presented at `presented_at`; its session records the output's `drawn_frames`. A buffer
+    /// that no longer holds the frame fails it.
     pub(crate) fn finish_client_frame(
         &mut self,
         frame: ClientFrame,
         pixels: &[u8],
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         presented_at: Duration,
+        drawn_frames: u64,
     ) {
         let ClientFrame { frame, session } = frame;
         let written = with_buffer_contents_mut(&frame.buffer(), |memory, length, data| {
@@ -150,7 +164,7 @@ impl State {
             .iter_mut()
             .find(|(s, _, _)| **s == session)
         {
-            entry.2 = true;
+            entry.2 = Some(drawn_frames);
         }
     }
 
@@ -195,8 +209,8 @@ impl ImageCopyCaptureHandler for State {
         })
     }
 
-    /// Keeps a session of the client's own seat's output, within the client's bound; drops
-    /// any other, which stops it.
+    /// Keeps a session of the client's own seat's output, within the bounds; drops any other,
+    /// which stops it.
     fn new_session(&mut self, session: Session) {
         let Some(output) = source_output(&session.source()) else {
             return;
@@ -222,18 +236,20 @@ impl ImageCopyCaptureHandler for State {
             .iter()
             .filter(|(s, _, _)| s.client().is_some_and(|c| c.id() == client.id()))
             .count();
-        if kept >= MAX_CAPTURE_SESSIONS_PER_CLIENT {
+        if kept >= MAX_CAPTURE_SESSIONS_PER_CLIENT
+            || self.screencopy.sessions.len() >= MAX_CAPTURE_SESSIONS
+        {
             tracing::debug!(
                 seat = seat.0,
-                "a client passed its bound of capture sessions"
+                "a capture session past the bounds is stopped"
             );
             return;
         }
-        self.screencopy.sessions.push((session, output, false));
+        self.screencopy.sessions.push((session, output, None));
     }
 
     fn frame(&mut self, session: &SessionRef, frame: Frame) {
-        let Some(&(_, output, captured_once)) = self
+        let Some(&(_, output, last_frame)) = self
             .screencopy
             .sessions
             .iter()
@@ -246,7 +262,13 @@ impl ImageCopyCaptureHandler for State {
             frame,
             session: session.clone(),
         };
-        self.queue_capture(output, captured_once, Destination::Client(frame));
+        // A later frame waits for new content only while the output drew nothing since the
+        // session's last: what it drew meanwhile is the next frame.
+        let drawn = self
+            .output_index(output)
+            .map(|index| self.outputs[index].drawn_frames);
+        let new_content = last_frame.is_some() && last_frame == drawn;
+        self.queue_capture(output, new_content, Destination::Client(frame));
     }
 
     fn frame_aborted(&mut self, aborted: FrameRef) {

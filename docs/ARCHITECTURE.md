@@ -464,30 +464,39 @@ only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each abou
 A capture shows an output's *newest* frame ([ADR-0034](adr/0034-captures.md),
 [ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)): when the output's refresh is
 armed, a commit or a change of the layout on its way, the frame that refresh draws; otherwise
-the frame its buffer holds, copied at once. Nothing is drawn for a capture.
+the frame its buffer holds. Nothing is drawn for a capture.
 
 1. A capture is queued on its output (`capture.rs`). At that output's refresh, after drawing,
    the pixels are read from its buffer (`render::read_pixels`), on the main thread, and the
    capture records the boundary the frame is presented at. A failed drawing, or a removed
-   output, fails the captures waiting on it.
+   output, fails the captures waiting on it. A Wayland client's capture of the newest frame
+   arms the refresh when none is armed, due at once on an idle output and drawing nothing new,
+   so that clients asking frames again and again cost one copy a refresh at most; an agent's,
+   one at a time for each seat, is copied at once instead.
 2. An agent's capture reads the physical pixels under its area: the whole output, a region in
-   whole logical units, or the rectangle its window was drawn at, cut to the output; a window
-   hidden when asked is refused. Its *mapping* says where the image's top-left corner is in the
+   whole logical units, or the rectangle its window was drawn at, cut to the output. A window
+   hidden when asked is refused; while an arrangement is pending, its capture waits for it, and
+   takes the output it shows the window on, or fails if it hides it. An area that holds no whole
+   pixel, an odd scale's last unit, is refused. Its *mapping* says where the image's top-left corner is in the
    output's logical units, and how many units a pixel covers: 1 at the logical size, 1 / scale at
    the physical size.
 3. The MCP server encodes it on a thread of its own (`mcp/image.rs`): at the logical size each
    pixel is the average of the physical pixels its unit covers, weighted by how much of each;
    then a PNG with fdeflate's fast compression, then base64. Over 8,000 pixels a side or 5 MB of
-   base64, it is refused. The reply goes once the image is encoded and the clock has reached the
-   frame's boundary; on the real clock a timer wakes the loop for it. It gives the image, the
+   base64, it is refused. Four encoders run at most, those of captures cancelled included; a
+   panic in one fails its capture. The reply goes once the image is encoded and the clock has
+   reached the frame's boundary; on the real clock a timer wakes the loop for it. It gives the image, the
    mapping and an id; `pointer` maps a point of one of the seat's last 16 images to its output.
 4. A Wayland client's capture (`screencopy.rs`) sees the globals whatever its seat, and captures
-   only its own seat's outputs: Yuna stops a session of another's. A session's first frame is
-   the newest; each later one waits for a refresh that draws something, so that a recorder costs
-   nothing at rest. The whole output is copied once per refresh for all the frames waiting on it,
-   into each client's `wl_shm` buffer, `Argb8888` or `Xrgb8888`, the renderer's R, G, B, A
-   swapped to B, G, R, A; the frame is ready at once, with full damage and the time of its
-   boundary. A client keeps 16 sessions at most.
+   only its own seat's outputs: Yuna stops a session of another's. A session's frame is the
+   newest when it is its first, or when the output drew since its last; otherwise it waits for a
+   refresh that draws something, so that a recorder costs nothing at rest. The whole output is
+   copied once per refresh for all the frames waiting on it, into each client's `wl_shm` buffer,
+   `Argb8888` or `Xrgb8888`, the renderer's R, G, B, A swapped to B, G, R, A; the frame is ready
+   as soon as it is copied, as the protocol asks, with full damage and the time of the boundary
+   it is presented at. A frame that could not be drawn or read fails as one the client may ask
+   again; a removed output stops its sessions. A client keeps 4 sessions at most, all clients
+   16.
 
 ### The MCP server
 

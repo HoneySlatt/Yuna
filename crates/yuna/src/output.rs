@@ -17,6 +17,7 @@ use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
 
 use crate::Error;
+use crate::capture::Failure;
 use crate::clock::Deadline;
 use crate::compositor::OutputDescription;
 use crate::frames::Drawings;
@@ -149,6 +150,9 @@ pub(crate) struct VirtualOutput {
     pub damage: OutputDamageTracker,
     /// Whether `buffer` holds the last frame drawn, so that only damage needs drawing.
     pub drawn_once: bool,
+    /// How many frames were drawn on it: a capture session's later frame waits for new content
+    /// only while this is what it was at the session's last frame.
+    pub drawn_frames: u64,
     /// Its refresh boundaries, from its creation.
     pub boundaries: Boundaries,
     /// The boundary its armed refresh aims at, and when that refresh is due.
@@ -248,6 +252,7 @@ impl State {
             buffer,
             damage,
             drawn_once: false,
+            drawn_frames: 0,
             boundaries,
             armed_boundary: 0,
             armed_at: Duration::ZERO,
@@ -314,7 +319,7 @@ impl State {
         }
         self.clock.disarm(Deadline::Refresh(id));
         self.clock.disarm(Deadline::Presentation(id));
-        self.fail_captures(id, "its output was removed");
+        self.fail_captures(id, "its output was removed", Failure::OutputGone);
         self.stop_capture_sessions(id);
         let removed = self.outputs.remove(index);
         for (_, mut feedback) in removed.held_feedback {

@@ -12,7 +12,8 @@ use std::time::Duration;
 use smithay::utils::Rectangle;
 use yuna::yuna_layout::OutputId;
 use yuna::{
-    ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS_PER_CLIENT, OWNER_SEAT, OutputMode,
+    ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT,
+    OWNER_SEAT, OutputMode,
 };
 
 use crate::capture_client::{CaptureClient, FailureReason, Format};
@@ -77,6 +78,8 @@ fn a_client_captures_its_seats_output_into_its_buffer() {
         let session = capture.start_session("HEADLESS-1");
         let frame = capture.capture(session, format, 640, 360);
         capture.roundtrip(&mut compositor);
+        run_armed_deadlines(&mut compositor);
+        capture.roundtrip(&mut compositor);
         let events = capture.frame(frame).clone();
         assert!(events.ready, "{format:?}: {events:?}");
         assert_eq!(events.failed, None);
@@ -110,6 +113,8 @@ fn a_later_frame_waits_for_new_content_and_costs_nothing_at_rest() {
     let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
     let session = capture.start_session("HEADLESS-1");
     let first = capture.capture(session, Format::Xrgb8888, 640, 360);
+    capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
     capture.roundtrip(&mut compositor);
     assert!(capture.frame(first).ready);
     capture.destroy_frame(first);
@@ -192,6 +197,8 @@ fn a_session_of_another_seats_output_is_stopped() {
     assert!(!theirs.session(own).stopped);
     let frame = theirs.capture(own, Format::Argb8888, 640, 360);
     theirs.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    theirs.roundtrip(&mut compositor);
     assert!(theirs.frame(frame).ready);
 }
 
@@ -218,6 +225,8 @@ fn a_buffer_that_does_not_fit_fails_its_frame() {
     capture.destroy_frame(short);
     let fits = capture.capture(session, Format::Argb8888, 640, 360);
     capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
     assert!(capture.frame(fits).ready);
 }
 
@@ -236,6 +245,8 @@ fn a_removed_output_stops_its_sessions() {
     let session = capture.start_session("HEADLESS-2");
     let first = capture.capture(session, Format::Argb8888, 640, 360);
     capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
     assert!(capture.frame(first).ready);
     capture.destroy_frame(first);
     let waiting = capture.capture(session, Format::Argb8888, 640, 360);
@@ -246,21 +257,37 @@ fn a_removed_output_stops_its_sessions() {
     assert_eq!(capture.frame(waiting).failed, Some(FailureReason::Stopped));
 }
 
-/// A client keeps at most 16 sessions; the next is stopped at once.
+/// A client keeps at most 4 sessions, and all clients 16 together; a session past either bound
+/// is stopped at once, and one closed makes room.
 #[test]
-fn a_client_keeps_at_most_16_sessions() {
+fn capture_sessions_are_bounded_per_client_and_in_all() {
     let (mut compositor, _client) = compositor_with_a_window(RED);
-    let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
-    let sessions: Vec<usize> = (0..=MAX_CAPTURE_SESSIONS_PER_CLIENT)
-        .map(|_| capture.start_session("HEADLESS-1"))
-        .collect();
-    capture.roundtrip(&mut compositor);
-    let stopped: Vec<bool> = sessions
-        .iter()
-        .map(|&s| capture.session(s).stopped)
-        .collect();
-    assert_eq!(stopped.iter().filter(|&&s| s).count(), 1);
-    assert!(stopped[MAX_CAPTURE_SESSIONS_PER_CLIENT]);
+    let mut clients: Vec<CaptureClient> = Vec::new();
+    for _ in 0..MAX_CAPTURE_SESSIONS / MAX_CAPTURE_SESSIONS_PER_CLIENT {
+        let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+        let sessions: Vec<usize> = (0..=MAX_CAPTURE_SESSIONS_PER_CLIENT)
+            .map(|_| capture.start_session("HEADLESS-1"))
+            .collect();
+        capture.roundtrip(&mut compositor);
+        let stopped: Vec<bool> = sessions
+            .iter()
+            .map(|&s| capture.session(s).stopped)
+            .collect();
+        assert_eq!(stopped.iter().filter(|&&s| s).count(), 1);
+        assert!(stopped[MAX_CAPTURE_SESSIONS_PER_CLIENT]);
+        clients.push(capture);
+    }
+    let mut last = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let refused = last.start_session("HEADLESS-1");
+    last.roundtrip(&mut compositor);
+    assert!(last.session(refused).stopped);
+    drop(clients.pop());
+    compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("the compositor dispatches");
+    let kept = last.start_session("HEADLESS-1");
+    last.roundtrip(&mut compositor);
+    assert!(!last.session(kept).stopped);
 }
 
 /// A client that leaves with a frame waiting takes nothing with it: Yuna draws the next change
@@ -275,10 +302,16 @@ fn a_client_that_leaves_with_a_frame_waiting_leaves_nothing() {
     capture.destroy_frame(first);
     capture.capture(session, Format::Argb8888, 640, 360);
     capture.roundtrip(&mut compositor);
+    assert_eq!(compositor.pending_captures(), 1);
     drop(capture);
     compositor
         .dispatch(Some(Duration::ZERO))
         .expect("the compositor dispatches");
+    assert_eq!(
+        compositor.pending_captures(),
+        0,
+        "the frame of a client gone still waits"
+    );
     let configure = client
         .window(0)
         .configures
@@ -291,4 +324,99 @@ fn a_client_that_leaves_with_a_frame_waiting_leaves_nothing() {
     run_armed_deadlines(&mut compositor);
     assert_eq!(output_pixel(&mut compositor, 100, 100), [0, 0, 255, 255]);
     assert_rests(&mut compositor);
+}
+
+/// Content drawn after a session's frame and before its next is not lost: the next frame is
+/// the newest, at the output's next refresh, though nothing changes after it is asked.
+#[test]
+fn content_drawn_between_two_frames_is_the_next_frame() {
+    let (mut compositor, mut client) = compositor_with_a_window(RED);
+    let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let session = capture.start_session("HEADLESS-1");
+    let first = capture.capture(session, Format::Xrgb8888, 640, 360);
+    capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
+    assert!(capture.frame(first).ready);
+    capture.destroy_frame(first);
+    // The window turns blue, and the output draws it, while the client reads its frame.
+    let configure = client
+        .window(0)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    client.attach(0, configure.width, configure.height, BLUE);
+    client.commit(0);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    let second = capture.capture(session, Format::Xrgb8888, 640, 360);
+    capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
+    assert!(capture.frame(second).ready, "{:?}", capture.frame(second));
+    assert_eq!(capture.pixel(second, 100, 100), [255, 0, 0, 255]);
+    assert_rests(&mut compositor);
+}
+
+/// A frame is copied at an output's refresh, never at once: sessions made one after another
+/// cost one copy a refresh, all their first frames together, and a refresh with nothing new
+/// draws nothing.
+#[test]
+fn first_frames_wait_for_the_outputs_refresh_and_draw_nothing() {
+    let (mut compositor, mut client) = compositor_with_a_window(RED);
+    // The output just drew: its next refresh waits for a boundary.
+    let configure = client
+        .window(0)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    client.attach(0, configure.width, configure.height, RED);
+    client.commit(0);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    let drawn = compositor.counters().frames_drawn;
+    let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let frames: Vec<usize> = (0..3)
+        .map(|_| {
+            let session = capture.start_session("HEADLESS-1");
+            capture.capture(session, Format::Argb8888, 640, 360)
+        })
+        .collect();
+    capture.roundtrip(&mut compositor);
+    assert!(frames.iter().all(|&f| !capture.frame(f).ready));
+    let refresh = compositor
+        .next_deadline()
+        .expect("a refresh armed for the frames");
+    assert!(refresh > compositor.now());
+    compositor
+        .advance(refresh - compositor.now())
+        .expect("the clock moves");
+    capture.roundtrip(&mut compositor);
+    assert!(frames.iter().all(|&f| capture.frame(f).ready));
+    assert_eq!(compositor.counters().frames_drawn, drawn);
+    assert_rests(&mut compositor);
+}
+
+/// A buffer larger than the output, with rows longer than its pixels and an offset in its
+/// pool, takes the frame at its top-left corner, each row at its stride.
+#[test]
+fn a_buffer_with_its_own_stride_and_offset_takes_the_frame() {
+    let (mut compositor, _client) = compositor_with_a_window(RED);
+    let background = output_pixel(&mut compositor, 0, 0);
+    let mut capture = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let session = capture.start_session("HEADLESS-1");
+    let frame = capture.capture_into(session, Format::Argb8888, (700, 400), 700 * 4 + 64, 4096);
+    capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
+    assert!(capture.frame(frame).ready, "{:?}", capture.frame(frame));
+    let [r, g, b, a] = background;
+    assert_eq!(capture.pixel(frame, 0, 0), [b, g, r, a]);
+    assert_eq!(capture.pixel(frame, 100, 100), [0, 0, 255, 255]);
+    assert_eq!(capture.pixel(frame, 100, 359), [b, g, r, a]);
+    // Past the output's size, the buffer keeps what it held.
+    assert_eq!(capture.pixel(frame, 650, 100), [0, 0, 0, 0]);
+    assert_eq!(capture.pixel(frame, 100, 380), [0, 0, 0, 0]);
 }

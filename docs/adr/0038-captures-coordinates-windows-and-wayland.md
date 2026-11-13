@@ -39,7 +39,9 @@ The owner chose, on 2026-11-13:
   every client; a client captures only its own seat's outputs: a session of another seat's
   output is stopped. No cursor is captured, since Yuna draws none, and no window is captured
   through Wayland until Yuna offers `ext-foreign-toplevel-list-v1`. Consent before a capture
-  comes with the desktop ([ROADMAP](../ROADMAP.md)).
+  comes with the desktop ([ROADMAP](../ROADMAP.md)). A client's frame is ready as soon as it is
+  copied, at its refresh, as the protocol asks, with the time of the boundary it is presented
+  at; an agent's capture comes at that boundary ([ADR-0034](0034-captures.md)).
 
 ## Alternatives considered
 

@@ -588,3 +588,96 @@ fn an_output_that_does_not_divide_by_its_scale_keeps_its_last_unit() {
     let (width, height, _) = image_of(&result);
     assert_eq!((width, height), (911, 512));
 }
+
+/// A window whose workspace is shown by an arrangement still to come is captured at that
+/// arrangement's refresh, as it will be drawn, not refused as hidden.
+#[test]
+fn a_window_shown_by_an_arrangement_to_come_is_captured_there() {
+    let (mut mcp, seat, _client, window) = seat_with_a_window(RED);
+    for action in ["create", "focus"] {
+        let shown = mcp.call(
+            "workspaces",
+            json!({"action": action, "seat": seat, "name": "empty"}),
+        );
+        assert_eq!(shown["isError"], json!(false), "{shown}");
+    }
+    settle(&mut mcp);
+    let moved = mcp.call(
+        "workspaces",
+        json!({"action": "move_window", "seat": seat, "window": window, "workspace": "empty"}),
+    );
+    assert_eq!(moved["isError"], json!(false), "{moved}");
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 990, "method": "tools/call",
+                     "params": modern(json!({"name": "capture",
+                                             "arguments": {"seat": seat, "window": window}}))}));
+    assert_eq!(wait_for(&mut mcp, 990, Duration::from_millis(20)), None);
+    settle(&mut mcp);
+    let result = wait_for(&mut mcp, 990, Duration::from_secs(10)).expect("answered");
+    let (width, height, pixels) = image_of(&result);
+    assert_eq!((width, height), (296, 328));
+    assert_eq!(at(&pixels, width, 100, 100), RED_RGB);
+
+    // A window hidden by the arrangement to come is refused once it is arranged.
+    for action in ["create", "focus"] {
+        mcp.call(
+            "workspaces",
+            json!({"action": action, "seat": seat, "name": "other"}),
+        );
+    }
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 991, "method": "tools/call",
+                     "params": modern(json!({"name": "capture",
+                                             "arguments": {"seat": seat, "window": window}}))}));
+    settle(&mut mcp);
+    let hidden = wait_for(&mut mcp, 991, Duration::from_secs(10)).expect("answered");
+    assert_eq!(hidden["isError"], json!(true));
+    let reason = hidden["content"][0]["text"].as_str().expect("a reason");
+    assert!(reason.contains("hidden"), "{reason}");
+}
+
+/// A capture's image spans [0, width) × [0, height): the point just past its last pixel is
+/// off it, as a point just past an output's edge is.
+#[test]
+fn the_point_past_a_captures_last_pixel_is_off_it() {
+    let (mut mcp, seat, _client, window) = seat_with_a_window(RED);
+    let logical = capture_reply(&mut mcp, 980, json!({"seat": seat, "window": window}));
+    let id = logical["structuredContent"]["capture"]
+        .as_u64()
+        .expect("an id");
+    for (x, y, refused) in [(295.5, 0.0, false), (296.0, 0.0, true), (0.0, 328.0, true)] {
+        let moved = mcp.call(
+            "pointer",
+            json!({"action": "move", "seat": seat, "capture": id, "x": x, "y": y}),
+        );
+        assert_eq!(moved["isError"], json!(refused), "({x}, {y}): {moved}");
+    }
+}
+
+/// An agent's capture waiting on an output that is removed fails, saying so.
+#[test]
+fn a_capture_waiting_on_a_removed_output_fails() {
+    let (mut mcp, seat, _client, _) = seat_with_a_window(RED);
+    let created = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 640, "height": 360, "scale": 1}),
+    );
+    let output = created["structuredContent"]["output"]["id"]
+        .as_u64()
+        .expect("an output");
+    // A new output's first frame waits for its first boundary.
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 995, "method": "tools/call",
+                     "params": modern(json!({"name": "capture",
+                                             "arguments": {"seat": seat, "output": output}}))}));
+    assert_eq!(wait_for(&mut mcp, 995, Duration::from_millis(20)), None);
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 996, "method": "tools/call",
+                     "params": modern(json!({"name": "outputs",
+                                             "arguments": {"action": "remove", "seat": seat, "output": output}}))}));
+    let replies = mcp.replies();
+    let failed = replies
+        .iter()
+        .find(|r| r["id"] == json!(995))
+        .map(|r| r["result"].clone())
+        .expect("answered with the removal");
+    assert_eq!(failed["isError"], json!(true));
+    let reason = failed["content"][0]["text"].as_str().expect("a reason");
+    assert!(reason.contains("removed"), "{reason}");
+}

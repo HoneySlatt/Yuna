@@ -91,9 +91,10 @@ pub struct CaptureMapping {
 }
 
 impl CaptureMapping {
-    /// The logical point of the image's point (`px`, `py`); none for a point off the image.
+    /// The logical point of the image's point (`px`, `py`); none for a point off the image,
+    /// which spans [0, width) × [0, height), as an output does.
     pub fn to_logical(&self, px: f64, py: f64) -> Option<(f64, f64)> {
-        let on = |p: f64, side: u32| p.is_finite() && (0.0..=f64::from(side)).contains(&p);
+        let on = |p: f64, side: u32| p.is_finite() && (0.0..f64::from(side)).contains(&p);
         (on(px, self.width) && on(py, self.height)).then_some((
             self.x + px * self.units_per_pixel,
             self.y + py * self.units_per_pixel,
@@ -151,9 +152,25 @@ struct Area {
 const ON_THE_GRID: f64 = 1e-6;
 
 /// The area of an output of `mode` that shows `rect`, logical units from the output's top-left
+/// corner, cut to the output (`widened_area`). Refused when it holds no whole pixel: at an odd
+/// scale, an output's last logical unit may hold none.
+fn area(
+    output: OutputId,
+    mode: &OutputMode,
+    rect: Rect,
+    size: CaptureSize,
+) -> Result<Area, String> {
+    let area = widened_area(output, mode, rect, size)?;
+    if area.read.size.w <= 0 || area.read.size.h <= 0 {
+        return Err("it holds no whole pixel of its output".to_owned());
+    }
+    Ok(area)
+}
+
+/// The area of an output of `mode` that shows `rect`, logical units from the output's top-left
 /// corner, cut to the output. At the logical size, `rect` widens to whole units; at the
 /// physical size, to whole pixels. Refused when nothing of `rect` is on the output.
-fn area(
+fn widened_area(
     output: OutputId,
     mode: &OutputMode,
     rect: Rect,
@@ -353,16 +370,37 @@ pub(crate) enum Destination {
 
 /// A capture waiting for its output's refresh.
 pub(crate) struct PendingCapture {
-    pub output: OutputId,
+    /// Its output; none for a window's capture asked while an arrangement was pending, which
+    /// takes the output the arrangement shows the window on.
+    pub output: Option<OutputId>,
     /// Whether it waits for a refresh that draws something, rather than the next refresh.
     pub new_content: bool,
     pub destination: Destination,
 }
 
+/// Why a capture fails without being copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Failure {
+    /// Its output was removed: a client's session is over.
+    OutputGone,
+    /// Its frame could not be drawn or read: a client may ask again.
+    ForNow,
+}
+
+/// Why window `window` cannot be captured: hidden, with what shows it.
+fn hidden(window: WindowId) -> String {
+    format!(
+        "window {} is hidden: show its workspace with `workspaces focus`, or scroll it into view",
+        window.0
+    )
+}
+
 impl State {
     /// Asks a capture of `target` on agent seat `seat`'s output, at `size`. Refused, with what
     /// to do, for another seat's output or window, a hidden window, and a region off its
-    /// output. Its pixels come in [`State::take_captures`], at its output's newest frame.
+    /// output. Its pixels come in [`State::take_captures`], at its output's newest frame. A
+    /// window's capture asked while an arrangement is pending waits for it: it shows the window
+    /// where that arrangement puts it, or fails if it hides it.
     pub(crate) fn capture(
         &mut self,
         seat: SeatId,
@@ -400,7 +438,7 @@ impl State {
                         )));
                     }
                 }
-                output
+                Some(output)
             }
             CaptureTarget::Window(window) => {
                 let toplevel = self
@@ -411,26 +449,29 @@ impl State {
                     .ok_or_else(|| {
                         Error::Refused(format!("no window {} on seat {}", window.0, seat.0))
                     })?;
-                toplevel.shown_on.ok_or_else(|| {
-                    Error::Refused(format!(
-                        "window {} is hidden: show its workspace with `workspaces focus`, or \
-                         scroll it into view",
-                        window.0
-                    ))
-                })?
+                match toplevel.shown_on {
+                    // Every output's refresh is armed while the layout waits to be arranged.
+                    _ if self.layout_dirty => None,
+                    Some(output) => Some(output),
+                    None => return Err(Error::Refused(hidden(window))),
+                }
             }
         };
         let ticket = CaptureTicket(self.next_capture_ticket);
         self.next_capture_ticket += 1;
-        self.queue_capture(
-            output,
-            false,
-            Destination::Agent {
-                ticket,
-                target,
-                size,
-            },
-        );
+        let destination = Destination::Agent {
+            ticket,
+            target,
+            size,
+        };
+        match output {
+            Some(output) => self.queue_capture(output, false, destination),
+            None => self.pending_captures.push(PendingCapture {
+                output: None,
+                new_content: false,
+                destination,
+            }),
+        }
         Ok(ticket)
     }
 
@@ -446,9 +487,11 @@ impl State {
         });
     }
 
-    /// Queues a capture of `output`: copied now, from the frame its buffer holds, when it waits
-    /// for no new content and no refresh is armed; else at the next refresh, or the next that
-    /// draws something when `new_content`.
+    /// Queues a capture of `output` for its next refresh, or the next that draws something when
+    /// `new_content`. A capture of the newest frame arms that refresh when none is armed: due at
+    /// once on an idle output, and drawing nothing new, so that a client asking frames again and
+    /// again costs one copy a refresh at most. An agent's, one at a time for each seat, is
+    /// copied at once instead.
     pub(crate) fn queue_capture(
         &mut self,
         output: OutputId,
@@ -456,50 +499,90 @@ impl State {
         destination: Destination,
     ) {
         let Some(index) = self.output_index(output) else {
-            fail(&mut self.captured, destination, "its output was removed");
+            fail(
+                &mut self.captured,
+                destination,
+                "its output was removed",
+                Failure::OutputGone,
+            );
             return;
         };
-        if !new_content && !self.clock.is_armed(Deadline::Refresh(output)) {
-            let seq = self.outputs[index].last_refresh;
-            self.copy(index, vec![destination], seq);
-        } else {
-            self.pending_captures.push(PendingCapture {
-                output,
-                new_content,
-                destination,
-            });
+        let armed = self.clock.is_armed(Deadline::Refresh(output));
+        match destination {
+            Destination::Agent { .. } if !new_content && !armed => {
+                let seq = self.outputs[index].last_refresh;
+                self.copy(index, vec![destination], seq);
+            }
+            destination => {
+                if !new_content && !armed {
+                    self.schedule_refresh(output);
+                }
+                self.pending_captures.push(PendingCapture {
+                    output: Some(output),
+                    new_content,
+                    destination,
+                });
+            }
         }
     }
 
-    /// At output `id`'s refresh, presented at boundary `seq`: copies the captures that waited
-    /// for it, those that wait for new content only if it `drew`.
+    /// At output `id`'s refresh, presented at boundary `seq`, after its arrangement: copies the
+    /// captures that waited for it, those that wait for new content only if it `drew`. A
+    /// window's capture that waited for the arrangement takes its window's output now, or fails
+    /// if the window is hidden.
     pub(crate) fn copy_captures(&mut self, id: OutputId, drew: bool, seq: u64) {
         if self.pending_captures.is_empty() {
             return;
         }
-        let (due, waiting): (Vec<PendingCapture>, Vec<PendingCapture>) =
-            std::mem::take(&mut self.pending_captures)
-                .into_iter()
-                .partition(|pending| pending.output == id && (drew || !pending.new_content));
+        let mut due = Vec::new();
+        let mut waiting = Vec::new();
+        for mut pending in std::mem::take(&mut self.pending_captures) {
+            if pending.output.is_none()
+                && let Destination::Agent {
+                    target: CaptureTarget::Window(window),
+                    ..
+                } = pending.destination
+            {
+                let shown_on = self
+                    .windows
+                    .get(&window)
+                    .and_then(|surface| self.toplevels.get(surface))
+                    .and_then(|toplevel| toplevel.shown_on);
+                match shown_on {
+                    Some(output) => pending.output = Some(output),
+                    None => {
+                        let why = hidden(window);
+                        fail(
+                            &mut self.captured,
+                            pending.destination,
+                            &why,
+                            Failure::ForNow,
+                        );
+                        continue;
+                    }
+                }
+            }
+            if pending.output == Some(id) && (drew || !pending.new_content) {
+                due.push(pending.destination);
+            } else {
+                waiting.push(pending);
+            }
+        }
         self.pending_captures = waiting;
         if let Some(index) = self.output_index(id) {
-            self.copy(
-                index,
-                due.into_iter().map(|pending| pending.destination).collect(),
-                seq,
-            );
+            self.copy(index, due, seq);
         }
     }
 
     /// Fails every capture that waits on output `id`, saying `why`.
-    pub(crate) fn fail_captures(&mut self, id: OutputId, why: &str) {
+    pub(crate) fn fail_captures(&mut self, id: OutputId, why: &str, failure: Failure) {
         let (failed, waiting): (Vec<PendingCapture>, Vec<PendingCapture>) =
             std::mem::take(&mut self.pending_captures)
                 .into_iter()
-                .partition(|pending| pending.output == id);
+                .partition(|pending| pending.output == Some(id));
         self.pending_captures = waiting;
         for pending in failed {
-            fail(&mut self.captured, pending.destination, why);
+            fail(&mut self.captured, pending.destination, why, failure);
         }
     }
 
@@ -514,11 +597,12 @@ impl State {
                     &mut self.captured,
                     destination,
                     "its output has drawn no frame yet",
+                    Failure::ForNow,
                 );
             }
             return;
         }
-        let (id, mode) = (output.id, output.mode);
+        let (id, mode, drawn_frames) = (output.id, output.mode, output.drawn_frames);
         let whole = Rectangle::from_size((to_i32(mode.width()), to_i32(mode.height())).into());
         let mut whole_pixels: Option<Result<Vec<u8>, String>> = None;
         for destination in destinations {
@@ -562,13 +646,13 @@ impl State {
                         Ok(pixels) => self.finish_client_frame(
                             frame,
                             pixels,
-                            mode.width(),
-                            mode.height(),
+                            (mode.width(), mode.height()),
                             presented_at,
+                            drawn_frames,
                         ),
                         Err(error) => {
                             tracing::warn!(%error, output = id.0, "a client's capture failed");
-                            frame.fail();
+                            frame.fail(Failure::ForNow);
                         }
                     }
                 }
@@ -623,15 +707,17 @@ impl State {
     }
 }
 
-/// Fails a capture that will not be copied: an agent's with `why`, a client's as stopped.
+/// Fails a capture that will not be copied: an agent's with `why`, a client's as `failure`
+/// says.
 fn fail(
     captured: &mut Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     destination: Destination,
     why: &str,
+    failure: Failure,
 ) {
     match destination {
         Destination::Agent { ticket, .. } => captured.push((ticket, Err(why.to_owned()))),
-        Destination::Client(frame) => frame.fail(),
+        Destination::Client(frame) => frame.fail(failure),
     }
 }
 
@@ -717,6 +803,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_region_on_an_outputs_last_sliver_that_holds_no_pixel_is_refused() {
+        // 3 pixels at 0.7499998 are 4.0000011 units: the fifth unit holds no whole pixel row.
+        let mode = OutputMode::new(4, 3, 60.0, 0.7499998).expect("a mode");
+        assert_eq!(logical_units(&mode).1, 5);
+        let sliver = Rect::new(0.0, 4.0, 1.0, 1.0);
+        assert!(area(OUTPUT, &mode, sliver, CaptureSize::Logical).is_err());
+        assert!(area(OUTPUT, &mode, sliver, CaptureSize::Physical).is_err());
     }
 
     #[test]

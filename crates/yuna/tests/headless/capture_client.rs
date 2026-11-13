@@ -51,6 +51,7 @@ struct CaptureFrame {
     frame: ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1,
     file: File,
     stride: u32,
+    offset: u32,
     events: FrameEvents,
 }
 
@@ -150,17 +151,31 @@ impl CaptureClient {
     /// Asks a frame of session `session` into a new buffer of `width` × `height` pixels of
     /// `format`, damaged whole; returns the frame's index.
     pub fn capture(&mut self, session: usize, format: Format, width: u32, height: u32) -> usize {
+        self.capture_into(session, format, (width, height), width * 4, 0)
+    }
+
+    /// Asks a frame of session `session` into a new buffer of `width` × `height` pixels of
+    /// `format`, `stride` bytes a row, starting `offset` bytes into its pool; returns the
+    /// frame's index.
+    pub fn capture_into(
+        &mut self,
+        session: usize,
+        format: Format,
+        (width, height): (u32, u32),
+        stride: u32,
+        offset: u32,
+    ) -> usize {
         let qh = self.queue.handle();
         let state = &mut self.state;
-        let stride = width * 4;
+        let size = offset + stride * height;
         let fd = memfd_create("yuna-test-capture", MemfdFlags::CLOEXEC).expect("a memfd");
         let file = File::from(fd);
-        file.set_len(u64::from(stride * height))
+        file.set_len(u64::from(size))
             .expect("the memfd takes its size");
         let shm = state.shm.as_ref().expect("wl_shm");
-        let pool = shm.create_pool(file.as_fd(), (stride * height) as i32, &qh, ());
+        let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
         let buffer = pool.create_buffer(
-            0,
+            offset as i32,
             width as i32,
             height as i32,
             stride as i32,
@@ -178,6 +193,7 @@ impl CaptureClient {
             frame,
             file,
             stride,
+            offset,
             events: FrameEvents::default(),
         });
         index
@@ -198,7 +214,10 @@ impl CaptureClient {
         let mut bytes = [0; 4];
         frame
             .file
-            .read_exact_at(&mut bytes, u64::from(y * frame.stride + x * 4))
+            .read_exact_at(
+                &mut bytes,
+                u64::from(frame.offset + y * frame.stride + x * 4),
+            )
             .expect("the buffer is read");
         bytes
     }

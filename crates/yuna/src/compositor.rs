@@ -680,6 +680,12 @@ impl Compositor {
         self.state.take_captures()
     }
 
+    /// How many captures, agents' and clients', wait for their output's refresh. For tests.
+    #[doc(hidden)]
+    pub fn pending_captures(&self) -> usize {
+        self.state.pending_captures.len()
+    }
+
     /// Drops a capture still waiting for its frame.
     pub fn cancel_capture(&mut self, ticket: CaptureTicket) {
         self.state.cancel_capture(ticket);
