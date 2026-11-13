@@ -45,3 +45,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
 | [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted |
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009, 0021 |
+| [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted |
