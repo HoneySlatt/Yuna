@@ -8,7 +8,8 @@
 //! - an operation that returns an error leaves the model exactly as it was;
 //! - a window opening is asked the size [`Layout::size_on_open`] gave just before;
 //! - every workspace of every output peeks ([`Layout::arrange_workspace`]) at windows of its own,
-//!   the one shown as its output draws them, the others without the seat's focus.
+//!   the one shown as its output draws them, but its pinned windows that a covering special
+//!   workspace hides, the others without the seat's focus.
 //!
 //! Clients are random too: they ask minimum and maximum sizes, commit sizes other than the ones
 //! they are asked, and open dialogs, with sizes of 1, small, typical, huge and nonsense.
@@ -353,7 +354,11 @@ fn check_peeks(layout: &Layout) -> Result<(), String> {
                         ));
                     }
                     seen.push(p.window);
-                    if workspace.shown && !drawn.contains(p) {
+                    // A pinned window of the workspace shown is in its peek, but not drawn
+                    // while a fullscreen window of the special workspace covers the output.
+                    let hidden_by_special = layout.window(p.window).is_some_and(|w| w.pinned)
+                        && layout.shown_special(output).ok().flatten().is_some();
+                    if workspace.shown && !drawn.contains(p) && !hidden_by_special {
                         return Err(format!("{p:?} is not as {output:?} draws it"));
                     }
                     if !workspace.shown && p.activated {
@@ -663,4 +668,38 @@ fn operations_from_a_busy_state_keep_every_property() {
             },
         )
         .unwrap();
+}
+
+/// The sequence M1.5's closing review found failing `check_peeks`: a pinned window under a
+/// special workspace whose fullscreen window covers the output, every step accepted. Kept as a
+/// case, since a seed replays only while the generator stays the same.
+#[test]
+fn a_pinned_window_under_a_covering_special_workspace_keeps_every_property() {
+    let open = |window: u64, floating: bool, fullscreen: bool| Op::Open {
+        seat: 1,
+        window,
+        floating,
+        fullscreen,
+        width: None,
+        workspace: None,
+        parent: None,
+        limits: None,
+        committed: None,
+        size: None,
+    };
+    let ops = [
+        Op::AddOutput {
+            seat: 1,
+            output: 1,
+            scale: 0,
+            size: 1,
+            x: 0,
+        },
+        open(1, false, false),
+        open(2, true, false),
+        Op::SetPinned(2, true),
+        Op::ToggleSpecial { seat: 1, name: 2 },
+        open(4, false, true),
+    ];
+    run(Options::default(), &ops).unwrap_or_else(|failure| panic!("{failure}"));
 }

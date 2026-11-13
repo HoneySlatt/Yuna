@@ -143,3 +143,21 @@ fn the_owner_peeks_at_an_agents_workspace_and_bad_requests_are_refused() {
         Err(LayoutError::UnknownOutput(unknown))
     );
 }
+
+/// A special workspace's fullscreen window hides the pinned windows on the output, but not in
+/// the peek at the workspace beneath, which shows that workspace alone. Found by the property
+/// tests in M1.5's closing review.
+#[test]
+fn a_pinned_window_hidden_by_a_covering_special_workspace_stays_in_the_peek() {
+    let mut m = Model::new();
+    m.open(1);
+    m.open_with(OWNER, 2, floating());
+    m.ok(|l| l.set_pinned(w(2), true));
+    m.ok(|l| l.toggle_special(OWNER, "scratch"));
+    m.open(4);
+    m.ok(|l| l.set_fullscreen(w(4), true));
+    assert_eq!(m.shown(MAIN), vec![1, 4]);
+    let shown = m.workspaces(MAIN).1;
+    let peeked: Vec<u64> = peek(&m, MAIN, shown).iter().map(|p| p.window.0).collect();
+    assert_eq!(peeked, vec![1, 2]);
+}
