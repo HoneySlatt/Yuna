@@ -8,6 +8,8 @@
 //! `scale.rs` and `dmabuf.rs` hold the stories of viewporter, fractional scale and linux-dmabuf.
 
 mod activation;
+mod capture_client;
+mod captures;
 mod client;
 mod dialogs;
 mod dmabuf;
@@ -18,6 +20,7 @@ mod outputs;
 mod popups;
 mod random_requests;
 mod scale;
+mod screencopy;
 mod seats;
 mod selection;
 mod selection_client;

@@ -16,11 +16,12 @@
 //! pointer and keyboard input (`input.rs`); `xdg-shell` and
 //! `xdg-decoration` in front of the layout (`shell.rs`), with popups (`popups.rs`),
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
-//! primary selection (`selection.rs`); the frame loop (`frames.rs`); clients' dmabufs
-//! (`dmabuf.rs`); the scale each surface is told (`scale.rs`); the public face
-//! (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
+//! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);
+//! the scale each surface is told (`scale.rs`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
 
 mod activation;
+mod capture;
 mod clock;
 mod compositor;
 mod dialog;
@@ -32,6 +33,7 @@ mod output;
 mod popups;
 mod render;
 mod scale;
+mod screencopy;
 mod seats;
 mod selection;
 mod shell;
@@ -40,6 +42,9 @@ mod state;
 use std::fmt;
 
 pub use activation::TOKEN_LIFETIME;
+pub use capture::{
+    CaptureMapping, CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame, LogicalRegion,
+};
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
     Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription,
@@ -52,6 +57,7 @@ pub use input::{
 pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use render::Device;
+pub use screencopy::MAX_CAPTURE_SESSIONS_PER_CLIENT;
 pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;

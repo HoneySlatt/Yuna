@@ -5,6 +5,12 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- `yuna mcp`'s `capture` gives a PNG of a seat's output, a region of it or one of its windows,
+  at the logical size by default, where a pixel is a unit `pointer` takes, or at the physical
+  size. Its result tells how the image maps to the output and gives an id, through which
+  `pointer` aims at a pixel of that image.
+- Clients can capture their seat's outputs through `ext-image-copy-capture-v1`, as grim does.
+
 - `yuna mcp` serves several agents, each on a seat of its own: `seat` creates one, with an
   output and a Wayland socket its programs use, lists them and closes one, ending its programs.
   `pointer` moves, clicks, drags and scrolls, `keyboard` presses keys, taps combinations and

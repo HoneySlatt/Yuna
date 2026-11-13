@@ -24,9 +24,12 @@ One Cargo workspace; its crates live in `crates/`.
   `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
   its logs; `serde`, with its derive, and `serde_json` for MCP's messages
-  ([ADR-0033](adr/0033-the-mcp-server.md)); `yuna-layout`. rustix, which Smithay re-exports,
-  makes its system calls: pipes, signals, `waitpid`, `prctl`. Its tests use `wayland-client` and `wayland-protocols`' client side,
-  staging protocols included, and proptest, without its default features.
+  ([ADR-0033](adr/0033-the-mcp-server.md)); `png` for a capture's image
+  ([ADR-0034](adr/0034-captures.md)), which builds `miniz_oxide` twice, 0.8 for itself and 0.9
+  for `flate2`; `yuna-layout`. rustix, which Smithay re-exports, makes its system calls: pipes,
+  signals, `waitpid`, `prctl`. Its tests use `wayland-client` and `wayland-protocols`' client
+  side, staging protocols included, proptest, without its default features, and `png` to decode
+  captures.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers.
@@ -147,13 +150,18 @@ operation, and an example measures the model:
   `ext-data-control-v1`, on Smithay's handlers.
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
   reported presented, and the hidden windows.
+- `capture.rs`: captures, in Yuna's terms: which frame, which pixels, and how an agent's image maps
+  to logical coordinates ([below](#captures)).
+- `screencopy.rs`: `ext-image-copy-capture-v1` and its output sources, a thin layer over
+  Smithay's modules and `capture.rs`.
 - `scale.rs`: the scale each surface is told: `wp_fractional_scale_v1`, and `wl_surface`'s
   preferred buffer scale and transform.
 - `dmabuf.rs`: `linux-dmabuf`: its global, and the import of each client's dmabuf.
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
   damage tracker; their refresh boundaries; their removal.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
-  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)). It keeps each EGL
+  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)); `read_pixels` is the
+  only place pixels are read back. It keeps each EGL
   display it opens until the process ends, so that compositors started and dropped on several
   threads, as tests run them, never lose the display Smithay shares among them.
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
@@ -451,6 +459,36 @@ is disabled at once and destroyed 10 s later, at the end of a round, so that a c
 to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
+### Captures
+
+A capture shows an output's *newest* frame ([ADR-0034](adr/0034-captures.md),
+[ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)): when the output's refresh is
+armed, a commit or a change of the layout on its way, the frame that refresh draws; otherwise
+the frame its buffer holds, copied at once. Nothing is drawn for a capture.
+
+1. A capture is queued on its output (`capture.rs`). At that output's refresh, after drawing,
+   the pixels are read from its buffer (`render::read_pixels`), on the main thread, and the
+   capture records the boundary the frame is presented at. A failed drawing, or a removed
+   output, fails the captures waiting on it.
+2. An agent's capture reads the physical pixels under its area: the whole output, a region in
+   whole logical units, or the rectangle its window was drawn at, cut to the output; a window
+   hidden when asked is refused. Its *mapping* says where the image's top-left corner is in the
+   output's logical units, and how many units a pixel covers: 1 at the logical size, 1 / scale at
+   the physical size.
+3. The MCP server encodes it on a thread of its own (`mcp/image.rs`): at the logical size each
+   pixel is the average of the physical pixels its unit covers, weighted by how much of each;
+   then a PNG with fdeflate's fast compression, then base64. Over 8,000 pixels a side or 5 MB of
+   base64, it is refused. The reply goes once the image is encoded and the clock has reached the
+   frame's boundary; on the real clock a timer wakes the loop for it. It gives the image, the
+   mapping and an id; `pointer` maps a point of one of the seat's last 16 images to its output.
+4. A Wayland client's capture (`screencopy.rs`) sees the globals whatever its seat, and captures
+   only its own seat's outputs: Yuna stops a session of another's. A session's first frame is
+   the newest; each later one waits for a refresh that draws something, so that a recorder costs
+   nothing at rest. The whole output is copied once per refresh for all the frames waiting on it,
+   into each client's `wl_shm` buffer, `Argb8888` or `Xrgb8888`, the renderer's R, G, B, A
+   swapped to B, G, R, A; the frame is ready at once, with full damage and the time of its
+   boundary. A client keeps 16 sessions at most.
+
 ### The MCP server
 
 `yuna mcp` is a headless Yuna of one MCP client's own: it reads JSON-RPC requests from its
@@ -466,12 +504,14 @@ standard input, one per line, and writes the replies to its standard output, not
 - `tools.rs`: the tools' schemas, their arguments, read with serde, and their results, given
   both as `structuredContent` and as text. A tool that does several things takes an `action`.
 - `programs.rs`: the programs `spawn` starts, and which processes belong to a seat.
+- `image.rs`: a capture's PNG and its base64, made on a thread of its own.
 - `mod.rs`: `Server`, which holds the compositor and runs the tools.
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
-of SIGCHLD and of the waiting calls' timers only note what came; after each round,
+of SIGCHLD, of the waiting calls' timers and of the encoders' channel only note what came; after each round,
 `Server::dispatch` reaps the programs that ended, reads one chunk of input, answers each whole
-line, answers the calls whose window came or whose time is up, sends the compositor's events and
+line, answers the calls whose window came or whose time is up, starts encoding the captures copied
+and answers those encoded whose frame's boundary came, sends the compositor's events and
 writes the replies. While 16 MiB of replies wait, no further line is answered and the client's
 input is not read. A line over 1 MiB, or an input or output that fails, ends the connection.
 
@@ -490,8 +530,11 @@ window or program unknown there:
   waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting call is
   answered once the layout has placed the window, which on the manual clock takes a `clock`
   advance; `notifications/cancelled` drops it unanswered; 64 wait at most.
-- `pointer` moves, presses, releases, clicks and scrolls, moving first when given a place, and
-  tells where the pointer is and what is under it; `keyboard` presses, releases and taps keys,
+- `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
+  physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
+  time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
+- `pointer` moves, presses, releases, clicks and scrolls, moving first when given a place, on an
+  output or in a capture's image, and tells where the pointer is and what is under it; `keyboard` presses, releases and taps keys,
   and types text, and tells the window the keyboard is on ([Seats and input](#seats-and-input)).
 - `clock` reads the time, and advances a manual clock, never past real time.
 
@@ -547,7 +590,13 @@ one it was presented at, later when the frame was late.
   that bound another seat's `wl_seat`, a click's focus, text read back through the keymaps the
   client got, wheel and cursor, a popup grab and a drag from a press, activation and the
   clipboard kept to their seat, and a seat's closing; its
-  clients are `input_client.rs`'s, which bind a seat by name. `mcp.rs` in it drives the MCP
+  clients are `input_client.rs`'s, which bind a seat by name. `captures.rs` in it captures
+  through MCP: an output's logical image, its edges on whole units, a frame on its way answered
+  at its boundary, a window, a region and the physical size with `pointer` aimed through them,
+  the refusals, a closed seat, the last 16 ids, images too large. `screencopy.rs` captures
+  through `ext-image-copy-capture-v1`, with `capture_client.rs`: both formats, a later frame
+  waiting for new content at rest, another seat's output stopped, buffers that do not fit, a
+  removed output, the bound on sessions, a client that leaves with a frame waiting. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
   not read, a line too long, an input that closes.

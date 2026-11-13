@@ -25,19 +25,21 @@
 //! `protocol.rs`, the framing in `stdio.rs`, the tools' schemas and results in `tools.rs`, the
 //! programs in `programs.rs`.
 
+mod image;
 mod programs;
 mod protocol;
 mod stdio;
 mod tools;
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
+use smithay::reexports::calloop::channel::{self, Sender};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
@@ -49,15 +51,17 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 use crate::compositor::Compositor;
 use crate::output::OutputMode;
 use crate::state::OWNER_SEAT;
-use crate::{ClockMode, Error};
+use crate::{CaptureMapping, CaptureTicket, ClockMode, Error};
+use image::Encoded;
 use programs::{Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
 use tools::{
-    ButtonCall, ClockCall, KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall, ToolResult,
-    WindowsCall, WorkspacesCall,
+    ButtonCall, CaptureCall, ClockCall, CopiedCapture, KeyboardCall, OutputsCall, PointerCall,
+    SeatCall, SpawnCall, ToolResult, WindowsCall, WorkspacesCall,
 };
 
+pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use programs::{
     END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
     SEAT_VARIABLE,
@@ -69,6 +73,10 @@ pub use tools::{MAX_WAIT, MAX_WAITING_CALLS};
 /// How many bytes of replies may wait for the client before its input stops being read: 16 MiB,
 /// room for a few captures (M1.5's C4) beside the replies to a burst of calls.
 pub const MAX_QUEUED_OUTPUT: usize = 16 << 20;
+
+/// How many of a seat's captures `pointer` may name: its last ones
+/// ([ADR-0038](../../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)).
+pub const RECENT_CAPTURES: usize = 16;
 
 /// How much of the client's input is read at a time.
 const READ_SIZE: usize = 64 * 1024;
@@ -88,6 +96,8 @@ struct Events {
     timed_out: Vec<u64>,
     /// The seat closings whose stage is up, by key.
     closings_due: Vec<u64>,
+    /// The captures' images encoded, by key.
+    encoded: Vec<(u64, Result<Encoded, String>)>,
 }
 
 /// A `windows` call waiting for a window.
@@ -98,6 +108,32 @@ struct WindowWait {
     revision: Revision,
     call: WindowsCall,
     timer: RegistrationToken,
+}
+
+/// A `capture` call, until it is answered.
+#[derive(Debug)]
+struct CaptureWait {
+    key: u64,
+    id: Value,
+    revision: Revision,
+    seat: SeatId,
+    ticket: CaptureTicket,
+    stage: CaptureStage,
+}
+
+/// Where a capture is: its frame waited for, its image encoded, then held until its frame's
+/// boundary ([ADR-0034](../../../../docs/adr/0034-captures.md)).
+#[derive(Debug)]
+enum CaptureStage {
+    /// Waiting for its frame, at most [`MAX_WAIT`]: the timer that fails it.
+    Copying(RegistrationToken),
+    Encoding(CopiedCapture),
+    /// Encoded; `woken` once a timer will wake the loop at its boundary.
+    Encoded {
+        copied: CopiedCapture,
+        result: Result<Encoded, String>,
+        woken: bool,
+    },
 }
 
 /// A `seat close` waiting for the seat's processes to end.
@@ -139,6 +175,13 @@ pub struct Server {
     /// The keys of waiting calls and of closings, never reused.
     next_wait: u64,
     closings: Vec<SeatClosing>,
+    captures: Vec<CaptureWait>,
+    /// Where the encoders send the captures' images, by key.
+    encoder_results: Sender<(u64, Result<Encoded, String>)>,
+    /// Each seat's last captures, newest last, by id, which `pointer` takes.
+    recent_captures: HashMap<SeatId, VecDeque<(u64, CaptureMapping)>>,
+    /// The next capture's id: ids increase and are never reused.
+    next_capture: u64,
     /// The mode of a new seat's output, unless `seat create` says.
     seat_output: OutputMode,
     /// The programs, when the server may start some, with SIGCHLD's pipe.
@@ -243,6 +286,16 @@ impl Server {
                 Some((programs, children))
             }
         };
+        let (encoder_results, encoded) = channel::channel();
+        let noted = events.clone();
+        handle
+            .insert_source(encoded, move |event, _, state| {
+                state.woke = true;
+                if let channel::Event::Msg(message) = event {
+                    noted.borrow_mut().encoded.push(message);
+                }
+            })
+            .map_err(|e| failed("event loop", &e.error))?;
         // Last, so that a server that fails to start leaves its caller's output as it was.
         rustix::fs::fcntl_setfl(&output, output_flags | OFlags::NONBLOCK)
             .map_err(|e| failed("output", &e))?;
@@ -264,6 +317,10 @@ impl Server {
             waits: Vec::new(),
             next_wait: 1,
             closings: Vec::new(),
+            captures: Vec::new(),
+            encoder_results,
+            recent_captures: HashMap::new(),
+            next_capture: 1,
             seat_output: OutputMode::default(),
             programs,
             throttle_armed: false,
@@ -326,6 +383,9 @@ impl Server {
         for key in events.timed_out {
             self.answer_timed_out(key);
         }
+        self.encode_copied_captures();
+        self.note_encoded(events.encoded);
+        self.answer_captures_due();
         // A window is told once it is placed: after the arrangement that follows its mapping.
         if !self.waits.is_empty() && !self.compositor.arrangement_pending() {
             self.answer_waits();
@@ -555,6 +615,11 @@ impl Server {
                         // It waits, and is answered later.
                         None => return,
                     },
+                    "capture" => match self.capture(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It waits for its frame, and is answered later.
+                        None => return,
+                    },
                     "clock" => self.clock(arguments),
                     _ => {
                         let error = RpcError {
@@ -773,9 +838,23 @@ impl Server {
         None
     }
 
-    /// Answers the `windows` calls that wait on `seat`, which closed: a stale handle fails
-    /// plainly ([ADR-0035](../../../../docs/adr/0035-agents-seats.md)).
+    /// Answers the `windows` and `capture` calls that wait on `seat`, which closed, and forgets
+    /// its captures: a stale handle fails plainly
+    /// ([ADR-0035](../../../../docs/adr/0035-agents-seats.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
+        self.recent_captures.remove(&seat);
+        while let Some(index) = self
+            .captures
+            .iter()
+            .position(|capture| capture.seat == seat)
+        {
+            let capture = self.drop_capture(index);
+            let result = ToolResult::failed(format!("seat {} was closed", seat.0));
+            self.queue.push(&protocol::response(
+                capture.id,
+                result.into_result(capture.revision),
+            ));
+        }
         let handle = self.compositor.loop_handle();
         let mut index = 0;
         while index < self.waits.len() {
@@ -1078,10 +1157,15 @@ impl Server {
         };
         let result = match call {
             PointerCall::Get { .. } => Ok(self.compositor.pointer(seat)),
-            PointerCall::Move { x, y, output, .. } => {
-                self.compositor
-                    .pointer_move(seat, output.map(OutputId), x, y)
-            }
+            PointerCall::Move {
+                x,
+                y,
+                output,
+                capture,
+                ..
+            } => self
+                .place(seat, x, y, output, capture)
+                .and_then(|(output, x, y)| self.compositor.pointer_move(seat, output, x, y)),
             PointerCall::Press(button) => self.move_first(seat, &button).and_then(|()| {
                 self.compositor
                     .pointer_button(seat, button.button.code(), true)
@@ -1101,9 +1185,10 @@ impl Server {
                 x,
                 y,
                 output,
+                capture,
                 ..
             } => self
-                .move_to(seat, x, y, output)
+                .move_to(seat, x, y, output, capture)
                 .and_then(|()| self.compositor.pointer_scroll(seat, dx, dy)),
         };
         match result {
@@ -1114,26 +1199,66 @@ impl Server {
 
     /// Moves `seat`'s pointer where a button call says, when it says.
     fn move_first(&mut self, seat: SeatId, button: &ButtonCall) -> Result<(), Error> {
-        self.move_to(seat, button.x, button.y, button.output)
+        self.move_to(seat, button.x, button.y, button.output, button.capture)
     }
 
-    /// Moves `seat`'s pointer to (`x`, `y`) on `output` when both are given; refused for one
-    /// without the other.
+    /// Moves `seat`'s pointer to (`x`, `y`), on `output` or in `capture`'s image, when both are
+    /// given; refused for one without the other.
     fn move_to(
         &mut self,
         seat: SeatId,
         x: Option<f64>,
         y: Option<f64>,
         output: Option<u64>,
+        capture: Option<u64>,
     ) -> Result<(), Error> {
         match (x, y) {
-            (Some(x), Some(y)) => self
-                .compositor
-                .pointer_move(seat, output.map(OutputId), x, y)
-                .map(|_| ()),
-            (None, None) if output.is_none() => Ok(()),
+            (Some(x), Some(y)) => {
+                let (output, x, y) = self.place(seat, x, y, output, capture)?;
+                self.compositor.pointer_move(seat, output, x, y).map(|_| ())
+            }
+            (None, None) if output.is_none() && capture.is_none() => Ok(()),
             _ => Err(Error::Refused("give x and y together".to_owned())),
         }
+    }
+
+    /// The output and logical place a call's (`x`, `y`) name: on `output`, or, with `capture`,
+    /// a point of that capture's image, mapped to its output. Refused for both given, a capture
+    /// not among the seat's last [`RECENT_CAPTURES`], and a point off its image.
+    fn place(
+        &self,
+        seat: SeatId,
+        x: f64,
+        y: f64,
+        output: Option<u64>,
+        capture: Option<u64>,
+    ) -> Result<(Option<OutputId>, f64, f64), Error> {
+        let Some(capture) = capture else {
+            return Ok((output.map(OutputId), x, y));
+        };
+        if output.is_some() {
+            return Err(Error::Refused(
+                "give a capture or an output, not both".to_owned(),
+            ));
+        }
+        let mapping = self
+            .recent_captures
+            .get(&seat)
+            .and_then(|recent| recent.iter().find(|(id, _)| *id == capture))
+            .map(|(_, mapping)| *mapping)
+            .ok_or_else(|| {
+                Error::Refused(format!(
+                    "no capture {capture} among seat {}'s last {RECENT_CAPTURES}: capture again",
+                    seat.0
+                ))
+            })?;
+        let (logical_x, logical_y) = mapping.to_logical(x, y).ok_or_else(|| {
+            Error::Refused(format!(
+                "({x}, {y}) is off capture {capture}'s {} × {} pixels",
+                mapping.width, mapping.height
+            ))
+        })?;
+        Ok((Some(mapping.output), logical_x, logical_y))
     }
 
     fn keyboard(&mut self, arguments: Map<String, Value>) -> ToolResult {
@@ -1279,6 +1404,215 @@ impl Server {
         None
     }
 
+    /// `capture`: a failure now, or none while the capture waits for its frame; one capture of
+    /// a seat at a time.
+    fn capture(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call: CaptureCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        let seat = match self.agent_seat(call.seat) {
+            Ok(seat) => seat,
+            Err(failed) => return Some(failed),
+        };
+        if self.captures.iter().any(|capture| capture.seat == seat) {
+            return Some(ToolResult::failed(format!(
+                "a capture of seat {} is in flight: wait for its answer",
+                seat.0
+            )));
+        }
+        let target = match call.target() {
+            Ok(target) => target,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        let ticket = match self.compositor.capture(seat, target, call.size()) {
+            Ok(ticket) => ticket,
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
+        };
+        let key = self.next_wait;
+        let events = self.events.clone();
+        let timer = self.compositor.loop_handle().insert_source(
+            Timer::from_duration(MAX_WAIT),
+            move |_, _, state| {
+                state.woke = true;
+                events.borrow_mut().timed_out.push(key);
+                TimeoutAction::Drop
+            },
+        );
+        let timer = match timer {
+            Ok(timer) => timer,
+            Err(error) => {
+                self.compositor.cancel_capture(ticket);
+                return Some(ToolResult::failed(error.error.to_string()));
+            }
+        };
+        self.next_wait += 1;
+        self.captures.push(CaptureWait {
+            key,
+            id: id.clone(),
+            revision,
+            seat,
+            ticket,
+            stage: CaptureStage::Copying(timer),
+        });
+        None
+    }
+
+    /// Starts encoding each capture whose pixels the compositor copied, on a thread of its own;
+    /// answers those it failed.
+    fn encode_copied_captures(&mut self) {
+        for (ticket, copied) in self.compositor.take_captures() {
+            let Some(index) = self.captures.iter().position(|capture| {
+                capture.ticket == ticket && matches!(capture.stage, CaptureStage::Copying(_))
+            }) else {
+                continue;
+            };
+            if let CaptureStage::Copying(timer) = self.captures[index].stage {
+                self.compositor.loop_handle().remove(timer);
+            }
+            let frame = match copied {
+                Ok(frame) => frame,
+                Err(why) => {
+                    self.answer_capture(
+                        index,
+                        ToolResult::failed(format!("the capture failed: {why}")),
+                    );
+                    continue;
+                }
+            };
+            let (width, height) = (frame.mapping.width, frame.mapping.height);
+            if width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+                self.answer_capture(
+                    index,
+                    ToolResult::failed(format!(
+                        "the capture's image is {width} × {height} pixels, over the \
+                         {MAX_IMAGE_SIDE} an image may have on a side: capture a region, or at \
+                         the logical size"
+                    )),
+                );
+                continue;
+            }
+            let copied = CopiedCapture::of(&frame);
+            let key = self.captures[index].key;
+            let results = self.encoder_results.clone();
+            let started = std::thread::Builder::new()
+                .name("yuna-capture".to_owned())
+                .spawn(move || {
+                    let began = Instant::now();
+                    let encoded = image::encode(&frame);
+                    tracing::debug!(
+                        width = frame.mapping.width,
+                        height = frame.mapping.height,
+                        took_us = began.elapsed().as_micros(),
+                        "capture encoded"
+                    );
+                    // A capture cancelled meanwhile, or a server gone, takes nothing.
+                    let _ = results.send((key, encoded));
+                });
+            match started {
+                Ok(_) => self.captures[index].stage = CaptureStage::Encoding(copied),
+                Err(error) => self.answer_capture(
+                    index,
+                    ToolResult::failed(format!("the capture could not be encoded: {error}")),
+                ),
+            }
+        }
+    }
+
+    /// Records the images the encoders finished.
+    fn note_encoded(&mut self, encoded: Vec<(u64, Result<Encoded, String>)>) {
+        for (key, result) in encoded {
+            if let Some(capture) = self.captures.iter_mut().find(|capture| capture.key == key)
+                && let CaptureStage::Encoding(copied) = capture.stage
+            {
+                capture.stage = CaptureStage::Encoded {
+                    copied,
+                    result,
+                    woken: false,
+                };
+            }
+        }
+    }
+
+    /// Answers each capture encoded whose frame's boundary has come; on the real clock, arms a
+    /// timer to wake the loop at the boundary of one encoded before it.
+    fn answer_captures_due(&mut self) {
+        let now = self.compositor.now();
+        let real = self.compositor.clock_mode() == ClockMode::Real;
+        let mut index = 0;
+        while index < self.captures.len() {
+            let CaptureStage::Encoded { copied, woken, .. } = &mut self.captures[index].stage
+            else {
+                index += 1;
+                continue;
+            };
+            if copied.presented_at > now {
+                if real && !*woken {
+                    let wait = copied.presented_at.saturating_sub(now);
+                    *woken = self
+                        .compositor
+                        .loop_handle()
+                        .insert_source(Timer::from_duration(wait), |_, _, state| {
+                            state.woke = true;
+                            TimeoutAction::Drop
+                        })
+                        .is_ok();
+                }
+                index += 1;
+                continue;
+            }
+            let wait = self.captures.remove(index);
+            let CaptureStage::Encoded { copied, result, .. } = wait.stage else {
+                continue;
+            };
+            let result = match result {
+                Ok(encoded) => {
+                    let id = self.next_capture;
+                    self.next_capture += 1;
+                    let recent = self.recent_captures.entry(wait.seat).or_default();
+                    if recent.len() >= RECENT_CAPTURES {
+                        recent.pop_front();
+                    }
+                    recent.push_back((id, copied.mapping));
+                    ToolResult::done_with_image(
+                        tools::capture_json(id, &copied, encoded.png_bytes),
+                        encoded.base64,
+                    )
+                }
+                Err(why) => ToolResult::failed(why),
+            };
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+        }
+    }
+
+    /// Answers the capture at `index` with `result`, now.
+    fn answer_capture(&mut self, index: usize, result: ToolResult) {
+        let capture = self.captures.remove(index);
+        self.queue.push(&protocol::response(
+            capture.id,
+            result.into_result(capture.revision),
+        ));
+    }
+
+    /// Drops the capture at `index`, unanswered: its frame no longer waited for, its image
+    /// discarded when it comes.
+    fn drop_capture(&mut self, index: usize) -> CaptureWait {
+        let capture = self.captures.remove(index);
+        if let CaptureStage::Copying(timer) = capture.stage {
+            self.compositor.loop_handle().remove(timer);
+            self.compositor.cancel_capture(capture.ticket);
+        }
+        capture
+    }
+
     fn matching_windows(&self, call: &WindowsCall) -> Vec<Value> {
         self.compositor
             .windows()
@@ -1312,8 +1646,26 @@ impl Server {
         }
     }
 
-    /// Answers the call `key` whose time is up, if it still waits: no window matched.
+    /// Answers the call `key` whose time is up, if it still waits: no window matched, or no
+    /// frame came for a capture.
     fn answer_timed_out(&mut self, key: u64) {
+        if let Some(index) = self.captures.iter().position(|capture| {
+            capture.key == key && matches!(capture.stage, CaptureStage::Copying(_))
+        }) {
+            // Its timer removed itself.
+            let capture = self.captures.remove(index);
+            self.compositor.cancel_capture(capture.ticket);
+            let result = ToolResult::failed(format!(
+                "no frame came in {} s: nothing changed on the output since a refresh was armed; \
+                 on a manual clock, advance it",
+                MAX_WAIT.as_secs()
+            ));
+            self.queue.push(&protocol::response(
+                capture.id,
+                result.into_result(capture.revision),
+            ));
+            return;
+        }
         let Some(index) = self.waits.iter().position(|wait| wait.key == key) else {
             return;
         };
@@ -1337,6 +1689,10 @@ impl Server {
             {
                 closing.reply = None;
             }
+        }
+        while let Some(index) = self.captures.iter().position(|capture| &capture.id == id) {
+            self.drop_capture(index);
+            tracing::debug!(request = %id, "a capture is cancelled");
         }
         let handle = self.compositor.loop_handle();
         self.waits.retain(|wait| {

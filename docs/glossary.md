@@ -9,6 +9,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
+  logical point of its top-left corner, and the logical units one pixel covers.
 - **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
   the column is as wide as the widest of them as drawn.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
@@ -61,6 +63,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   time.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
+- **Newest frame**: what a capture shows: the frame an output's armed refresh draws, else the
+  one its buffer holds.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for its seat's keyboard and pointer until it is dismissed, as
   an open menu holds them; granted only with a serial its client's own seat sent to its window,

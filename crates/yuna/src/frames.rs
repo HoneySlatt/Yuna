@@ -12,7 +12,7 @@
 //!
 //! At the refresh, in order: the layout is arranged once if it changed, and the configures that
 //! changed are sent; the output is drawn if anything on it is damaged; its shown surfaces get
-//! their frame callbacks. Their presentation feedback is taken then and held until the boundary
+//! their frame callbacks; the captures that waited for it are copied (`capture.rs`). Their presentation feedback is taken then and held until the boundary
 //! the frame is presented at: the one it aimed at if its drawing ended by then, else the first
 //! after. It is sent at that boundary, through a deadline of its own.
 //!
@@ -147,6 +147,7 @@ impl State {
 
     /// An output's refresh. See the module's documentation.
     fn refresh(&mut self, output: OutputId) {
+        let output_id = output;
         if self.layout_dirty {
             self.arrange();
         }
@@ -161,6 +162,7 @@ impl State {
                 self.send_frames(&root, now);
             }
         }
+        let drew = matches!(drawing, Drawing::Drawn { .. });
         let output = &mut self.outputs[index];
         let aimed = output.armed_boundary;
         let seq = match drawing {
@@ -196,10 +198,14 @@ impl State {
                         discard_presentation_feedback(&root);
                     }
                 }
+                self.fail_captures(output_id, "its frame could not be drawn");
                 return;
             }
         };
         output.last_refresh = output.last_refresh.max(seq);
+        // The frame shown from `seq` on is in the buffer now: the captures that waited for it.
+        self.copy_captures(output_id, drew, seq);
+        let output = &mut self.outputs[index];
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
         let mut any = false;

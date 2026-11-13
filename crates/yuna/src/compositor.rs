@@ -21,6 +21,7 @@ use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 
 use crate::Error;
+use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
 use crate::input::PointerDescription;
 use crate::output::OutputMode;
@@ -656,6 +657,34 @@ impl Compositor {
         crate::render::read_pixels(&mut self.state.renderer, virtual_output, region)
     }
 
+    /// Asks a capture of `target` on agent seat `seat`, at `size`
+    /// ([ADR-0038](../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)): its
+    /// output's newest frame, the one its armed refresh draws, else the one it holds, copied at
+    /// once. Its pixels, or why it failed, come from [`Compositor::take_captures`]. Refused for
+    /// another seat's output or window, a hidden window, and a region not wholly on its output.
+    pub fn capture(
+        &mut self,
+        seat: SeatId,
+        target: CaptureTarget,
+        size: CaptureSize,
+    ) -> Result<CaptureTicket, Error> {
+        if seat == OWNER_SEAT || self.state.seat(seat).is_none() {
+            return Err(Error::Refused(format!("no agent seat {}", seat.0)));
+        }
+        self.state.capture(seat, target, size)
+    }
+
+    /// The captures copied since the last call, each with its ticket, or why it failed: its
+    /// output removed, or its window gone from it.
+    pub fn take_captures(&mut self) -> Vec<(CaptureTicket, Result<CapturedFrame, String>)> {
+        self.state.take_captures()
+    }
+
+    /// Drops a capture still waiting for its frame.
+    pub fn cancel_capture(&mut self, ticket: CaptureTicket) {
+        self.state.cancel_capture(ticket);
+    }
+
     /// Arms the calloop timer at the clock's earliest deadline, in real mode; with the manual
     /// clock, deadlines run only when a test advances it.
     fn arm_timer(&mut self) -> Result<(), Error> {
@@ -699,6 +728,7 @@ impl Compositor {
         }
         self.state.release_textures();
         self.state.destroy_retired_globals();
+        self.state.screencopy.cleanup();
         if let Err(error) = self.display.flush_clients() {
             tracing::debug!(%error, "flushing the clients failed");
         }

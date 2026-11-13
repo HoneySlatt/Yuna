@@ -18,8 +18,8 @@ use crate::RED;
 use crate::client::Client;
 
 /// A test's end of a server: what it writes to, what it reads from.
-struct Mcp {
-    server: Server,
+pub struct Mcp {
+    pub server: Server,
     requests: UnixStream,
     replies: UnixStream,
     read: Vec<u8>,
@@ -27,7 +27,7 @@ struct Mcp {
 }
 
 impl Mcp {
-    fn new(clock: ClockMode) -> Mcp {
+    pub fn new(clock: ClockMode) -> Mcp {
         let compositor = Compositor::new(Config {
             outputs: Vec::new(),
             clock,
@@ -55,7 +55,7 @@ impl Mcp {
         }
     }
 
-    fn send(&mut self, message: &Value) {
+    pub fn send(&mut self, message: &Value) {
         let mut line = message.to_string();
         line.push('\n');
         self.requests
@@ -64,7 +64,7 @@ impl Mcp {
     }
 
     /// Lets the server run a round, then reads the replies that came.
-    fn replies(&mut self) -> Vec<Value> {
+    pub fn replies(&mut self) -> Vec<Value> {
         self.server
             .dispatch(Some(Duration::ZERO))
             .expect("the server dispatches");
@@ -86,14 +86,14 @@ impl Mcp {
     }
 
     /// Sends a request and waits, up to 5 s of real time, for its reply.
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    pub fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         self.reply_to(id)
     }
 
-    fn reply_to(&mut self, id: u64) -> Value {
+    pub fn reply_to(&mut self, id: u64) -> Value {
         let until = Instant::now() + Duration::from_secs(5);
         while Instant::now() < until {
             if let Some(reply) = self.replies().into_iter().find(|r| r["id"] == json!(id)) {
@@ -105,7 +105,7 @@ impl Mcp {
     }
 
     /// Creates a seat with `seat create` and returns its handle.
-    fn seat(&mut self) -> u64 {
+    pub fn seat(&mut self) -> u64 {
         let created = self.call("seat", json!({"action": "create"}));
         assert_eq!(created["isError"], json!(false), "{created}");
         created["structuredContent"]["seat"]
@@ -114,7 +114,7 @@ impl Mcp {
     }
 
     /// Calls a tool in 2026-07-28 and returns its result.
-    fn call(&mut self, tool: &str, arguments: Value) -> Value {
+    pub fn call(&mut self, tool: &str, arguments: Value) -> Value {
         let reply = self.request(
             "tools/call",
             modern(json!({"name": tool, "arguments": arguments})),
@@ -124,7 +124,7 @@ impl Mcp {
 }
 
 /// `params` with 2026-07-28's `_meta`.
-fn modern(mut params: Value) -> Value {
+pub fn modern(mut params: Value) -> Value {
     params["_meta"] = json!({
         "io.modelcontextprotocol/protocolVersion": MODERN_REVISION,
         "io.modelcontextprotocol/clientCapabilities": {},

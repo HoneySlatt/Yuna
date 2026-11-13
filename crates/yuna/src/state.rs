@@ -1,7 +1,8 @@
 //! The compositor's state, and the protocol handlers that are not the shell's: surfaces, shared
 //! memory, the seats' handler and the cursors their clients ask, outputs and presentation time.
 //! The seats themselves are in `seats.rs`, their input in `input.rs`, `linux-dmabuf` in
-//! `dmabuf.rs`, the preferred scale in `scale.rs`; viewporter needs no handler.
+//! `dmabuf.rs`, the preferred scale in `scale.rs`, captures in `capture.rs` and
+//! `screencopy.rs`; viewporter needs no handler.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -41,10 +42,12 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 
 use crate::Error;
+use crate::capture::{CaptureTicket, CapturedFrame, PendingCapture};
 use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
 use crate::output::VirtualOutput;
 use crate::render::Device;
+use crate::screencopy::ScreencopyState;
 use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
@@ -118,6 +121,14 @@ pub(crate) struct State {
     pub popups: PopupManager,
     pub xdg_activation_state: XdgActivationState,
     _xdg_dialog_state: XdgDialogState,
+    /// `ext-image-copy-capture-v1` and its sessions (`screencopy.rs`).
+    pub screencopy: ScreencopyState,
+    /// The captures waiting for their output's refresh (`capture.rs`).
+    pub pending_captures: Vec<PendingCapture>,
+    /// The agents' captures copied or failed, until the compositor's user takes them.
+    pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
+    /// The next agent's capture's ticket: tickets increase and are never reused.
+    pub next_capture_ticket: u64,
 }
 
 impl State {
@@ -182,6 +193,10 @@ impl State {
             popups: PopupManager::default(),
             xdg_activation_state: XdgActivationState::new::<State>(dh),
             _xdg_dialog_state: XdgDialogState::new::<State>(dh),
+            screencopy: ScreencopyState::new(dh),
+            pending_captures: Vec::new(),
+            captured: Vec::new(),
+            next_capture_ticket: 1,
         })
     }
 

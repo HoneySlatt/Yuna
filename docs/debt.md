@@ -104,8 +104,8 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   focus, not the serial it names: that client may set a selection with any serial, not only in
   answer to its own input. Checking it needs a patch to Smithay; a test pins the gap down
   (`the_serial_of_the_client_with_the_focus_is_not_checked`).
-- A drag's icon is dropped, and the cursors clients ask are recorded, not drawn: a capture (C4)
-  shows neither. Touch has no drag: Yuna has no touch.
+- A drag's icon is dropped, and the cursors clients ask are recorded, not drawn: a capture
+  shows neither, and a client asking cursors painted into its frames gets none. Touch has no drag: Yuna has no touch.
 - Every seat's `wl_output` and `xdg-output` globals, like its `wl_seat`, are announced to every
   client: a program of one agent sees, and may bind, another agent's outputs, their names,
   modes and places, and a toolkit that lists monitors lists them. No input or focus crosses
@@ -122,6 +122,27 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
+
+## Captures
+
+- Smithay `8fd9fe0` asks a session's buffer constraints (`capture_constraints`) without naming
+  its client: a client of another seat is told that output's size and formats before Yuna stops
+  its session. It learns no more than that output's `wl_output` tells it already.
+- Smithay `8fd9fe0` ignores what `ext-image-copy-capture-v1` calls protocol errors: a buffer
+  attached or damaged after `capture`, a damage of no area, a second `capture`; a `capture`
+  without a buffer fails the frame rather than end the client with `no_buffer`. Fixing it needs
+  a patch to Smithay.
+- Smithay `8fd9fe0`'s `Frame::success` sends no damage for `None`, which its documentation calls
+  full damage: Yuna gives the whole buffer as damage on every frame. No frame tells less, so a
+  recorder copies every pixel each time.
+- A client's frame copies the whole output, about 33 MB at 4K, and an agent's capture its area,
+  on the main thread at the refresh: their time on the frame loop is not measured yet (C5).
+- In a debug build, as the tests run, a 4K output's capture takes about 1.2 s to encode, on its
+  own thread; the release build's time is C5's measure.
+- Every client of `yuna --headless` may capture its seat's outputs without being asked; consent
+  comes with the desktop ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)).
+- A capture waiting for its frame times out after 50 s; no test waits that long.
+- `png` and `flate2` build two versions of `miniz_oxide`, 0.8 and 0.9, until `png` moves to 0.9.
 
 ## The MCP server
 

@@ -11,6 +11,7 @@ publish.workspace = true
 # The protocols' server side (`wayland_frontend`), its helpers for surfaces (`desktop`), and the
 # GLES renderer on EGL (`renderer_gl`); no DRM, no input backend (ADR-0022).
 smithay = { workspace = true, features = ["wayland_frontend", "desktop", "renderer_gl"] }
+png.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

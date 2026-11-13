@@ -17,7 +17,8 @@ use super::programs::{End, Program};
 use super::protocol::{self, Revision};
 use crate::compositor::{OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
-use yuna_layout::WorkspaceInfo;
+use crate::{CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion};
+use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
 
 /// The longest a call may wait: under the 60 s at which Codex gives up on a call by default
 /// ([survey](../../../../docs/survey.md#agents-and-mcp)).
@@ -157,15 +158,57 @@ pub fn definitions() -> Value {
             }
         },
         {
+            "name": "capture",
+            "title": "Capture",
+            "description": "Capture what one of a seat's outputs shows, as a PNG image of its \
+                newest frame: the one being drawn when a change is on its way, else the last \
+                one drawn. All of the output, its first by default, a region of it, or a \
+                window: what the output shows where the window is, what covers it included; \
+                a hidden window is refused. By default at the logical size, where a pixel is \
+                a logical unit, the units pointer takes; size physical gives every physical \
+                pixel. The result tells how the image maps to its output, logical = x + pixel \
+                × units_per_pixel, and gives a capture id: pointer takes it, with x and y in \
+                that image's pixels. One capture of a seat at a time. It comes once the clock \
+                reaches the boundary its frame is presented at: on a manual clock, advance it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seat": seat,
+                    "output": { "type": "integer",
+                        "description": "the output; the seat's first by default" },
+                    "window": { "type": "integer",
+                        "description": "a window's id, instead of an output or a region" },
+                    "region": {
+                        "type": "object",
+                        "description": "a rectangle of the output, in whole logical units from \
+                            its top-left corner",
+                        "properties": {
+                            "x": { "type": "integer", "minimum": 0 },
+                            "y": { "type": "integer", "minimum": 0 },
+                            "width": { "type": "integer", "minimum": 1 },
+                            "height": { "type": "integer", "minimum": 1 }
+                        },
+                        "required": ["x", "y", "width", "height"],
+                        "additionalProperties": false
+                    },
+                    "size": { "type": "string", "enum": ["logical", "physical"],
+                        "description": "logical by default" }
+                },
+                "required": ["seat"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "pointer",
             "title": "Pointer",
             "description": "Move, press, release, click or scroll a seat's pointer, or read \
                 where it is. x and y are logical units from the top-left corner of one of the \
-                seat's outputs, its first by default: a capture's pixels. press, release, \
-                click and scroll move first when x and y are given. A press focuses the window \
-                under it. Drag in several calls: press, move, release. The result tells the \
-                window and the surface position under the pointer, and the cursor its client \
-                asked for.",
+                seat's outputs, its first by default, which are a whole output's capture's \
+                pixels at the logical size; with capture, they are pixels of that capture's \
+                image, which Yuna maps to its output. press, release, click and scroll move \
+                first when x and y are given. A press focuses the window under it. Drag in \
+                several calls: press, move, release. The result tells the window and the \
+                surface position under the pointer, and the cursor its client asked for.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -175,6 +218,9 @@ pub fn definitions() -> Value {
                     "x": { "type": "number" },
                     "y": { "type": "number" },
                     "output": { "type": "integer", "description": "the output x and y are on" },
+                    "capture": { "type": "integer",
+                        "description": "a capture's id, among the seat's last 16: x and y are \
+                            pixels of its image, instead of an output's units" },
                     "button": { "type": "string",
                         "enum": ["left", "right", "middle", "back", "forward"],
                         "description": "press, release, click: left by default" },
@@ -308,6 +354,7 @@ pub enum PointerCall {
         x: f64,
         y: f64,
         output: Option<u64>,
+        capture: Option<u64>,
     },
     Press(ButtonCall),
     Release(ButtonCall),
@@ -321,6 +368,7 @@ pub enum PointerCall {
         x: Option<f64>,
         y: Option<f64>,
         output: Option<u64>,
+        capture: Option<u64>,
     },
 }
 
@@ -334,6 +382,7 @@ pub struct ButtonCall {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub output: Option<u64>,
+    pub capture: Option<u64>,
 }
 
 /// A pointer button, by name.
@@ -436,6 +485,64 @@ impl WindowsCall {
     }
 }
 
+/// `capture`'s arguments.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureCall {
+    pub seat: u64,
+    pub output: Option<u64>,
+    pub window: Option<u64>,
+    pub region: Option<RegionArgument>,
+    #[serde(default)]
+    pub size: SizeArgument,
+}
+
+/// A capture's region, in whole logical units.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionArgument {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A capture's size, by name.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizeArgument {
+    #[default]
+    Logical,
+    Physical,
+}
+
+impl CaptureCall {
+    /// What the call captures; refused for a window given with an output or a region.
+    pub fn target(&self) -> Result<CaptureTarget, String> {
+        match (self.window, self.output, self.region) {
+            (Some(window), None, None) => Ok(CaptureTarget::Window(WindowId(window))),
+            (Some(_), _, _) => Err("give a window, or an output and a region, not both".to_owned()),
+            (None, output, region) => Ok(CaptureTarget::Output {
+                output: output.map(OutputId),
+                region: region.map(|r| LogicalRegion {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                }),
+            }),
+        }
+    }
+
+    /// The image's size.
+    pub fn size(&self) -> CaptureSize {
+        match self.size {
+            SizeArgument::Logical => CaptureSize::Logical,
+            SizeArgument::Physical => CaptureSize::Physical,
+        }
+    }
+}
+
 /// `clock`'s arguments.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -460,6 +567,8 @@ pub struct ToolResult {
     structured: Option<Value>,
     /// What the model reads: the result as JSON, or the failure.
     text: String,
+    /// A PNG image in base64, given after the text.
+    image: Option<String>,
 }
 
 impl ToolResult {
@@ -468,6 +577,15 @@ impl ToolResult {
         ToolResult {
             text: structured.to_string(),
             structured: Some(structured),
+            image: None,
+        }
+    }
+
+    /// A result with a PNG image, in base64.
+    pub fn done_with_image(structured: Value, png_base64: String) -> ToolResult {
+        ToolResult {
+            image: Some(png_base64),
+            ..ToolResult::done(structured)
         }
     }
 
@@ -476,16 +594,18 @@ impl ToolResult {
         ToolResult {
             structured: None,
             text: reason.into(),
+            image: None,
         }
     }
 
     /// `tools/call`'s result, shaped for `revision`.
     pub fn into_result(self, revision: Revision) -> Value {
         let mut body = Map::new();
-        body.insert(
-            "content".to_owned(),
-            json!([{ "type": "text", "text": self.text }]),
-        );
+        let mut content = vec![json!({ "type": "text", "text": self.text })];
+        if let Some(data) = self.image {
+            content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
+        }
+        body.insert("content".to_owned(), Value::Array(content));
         body.insert("isError".to_owned(), json!(self.structured.is_none()));
         if let Some(structured) = self.structured {
             body.insert("structuredContent".to_owned(), structured);
@@ -544,6 +664,44 @@ pub fn pointer_json(pointer: &PointerDescription) -> Value {
             .iter()
             .map(|&code| Button::name_of(code).map_or_else(|| json!(code), |name| json!(name)))
             .collect::<Vec<Value>>(),
+    })
+}
+
+/// What a capture's result tells of its frame, kept while its image is encoded.
+#[derive(Debug, Clone, Copy)]
+pub struct CopiedCapture {
+    pub mapping: CaptureMapping,
+    pub window: Option<WindowId>,
+    pub boundary: u64,
+    pub presented_at: Duration,
+}
+
+impl CopiedCapture {
+    pub fn of(frame: &CapturedFrame) -> CopiedCapture {
+        CopiedCapture {
+            mapping: frame.mapping,
+            window: frame.window,
+            boundary: frame.boundary,
+            presented_at: frame.presented_at,
+        }
+    }
+}
+
+/// A capture, as `capture` gives it: its id, and how its image maps to its output.
+pub fn capture_json(id: u64, frame: &CopiedCapture, png_bytes: usize) -> Value {
+    let mapping = &frame.mapping;
+    json!({
+        "capture": id,
+        "output": mapping.output.0,
+        "window": frame.window.map(|window| window.0),
+        "width": mapping.width,
+        "height": mapping.height,
+        "x": mapping.x,
+        "y": mapping.y,
+        "units_per_pixel": mapping.units_per_pixel,
+        "presented_ns": frame.presented_at.as_nanos() as u64,
+        "boundary": frame.boundary,
+        "png_bytes": png_bytes,
     })
 }
 
@@ -617,6 +775,7 @@ mod tests {
                 "workspaces",
                 "spawn",
                 "windows",
+                "capture",
                 "pointer",
                 "keyboard",
                 "clock"

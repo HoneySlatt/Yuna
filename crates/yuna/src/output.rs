@@ -292,7 +292,8 @@ impl State {
 
     /// Removes the output at `index`, its seat's last one included. Its windows' surfaces leave
     /// it now, and enter their new output at the arrangement. The feedback it holds is
-    /// discarded, its deadlines disarmed. Its global is disabled at once and destroyed
+    /// discarded, its deadlines disarmed, the captures waiting on it failed and its capture
+    /// sessions stopped. Its global is disabled at once and destroyed
     /// [`RETIRED_GLOBAL_LIFETIME`] later.
     pub(crate) fn drop_output(&mut self, index: usize) {
         let id = self.outputs[index].id;
@@ -313,6 +314,8 @@ impl State {
         }
         self.clock.disarm(Deadline::Refresh(id));
         self.clock.disarm(Deadline::Presentation(id));
+        self.fail_captures(id, "its output was removed");
+        self.stop_capture_sessions(id);
         let removed = self.outputs.remove(index);
         for (_, mut feedback) in removed.held_feedback {
             feedback.discarded();
