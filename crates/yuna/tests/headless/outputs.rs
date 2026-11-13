@@ -33,7 +33,7 @@ fn a_removed_output_gives_its_windows_to_another_and_discards_its_feedback() {
 
     let created_at = compositor.now();
     let second_output = compositor
-        .add_output(full_hd())
+        .add_output(OWNER_SEAT, full_hd())
         .expect("an output is added");
     assert_eq!(second_output, OutputId(2));
     // Once for the global, once for the events of the output bound.
@@ -145,11 +145,11 @@ fn outputs_past_the_cap_are_refused() {
     let small = OutputMode::new(64, 64, 60.0, 1.0).expect("a valid mode");
     for _ in 1..MAX_OUTPUTS {
         compositor
-            .add_output(small)
+            .add_output(OWNER_SEAT, small)
             .expect("an output under the cap");
     }
     assert!(matches!(
-        compositor.add_output(small),
+        compositor.add_output(OWNER_SEAT, small),
         Err(Error::Refused(_))
     ));
     assert_eq!(compositor.outputs().len(), MAX_OUTPUTS);
@@ -157,7 +157,9 @@ fn outputs_past_the_cap_are_refused() {
         .remove_output(OutputId(2))
         .expect("an output removed");
     assert_eq!(
-        compositor.add_output(small).expect("room again"),
+        compositor
+            .add_output(OWNER_SEAT, small)
+            .expect("room again"),
         OutputId(MAX_OUTPUTS as u64 + 1)
     );
 }

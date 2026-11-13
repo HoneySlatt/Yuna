@@ -11,13 +11,16 @@
 //! window's output, and its frame callbacks and presentation feedback go with its window's
 //! (`frames.rs`), at the hidden windows' rate when the window is hidden.
 //!
-//! A popup that asks an explicit grab gets it when the grab's serial is the last keyboard `enter`
-//! the owner's seat sent to the popup's window, or the serial of the grab its parent holds; there
-//! is no pointer input before M1.5. The keyboard then goes to the topmost grabbing popup, until
-//! the grab ends: when its popups are gone or dismissed, or when the focus leaves their window. A
-//! grab asked otherwise is refused by dismissing the popup, as xdg-shell allows; a popup
-//! dismissed already takes none. Between refresh boundaries the keyboard moves only within the
-//! window it is on; a move to another window waits for the next refresh (`frames.rs`).
+//! A popup that asks an explicit grab gets it on its client's own seat, when the grab's serial is
+//! one that seat sent to the popup's window: the last keyboard `enter` or key press while its
+//! keyboard is on that window, a button press on that window, or the serial of the grab its
+//! parent holds. Each seat has its own grab. The seat's keyboard then goes to the topmost
+//! grabbing popup, and its pointer, if it has one, is grabbed so that a click outside the
+//! client's surfaces dismisses the popups, until the grab ends: when its popups are gone or
+//! dismissed, or when the focus leaves their window. A grab asked otherwise is refused by
+//! dismissing the popup, as xdg-shell allows; a popup dismissed already takes none. Between
+//! refresh boundaries the keyboard moves only within the window it is on; a move to another
+//! window waits for the next refresh (`frames.rs`).
 //!
 //! A popup is dismissed (`popup_done`) when its window unmaps or goes, when it commits without a
 //! buffer, and at once when it is created for a window that is not mapped or has
@@ -30,20 +33,23 @@ use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
 
 use smithay::desktop::{
-    PopupGrab, PopupGrabError, PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy,
+    PopupGrab, PopupGrabError, PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab,
+    PopupUngrabStrategy,
 };
-use smithay::input::Seat;
+use smithay::input::pointer::Focus;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Resource, Weak};
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
 use smithay::wayland::compositor::{get_role, with_states};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, XDG_POPUP_ROLE, XdgPopupSurfaceData,
 };
-use yuna_layout::{OutputId, WindowId};
+use yuna_layout::{OutputId, SeatId, WindowId};
 
+use crate::seats::SeatData;
+use crate::seats::{seat_of_surface, seat_of_wl_seat};
 use crate::shell::refuse_second_role;
 use crate::state::State;
 
@@ -199,52 +205,70 @@ impl State {
             tracing::debug!("a grab asked by a popup dismissed already is refused");
             return;
         }
-        let seat = self.owner_seat_of(&seat);
-        let Some(seat) = seat.filter(|_| self.grab_serial_is_valid(&toplevel, serial)) else {
-            tracing::debug!("a popup grab with a serial Yuna's seat did not send is refused");
+        // Only on its client's own seat: another seat's serials never reach its client.
+        let own_seat = seat_of_surface(&toplevel);
+        let seat = seat_of_wl_seat(&seat).filter(|&seat| seat == own_seat);
+        let Some(seat) = seat.filter(|&seat| self.grab_serial_is_valid(seat, &toplevel, serial))
+        else {
+            tracing::debug!("a popup grab with a serial its seat did not send is refused");
             self.dismiss_popup(&toplevel, &popup);
             return;
         };
         // Smithay refuses, with a protocol error, a grab whose parent is not the topmost grabbing
         // popup; xdg-shell allows a new menu on the window, so the older grab ends first.
         let parent = popup.get_parent_surface();
-        if self
-            .popup_grab
-            .as_ref()
-            .is_some_and(|active| active.grab.current_grab() != parent)
-        {
-            self.end_popup_grab();
+        let older_elsewhere = self
+            .seat(seat)
+            .and_then(|data| data.popup_grab.as_ref())
+            .is_some_and(|active| active.grab.current_grab() != parent);
+        if older_elsewhere {
+            self.end_popup_grab(seat);
         }
         // The older grab's popups are dismissed, and this one with them if one was its parent.
         if is_tracked(&toplevel, popup.wl_surface()) {
-            self.start_popup_grab(&toplevel, &popup, &seat, serial);
+            self.start_popup_grab(seat, &toplevel, &popup, serial);
         } else {
             tracing::debug!("a popup dismissed with the older grab takes no grab");
         }
         // The keyboard stays in this window until the next refresh: on the topmost popup of the
         // grab, or back on the window when there is none.
-        self.give_keyboard_to(Some(toplevel));
+        self.give_keyboard_to(seat, Some(toplevel));
     }
 
-    /// Asks Smithay for the grab of `popup`, a popup Yuna tracks on the toplevel whose surface is
-    /// `toplevel`, and sets its keyboard grab; the caller then moves the keyboard. A refusal
-    /// dismisses the popup.
+    /// Asks Smithay for the grab of `popup` on `seat`, a popup Yuna tracks on the toplevel whose
+    /// surface is `toplevel`, and sets the seat's keyboard grab, and its pointer grab when it
+    /// has a pointer; the caller then moves the keyboard. A refusal dismisses the popup.
     fn start_popup_grab(
         &mut self,
+        seat: SeatId,
         toplevel: &WlSurface,
         popup: &PopupSurface,
-        seat: &Seat<State>,
         serial: Serial,
     ) {
+        let Some(data) = self.seat(seat) else {
+            return;
+        };
+        let (smithay_seat, keyboard, pointer) = (
+            data.seat.clone(),
+            data.keyboard.clone(),
+            data.pointer.clone(),
+        );
         let kind = PopupKind::Xdg(popup.clone());
-        match self.popups.grab_popup(toplevel.clone(), kind, seat, serial) {
+        match self
+            .popups
+            .grab_popup(toplevel.clone(), kind, &smithay_seat, serial)
+        {
             Ok(grab) => {
-                let keyboard = self.keyboard.clone();
                 keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
-                self.popup_grab = Some(ActivePopupGrab {
-                    toplevel: toplevel.clone(),
-                    grab,
-                });
+                if let Some(pointer) = pointer {
+                    pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+                }
+                if let Some(data) = self.seat_mut(seat) {
+                    data.popup_grab = Some(ActivePopupGrab {
+                        toplevel: toplevel.clone(),
+                        grab,
+                    });
+                }
             }
             // Smithay dismissed the popup already.
             Err(PopupGrabError::ParentDismissed) => {}
@@ -257,12 +281,16 @@ impl State {
         }
     }
 
-    /// What the keyboard focuses, given the toplevel surface it is to be on: the topmost popup of
-    /// a grab on that window, or the window. A grab whose popups are gone, whose topmost popup was
-    /// dismissed, or whose window is not the one given, ends here: its popups are dismissed and
-    /// the keyboard is let go.
-    pub(crate) fn keyboard_focus(&mut self, window: Option<WlSurface>) -> Option<WlSurface> {
-        let Some(active) = &self.popup_grab else {
+    /// What `seat`'s keyboard focuses, given the toplevel surface it is to be on: the topmost
+    /// popup of the seat's grab on that window, or the window. A grab whose popups are gone,
+    /// whose topmost popup was dismissed, or whose window is not the one given, ends here: its
+    /// popups are dismissed and the seat's keyboard and pointer are let go.
+    pub(crate) fn keyboard_focus(
+        &mut self,
+        seat: SeatId,
+        window: Option<WlSurface>,
+    ) -> Option<WlSurface> {
+        let Some(active) = self.seat(seat).and_then(|data| data.popup_grab.as_ref()) else {
             return window;
         };
         let topmost = active.grab.current_grab();
@@ -274,20 +302,21 @@ impl State {
         if holds {
             return topmost;
         }
-        self.end_popup_grab();
+        self.end_popup_grab(seat);
         window
     }
 
-    /// Moves the keyboard within the window of the popup grab, between refresh boundaries: to the
-    /// grab's topmost popup while it holds, else back to the window. Without a grab, nothing
-    /// moves.
+    /// Moves each seat's keyboard within the window of its popup grab, between refresh
+    /// boundaries: to the grab's topmost popup while it holds, else back to the window. A seat
+    /// without a grab does not move.
     fn refocus_within_grab_window(&mut self) {
-        if let Some(toplevel) = self
-            .popup_grab
-            .as_ref()
-            .map(|active| active.toplevel.clone())
-        {
-            self.give_keyboard_to(Some(toplevel));
+        let grabs: Vec<(SeatId, WlSurface)> = self
+            .seats
+            .iter()
+            .filter_map(|data| Some((data.id, data.popup_grab.as_ref()?.toplevel.clone())))
+            .collect();
+        for (seat, toplevel) in grabs {
+            self.give_keyboard_to(seat, Some(toplevel));
         }
     }
 
@@ -306,12 +335,18 @@ impl State {
                 popup.send_popup_done();
             }
         }
-        if self
-            .popup_grab
-            .as_ref()
-            .is_some_and(|active| active.toplevel == *toplevel)
-        {
-            self.end_popup_grab();
+        let grabbing: Vec<SeatId> = self
+            .seats
+            .iter()
+            .filter(|data| {
+                data.popup_grab
+                    .as_ref()
+                    .is_some_and(|active| active.toplevel == *toplevel)
+            })
+            .map(|data| data.id)
+            .collect();
+        for seat in grabbing {
+            self.end_popup_grab(seat);
         }
     }
 
@@ -366,15 +401,31 @@ impl State {
         Some(Rectangle::new((x, y).into(), size.into()))
     }
 
-    /// Whether `serial` may start a popup grab on the toplevel whose surface is `toplevel`: the
-    /// keyboard is on that window or one of its popups, and the serial is the last `enter` the
-    /// keyboard sent, or the serial of the grab a parent popup holds.
-    fn grab_serial_is_valid(&self, toplevel: &WlSurface, serial: Serial) -> bool {
-        let focus_in_window = self.keyboard.current_focus().is_some_and(|focus| {
+    /// Whether `serial` may start a popup grab of `seat` on the toplevel whose surface is
+    /// `toplevel`: a button press of the seat on that window; or, while the seat's keyboard is on
+    /// that window or one of its popups, the last `enter` or key press its keyboard sent, or the
+    /// serial of the grab a parent popup holds.
+    fn grab_serial_is_valid(&self, seat: SeatId, toplevel: &WlSurface, serial: Serial) -> bool {
+        let Some(data) = self.seat(seat) else {
+            return false;
+        };
+        let pressed_on_window = data
+            .last_button_press
+            .as_ref()
+            .is_some_and(|(pressed, window)| *pressed == serial && window == toplevel);
+        let keyboard = &data.keyboard;
+        let focus_in_window = keyboard.current_focus().is_some_and(|focus| {
             focus == *toplevel || popup_toplevel(&focus).as_ref() == Some(toplevel)
         });
-        focus_in_window
-            && (self.keyboard.last_enter() == Some(serial) || self.keyboard.has_grab(serial))
+        let key_pressed = data
+            .last_key_press
+            .as_ref()
+            .is_some_and(|(pressed, _)| *pressed == serial);
+        pressed_on_window
+            || (focus_in_window
+                && (keyboard.last_enter() == Some(serial)
+                    || key_pressed
+                    || keyboard.has_grab(serial)))
     }
 
     /// Dismisses `popup` and the popups over it, which leave their window's tree. A grab whose
@@ -405,13 +456,24 @@ impl State {
             .cloned()
     }
 
-    /// Ends the popup grab: its popups still open are dismissed, and the keyboard is let go. The
-    /// focus moves at the next call of `give_keyboard_to`.
-    fn end_popup_grab(&mut self) {
-        if let Some(mut active) = self.popup_grab.take() {
-            active.grab.ungrab(PopupUngrabStrategy::All);
-            let keyboard = self.keyboard.clone();
-            keyboard.unset_grab(self);
+    /// Ends `seat`'s popup grab: its popups still open are dismissed, and the seat's keyboard
+    /// and pointer are let go. The focus moves at the next call of `give_keyboard_to`.
+    pub(crate) fn end_popup_grab(&mut self, seat: SeatId) {
+        let Some(data) = self.seat_mut(seat) else {
+            return;
+        };
+        let Some(mut active) = data.popup_grab.take() else {
+            return;
+        };
+        let (keyboard, pointer) = (data.keyboard.clone(), data.pointer.clone());
+        let serial = active.grab.serial();
+        active.grab.ungrab(PopupUngrabStrategy::All);
+        keyboard.unset_grab(self);
+        // Only the popup's grab: a button held, or a drag, keeps its own.
+        if let Some(pointer) = pointer
+            && pointer.has_grab(serial)
+        {
+            pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), self.input_time());
         }
     }
 
@@ -471,38 +533,15 @@ impl State {
                 }
             }
         }
-        if let Some(active) = &self.popup_grab {
-            if active.grab.has_ended() || !is_mapped(&active.toplevel) {
-                return Err(format!(
-                    "Yuna holds a popup grab on {} that has ended or whose window is not mapped",
-                    active.toplevel.id()
-                ));
-            }
-            let topmost = active.grab.current_grab();
-            let tracked = topmost.as_ref().is_some_and(|topmost| {
-                *topmost != active.toplevel && is_tracked(&active.toplevel, topmost)
-            });
-            if !tracked {
-                return Err(format!(
-                    "the popup grab on {} holds {:?}, which is not a popup its window tracks",
-                    active.toplevel.id(),
-                    topmost.map(|topmost| topmost.id())
-                ));
-            }
-        }
-        let focus = self.keyboard.current_focus();
-        if focus.as_ref().is_some_and(|focus| !focus.is_alive()) && !self.layout_dirty {
-            return Err(
-                "the keyboard is on a surface that is gone, and no arrangement will move it"
-                    .to_owned(),
-            );
+        for seat in &self.seats {
+            check_seat_grab_and_keyboard(seat, &is_mapped, self.layout_dirty)?;
         }
         Ok(())
     }
 
     /// Arms the next refresh of the output the toplevel whose surface is `toplevel` is shown on,
     /// so that a popup that left it is no longer drawn.
-    fn refresh_output_of(&mut self, toplevel: &WlSurface) {
+    pub(crate) fn refresh_output_of(&mut self, toplevel: &WlSurface) {
         if let Some(output) = self
             .toplevels
             .get(&toplevel.id())
@@ -511,6 +550,52 @@ impl State {
             self.schedule_refresh(output);
         }
     }
+}
+
+/// Checks one seat's popup grab and keyboard, as `check_popups_and_keyboard` says.
+fn check_seat_grab_and_keyboard(
+    seat: &SeatData,
+    is_mapped: &impl Fn(&WlSurface) -> bool,
+    layout_dirty: bool,
+) -> Result<(), String> {
+    if let Some(active) = &seat.popup_grab {
+        if active.grab.has_ended() || !is_mapped(&active.toplevel) {
+            return Err(format!(
+                "seat {} holds a popup grab on {} that has ended or whose window is not mapped",
+                seat.id.0,
+                active.toplevel.id()
+            ));
+        }
+        let topmost = active.grab.current_grab();
+        let tracked = topmost.as_ref().is_some_and(|topmost| {
+            *topmost != active.toplevel && is_tracked(&active.toplevel, topmost)
+        });
+        if !tracked {
+            return Err(format!(
+                "seat {}'s popup grab on {} holds {:?}, which is not a popup its window tracks",
+                seat.id.0,
+                active.toplevel.id(),
+                topmost.map(|topmost| topmost.id())
+            ));
+        }
+    }
+    let focus = seat.keyboard.current_focus();
+    if focus.as_ref().is_some_and(|focus| !focus.is_alive()) && !layout_dirty {
+        return Err(format!(
+            "seat {}'s keyboard is on a surface that is gone, and no arrangement will move it",
+            seat.id.0
+        ));
+    }
+    if let Some(focus) = &focus
+        && seat_of_surface(focus) != seat.id
+    {
+        return Err(format!(
+            "seat {}'s keyboard is on {}, a surface of another seat's client",
+            seat.id.0,
+            focus.id()
+        ));
+    }
+    Ok(())
 }
 
 /// The surfaces whose trees make a window: its toplevel's surface, then each of its popups',

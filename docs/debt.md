@@ -91,20 +91,26 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - With two agents' seats in one Yuna, a program of the second may bind the first's `wl_seat`,
   which upstream Smithay announces to every client: it then gets no input, never another seat's.
   The filter per client comes at Stage 3 ([ADR-0035](adr/0035-agents-seats.md)).
-- Until M1.5 brings input, only a keyboard `enter` serial makes an activation token or a popup
-  grab valid; key, button and touch serials come with input.
+- The owner's seat has no pointer headless, and takes no input: its clients' tokens and popup
+  grabs carry a keyboard `enter` serial alone, and they start no drag. Its input comes with the
+  desktop (Stage 2).
 - The modal hint of `xdg-dialog-v1` is read but not used: a modal dialog does not yet keep its
   parent from the focus.
-- `ext-data-control-v1` is offered to every client: any client can read and set the clipboard and
-  the primary selection without the focus. It is filtered at Stage 2, through security-context or
-  a rule for privileged clients.
+- `ext-data-control-v1` is offered to every client of the owner's seat: any of them can read and
+  set the clipboard and the primary selection without the focus. It is filtered at Stage 2,
+  through security-context or a rule for privileged clients. No agent's client sees it: a
+  clipboard manager does not work on an agent's seat.
 - Smithay `8fd9fe0` checks that a selection request comes from the client with the keyboard
   focus, not the serial it names: that client may set a selection with any serial, not only in
   answer to its own input. Checking it needs a patch to Smithay; a test pins the gap down
   (`the_serial_of_the_client_with_the_focus_is_not_checked`).
-- Drag and drop is refused until the pointer comes (M1.5), with no answer to the client: its
-  source is not cancelled. With a pointer, Smithay's default `dnd_requested` would cancel every
-  drag; M1.5 implements it.
+- A drag's icon and every cursor are recorded, not drawn: a capture (C4) shows neither. Touch
+  has no drag: Yuna has no touch.
+- Smithay keeps a record of every seat it made and offers no way to drop one: each seat closed
+  leaves its record, without keyboard or pointer, until Yuna stops. An agent that makes and
+  closes seats without end grows it.
+- A pointer is moved onto what is under it after each arrangement, not when a surface changes
+  its input region or a popup opens under it between arrangements.
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
@@ -114,20 +120,23 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - No real MCP client has run `yuna mcp` yet: Claude Code, Codex and OpenCode are untested. Its
   tests speak both revisions as the specification reads ([survey](survey.md#agents-and-mcp));
   which revision Codex speaks is not known. The owner's check, or C5's story, pays it.
-- `windows` finds a program's window by its client's process id or its application id: a window
-  opened by another process than the one started, a wrapper's child or a program started
-  through D-Bus, is found by its application id alone. C3's sockets per seat tie windows to
-  their seat ([ADR-0035](adr/0035-agents-seats.md)).
 - A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
   and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them.
   Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
   client may kill Yuna sooner.
-- `windows` lists every window: past a few hundred, its reply passes Claude Code's 25,000 tokens
-  of tool output. A seat's own windows (C3) shorten it.
+- `windows` lists every window of its seat: past a few hundred, its reply passes Claude Code's
+  25,000 tokens of tool output.
+- A process that empties its environment and leaves its process group and its parents, a
+  double fork with `setsid` and `env -i`, escapes its seat's closing
+  ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)); Yuna's stopping ends it. A test pins
+  the gap. A cgroup per seat would close it, where systemd delegates one.
+- A seat whose agent forgets it keeps its programs until Yuna stops: there is no lease.
+- A closed seat's programs are forgotten with their logs: an agent reads a log before it
+  closes the seat.
 - 64 programs run at most, counted by their first process: one that exits leaving its children
   frees its place.
-- When Yuna stops, the processes under it are found through `/proc`, then signalled by pid: a
-  process that ends and is reaped by its own parent between the two frees a pid that another
-  process may take. The window is short; pidfds would close it.
+- When Yuna stops or a seat closes, the processes are found through `/proc`, then signalled by
+  pid: a process that ends and is reaped by its own parent between the two frees a pid that
+  another process may take. The window is short; pidfds would close it.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.

@@ -40,7 +40,8 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::dialog::v1::client::{xdg_dialog_v1, xdg_wm_dialog_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use yuna::Compositor;
+use yuna::yuna_layout::SeatId;
+use yuna::{Compositor, OWNER_SEAT};
 
 pub use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::Kind;
 pub use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
@@ -168,9 +169,18 @@ enum CallbackKind {
 }
 
 impl Client {
-    /// Connects to `compositor` through a socket pair, and binds its globals.
+    /// Connects to `compositor` through a socket pair, as a client of the owner's seat, and binds
+    /// its globals.
     pub fn connect(compositor: &mut Compositor) -> Client {
-        let stream = compositor.connect_client().expect("a client connects");
+        Client::connect_to(compositor, OWNER_SEAT)
+    }
+
+    /// Connects to `compositor` through a socket pair, as a client of `seat`, and binds its
+    /// globals.
+    pub fn connect_to(compositor: &mut Compositor, seat: SeatId) -> Client {
+        let stream = compositor
+            .connect_client_to(seat)
+            .expect("a client connects");
         let connection = Connection::from_socket(stream).expect("a connection");
         let queue = connection.new_event_queue();
         connection.display().get_registry(&queue.handle(), ());

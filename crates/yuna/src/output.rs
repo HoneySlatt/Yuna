@@ -14,13 +14,13 @@ use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{OutputConfig, OutputId, Placed};
+use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
 
 use crate::Error;
 use crate::clock::Deadline;
 use crate::compositor::OutputDescription;
 use crate::frames::Drawings;
-use crate::state::{OWNER_SEAT, State};
+use crate::state::State;
 
 /// The slowest refresh rate accepted, in Hz.
 const MIN_RATE: f64 = 1.0;
@@ -134,6 +134,8 @@ impl Default for OutputMode {
 #[derive(Debug)]
 pub(crate) struct VirtualOutput {
     pub id: OutputId,
+    /// The seat it belongs to, whose workspaces it shows.
+    pub seat: SeatId,
     /// Smithay's output: what `wl_output` and `xdg-output` tell clients.
     pub output: Output,
     /// Its `wl_output` global.
@@ -166,10 +168,13 @@ pub(crate) struct VirtualOutput {
 }
 
 impl State {
-    /// Creates a virtual output to the right of the others, on the owner's seat, and arms its
-    /// first frame. Refused, with nothing created, for a side beyond the renderer's
-    /// `GL_MAX_RENDERBUFFER_SIZE`, and past [`MAX_OUTPUTS`].
-    pub(crate) fn add_output(&mut self, mode: OutputMode) -> Result<OutputId, Error> {
+    /// Creates a virtual output of `seat` to the right of every output, and arms its first
+    /// frame. Refused, with nothing created, for a seat that does not exist, a side beyond the
+    /// renderer's `GL_MAX_RENDERBUFFER_SIZE`, and past [`MAX_OUTPUTS`].
+    pub(crate) fn add_output(&mut self, seat: SeatId, mode: OutputMode) -> Result<OutputId, Error> {
+        if self.seat(seat).is_none() {
+            return Err(Error::Refused(format!("no seat {}", seat.0)));
+        }
         if self.outputs.len() >= MAX_OUTPUTS {
             return Err(Error::Refused(format!(
                 "Yuna has {MAX_OUTPUTS} outputs already, the most it keeps"
@@ -199,11 +204,9 @@ impl State {
             physical_height: mode.height(),
             scale: mode.scale(),
         };
-        self.layout
-            .add_output(OWNER_SEAT, id, config)
-            .map_err(|e| {
-                Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
-            })?;
+        self.layout.add_output(seat, id, config).map_err(|e| {
+            Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
+        })?;
         let rect = self
             .layout
             .output_rect(id)
@@ -237,6 +240,7 @@ impl State {
         };
         self.outputs.push(VirtualOutput {
             id,
+            seat,
             output,
             global,
             mode,
@@ -267,25 +271,34 @@ impl State {
 }
 
 impl State {
-    /// Removes output `id`. Its windows go to another output, as the layout moves its workspaces
-    /// ([`Layout::remove_output`](yuna_layout::Layout::remove_output)); their surfaces leave it
-    /// now, and enter their new output at the arrangement. The feedback it holds is discarded,
-    /// its deadlines disarmed. Its global is disabled at once and destroyed
-    /// [`RETIRED_GLOBAL_LIFETIME`] later. Refused for an unknown output, and for the last one: a
-    /// compositor has at least one.
+    /// Removes output `id`. Its windows go to another output of its seat, as the layout moves its
+    /// workspaces ([`Layout::remove_output`](yuna_layout::Layout::remove_output)). Refused for an
+    /// unknown output, and for its seat's last one: a seat keeps one while it lives, so that its
+    /// windows have somewhere to show. See [`State::drop_output`].
     pub(crate) fn remove_output(&mut self, id: OutputId) -> Result<(), Error> {
         let index = self
             .output_index(id)
             .ok_or_else(|| Error::Refused(format!("no output {}", id.0)))?;
-        if self.outputs.len() == 1 {
+        let seat = self.outputs[index].seat;
+        if self.layout.outputs(seat).map_or(0, |outputs| outputs.len()) <= 1 {
             return Err(Error::Refused(format!(
-                "output {} is the last one, and a compositor keeps at least one",
+                "output {} is its seat's last one, and a seat keeps one while it lives",
                 id.0
             )));
         }
-        self.layout
-            .remove_output(id)
-            .map_err(|e| Error::Layout(e.to_string()))?;
+        self.drop_output(index);
+        Ok(())
+    }
+
+    /// Removes the output at `index`, its seat's last one included. Its windows' surfaces leave
+    /// it now, and enter their new output at the arrangement. The feedback it holds is
+    /// discarded, its deadlines disarmed. Its global is disabled at once and destroyed
+    /// [`RETIRED_GLOBAL_LIFETIME`] later.
+    pub(crate) fn drop_output(&mut self, index: usize) {
+        let id = self.outputs[index].id;
+        if let Err(error) = self.layout.remove_output(id) {
+            tracing::error!(%error, output = id.0, "the layout has no such output");
+        }
         let leaving: Vec<WlSurface> = self
             .toplevels
             .values()
@@ -309,7 +322,6 @@ impl State {
         self.retired_globals.push((Instant::now(), removed.global));
         tracing::info!(output = id.0, "virtual output removed");
         self.mark_layout_changed();
-        Ok(())
     }
 
     /// Every output, in the order they were created.
@@ -318,6 +330,7 @@ impl State {
             .iter()
             .map(|output| OutputDescription {
                 id: output.id,
+                seat: output.seat,
                 name: output.output.name(),
                 mode: output.mode,
                 rect: output.rect,

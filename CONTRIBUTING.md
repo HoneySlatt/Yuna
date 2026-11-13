@@ -72,10 +72,12 @@ It needs no screen of its own. On the owner's machine, agents run it inside `age
 one measure at a time.
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
-input and output, with the same options and `--manual-clock`
-([ADR-0033](docs/adr/0033-the-mcp-server.md)). For Claude Code, for example:
-`claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes, and ends the
-programs it started then.
+input and output, with `--gpu`, one `--output` for each seat's first output, and
+`--manual-clock` ([ADR-0033](docs/adr/0033-the-mcp-server.md)). An agent's first call is `seat
+create`; every other tool but `clock` takes the seat's handle
+([ADR-0037](docs/adr/0037-seats-tools-input-and-closing.md)). For Claude Code, for example:
+`claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes,
+and ends the programs it started then.
 
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
 to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
@@ -89,7 +91,8 @@ applications' tests (`crates/yuna/tests/applications.rs`) run the program with r
 and check that it rests; they need the shell's applications, and take about 15 s.
 Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATIONS_OUTPUT` names.
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
-in about 3 s; the MCP server's exchanges are tested in the compositor's tests (`mcp.rs` there).
+in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's
+tests (`mcp.rs` and `seats.rs` there).
 SlimeEngine's `window` example runs in an ignored test, given the path of its binary, as the
 weekly job runs it:
 

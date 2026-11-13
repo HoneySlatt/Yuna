@@ -25,7 +25,8 @@ use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional
 use yuna_layout::OutputId;
 
 use crate::popups::popup_toplevel;
-use crate::state::{OWNER_SEAT, State, tree_root};
+use crate::seats::seat_of_surface;
+use crate::state::{State, tree_root};
 
 /// What a surface is told of its output.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,13 +84,13 @@ impl State {
     }
 
     /// What a surface of the window whose surface is `window`, shown nowhere and never told
-    /// anything, learns: what `window` was last told; else, as a new window, the owner seat's
-    /// active output, where new windows open; else the first output.
+    /// anything, learns: what `window` was last told; else, as a new window, the active output of
+    /// its client's seat, where its new windows open; else the first output.
     fn preferred_never_told(&self, window: &WlSurface) -> Option<Preferred> {
         with_states(window, last_told)
             .or_else(|| {
                 self.layout
-                    .active_output(OWNER_SEAT)
+                    .active_output(seat_of_surface(window))
                     .and_then(|output| self.preferred_on(output))
             })
             .or_else(|| {

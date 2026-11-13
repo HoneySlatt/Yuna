@@ -2,7 +2,7 @@
 //! `xdg_positioner`, and what each received: configures, `repositioned`, `popup_done`, frame
 //! callbacks, presentation feedback and the scale it is told.
 
-use wayland_client::protocol::{wl_callback, wl_surface};
+use wayland_client::protocol::{wl_callback, wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1;
 use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback;
@@ -273,6 +273,12 @@ impl Client {
     /// Asks an explicit grab of the keyboard with `serial`, for the popup's next commit.
     pub fn grab_popup(&mut self, popup: usize, serial: u32) {
         let seat = self.state.seat.as_ref().expect("wl_seat");
+        self.state.popups[popup].popup.grab(seat, serial);
+    }
+
+    /// Asks an explicit grab with `serial` on `seat`, any `wl_seat` of the connection, for the
+    /// popup's next commit.
+    pub fn grab_popup_on(&mut self, popup: usize, seat: &wl_seat::WlSeat, serial: u32) {
         self.state.popups[popup].popup.grab(seat, serial);
     }
 

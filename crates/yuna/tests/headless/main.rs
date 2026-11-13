@@ -11,12 +11,14 @@ mod activation;
 mod client;
 mod dialogs;
 mod dmabuf;
+mod input_client;
 mod mcp;
 mod misbehaving;
 mod outputs;
 mod popups;
 mod random_requests;
 mod scale;
+mod seats;
 mod selection;
 mod selection_client;
 mod window_cap;
@@ -979,16 +981,27 @@ fn a_compositor_starts_while_another_thread_drops_the_last_one() {
     );
 }
 
-/// A compositor without an output is refused.
+/// A compositor may start without an output, as `yuna mcp` does, whose outputs are its seats':
+/// it then has nothing to draw, and rests. A window of the owner's seat opens on no output,
+/// hidden.
 #[test]
-fn a_compositor_without_an_output_is_refused() {
-    let started = Compositor::new(Config {
+fn a_compositor_without_an_output_starts_and_rests() {
+    let mut compositor = Compositor::new(Config {
         outputs: Vec::new(),
         clock: ClockMode::Manual,
         listen: false,
         ..Config::default()
-    });
-    assert!(matches!(started, Err(Error::Refused(_))));
+    })
+    .expect("the compositor starts");
+    assert_eq!(compositor.outputs(), Vec::new());
+    assert_eq!(compositor.next_deadline(), None);
+    let mut client = Client::connect(&mut compositor);
+    open_and_commit(&mut compositor, &mut client, RED);
+    run_armed_deadlines(&mut compositor);
+    let windows = compositor.windows();
+    assert_eq!(windows.len(), 1, "{windows:?}");
+    assert_eq!((windows[0].output, windows[0].rect), (None, None));
+    assert_eq!(compositor.counters().frames_drawn, 0);
 }
 
 /// A window the layout refuses to open is not shown, but its client gets its frame callbacks at

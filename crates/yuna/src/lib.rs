@@ -12,7 +12,8 @@
 //!
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
 //! boundaries (`output.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
-//! surfaces, the seat and the other protocol handlers (`state.rs`); `xdg-shell` and
+//! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`) and their
+//! pointer and keyboard input (`input.rs`); `xdg-shell` and
 //! `xdg-decoration` in front of the layout (`shell.rs`), with popups (`popups.rs`),
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); clients' dmabufs
@@ -25,11 +26,13 @@ mod compositor;
 mod dialog;
 mod dmabuf;
 mod frames;
+mod input;
 pub mod mcp;
 mod output;
 mod popups;
 mod render;
 mod scale;
+mod seats;
 mod selection;
 mod shell;
 mod state;
@@ -40,9 +43,14 @@ pub use activation::TOKEN_LIFETIME;
 pub use clock::{Clock, ClockMode};
 pub use compositor::{Compositor, Config, Counters, OutputDescription, WindowDescription};
 pub use frames::HIDDEN_FRAME_INTERVAL;
+pub use input::{
+    BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_SCROLL_STEPS,
+    MAX_TYPED, PointerDescription,
+};
 pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use render::Device;
+pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use yuna_layout;

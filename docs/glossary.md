@@ -62,9 +62,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
-- **Popup grab**: a popup's request for the keyboard until it is dismissed, as an open menu
-  holds it; granted only with a serial Yuna's seat sent, and only to a popup not dismissed. While
-  it holds, the keyboard stays within its window.
+- **Popup grab**: a popup's request for its seat's keyboard and pointer until it is dismissed, as
+  an open menu holds them; granted only with a serial its client's own seat sent to its window,
+  and only to a popup not dismissed. While it holds, the keyboard stays within its window, and a
+  click outside the client's surfaces dismisses it.
 - **Lead**: how long before a refresh boundary an output starts drawing its frame: its longest
   drawing of the last half second, at least 2 ms, plus 1 ms, at most one period
   ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). An output is **idle** when the
@@ -79,7 +80,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
-  one, apart from the owner's.
+  one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
+  seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is
+  the number `seat create` gives, which every tool but `clock` takes.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a

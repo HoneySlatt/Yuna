@@ -40,13 +40,14 @@ use smithay::wayland::compositor::{
     SurfaceAttributes, SurfaceData, TraversalAction, with_surface_tree_downward,
 };
 use smithay::wayland::presentation::{PresentationFeedbackCachedState, Refresh};
-use yuna_layout::{OutputId, Placed, WindowId};
+use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 
 use crate::clock::Deadline;
 use crate::output::VirtualOutput;
 use crate::popups::window_surface_trees;
 use crate::render;
-use crate::state::{OWNER_SEAT, State};
+use crate::seats::seat_of_surface;
+use crate::state::State;
 
 /// The shortest time between two frame callbacks of a hidden window.
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
@@ -426,26 +427,34 @@ impl State {
         }
     }
 
-    /// At a refresh boundary, gives the keyboard to the window the owner's seat focuses, or to the
-    /// topmost popup of a grab on it. Only here does the keyboard change window: between
-    /// boundaries, `popups.rs` moves it within the window it is on.
+    /// At a refresh boundary, gives each seat's keyboard to the window the seat focuses, or to
+    /// the topmost popup of a grab on it; and puts each seat's pointer on what is under it now
+    /// that windows moved. Only here does a keyboard change window: between boundaries,
+    /// `popups.rs` moves it within the window it is on, and a click moves the seat's focus.
     fn focus_keyboard(&mut self) {
-        let window = self
-            .layout
-            .focused(OWNER_SEAT)
-            .and_then(|window| self.root_of(window));
-        self.give_keyboard_to(window);
+        for seat in self.seat_ids() {
+            let window = self
+                .layout
+                .focused(seat)
+                .and_then(|window| self.root_of(window));
+            self.give_keyboard_to(seat, window);
+            self.refresh_pointer_focus(seat);
+        }
     }
 
-    /// Gives the keyboard to the toplevel surface `window`, or to the topmost popup of a grab on
-    /// it, and the selections with it: the selections first, for `wl_data_device` asks that a
-    /// client be told the selection just before its keyboard `enter`. Every change of the
-    /// keyboard focus goes through here.
-    pub(crate) fn give_keyboard_to(&mut self, window: Option<WlSurface>) {
-        let focus = self.keyboard_focus(window);
-        if self.keyboard.current_focus() != focus {
-            self.give_selections_to(focus.as_ref());
-            let keyboard = self.keyboard.clone();
+    /// Gives `seat`'s keyboard to the toplevel surface `window`, or to the topmost popup of a
+    /// grab on it, and the seat's selections with it: the selections first, for
+    /// `wl_data_device` asks that a client be told the selection just before its keyboard
+    /// `enter`. A window of another seat's client is never given it. Every change of a keyboard
+    /// focus goes through here.
+    pub(crate) fn give_keyboard_to(&mut self, seat: SeatId, window: Option<WlSurface>) {
+        let window = window.filter(|window| seat_of_surface(window) == seat);
+        let focus = self.keyboard_focus(seat, window);
+        let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
+            return;
+        };
+        if keyboard.current_focus() != focus {
+            self.give_selections_to(seat, focus.as_ref());
             keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
         }
     }

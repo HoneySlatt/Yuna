@@ -10,6 +10,14 @@
 //! window is placed only once the clock moves to its output's refresh.
 //! `notifications/cancelled` drops a waiting call unanswered.
 //!
+//! Everything an agent does is on a seat of its own, which `seat create` makes
+//! ([ADR-0035](../../../../docs/adr/0035-agents-seats.md),
+//! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): every tool but
+//! `clock` names it, and an id of another seat's output, window or program is unknown there.
+//! `seat close` releases what the seat holds, removes its socket, ends its clients, its outputs
+//! and its place in the layout at once, then ends its processes: SIGTERM, then SIGKILL
+//! [`END_GRACE`] later; it is answered once they are gone, [`KILL_WAIT`] after SIGKILL at most.
+//!
 //! Bounds: a line over [`stdio::MAX_LINE`] ends the connection; while more than
 //! [`MAX_QUEUED_OUTPUT`] of replies wait, because the client does not read them, no further
 //! request is answered and its input is not read; at most [`tools::MAX_WAITING_CALLS`] calls wait
@@ -35,19 +43,24 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
 use smithay::reexports::rustix;
 use smithay::reexports::rustix::fs::OFlags;
-use smithay::reexports::rustix::process::Signal;
-use yuna_layout::OutputId;
+use smithay::reexports::rustix::process::{Pid, Signal};
+use yuna_layout::{OutputId, SeatId, WindowId};
 
 use crate::compositor::Compositor;
 use crate::output::OutputMode;
+use crate::state::OWNER_SEAT;
 use crate::{ClockMode, Error};
 use programs::{Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
-use tools::{ClockCall, OutputsCall, SpawnCall, ToolResult, WindowsCall};
+use tools::{
+    ButtonCall, ClockCall, KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall, ToolResult,
+    WindowsCall, WorkspacesCall,
+};
 
 pub use programs::{
     END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
+    SEAT_VARIABLE,
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
@@ -73,6 +86,8 @@ struct Events {
     stop: bool,
     /// The waiting calls whose time is up, by key.
     timed_out: Vec<u64>,
+    /// The seat closings whose stage is up, by key.
+    closings_due: Vec<u64>,
 }
 
 /// A `windows` call waiting for a window.
@@ -82,6 +97,22 @@ struct WindowWait {
     id: Value,
     revision: Revision,
     call: WindowsCall,
+    timer: RegistrationToken,
+}
+
+/// A `seat close` waiting for the seat's processes to end.
+#[derive(Debug)]
+struct SeatClosing {
+    key: u64,
+    /// The request, unless cancelled: then the seat still closes, unanswered.
+    reply: Option<(Value, Revision)>,
+    seat: SeatId,
+    /// Its clients' process ids, which find its processes.
+    client_pids: Vec<i32>,
+    /// The processes signalled, in the order they were found.
+    signalled: Vec<Pid>,
+    /// Whether SIGKILL was sent: the last stage.
+    killed: bool,
     timer: RegistrationToken,
 }
 
@@ -105,7 +136,11 @@ pub struct Server {
     queue: OutputQueue,
     events: Rc<RefCell<Events>>,
     waits: Vec<WindowWait>,
+    /// The keys of waiting calls and of closings, never reused.
     next_wait: u64,
+    closings: Vec<SeatClosing>,
+    /// The mode of a new seat's output, unless `seat create` says.
+    seat_output: OutputMode,
     /// The programs, when the server may start some, with SIGCHLD's pipe.
     programs: Option<(Programs, OwnedFd)>,
     /// Whether the timer that ends the programs' throttle is armed.
@@ -135,9 +170,10 @@ fn is_not_pollable(error: &smithay::reexports::calloop::Error) -> bool {
 impl Server {
     /// A server for `compositor`, reading the client's requests from `input` and writing replies
     /// to `output`, which it makes non-blocking until it stops. With `children`, the read end of
-    /// a pipe that SIGCHLD writes to, in a process that is its children's subreaper, `spawn`
-    /// starts programs; their folder is made in `XDG_RUNTIME_DIR`, which the compositor's socket
-    /// must be in. Without, `spawn` is refused.
+    /// a pipe that SIGCHLD writes to, in a process that is its children's subreaper, each seat
+    /// gets a Wayland socket and `spawn` starts programs; their folder is made in
+    /// `XDG_RUNTIME_DIR`. Without, a seat's clients connect only through
+    /// [`Compositor::connect_client_to`], and `spawn` is refused.
     pub fn new(
         compositor: Compositor,
         input: OwnedFd,
@@ -192,16 +228,18 @@ impl Server {
                     events.children_ended = true
                 })?
                 .ok_or_else(|| Error::EventLoop("SIGCHLD's pipe cannot be watched".to_owned()))?;
-                let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
-                let (Some(runtime_dir), Some(socket)) = (runtime_dir, compositor.socket_name())
-                else {
-                    return Err(Error::Socket(
-                        "programs need Yuna's socket in XDG_RUNTIME_DIR".to_owned(),
-                    ));
-                };
-                let socket = runtime_dir.join(socket);
-                let programs = Programs::new(&runtime_dir, socket)
-                    .map_err(|e| failed("programs' folder", &e))?;
+                let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+                    .map(PathBuf::from)
+                    .filter(|folder| folder.is_absolute())
+                    .ok_or_else(|| {
+                        Error::Socket(
+                            "XDG_RUNTIME_DIR is not set, or not an absolute path; the seats' \
+                             sockets and the programs' logs go there"
+                                .to_owned(),
+                        )
+                    })?;
+                let programs =
+                    Programs::new(&runtime_dir).map_err(|e| failed("programs' folder", &e))?;
                 Some((programs, children))
             }
         };
@@ -225,10 +263,17 @@ impl Server {
             events,
             waits: Vec::new(),
             next_wait: 1,
+            closings: Vec::new(),
+            seat_output: OutputMode::default(),
             programs,
             throttle_armed: false,
             stopping: None,
         })
+    }
+
+    /// Sets the mode of a new seat's output when `seat create` gives none: `yuna mcp --output`.
+    pub fn set_seat_output(&mut self, mode: OutputMode) {
+        self.seat_output = mode;
     }
 
     /// The compositor it serves.
@@ -269,6 +314,10 @@ impl Server {
             programs::drain(children.as_fd());
             programs.reap();
         }
+        for key in events.closings_due {
+            self.closing_stage_up(key);
+        }
+        self.answer_closings_done();
         self.throttle_programs(events.throttle_ended);
         if events.input_readable && self.stopping.is_none() && self.lines.is_empty() {
             self.read_input();
@@ -478,7 +527,15 @@ impl Server {
             Call::ListTools => protocol::tools_list_result(revision, tools::definitions()),
             Call::Tool { name, arguments } => {
                 let result = match name.as_str() {
+                    "seat" => match self.seat(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It waits for the seat's processes, and is answered later.
+                        None => return,
+                    },
                     "outputs" => self.outputs(arguments),
+                    "workspaces" => self.workspaces(arguments),
+                    "pointer" => self.pointer(arguments),
+                    "keyboard" => self.keyboard(arguments),
                     "spawn" => self.spawn(arguments),
                     "windows" => match self.windows(&id, revision, arguments) {
                         Some(result) => result,
@@ -502,56 +559,561 @@ impl Server {
         self.queue.push(&protocol::response(id, result));
     }
 
+    /// The agent seat `seat`, while it exists; a failure that says so otherwise.
+    fn agent_seat(&self, seat: u64) -> Result<SeatId, ToolResult> {
+        let id = SeatId(seat);
+        if id != OWNER_SEAT && self.compositor.seats().contains(&id) {
+            Ok(id)
+        } else {
+            Err(ToolResult::failed(format!(
+                "no seat {seat}: create one with `seat create`"
+            )))
+        }
+    }
+
+    /// An output mode from a call's values, each defaulting to the seats' default output's.
+    fn mode_of(
+        &self,
+        width: Option<u32>,
+        height: Option<u32>,
+        rate: Option<f64>,
+        scale: Option<f64>,
+    ) -> Result<OutputMode, ToolResult> {
+        let default = self.seat_output;
+        OutputMode::new(
+            width.unwrap_or(default.width()),
+            height.unwrap_or(default.height()),
+            rate.unwrap_or(f64::from(default.refresh_millihertz()) / 1_000.0),
+            scale.unwrap_or(default.scale()),
+        )
+        .map_err(|reason| ToolResult::failed(reason.to_string()))
+    }
+
+    /// The output `output` of `seat`, described; none for an unknown one or another seat's.
+    fn output_of(&self, seat: SeatId, output: OutputId) -> Option<Value> {
+        self.compositor
+            .output_descriptions()
+            .iter()
+            .find(|description| description.id == output && description.seat == seat)
+            .map(tools::output_json)
+    }
+
+    /// `seat`: the result now, or none when a closing waits for the seat's processes.
+    fn seat(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        Some(match call {
+            SeatCall::Create {
+                width,
+                height,
+                rate,
+                scale,
+            } => match self.mode_of(width, height, rate, scale) {
+                Ok(mode) => self.create_seat(mode),
+                Err(failed) => failed,
+            },
+            SeatCall::List {} => {
+                let seats: Vec<Value> = self
+                    .compositor
+                    .seats()
+                    .into_iter()
+                    .filter(|&seat| seat != OWNER_SEAT)
+                    .map(|seat| self.seat_json(seat))
+                    .collect();
+                ToolResult::done(json!({ "seats": seats }))
+            }
+            SeatCall::Close { seat } => match self.agent_seat(seat) {
+                Ok(seat) => return self.close_seat(id, revision, seat),
+                Err(failed) => failed,
+            },
+        })
+    }
+
+    /// Creates a seat, its output and, with programs, its socket; nothing is left of it when a
+    /// step fails.
+    fn create_seat(&mut self, mode: OutputMode) -> ToolResult {
+        let has_agent_seat = self
+            .compositor
+            .seats()
+            .iter()
+            .any(|&seat| seat != OWNER_SEAT);
+        if self.compositor.clock_mode() == ClockMode::Manual && has_agent_seat {
+            return ToolResult::failed(
+                "a Yuna on a manual clock holds one seat, whose agent steps its clock: close \
+                 it, or start another `yuna mcp`",
+            );
+        }
+        let seat = match self.compositor.add_seat() {
+            Ok(seat) => seat,
+            Err(error) => return ToolResult::failed(error.to_string()),
+        };
+        let made = self
+            .compositor
+            .add_output(seat, mode)
+            .and_then(|_| match &self.programs {
+                Some((programs, _)) => {
+                    let path = programs.socket_path(seat);
+                    self.compositor.listen_for_seat(seat, path.clone())?;
+                    Ok(Some(path))
+                }
+                None => Ok(None),
+            });
+        match made {
+            Ok(_) => ToolResult::done(self.seat_json(seat)),
+            Err(error) => {
+                if let Err(undo) = self.compositor.remove_seat(seat) {
+                    tracing::error!(%undo, seat = seat.0, "a seat half made is left");
+                }
+                ToolResult::failed(error.to_string())
+            }
+        }
+    }
+
+    /// A seat, as the tools give it: its handle, its outputs, its socket, its windows' and
+    /// running programs' counts.
+    fn seat_json(&self, seat: SeatId) -> Value {
+        let outputs: Vec<Value> = self
+            .compositor
+            .output_descriptions()
+            .iter()
+            .filter(|output| output.seat == seat)
+            .map(tools::output_json)
+            .collect();
+        let windows = self
+            .compositor
+            .windows()
+            .iter()
+            .filter(|window| window.seat == seat)
+            .count();
+        let (socket, running) = match &self.programs {
+            Some((programs, _)) => (
+                Some(programs.socket_path(seat)),
+                programs
+                    .list(seat)
+                    .iter()
+                    .filter(|program| program.end.is_none())
+                    .count(),
+            ),
+            None => (None, 0),
+        };
+        json!({
+            "seat": seat.0,
+            "outputs": outputs,
+            "socket": socket,
+            "windows": windows,
+            "programs_running": running,
+        })
+    }
+
+    /// Closes `seat`: what the compositor holds of it at once, then its processes, SIGTERM
+    /// first. Answered now when none is left, else once they end (`answer_closings_done`).
+    fn close_seat(&mut self, id: &Value, revision: Revision, seat: SeatId) -> Option<ToolResult> {
+        let client_pids = match self.compositor.remove_seat(seat) {
+            Ok(pids) => pids,
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
+        };
+        let processes = match &self.programs {
+            Some((programs, _)) => programs.seat_processes(seat, &client_pids),
+            None => Vec::new(),
+        };
+        if processes.is_empty() {
+            return Some(self.seat_closed(seat, &[], &[]));
+        }
+        for &pid in &processes {
+            let _ = rustix::process::kill_process(pid, Signal::TERM);
+        }
+        tracing::info!(
+            seat = seat.0,
+            processes = processes.len(),
+            "ending a seat's processes"
+        );
+        let key = self.next_wait;
+        let timer = match self.arm_closing_stage(key, END_GRACE) {
+            Ok(timer) => timer,
+            Err(error) => {
+                // Without a timer, nothing would send SIGKILL: send it now.
+                for &pid in &processes {
+                    let _ = rustix::process::kill_process(pid, Signal::KILL);
+                }
+                tracing::warn!(%error, "a seat's processes are killed at once");
+                return Some(self.seat_closed(seat, &processes, &[]));
+            }
+        };
+        self.next_wait += 1;
+        self.closings.push(SeatClosing {
+            key,
+            reply: Some((id.clone(), revision)),
+            seat,
+            client_pids,
+            signalled: processes,
+            killed: false,
+            timer,
+        });
+        None
+    }
+
+    /// Arms the timer that ends a closing's stage `after` from now.
+    fn arm_closing_stage(
+        &self,
+        key: u64,
+        after: Duration,
+    ) -> Result<RegistrationToken, smithay::reexports::calloop::Error> {
+        let events = self.events.clone();
+        self.compositor
+            .loop_handle()
+            .insert_source(Timer::from_duration(after), move |_, _, state| {
+                state.woke = true;
+                events.borrow_mut().closings_due.push(key);
+                TimeoutAction::Drop
+            })
+            .map_err(|e| e.error)
+    }
+
+    /// A closing's stage is up: after SIGTERM, SIGKILL goes to every process of the seat still
+    /// there, those it started meanwhile included; after SIGKILL, the closing is answered with
+    /// what is left.
+    fn closing_stage_up(&mut self, key: u64) {
+        let Some(index) = self.closings.iter().position(|closing| closing.key == key) else {
+            return;
+        };
+        if self.closings[index].killed {
+            let closing = self.closings.remove(index);
+            let left: Vec<Pid> = closing
+                .signalled
+                .iter()
+                .copied()
+                .filter(|&pid| programs::is_alive(pid))
+                .collect();
+            self.answer_closing(closing, &left);
+            return;
+        }
+        let closing = &self.closings[index];
+        let mut targets: Vec<Pid> = closing
+            .signalled
+            .iter()
+            .copied()
+            .filter(|&pid| programs::is_alive(pid))
+            .collect();
+        if let Some((programs, _)) = &self.programs {
+            for pid in programs.seat_processes(closing.seat, &closing.client_pids) {
+                if !targets.contains(&pid) {
+                    targets.push(pid);
+                }
+            }
+        }
+        for &pid in &targets {
+            let _ = rustix::process::kill_process(pid, Signal::KILL);
+        }
+        let timer = self.arm_closing_stage(key, KILL_WAIT);
+        let closing = &mut self.closings[index];
+        for pid in targets {
+            if !closing.signalled.contains(&pid) {
+                closing.signalled.push(pid);
+            }
+        }
+        closing.killed = true;
+        match timer {
+            Ok(timer) => closing.timer = timer,
+            Err(_) => {
+                let closing = self.closings.remove(index);
+                self.answer_closing(closing, &[]);
+            }
+        }
+    }
+
+    /// Answers each closing whose processes have all ended.
+    fn answer_closings_done(&mut self) {
+        let mut index = 0;
+        while index < self.closings.len() {
+            if self.closings[index]
+                .signalled
+                .iter()
+                .any(|&pid| programs::is_alive(pid))
+            {
+                index += 1;
+                continue;
+            }
+            let closing = self.closings.remove(index);
+            self.compositor.loop_handle().remove(closing.timer);
+            self.answer_closing(closing, &[]);
+        }
+    }
+
+    fn answer_closing(&mut self, closing: SeatClosing, left: &[Pid]) {
+        let result = self.seat_closed(closing.seat, &closing.signalled, left);
+        if let Some((id, revision)) = closing.reply {
+            self.queue
+                .push(&protocol::response(id, result.into_result(revision)));
+        }
+    }
+
+    /// A closed seat's result; its programs are forgotten, their logs deleted.
+    fn seat_closed(&mut self, seat: SeatId, ended: &[Pid], left: &[Pid]) -> ToolResult {
+        if let Some((programs, _)) = &mut self.programs {
+            programs.forget_seat(seat);
+        }
+        let raw = |pid: &Pid| pid.as_raw_nonzero().get();
+        let ended: Vec<i32> = ended
+            .iter()
+            .filter(|pid| !left.contains(pid))
+            .map(raw)
+            .collect();
+        let left: Vec<i32> = left.iter().map(raw).collect();
+        tracing::info!(seat = seat.0, left = left.len(), "seat closed");
+        ToolResult::done(json!({
+            "closed": seat.0,
+            "ended": ended,
+            "left_running": left,
+        }))
+    }
+
     fn outputs(&mut self, arguments: Map<String, Value>) -> ToolResult {
         let call = match tools::arguments(arguments) {
             Ok(call) => call,
             Err(reason) => return ToolResult::failed(reason),
         };
         match call {
-            OutputsCall::List {} => {
+            OutputsCall::List { seat } => {
+                let seat = match self.agent_seat(seat) {
+                    Ok(seat) => seat,
+                    Err(failed) => return failed,
+                };
                 let outputs: Vec<Value> = self
                     .compositor
                     .output_descriptions()
                     .iter()
+                    .filter(|output| output.seat == seat)
                     .map(tools::output_json)
                     .collect();
                 ToolResult::done(json!({ "outputs": outputs }))
             }
             OutputsCall::Create {
+                seat,
                 width,
                 height,
                 rate,
                 scale,
             } => {
-                let default = OutputMode::default();
-                let mode = match OutputMode::new(
-                    width.unwrap_or(default.width()),
-                    height.unwrap_or(default.height()),
-                    rate.unwrap_or(f64::from(default.refresh_millihertz()) / 1_000.0),
-                    scale.unwrap_or(default.scale()),
-                ) {
-                    Ok(mode) => mode,
-                    Err(reason) => return ToolResult::failed(reason.to_string()),
+                let seat = match self.agent_seat(seat) {
+                    Ok(seat) => seat,
+                    Err(failed) => return failed,
                 };
-                match self.compositor.add_output(mode) {
-                    Ok(id) => {
-                        let output = self
-                            .compositor
-                            .output_descriptions()
-                            .into_iter()
-                            .find(|output| output.id == id)
-                            .map(|output| tools::output_json(&output));
-                        ToolResult::done(json!({ "output": output }))
-                    }
+                let mode = match self.mode_of(width, height, rate, scale) {
+                    Ok(mode) => mode,
+                    Err(failed) => return failed,
+                };
+                match self.compositor.add_output(seat, mode) {
+                    Ok(id) => ToolResult::done(json!({ "output": self.output_of(seat, id) })),
                     Err(error) => ToolResult::failed(error.to_string()),
                 }
             }
-            OutputsCall::Remove { output } => {
+            OutputsCall::Remove { seat, output } => {
+                let seat = match self.agent_seat(seat) {
+                    Ok(seat) => seat,
+                    Err(failed) => return failed,
+                };
+                if self.output_of(seat, OutputId(output)).is_none() {
+                    return ToolResult::failed(format!("no output {output} on seat {}", seat.0));
+                }
                 match self.compositor.remove_output(OutputId(output)) {
                     Ok(()) => ToolResult::done(json!({ "removed": output })),
                     Err(error) => ToolResult::failed(error.to_string()),
                 }
             }
+        }
+    }
+
+    fn workspaces(&mut self, arguments: Map<String, Value>) -> ToolResult {
+        let call: WorkspacesCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return ToolResult::failed(reason),
+        };
+        let seat = match &call {
+            WorkspacesCall::List { seat }
+            | WorkspacesCall::Create { seat, .. }
+            | WorkspacesCall::Remove { seat, .. }
+            | WorkspacesCall::Focus { seat, .. }
+            | WorkspacesCall::MoveWindow { seat, .. } => *seat,
+        };
+        let seat = match self.agent_seat(seat) {
+            Ok(seat) => seat,
+            Err(failed) => return failed,
+        };
+        let changed = match call {
+            WorkspacesCall::List { .. } => Ok(()),
+            WorkspacesCall::Create { name, output, .. } => {
+                let output = output.map(OutputId);
+                if let Some(output) = output
+                    && self.output_of(seat, output).is_none()
+                {
+                    return ToolResult::failed(format!(
+                        "no output {} on seat {}",
+                        output.0, seat.0
+                    ));
+                }
+                self.compositor
+                    .change_layout(|layout| layout.add_workspace(seat, &name, output))
+            }
+            WorkspacesCall::Remove { name, .. } => self
+                .compositor
+                .change_layout(|layout| layout.remove_workspace(seat, &name)),
+            WorkspacesCall::Focus { name, .. } => self
+                .compositor
+                .change_layout(|layout| layout.focus_workspace(seat, &name)),
+            WorkspacesCall::MoveWindow {
+                window, workspace, ..
+            } => {
+                let window = WindowId(window);
+                let ours = self
+                    .compositor
+                    .windows()
+                    .iter()
+                    .any(|description| description.id == window && description.seat == seat);
+                if !ours {
+                    return ToolResult::failed(format!(
+                        "no window {} on seat {}",
+                        window.0, seat.0
+                    ));
+                }
+                self.compositor.change_layout(|layout| {
+                    layout.focus_window(window)?;
+                    layout.move_to_workspace(seat, &workspace)
+                })
+            }
+        };
+        if let Err(error) = changed {
+            return ToolResult::failed(error.to_string());
+        }
+        let outputs: Vec<Value> = self
+            .compositor
+            .output_descriptions()
+            .iter()
+            .filter(|output| output.seat == seat)
+            .map(|output| {
+                let workspaces: Vec<Value> = self
+                    .compositor
+                    .layout()
+                    .workspaces(output.id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(tools::workspace_json)
+                    .collect();
+                json!({ "output": output.id.0, "workspaces": workspaces })
+            })
+            .collect();
+        ToolResult::done(json!({ "outputs": outputs }))
+    }
+
+    fn pointer(&mut self, arguments: Map<String, Value>) -> ToolResult {
+        let call: PointerCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return ToolResult::failed(reason),
+        };
+        let seat = match &call {
+            PointerCall::Get { seat }
+            | PointerCall::Move { seat, .. }
+            | PointerCall::Scroll { seat, .. } => *seat,
+            PointerCall::Press(button)
+            | PointerCall::Release(button)
+            | PointerCall::Click(button) => button.seat,
+        };
+        let seat = match self.agent_seat(seat) {
+            Ok(seat) => seat,
+            Err(failed) => return failed,
+        };
+        let result = match call {
+            PointerCall::Get { .. } => Ok(self.compositor.pointer(seat)),
+            PointerCall::Move { x, y, output, .. } => {
+                self.compositor
+                    .pointer_move(seat, output.map(OutputId), x, y)
+            }
+            PointerCall::Press(button) => self.move_first(seat, &button).and_then(|()| {
+                self.compositor
+                    .pointer_button(seat, button.button.code(), true)
+            }),
+            PointerCall::Release(button) => self.move_first(seat, &button).and_then(|()| {
+                self.compositor
+                    .pointer_button(seat, button.button.code(), false)
+            }),
+            PointerCall::Click(button) => self.move_first(seat, &button).and_then(|()| {
+                let code = button.button.code();
+                self.compositor.pointer_button(seat, code, true)?;
+                self.compositor.pointer_button(seat, code, false)
+            }),
+            PointerCall::Scroll {
+                dx,
+                dy,
+                x,
+                y,
+                output,
+                ..
+            } => self
+                .move_to(seat, x, y, output)
+                .and_then(|()| self.compositor.pointer_scroll(seat, dx, dy)),
+        };
+        match result {
+            Ok(pointer) => ToolResult::done(json!({ "pointer": tools::pointer_json(&pointer) })),
+            Err(error) => ToolResult::failed(error.to_string()),
+        }
+    }
+
+    /// Moves `seat`'s pointer where a button call says, when it says.
+    fn move_first(&mut self, seat: SeatId, button: &ButtonCall) -> Result<(), Error> {
+        self.move_to(seat, button.x, button.y, button.output)
+    }
+
+    /// Moves `seat`'s pointer to (`x`, `y`) on `output` when both are given; refused for one
+    /// without the other.
+    fn move_to(
+        &mut self,
+        seat: SeatId,
+        x: Option<f64>,
+        y: Option<f64>,
+        output: Option<u64>,
+    ) -> Result<(), Error> {
+        match (x, y) {
+            (Some(x), Some(y)) => self
+                .compositor
+                .pointer_move(seat, output.map(OutputId), x, y)
+                .map(|_| ()),
+            (None, None) if output.is_none() => Ok(()),
+            _ => Err(Error::Refused("give x and y together".to_owned())),
+        }
+    }
+
+    fn keyboard(&mut self, arguments: Map<String, Value>) -> ToolResult {
+        let call: KeyboardCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return ToolResult::failed(reason),
+        };
+        let seat = match &call {
+            KeyboardCall::Press { seat, .. }
+            | KeyboardCall::Release { seat, .. }
+            | KeyboardCall::Tap { seat, .. }
+            | KeyboardCall::Type { seat, .. } => *seat,
+        };
+        let seat = match self.agent_seat(seat) {
+            Ok(seat) => seat,
+            Err(failed) => return failed,
+        };
+        let result = match call {
+            KeyboardCall::Press { key, .. } => self.compositor.key(seat, &key, true),
+            KeyboardCall::Release { key, .. } => self.compositor.key(seat, &key, false),
+            KeyboardCall::Tap { keys, .. } => self.compositor.tap_keys(seat, &keys),
+            KeyboardCall::Type { text, .. } => self.compositor.type_text(seat, &text),
+        };
+        match result {
+            Ok(()) => ToolResult::done(json!({
+                "keyboard_window": self.compositor.keyboard_window(seat).map(|window| window.0),
+            })),
+            Err(error) => ToolResult::failed(error.to_string()),
         }
     }
 
@@ -563,26 +1125,45 @@ impl Server {
         let Some((programs, _)) = &mut self.programs else {
             return ToolResult::failed("this Yuna starts no program: run `yuna mcp`");
         };
+        let seat = match &call {
+            SpawnCall::Start { seat, .. }
+            | SpawnCall::List { seat }
+            | SpawnCall::Stop { seat, .. } => *seat,
+        };
+        let seat = SeatId(seat);
+        if seat == OWNER_SEAT || !self.compositor.seats().contains(&seat) {
+            return ToolResult::failed(format!(
+                "no seat {}: create one with `seat create`",
+                seat.0
+            ));
+        }
         match call {
-            SpawnCall::Start { command, env, cwd } => {
+            SpawnCall::Start {
+                command, env, cwd, ..
+            } => {
                 let handle = self.compositor.loop_handle();
                 let start = Start {
                     command,
                     env,
                     cwd: cwd.map(PathBuf::from),
                 };
-                match programs.start(&handle, start) {
+                let socket = programs.socket_path(seat);
+                match programs.start(&handle, seat, &socket, start) {
                     Ok(program) => ToolResult::done(json!({
                         "program": tools::program_json(program)
                     })),
                     Err(reason) => ToolResult::failed(reason),
                 }
             }
-            SpawnCall::List {} => {
-                let list: Vec<Value> = programs.list().iter().map(tools::program_json).collect();
+            SpawnCall::List { .. } => {
+                let list: Vec<Value> = programs
+                    .list(seat)
+                    .into_iter()
+                    .map(tools::program_json)
+                    .collect();
                 ToolResult::done(json!({ "programs": list }))
             }
-            SpawnCall::Stop { program, force } => match programs.stop(program, force) {
+            SpawnCall::Stop { program, force, .. } => match programs.stop(seat, program, force) {
                 Ok(()) => ToolResult::done(json!({
                     "stopped": program,
                     "signal": if force { "SIGKILL" } else { "SIGTERM" },
@@ -603,6 +1184,9 @@ impl Server {
             Ok(call) => call,
             Err(reason) => return Some(ToolResult::failed(reason)),
         };
+        if let Err(failed) = self.agent_seat(call.seat) {
+            return Some(failed);
+        }
         let wait = Duration::from_millis(call.wait_ms);
         if wait > MAX_WAIT {
             return Some(ToolResult::failed(format!(
@@ -694,8 +1278,18 @@ impl Server {
         ));
     }
 
-    /// Drops the waiting calls of request `id`, unanswered, as MCP asks.
+    /// Drops the waiting calls of request `id`, unanswered, as MCP asks. A seat closing goes on,
+    /// unanswered.
     fn cancel(&mut self, id: &Value) {
+        for closing in &mut self.closings {
+            if closing
+                .reply
+                .as_ref()
+                .is_some_and(|(request, _)| request == id)
+            {
+                closing.reply = None;
+            }
+        }
         let handle = self.compositor.loop_handle();
         self.waits.retain(|wait| {
             let cancelled = &wait.id == id;

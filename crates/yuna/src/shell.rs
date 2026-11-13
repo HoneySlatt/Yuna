@@ -38,7 +38,8 @@ use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 
 use crate::activation::TokenOrigin;
 use crate::compositor::WindowDescription;
-use crate::state::{ClientState, OWNER_SEAT, State};
+use crate::seats::seat_of_surface;
+use crate::state::{ClientState, State};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
 const SUSPENDED_SINCE: u32 = 6;
@@ -257,7 +258,7 @@ impl State {
         let options = self.open_options(root);
         let size = self
             .layout
-            .size_on_open(OWNER_SEAT, &options)
+            .size_on_open(seat_of_surface(root), &options)
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "no size foretold for a new window; letting it choose");
                 Size::default()
@@ -287,7 +288,11 @@ impl State {
         options.committed = committed_size(geometry);
         let limits = (options.min_size, options.max_size);
         let window = WindowId(self.next_window_id);
-        if let Err(error) = self.layout.open_window(OWNER_SEAT, window, options) {
+        // On its client's seat: the one whose socket it came through (ADR-0035).
+        if let Err(error) = self
+            .layout
+            .open_window(seat_of_surface(root), window, options)
+        {
             // Its client may commit many times; the first refusal says it.
             if let Some(toplevel) = self.toplevels.get_mut(&root.id())
                 && !std::mem::replace(&mut toplevel.refused, true)
@@ -475,7 +480,6 @@ impl State {
 
     /// Every window the layout holds, in the order they opened.
     pub(crate) fn describe_windows(&self) -> Vec<WindowDescription> {
-        let focused = self.layout.focused(OWNER_SEAT);
         let mut windows: Vec<WindowDescription> = self
             .windows
             .iter()
@@ -510,10 +514,11 @@ impl State {
                     app_id,
                     title,
                     pid,
+                    seat: info.seat,
                     output: toplevel.shown_on,
                     workspace: info.workspace,
                     rect,
-                    focused: focused == Some(window),
+                    focused: self.layout.focused(info.seat) == Some(window),
                     floating: info.floating,
                     fullscreen: info.fullscreen,
                 })

@@ -19,17 +19,18 @@ const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
 Usage: yuna --headless [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE]...
-       yuna mcp [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE]... [--manual-clock]
+       yuna mcp [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE] [--manual-clock]
        yuna -h | --help
        yuna -V | --version
 
 Without an argument, Yuna would start the desktop session, which does not exist yet.
 
 Commands:
-  mcp                An MCP server for one agent, on standard input and output: a headless
-                     Yuna of its own, whose tools start programs, list windows, create and
-                     remove outputs, and read the clock. Logs to standard error; stops when
-                     its input closes, or on SIGTERM or SIGINT, and ends its programs then.
+  mcp                An MCP server on standard input and output: a headless Yuna of its own,
+                     whose tools create seats, each with its own outputs, Wayland socket,
+                     pointer and keyboard, start programs on them, list windows, give
+                     input, and read the clock. Logs to standard error; stops when its
+                     input closes, or on SIGTERM or SIGINT, and ends its programs then.
 
 Options:
       --headless     Run without a screen, on virtual outputs drawn offscreen. Prints
@@ -38,7 +39,8 @@ Options:
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
       --output MODE  Add a virtual output of WIDTHxHEIGHT physical pixels, refreshed RATE
                      times a second, at SCALE physical pixels per logical unit; outputs are
-                     laid out left to right. Default: one output, 3840x2160@240,1.5.
+                     laid out left to right. Default: one output, 3840x2160@240,1.5. With
+                     mcp, given once at most: the mode of each new seat's output.
       --manual-clock With mcp: time moves only when the clock tool advances it, never past
                      real time.
   -h, --help         Print this help
@@ -126,6 +128,12 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
     if !headless {
         return Request::Invalid("--gpu and --output need --headless".to_owned());
     }
+    if mcp && outputs.len() > 1 {
+        return Request::Invalid(
+            "mcp takes one --output, each seat's first output; `outputs create` adds more"
+                .to_owned(),
+        );
+    }
     if outputs.is_empty() {
         outputs.push(OutputMode::default());
     }
@@ -207,22 +215,29 @@ fn run_headless(headless: Headless) -> ExitCode {
     }
 }
 
-/// Starts the compositor `headless` asks for, listening on a socket; reports why it cannot.
+/// Starts the compositor `yuna --headless` asks for, its outputs on the owner's seat, listening on
+/// a socket; reports why it cannot.
 fn start_compositor(headless: Headless) -> Result<Compositor, ExitCode> {
     let config = Config {
+        device: device_of(&headless),
         outputs: headless.outputs,
-        device: if headless.gpu {
-            Device::Gpu
-        } else {
-            Device::Software
-        },
-        clock: if headless.manual_clock {
-            ClockMode::Manual
-        } else {
-            ClockMode::Real
-        },
+        clock: ClockMode::Real,
         listen: true,
+        announce_owner_seat: true,
     };
+    start(config)
+}
+
+fn device_of(headless: &Headless) -> Device {
+    if headless.gpu {
+        Device::Gpu
+    } else {
+        Device::Software
+    }
+}
+
+/// Starts a compositor; reports why it cannot.
+fn start(config: Config) -> Result<Compositor, ExitCode> {
     match Compositor::new(config) {
         Ok(compositor) => Ok(compositor),
         Err(Error::InvalidOutput(reason)) => Err(usage_error(&reason.to_string())),
@@ -263,12 +278,29 @@ fn run_mcp(headless: Headless) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let compositor = match start_compositor(headless) {
+    // No output, no socket and no `wl_seat` for the owner's seat: everything is on the seats
+    // agents create (ADR-0035, ADR-0037).
+    let seat_output = headless.outputs.first().copied().unwrap_or_default();
+    let config = Config {
+        outputs: Vec::new(),
+        device: device_of(&headless),
+        clock: if headless.manual_clock {
+            ClockMode::Manual
+        } else {
+            ClockMode::Real
+        },
+        listen: false,
+        announce_owner_seat: false,
+    };
+    let compositor = match start(config) {
         Ok(compositor) => compositor,
         Err(exit) => return exit,
     };
     let server = match Server::new(compositor, input, output, Some(children)) {
-        Ok(server) => server,
+        Ok(mut server) => {
+            server.set_seat_output(seat_output);
+            server
+        }
         Err(error) => {
             print_error(&format!("yuna: {error}\n"));
             return ExitCode::FAILURE;

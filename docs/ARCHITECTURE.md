@@ -117,8 +117,8 @@ operation, and an example measures the model:
 
 `crates/yuna/src`, one job per module:
 
-- `compositor.rs`: the public face, `Compositor`, which has at least one output. It holds
-  calloop's event loop, the Wayland display and the state, and runs them: `dispatch` for one
+- `compositor.rs`: the public face, `Compositor`. It holds calloop's event loop, the Wayland
+  display and the state, and runs them: `dispatch` for one
   round, `run_until` for the program, `advance` to move the manual clock. Each round ends by
   freeing what went away, without drawing. First the clients the display ended: each records its
   end in a list the compositor holds, and `Backend::dispatch_single_client` frees it, its objects
@@ -132,8 +132,11 @@ operation, and an example measures the model:
   for tests.
 - `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
   are not the shell's: `wl_compositor` (version 6) and `wl_subcompositor`, `wl_shm`,
-  `wp_viewporter`, one seat with a keyboard (the owner's), `wl_output` with `xdg-output`,
-  presentation time.
+  `wp_viewporter`, `wl_output` with `xdg-output`, presentation time, `cursor-shape`.
+- `seats.rs`: the seats, the owner's and each agent's: their keyboards, pointers, focus, popup
+  grabs and clients, their creation and their removal ([below](#seats-and-input)).
+- `input.rs`: pointer and keyboard input on an agent's seat, what is under the pointer, text
+  typed through a keymap, and drag and drop.
 - `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
   `WindowId`, passes on what its client asks, and caps the windows of each client.
 - `popups.rs`: popups (`xdg_popup`), through Smithay's `PopupManager`: their placement, their
@@ -239,13 +242,16 @@ its place relative to the toplevel's window geometry.
    error.
 3. Its commits arm what its window's commits arm (`schedule_for_commit`), and its frame callbacks
    and presentation feedback go out with its window's.
-4. An explicit grab (`xdg_popup.grab`) is granted when the owner's keyboard is on the popup's
-   window, or one of its popups, and the grab's serial is the last `enter` that keyboard sent, or
-   the serial of the grab a parent popup holds. Until M1.5 brings input, an `enter` is the only
-   serial a client can have. A grab asked otherwise is refused by dismissing the popup, as
-   xdg-shell allows. A popup dismissed already, at its creation or with its parent, takes no
-   grab. A granted grab sets Smithay's keyboard grab for popups, and the keyboard goes to the
-   topmost grabbing popup. The grab ends when its popups are gone, or its topmost popup is
+4. An explicit grab (`xdg_popup.grab`) is granted on the popup's client's own seat, when the
+   grab's serial is one that seat sent to the popup's window: a button press on it; or, while the
+   seat's keyboard is on that window or one of its popups, the last `enter` or key press that
+   keyboard sent, or the serial of the grab a parent popup holds. A grab asked otherwise, or
+   naming another seat, is refused by dismissing the popup, as xdg-shell allows. A popup
+   dismissed already, at its creation or with its parent, takes no grab. Each seat has its own
+   grab. A granted grab sets Smithay's keyboard grab for popups, and its pointer grab when the
+   seat has a pointer, and the keyboard goes to the topmost grabbing popup. A press outside the
+   client's surfaces then dismisses the popups: Smithay ends the grab, and Yuna lets it go after
+   that press, the keyboard back on the window. The grab ends when its popups are gone, or its topmost popup is
    dismissed, its other popups then dismissed too and the keyboard returning to the window; or
    when the focus moves to another window, at a refresh. A new grabbing popup on the
    window, not on the topmost grabbing one, ends the older grab first: Smithay would answer it
@@ -263,8 +269,10 @@ its place relative to the toplevel's window geometry.
 
 A client asks an `xdg-activation-v1` token, then asks with it that a window be activated, as a
 launcher does for the program it starts (`activation.rs`). A token is valid when it was asked with
-the owner's seat, for the surface that has the keyboard focus, and the serial of the `enter` the
-keyboard sent that surface; it lasts 10 s of Yuna's clock and is used once. Tokens asked
+its client's own seat, for a surface of that client, and a serial that seat sent there: the
+last `enter` or key press while its keyboard is on that surface, or a button press on the
+surface's window. It lasts 10 s of Yuna's clock, is used once, and activates only a window of
+the same seat. Tokens asked
 otherwise are given, as the protocol requires, but are not valid. Yuna keeps the 64 newest
 tokens of each client not used yet, without a timer, so that one client's tokens never push out
 another's.
@@ -273,7 +281,7 @@ With a valid token, `Layout::request_activation` decides: the window takes the f
 refresh, unless a fullscreen window holds the screen
 ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Refused, or with a token that is not valid
 or expired, the window is marked urgent and nothing else changes. Urgent is the compositor's
-state, kept on the toplevel: it ends when the window gets the seat's focus, at the arrangement
+state, kept on the toplevel: it ends when the window gets its seat's focus, at the arrangement
 that gives it, or closes; a window that has the focus is not marked. A request for a toplevel not
 mapped yet waits for its mapping, and is judged then, by when its token was asked: a token that
 expired meanwhile marks the window urgent. A request for a surface that is not a toplevel is
@@ -288,11 +296,12 @@ yet.
 At an output's refresh, due at once or a lead before the boundary it aims at:
 
 1. If the layout changed, it is arranged once, for every output. Each window is told its asked
-   size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
+   size and its states: tiled, fullscreen, activated if it has its seat's focus, suspended if it
    is shown on no output. A configure goes out only when its size or states changed, or when a
-   request of its client is owed one. The keyboard focus follows `Layout::focused`, or the
-   topmost popup of a grab on that window: only here does it change window. The selections
-   follow the keyboard focus; the focused window is no longer urgent.
+   request of its client is owed one. Each seat's keyboard focus follows `Layout::focused` for
+   that seat, or the topmost popup of the seat's grab on that window: only here does it change
+   window. The seat's selections follow it; the focused window is no longer urgent. Each
+   agent's pointer is put on what is under it now, if that changed.
 2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
    surface tree with its window geometry at its rectangle's corner, cut to the rectangle, then
    its popups just above it, over a plain background. Surfaces sit on whole pixels: where the
@@ -323,7 +332,7 @@ its window enters an output; only a change sends anything. A popup's surfaces ar
 their window is told, from the popup's creation on. A surface whose window is shown on no output
 keeps the last value. One never told anything learns what its window's surface was last told, so
 that a subsurface or a popup added to a hidden window matches its window; a new window learns the
-scale of the owner seat's active output, where it opens, else the first output's.
+scale of its seat's active output, where it opens, else the first output's.
 When a window moves to another output, it is told the new scale before the configure that gives
 its size there, so that its client draws the buffer that acknowledges it at that scale.
 
@@ -358,8 +367,9 @@ file shrunk in between would kill Yuna with SIGBUS, which Smithay catches only f
 
 ### Selections
 
-The clipboard and the primary selection belong to the owner's seat and follow its keyboard focus.
-Yuna holds no selection of its own.
+Each seat has its own clipboard and primary selection, which follow its keyboard focus: a seat's
+focus is only ever on its own clients, so a selection never crosses seats. Yuna holds no
+selection of its own.
 
 1. When the keyboard focus moves to another client's window, that client gets the selections
    just before its keyboard `enter`, as `wl_data_device` asks: each device it has is told what
@@ -369,8 +379,9 @@ Yuna holds no selection of its own.
    not check the serial the request names ([debt](debt.md)).
 3. A new selection is offered to the client with the focus, and to every `ext-data-control-v1`
    client. A data-control client, such as a clipboard manager, gets the current selections as
-   soon as it binds its device, and may set them without the focus. Every client may bind it for
-   now ([debt](debt.md)).
+   soon as it binds its device, and may set them without the focus. Every client of the owner's
+   seat may bind it for now ([debt](debt.md)); no agent's client sees it, since it would reach
+   any seat's selections.
 4. To read a selection, a client sends the write end of a pipe with its `receive`. Yuna passes it
    to the source's client in a `send` event, then closes its own copy once that event is sent. It
    never reads, writes or waits on the pipe. For a MIME type the source does not offer, or a
@@ -378,20 +389,64 @@ Yuna holds no selection of its own.
 5. A selection lasts as long as its source. When the source is destroyed, or its client leaves,
    the selection empties, and the client with the focus and the data-control clients are told.
 
-Drag and drop waits for the pointer (M1.5). Smithay starts a drag only from a pointer or touch
-grab, and the seat has neither: it refuses every `start_drag`.
+A drag starts from a button an agent's pointer holds: Smithay accepts `start_drag` only with the
+serial of the pointer's grab, which a press starts, and Yuna then gives the pointer Smithay's
+drag grab. The drag offers its source to the surfaces the pointer crosses, all of its seat's,
+and drops where the button is released, once the target accepted a type and an action. A drag
+from a client of another seat than the pointer's, one that bound another agent's `wl_seat` and
+guessed its serial, is refused, its source cancelled. The owner's seat has no pointer headless:
+its clients start no drag. The drag's icon is not drawn ([debt](debt.md)).
+
+### Seats and input
+
+A seat (`seats.rs`) is a Smithay seat with a keyboard, and for an agent a pointer, its own
+keyboard focus, popup grab, selections, cursor and clients, and its branch of the layout
+([ADR-0035](adr/0035-agents-seats.md), [ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` global, no output
+and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
+and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat
+whose socket it came through, recorded in its `ClientState`: its windows open on that seat's
+workspaces, and each seat's focus goes only to its own clients' surfaces. Upstream Smithay
+announces every `wl_seat` to every client: a client may bind another seat's, and then gets no
+input, since that seat's focus is never on its surfaces.
+
+Input (`input.rs`) reaches an agent's seat only through the compositor's calls, which the MCP
+server makes for the seat an agent names; the owner's seat takes none. Its events carry Yuna's
+clock's time.
+
+1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
+   is found among the windows that output shows, top to bottom, each window's popups before it,
+   a window cut to its rectangle: the surface whose input region holds the point. Smithay
+   sends `enter`, `leave` and `motion`. After each arrangement, a pointer is moved onto what is
+   under it then, when that changed.
+2. A button press focuses the window under it: its keyboard follows at the next refresh. The
+   press's serial, recorded with that window, may start a popup grab, a drag or an activation
+   token there. A wheel step scrolls 15 units, and 120 in `axis_value120`.
+3. A key is pressed by its XKB keycode, the name an agent gives looked up in the seat's keymap.
+   Text is typed key by key through that keymap, Shift held where a character needs it; a run
+   of characters the keymap lacks goes through Smithay's `inject_text_keysyms`, which gives the
+   focused client a keymap of its own for them, then the seat's back.
+4. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
+   `enter` serial, is recorded on the seat; Yuna does not draw cursors yet.
+
+Removing a seat (`Compositor::remove_seat`), in order: the keys and buttons it holds are
+released, its popup grab ends, and its focus leaves every surface; those events are sent; its
+socket is removed; its clients are ended and freed, their windows closed; then its outputs, its
+place in the layout, and its `wl_seat` global, disabled now and destroyed later, as a removed
+output's is. Smithay keeps a record of every seat it made: a removed one's stays, without its
+keyboard and pointer.
 
 ### Outputs added and removed
 
-An output added while Yuna runs goes to the right of the others, and its first frame is armed;
-its `wl_output` global is announced at the round's end. A removed output's workspaces go to the
-seat's active output, which keeps showing its own: their windows are hidden there until a
+An output belongs to one seat. An output added while Yuna runs goes to the right of every
+output, and its first frame is armed; its `wl_output` global is announced at the round's end. A
+removed output's workspaces go to its seat's active output, which keeps showing its own: their windows are hidden there until a
 workspace switch shows them ([ADR-0018](adr/0018-workspaces.md)). Its windows' surfaces leave
 it at once, and enter an output again once one shows them; the presentation feedback it
 held for a frame not yet at its boundary is discarded; its two deadlines are disarmed. Its global
 is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
-to bind it before it learnt of the removal is not ended for it. The last output is never removed,
-and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
+to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
+only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
 ### The MCP server
 
@@ -407,7 +462,7 @@ standard input, one per line, and writes the replies to its standard output, not
 - `stdio.rs`: the lines, at most 1 MiB, and the queue of replies.
 - `tools.rs`: the tools' schemas, their arguments, read with serde, and their results, given
   both as `structuredContent` and as text. A tool that does several things takes an `action`.
-- `programs.rs`: the programs `spawn` starts.
+- `programs.rs`: the programs `spawn` starts, and which processes belong to a seat.
 - `mod.rs`: `Server`, which holds the compositor and runs the tools.
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
@@ -417,17 +472,40 @@ line, answers the calls whose window came or whose time is up, sends the composi
 writes the replies. While 16 MiB of replies wait, no further line is answered and the client's
 input is not read. A line over 1 MiB, or an input or output that fails, ends the connection.
 
-The tools: `outputs` lists, creates and removes outputs; `spawn` starts, lists and stops
-programs; `windows` lists the windows, as `Compositor::windows` describes them, and with
-`wait_ms` waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting
-call is answered once the layout has placed the window, which on the manual clock takes a
-`clock` advance; `notifications/cancelled` drops it unanswered; 64 wait at most. `clock` reads
-the time, and advances a manual clock, never past real time.
+`yuna mcp` starts with no output and no socket of the owner's seat, which announces no
+`wl_seat`: everything is on agents' seats ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+The tools, each but `clock` naming its seat by its handle, an id of another seat's output,
+window or program unknown there:
+
+- `seat` creates a seat, with an output of the mode it gives, else `--output`'s, and a Wayland
+  socket, `seat-<id>` in Yuna's folder; lists the seats; closes one. A manual-clock Yuna holds one
+  seat at a time.
+- `outputs` lists, creates and removes a seat's outputs; `workspaces` lists them with their
+  windows, creates, removes and shows a named one, and moves a window to one.
+- `spawn` starts, lists and stops a seat's programs.
+- `windows` lists a seat's windows, as `Compositor::windows` describes them, and with `wait_ms`
+  waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting call is
+  answered once the layout has placed the window, which on the manual clock takes a `clock`
+  advance; `notifications/cancelled` drops it unanswered; 64 wait at most.
+- `pointer` moves, presses, releases, clicks and scrolls, moving first when given a place, and
+  tells where the pointer is and what is under it; `keyboard` presses, releases and taps keys,
+  and types text, and tells the window the keyboard is on ([Seats and input](#seats-and-input)).
+- `clock` reads the time, and advances a manual clock, never past real time.
+
+`seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
+then ends its processes: every process under Yuna that is, or descends from, one of the seat's
+programs still running, is in one of their process groups, is one of its clients, or has
+`YUNA_SEAT=<id>` in `/proc/<pid>/environ`. Each gets SIGTERM; 2 s later, SIGKILL goes to those
+left and to any found again; the call is answered once all are gone, or 1 s after SIGKILL, with
+what was ended and what is left. The seat's programs are then forgotten, their logs deleted. A
+process that empties its environment and leaves its group and its parents is not found
+([debt](debt.md)).
 
 A program gets an environment of its own: from Yuna's, only the variables that find its
-programs, libraries, locale and drivers (`programs::KEPT_VARIABLES`); `WAYLAND_DISPLAY`, the
-socket's full path; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's session bus
-nor their sound server is found; then the agent's variables. It inherits no descriptor of
+programs, libraries, locale and drivers (`programs::KEPT_VARIABLES`); `WAYLAND_DISPLAY`, its
+seat's socket's full path; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's
+session bus nor their sound server is found; then the agent's variables; then `YUNA_SEAT`, its
+seat's id, which the agent's cannot replace. It inherits no descriptor of
 Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
 log file. A log keeps 1 MiB; past it, the pipe is read 64 KiB every 100 ms and counted, so that a
 program writing without end waits on its pipe and Yuna does not spin. 64 programs run at most,
@@ -435,15 +513,15 @@ program writing without end waits on its pipe and Yuna does not spin. 64 program
 gone or not. Yuna is its children's subreaper: a process whose parent ends becomes Yuna's, so
 that the whole tree is reaped and ended by Yuna. When Yuna stops, every process under it, found
 through `/proc`, gets SIGTERM, then SIGKILL 2 s later, while the compositor still serves its
-clients; then the folder of logs and runtime folders, `yuna-mcp-<pid>` in `XDG_RUNTIME_DIR`, is
-removed.
+clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` in
+`XDG_RUNTIME_DIR`, is removed.
 
 ### The program
 
-`yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
-`WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM or SIGINT. `yuna mcp` starts the same
-compositor, on the manual clock with `--manual-clock`, and serves MCP until its input closes or
-SIGTERM or SIGINT comes. The signal handler writes to a pipe
+`yuna --headless` starts the compositor with real time, its outputs and a socket in
+`XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM
+or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
+clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes. The signal handler writes to a pipe
 the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
@@ -459,9 +537,14 @@ one it was presented at, later when the frame was late.
   written with `wayland-client` (`client.rs` and `client/`; `selection_client.rs` for the
   selections), each test a short story with exact figures: the windows' in `main.rs`, then one
   file per subject (`popups.rs`, `activation.rs`, `dialogs.rs`, `window_cap.rs`, `scale.rs`,
-  `dmabuf.rs`, `selection.rs`, `outputs.rs`). `mcp.rs` in it drives the MCP server through two
-  socket pairs, its input and its output: both revisions, every tool but `spawn`, waits,
-  cancellation and timeouts, a client that does not read, a line too long, an input that closes.
+  `dmabuf.rs`, `selection.rs`, `outputs.rs`). `seats.rs` in it tells agents' seats: windows on
+  their own outputs, the test that no input of one seat reaches another, the owner's or a client
+  that bound another seat's `wl_seat`, a click's focus, text read back through the keymaps the
+  client got, wheel and cursor, a popup grab and a drag from a press, and a seat's closing; its
+  clients are `input_client.rs`'s, which bind a seat by name. `mcp.rs` in it drives the MCP
+  server through two socket pairs, its input and its output: both revisions, every tool but
+  `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
+  not read, a line too long, an input that closes.
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no
@@ -497,8 +580,9 @@ one it was presented at, later when the frame was late.
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
-  logs, an orphan adopted, `stop`, the whole tree ended when its input closes, and Alacritty
-  started through `spawn` and found through `windows`. Applications get the environment of
+  logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
+  that ends its processes and no other seat's, and Alacritty started through `spawn`, found
+  through `windows`, clicked and typed into: its shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` shares.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as
   agents run it ([ADR-0025](adr/0025-applications-in-ci.md),

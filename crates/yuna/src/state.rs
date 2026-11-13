@@ -1,6 +1,7 @@
 //! The compositor's state, and the protocol handlers that are not the shell's: surfaces, shared
-//! memory, the seat, outputs and presentation time. `linux-dmabuf` is in `dmabuf.rs`, the
-//! preferred scale in `scale.rs`; viewporter needs no handler.
+//! memory, the seats' handler and the cursors their clients ask, outputs and presentation time.
+//! The seats themselves are in `seats.rs`, their input in `input.rs`, `linux-dmabuf` in
+//! `dmabuf.rs`, the preferred scale in `scale.rs`; viewporter needs no handler.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -11,13 +12,12 @@ use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::PopupManager;
-use smithay::input::keyboard::{KeyboardHandle, XkbConfig};
+use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId, ObjectId,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::ClockSource;
@@ -26,6 +26,7 @@ use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, get_parent, get_role,
 };
+use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
@@ -43,12 +44,13 @@ use crate::Error;
 use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
 use crate::output::VirtualOutput;
-use crate::popups::ActivePopupGrab;
 use crate::render::Device;
+use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
 
-/// The owner's seat: the only one until agents get theirs (M1.5).
+/// The owner's seat, which always exists; agents' seats come after it, from 2
+/// ([ADR-0035](../../../docs/adr/0035-agents-seats.md)).
 pub const OWNER_SEAT: SeatId = SeatId(1);
 
 /// A hook run when a frame's drawing has ended, before Yuna reads the time it ended at.
@@ -95,11 +97,13 @@ pub(crate) struct State {
     _xdg_decoration_state: XdgDecorationState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<State>,
-    pub keyboard: KeyboardHandle<State>,
+    /// Every seat, the owner's first (`seats.rs`).
+    pub seats: Vec<SeatData>,
+    /// The next agent seat's id: ids increase and are never reused.
+    pub next_seat_id: u64,
     _output_manager_state: OutputManagerState,
     _presentation_state: PresentationState,
-    /// The owner's seat.
-    pub seat: Seat<State>,
+    _cursor_shape_state: CursorShapeManagerState,
     pub selections: Selections,
     pub dmabuf_state: DmabufState,
     /// How many dmabuf formats clients are offered; 0 when there is no `linux-dmabuf` global.
@@ -108,17 +112,18 @@ pub(crate) struct State {
     _fractional_scale_state: FractionalScaleManagerState,
     /// Every window's popups, in trees kept on their toplevels' surfaces.
     pub popups: PopupManager,
-    /// The popup grab that holds the keyboard, if any.
-    pub popup_grab: Option<ActivePopupGrab>,
     pub xdg_activation_state: XdgActivationState,
     _xdg_dialog_state: XdgDialogState,
 }
 
 impl State {
+    /// The state of a compositor whose owner's seat announces a `wl_seat` when
+    /// `announce_owner_seat`.
     pub(crate) fn new(
         display_handle: DisplayHandle,
         clock_mode: ClockMode,
         device: Device,
+        announce_owner_seat: bool,
     ) -> Result<State, Error> {
         let dh = &display_handle;
         let (renderer, max_output_side) = crate::render::open_renderer(device)?;
@@ -128,11 +133,7 @@ impl State {
             .add_seat(OWNER_SEAT)
             .map_err(|e| Error::Layout(e.to_string()))?;
         let mut seat_state = SeatState::new();
-        let mut seat = seat_state.new_wl_seat(dh, "seat0");
-        // The default keymap, from XKB_CONFIG_ROOT; repeat as most desktops have it.
-        let keyboard = seat
-            .add_keyboard(XkbConfig::default(), 600, 25)
-            .map_err(|e| Error::Keyboard(e.to_string()))?;
+        let owner = SeatData::owner(&mut seat_state, dh, announce_owner_seat)?;
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_formats = crate::dmabuf::create_global(dh, &mut dmabuf_state, &renderer, device);
         Ok(State {
@@ -162,17 +163,17 @@ impl State {
             _xdg_decoration_state: XdgDecorationState::new::<State>(dh),
             shm_state: ShmState::new::<State>(dh, Vec::new()),
             seat_state,
-            keyboard,
+            seats: vec![owner],
+            next_seat_id: OWNER_SEAT.0 + 1,
             _output_manager_state: OutputManagerState::new_with_xdg_output::<State>(dh),
             _presentation_state: PresentationState::new::<State>(dh, Monotonic::ID as u32),
-            seat,
+            _cursor_shape_state: CursorShapeManagerState::new::<State>(dh),
             selections: Selections::new(dh),
             dmabuf_state,
             dmabuf_formats,
             _viewporter_state: ViewporterState::new::<State>(dh),
             _fractional_scale_state: FractionalScaleManagerState::new::<State>(dh),
             popups: PopupManager::default(),
-            popup_grab: None,
             xdg_activation_state: XdgActivationState::new::<State>(dh),
             _xdg_dialog_state: XdgDialogState::new::<State>(dh),
         })
@@ -199,18 +200,14 @@ impl State {
             tracing::warn!(%error, "the textures of closed windows could not be freed");
         }
     }
-
-    /// The seat a client named, when it is the owner's: the one whose keyboard Yuna holds.
-    pub(crate) fn owner_seat_of(&self, seat: &WlSeat) -> Option<Seat<State>> {
-        Seat::<State>::from_resource(seat)
-            .filter(|seat| seat.get_keyboard().as_ref() == Some(&self.keyboard))
-    }
 }
 
 /// What Yuna keeps for each client.
 #[derive(Debug)]
 pub(crate) struct ClientState {
     pub compositor: CompositorClientState,
+    /// The seat it belongs to: the one whose socket it connected through.
+    pub seat: SeatId,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -218,9 +215,10 @@ pub(crate) struct ClientState {
 }
 
 impl ClientState {
-    pub(crate) fn new(departed: DepartedClients) -> ClientState {
+    pub(crate) fn new(seat: SeatId, departed: DepartedClients) -> ClientState {
         ClientState {
             compositor: CompositorClientState::default(),
+            seat,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
@@ -315,6 +313,20 @@ impl SeatHandler for State {
     fn seat_state(&mut self) -> &mut SeatState<State> {
         &mut self.seat_state
     }
+
+    /// The cursor the client under a seat's pointer asked for, through `wl_pointer.set_cursor`
+    /// or `cursor-shape`; Smithay passes on only a request whose serial is the pointer's last
+    /// `enter` to that client.
+    fn cursor_image(&mut self, seat: &Seat<State>, image: CursorImageStatus) {
+        if let Some(data) = seat_id(seat).and_then(|id| self.seat_mut(id)) {
+            data.cursor = image;
+        }
+    }
+}
+
+/// Needed by `cursor-shape`, which also sets a tablet tool's cursor; Yuna has no tablet.
+impl smithay::input::tablet::TabletSeatHandler for State {
+    type ToolFocus = WlSurface;
 }
 
 /// Needed by Smithay's pointer on a `WlSurface`; no pointer constraint is offered yet.

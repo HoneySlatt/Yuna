@@ -1,10 +1,12 @@
 //! The headless compositor as a library: what the `yuna` program runs, and what tests drive in
 //! their own process ([ADR-0025](../../../docs/adr/0025-applications-in-ci.md)).
 
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, PoisonError};
+use std::path::PathBuf;
+use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
@@ -12,30 +14,36 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
 };
-use smithay::reexports::wayland_server::{BindError, Display};
+use smithay::reexports::wayland_server::{BindError, Display, ListeningSocket};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
 use yuna_layout::geometry::Rect;
-use yuna_layout::{Layout, OutputId, WindowId};
+use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::{Clock, ClockMode};
+use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
-use crate::state::{ClientState, State};
+use crate::state::{OWNER_SEAT, State};
 
 /// How to start a compositor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    /// Its virtual outputs, laid out left to right; their ids are 1, 2, … in this order.
+    /// Its virtual outputs, on the owner's seat, laid out left to right; their ids are 1, 2, …
+    /// in this order. None for `yuna mcp`, whose outputs are agents'.
     pub outputs: Vec<OutputMode>,
     /// The EGL device it draws on.
     pub device: Device,
     /// How its time moves.
     pub clock: ClockMode,
-    /// Whether it listens on a Wayland socket in `XDG_RUNTIME_DIR`. Without one, clients come
-    /// only through [`Compositor::connect_client`].
+    /// Whether it listens on a Wayland socket in `XDG_RUNTIME_DIR`, for the owner's seat.
+    /// Without one, the owner's clients come only through [`Compositor::connect_client`].
     pub listen: bool,
+    /// Whether the owner's seat is announced as a `wl_seat` global. `yuna mcp` announces none,
+    /// so that an agent's programs see only agents' seats
+    /// ([ADR-0035](../../../docs/adr/0035-agents-seats.md)).
+    pub announce_owner_seat: bool,
 }
 
 impl Default for Config {
@@ -46,6 +54,7 @@ impl Default for Config {
             device: Device::Software,
             clock: ClockMode::Real,
             listen: true,
+            announce_owner_seat: true,
         }
     }
 }
@@ -78,13 +87,15 @@ pub struct WindowDescription {
     pub title: Option<String>,
     /// The process id of its client, as the kernel gives it for the client's socket.
     pub pid: Option<i32>,
+    /// The seat whose workspaces hold it: its client's.
+    pub seat: SeatId,
     /// The output that shows it, as last arranged; none when it is hidden.
     pub output: Option<OutputId>,
     /// Its workspace's name; none for an unnamed workspace.
     pub workspace: Option<String>,
     /// Where it is drawn, in logical coordinates, as last arranged; none when it is hidden.
     pub rect: Option<Rect>,
-    /// Whether the owner's seat focuses it.
+    /// Whether its seat focuses it.
     pub focused: bool,
     /// Whether it floats.
     pub floating: bool,
@@ -97,6 +108,8 @@ pub struct WindowDescription {
 pub struct OutputDescription {
     /// Its id.
     pub id: OutputId,
+    /// The seat it belongs to.
+    pub seat: SeatId,
     /// Its name, as `wl_output` gives it: `HEADLESS-<id>`.
     pub name: String,
     /// Its size, rate and scale.
@@ -116,11 +129,13 @@ pub struct Compositor {
     socket_name: Option<OsString>,
     /// The calloop timer armed at the clock's earliest deadline, in real mode, and its time.
     timer: Option<(RegistrationToken, Duration)>,
+    /// The source of each agent seat's socket.
+    seat_sockets: HashMap<SeatId, RegistrationToken>,
 }
 
 impl Compositor {
     /// Starts a compositor: its renderer, its globals, its outputs, and its socket if
-    /// `config.listen`. Each output's first frame is armed. Refused without an output.
+    /// `config.listen`. Each output's first frame is armed.
     pub fn new(config: Config) -> Result<Compositor, Error> {
         // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
         // starts.
@@ -142,14 +157,14 @@ impl Compositor {
             EventLoop::try_new().map_err(|e| Error::EventLoop(e.to_string()))?;
         let mut display: Display<State> =
             Display::new().map_err(|e| Error::EventLoop(e.to_string()))?;
-        if config.outputs.is_empty() {
-            return Err(Error::Refused(
-                "a compositor needs at least one output".to_owned(),
-            ));
-        }
-        let mut state = State::new(display.handle(), config.clock, config.device)?;
+        let mut state = State::new(
+            display.handle(),
+            config.clock,
+            config.device,
+            config.announce_owner_seat,
+        )?;
         for mode in config.outputs {
-            state.add_output(mode)?;
+            state.add_output(OWNER_SEAT, mode)?;
         }
         let handle = event_loop.handle();
         // The display is read after each dispatch, outside the event loop's callbacks, so that it
@@ -175,8 +190,7 @@ impl Compositor {
                 handle
                     .insert_source(socket, |stream, _, state| {
                         state.woke = true;
-                        let client = Arc::new(ClientState::new(state.departed_clients.clone()));
-                        if let Err(error) = state.display_handle.insert_client(stream, client) {
+                        if let Err(error) = state.insert_client(OWNER_SEAT, stream) {
                             tracing::warn!(%error, "a client could not connect");
                         }
                     })
@@ -192,6 +206,7 @@ impl Compositor {
             state,
             socket_name,
             timer: None,
+            seat_sockets: HashMap::new(),
         })
     }
 
@@ -200,16 +215,161 @@ impl Compositor {
         self.socket_name.as_deref()
     }
 
-    /// Connects a client through a socket pair, without the socket file: its end, for
-    /// `wayland-client`'s `Connection::from_socket`.
+    /// Connects a client of the owner's seat through a socket pair, without the socket file:
+    /// its end, for `wayland-client`'s `Connection::from_socket`.
     pub fn connect_client(&mut self) -> Result<UnixStream, Error> {
+        self.connect_client_to(OWNER_SEAT)
+    }
+
+    /// Connects a client of `seat` through a socket pair, as one that came through the seat's
+    /// socket. Refused for a seat that does not exist.
+    pub fn connect_client_to(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
-        let client = Arc::new(ClientState::new(self.state.departed_clients.clone()));
-        self.state
-            .display_handle
-            .insert_client(ours, client)
-            .map_err(|e| Error::EventLoop(e.to_string()))?;
+        self.state.insert_client(seat, ours)?;
         Ok(theirs)
+    }
+
+    /// Adds an agent's seat, with no output yet: its `wl_seat` global is announced at the end of
+    /// the next round. Its id is never reused.
+    pub fn add_seat(&mut self) -> Result<SeatId, Error> {
+        self.state.add_agent_seat()
+    }
+
+    /// Every seat, the owner's first.
+    pub fn seats(&self) -> Vec<SeatId> {
+        self.state.seat_ids()
+    }
+
+    /// Listens on a Wayland socket at `path` for agent seat `seat`: every client that connects
+    /// through it belongs to that seat. The socket file and its lock are removed with the seat.
+    /// Refused for the owner's seat, a seat that does not exist or listens already, and a path
+    /// where a socket cannot be made.
+    pub fn listen_for_seat(&mut self, seat: SeatId, path: PathBuf) -> Result<(), Error> {
+        if seat == OWNER_SEAT || self.state.seat(seat).is_none() {
+            return Err(Error::Refused(format!("no agent seat {}", seat.0)));
+        }
+        if self.seat_sockets.contains_key(&seat) {
+            return Err(Error::Refused(format!("seat {} listens already", seat.0)));
+        }
+        let socket = ListeningSocket::bind_absolute(path.clone())
+            .map_err(|e| Error::Socket(format!("{}: {e}", path.display())))?;
+        let token = self
+            .event_loop
+            .handle()
+            .insert_source(
+                Generic::new(socket, Interest::READ, Mode::Level),
+                move |_, socket, state| {
+                    state.woke = true;
+                    while let Some(stream) = socket.accept()? {
+                        if let Err(error) = state.insert_client(seat, stream) {
+                            tracing::warn!(%error, "a client could not connect");
+                        }
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        self.seat_sockets.insert(seat, token);
+        Ok(())
+    }
+
+    /// Removes agent seat `seat` ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)):
+    /// releases the keys and buttons it holds and moves its focus off every surface; removes its
+    /// socket; ends its clients and frees them now, their windows closed; then removes its
+    /// outputs and its place in the layout, and disables its `wl_seat` global. Returns the
+    /// process ids of the clients it ended. Refused for the owner's seat and for a seat that does
+    /// not exist.
+    pub fn remove_seat(&mut self, seat: SeatId) -> Result<Vec<i32>, Error> {
+        self.state.release_seat(seat)?;
+        // The releases and the leaves reach the clients before their connections close.
+        if let Err(error) = self.display.flush_clients() {
+            tracing::debug!(%error, "flushing the clients failed");
+        }
+        if let Some(token) = self.seat_sockets.remove(&seat) {
+            // Dropping the source drops its socket, which removes its file and its lock.
+            self.event_loop.handle().remove(token);
+        }
+        let pids = self.state.end_seat_clients(seat);
+        self.free_departed_clients();
+        self.state.finish_removing_seat(seat)?;
+        self.flush();
+        Ok(pids)
+    }
+
+    /// The process ids of `seat`'s clients, as the kernel gave them for their sockets.
+    pub fn client_pids(&self, seat: SeatId) -> Vec<i32> {
+        self.state.client_pids(seat)
+    }
+
+    /// Moves agent seat `seat`'s pointer to (`x`, `y`), logical units from the top-left corner
+    /// of `output`, one of the seat's, or of its first output; it enters the surface under it.
+    /// Refused for the owner's seat, which takes no input from here, and for a place off the
+    /// output.
+    pub fn pointer_move(
+        &mut self,
+        seat: SeatId,
+        output: Option<OutputId>,
+        x: f64,
+        y: f64,
+    ) -> Result<PointerDescription, Error> {
+        self.state.pointer_move(seat, output, x, y)
+    }
+
+    /// Presses or releases `button` (Linux's code, such as [`BUTTON_LEFT`](crate::BUTTON_LEFT))
+    /// of agent seat `seat`'s pointer where it is. A press focuses the window under it, which
+    /// takes the seat's keyboard at the next refresh. Refused for a press of a button held and a
+    /// release of one not held.
+    pub fn pointer_button(
+        &mut self,
+        seat: SeatId,
+        button: u32,
+        pressed: bool,
+    ) -> Result<PointerDescription, Error> {
+        self.state.pointer_button(seat, button, pressed)
+    }
+
+    /// Scrolls agent seat `seat`'s wheel by `dx` and `dy` steps where its pointer is, positive
+    /// right and down; at most [`MAX_SCROLL_STEPS`](crate::MAX_SCROLL_STEPS) on an axis.
+    pub fn pointer_scroll(
+        &mut self,
+        seat: SeatId,
+        dx: f64,
+        dy: f64,
+    ) -> Result<PointerDescription, Error> {
+        self.state.pointer_scroll(seat, dx, dy)
+    }
+
+    /// The window `seat`'s keyboard is on: its own, or the window of the popup it is on.
+    pub fn keyboard_window(&self, seat: SeatId) -> Option<WindowId> {
+        self.state.keyboard_window(seat)
+    }
+
+    /// Where `seat`'s pointer is and what is under it.
+    pub fn pointer(&self, seat: SeatId) -> PointerDescription {
+        self.state.describe_pointer(seat)
+    }
+
+    /// Presses or releases the key XKB names `name` ("Return", "a", "F5") on agent seat
+    /// `seat`'s keyboard, to the surface it is on; no modifier is added. Refused for a name the
+    /// seat's keymap has no key for, a press of a key held and a release of one not held.
+    pub fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
+        let key = self.state.keycode_of(seat, name)?;
+        self.state.key(seat, key, pressed)
+    }
+
+    /// Taps `combination` on agent seat `seat`'s keyboard: keys joined by `+`, the last pressed
+    /// while the others are held ("ctrl+shift+t"); `ctrl`, `shift`, `alt`, `super` and `altgr`
+    /// name the left modifiers.
+    pub fn tap_keys(&mut self, seat: SeatId, combination: &str) -> Result<(), Error> {
+        self.state.tap_keys(seat, combination)
+    }
+
+    /// Types `text` on agent seat `seat`'s keyboard, to the surface it is on, through its `us`
+    /// keymap, Shift held where a character needs it; a character the keymap lacks is typed
+    /// through a keymap given to the client for it. At most [`MAX_TYPED`](crate::MAX_TYPED)
+    /// characters.
+    pub fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        self.state.type_text(seat, text)
     }
 
     /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
@@ -353,16 +513,16 @@ impl Compositor {
         self.state.outputs.iter().map(|o| o.id).collect()
     }
 
-    /// Adds a virtual output of `mode`, to the right of the others, and arms its first frame.
-    /// Refused for a side beyond the renderer's limit. Its global is announced at the end of
-    /// the next round.
-    pub fn add_output(&mut self, mode: OutputMode) -> Result<OutputId, Error> {
-        self.state.add_output(mode)
+    /// Adds a virtual output of `mode` to `seat`, to the right of every output, and arms its
+    /// first frame. Refused for a seat that does not exist and for a side beyond the renderer's
+    /// limit. Its global is announced at the end of the next round.
+    pub fn add_output(&mut self, seat: SeatId, mode: OutputMode) -> Result<OutputId, Error> {
+        self.state.add_output(seat, mode)
     }
 
-    /// Removes `output`: its windows go to another output, its global is disabled at once and
-    /// destroyed [`RETIRED_GLOBAL_LIFETIME`](crate::RETIRED_GLOBAL_LIFETIME) later. Refused for
-    /// an output that does not exist, and for the last one.
+    /// Removes `output`: its windows go to another output of its seat, its global is disabled at
+    /// once and destroyed [`RETIRED_GLOBAL_LIFETIME`](crate::RETIRED_GLOBAL_LIFETIME) later.
+    /// Refused for an output that does not exist, and for its seat's last one.
     pub fn remove_output(&mut self, output: OutputId) -> Result<(), Error> {
         self.state.remove_output(output)
     }
@@ -372,7 +532,8 @@ impl Compositor {
         self.state.describe_outputs()
     }
 
-    /// Every window the layout holds, in the order they opened, as last arranged.
+    /// Every window the layout holds, all seats together, in the order they opened, as last
+    /// arranged.
     pub fn windows(&self) -> Vec<WindowDescription> {
         self.state.describe_windows()
     }
@@ -524,6 +685,7 @@ impl Compositor {
                 return;
             }
             for client in departed {
+                self.state.forget_client(&client);
                 // An ended client is not read: the call fails, and frees it on its way out. A
                 // client a dispatch freed already is not found, and nothing happens.
                 let _ = self

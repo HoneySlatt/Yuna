@@ -1,7 +1,8 @@
 //! The MCP server in the test's own process (ADR-0033): requests written to its input, its
 //! replies read from its output, each through a socket pair of its own, and the compositor's
-//! windows opened by test clients. `spawn` needs a process that reaps its children, so it is
-//! tested on the program, in `tests/mcp.rs`.
+//! windows opened by test clients of a seat. Its compositor is `yuna mcp`'s: no output, no socket
+//! and no `wl_seat` for the owner's seat. `spawn` and the seats' sockets need a process that
+//! reaps its children, so they are tested on the program, in `tests/mcp.rs`.
 
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::OwnedFd;
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yuna::mcp::{MAX_LINE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS, MODERN_REVISION, Server, Stop};
+use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, Config};
 
 use crate::RED;
@@ -27,8 +29,10 @@ struct Mcp {
 impl Mcp {
     fn new(clock: ClockMode) -> Mcp {
         let compositor = Compositor::new(Config {
+            outputs: Vec::new(),
             clock,
             listen: false,
+            announce_owner_seat: false,
             ..Config::default()
         })
         .expect("the compositor starts");
@@ -98,6 +102,15 @@ impl Mcp {
             std::thread::sleep(Duration::from_millis(1));
         }
         panic!("no reply to request {id}");
+    }
+
+    /// Creates a seat with `seat create` and returns its handle.
+    fn seat(&mut self) -> u64 {
+        let created = self.call("seat", json!({"action": "create"}));
+        assert_eq!(created["isError"], json!(false), "{created}");
+        created["structuredContent"]["seat"]
+            .as_u64()
+            .expect("a handle")
     }
 
     /// Calls a tool in 2026-07-28 and returns its result.
@@ -178,25 +191,37 @@ fn both_revisions_are_served_and_list_the_same_tools() {
     assert_eq!(mcp.server.stopping(), None);
 }
 
-/// `outputs` creates, lists and removes outputs; bad modes and the last output are refused as
-/// tool errors, which the model reads.
+/// `outputs` creates, lists and removes a seat's outputs; bad modes, the seat's last output and
+/// a call without its seat are refused as tool errors, which the model reads.
 #[test]
 fn outputs_are_created_listed_and_removed() {
     let mut mcp = Mcp::new(ClockMode::Manual);
+    let no_seat = mcp.call("outputs", json!({"action": "list"}));
+    assert_eq!(no_seat["isError"], json!(true));
+    let unknown_seat = mcp.call("outputs", json!({"action": "list", "seat": 2}));
+    assert_eq!(unknown_seat["isError"], json!(true));
+    let text = unknown_seat["content"][0]["text"]
+        .as_str()
+        .expect("a reason");
+    assert!(text.contains("seat create"), "{text}");
+    let seat = mcp.seat();
+    assert_eq!(seat, 2);
     let created = mcp.call(
         "outputs",
-        json!({"action": "create", "width": 1920, "height": 1080, "rate": 60, "scale": 1}),
+        json!({"action": "create", "seat": seat, "width": 1920, "height": 1080, "rate": 60,
+               "scale": 1}),
     );
     assert_eq!(created["isError"], json!(false));
     let output = &created["structuredContent"]["output"];
     assert_eq!(output["id"], json!(2));
+    assert_eq!(output["seat"], json!(2));
     assert_eq!(output["name"], json!("HEADLESS-2"));
     assert_eq!(output["refresh_mhz"], json!(60_000));
     assert_eq!(
         output["logical"],
         json!({"x": 2560.0, "y": 0.0, "width": 1920.0, "height": 1080.0})
     );
-    let listed = mcp.call("outputs", json!({"action": "list"}));
+    let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
     let ids: Vec<&Value> = listed["structuredContent"]["outputs"]
         .as_array()
         .expect("a list")
@@ -205,14 +230,26 @@ fn outputs_are_created_listed_and_removed() {
         .collect();
     assert_eq!(ids, [&json!(1), &json!(2)]);
 
-    let bad = mcp.call("outputs", json!({"action": "create", "rate": 5000}));
+    let bad = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "rate": 5000}),
+    );
     assert_eq!(bad["isError"], json!(true));
-    let unknown_field = mcp.call("outputs", json!({"action": "list", "verbose": true}));
+    let unknown_field = mcp.call(
+        "outputs",
+        json!({"action": "list", "seat": seat, "verbose": true}),
+    );
     assert_eq!(unknown_field["isError"], json!(true));
 
-    let removed = mcp.call("outputs", json!({"action": "remove", "output": 1}));
+    let removed = mcp.call(
+        "outputs",
+        json!({"action": "remove", "seat": seat, "output": 1}),
+    );
     assert_eq!(removed["structuredContent"], json!({"removed": 1}));
-    let last = mcp.call("outputs", json!({"action": "remove", "output": 2}));
+    let last = mcp.call(
+        "outputs",
+        json!({"action": "remove", "seat": seat, "output": 2}),
+    );
     assert_eq!(last["isError"], json!(true));
     assert_eq!(mcp.server.compositor().outputs().len(), 1);
 }
@@ -222,15 +259,19 @@ fn outputs_are_created_listed_and_removed() {
 #[test]
 fn windows_waits_for_a_window_until_it_maps_its_time_is_up_or_it_is_cancelled() {
     let mut mcp = Mcp::new(ClockMode::Manual);
-    let empty = mcp.call("windows", json!({}));
+    let seat = mcp.seat();
+    let empty = mcp.call("windows", json!({"seat": seat}));
     assert_eq!(empty["structuredContent"], json!({"windows": []}));
     let waits = [
         (
             100,
-            json!({"app_id": "org.example.Test", "wait_ms": 10_000}),
+            json!({"seat": seat, "app_id": "org.example.Test", "wait_ms": 10_000}),
         ),
-        (101, json!({"wait_ms": 10_000})),
-        (102, json!({"app_id": "org.example.Other", "wait_ms": 30})),
+        (101, json!({"seat": seat, "wait_ms": 10_000})),
+        (
+            102,
+            json!({"seat": seat, "app_id": "org.example.Other", "wait_ms": 30}),
+        ),
     ];
     for (id, arguments) in &waits {
         mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -248,7 +289,7 @@ fn windows_waits_for_a_window_until_it_maps_its_time_is_up_or_it_is_cancelled() 
         json!({"windows": [], "timed_out": true})
     );
 
-    let mut client = Client::connect(mcp.server.compositor());
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
     let window = client.create_window();
     client.set_app_id_and_title(window, "org.example.Test", "Test");
     client.commit(window);
@@ -264,6 +305,7 @@ fn windows_waits_for_a_window_until_it_maps_its_time_is_up_or_it_is_cancelled() 
     let found = mcp.reply_to(100);
     let windows = &found["result"]["structuredContent"]["windows"];
     assert_eq!(windows[0]["app_id"], json!("org.example.Test"));
+    assert_eq!(windows[0]["seat"], json!(seat));
     assert_eq!(windows[0]["title"], json!("Test"));
     assert_eq!(windows[0]["output"], json!(1));
     assert_eq!(
@@ -274,7 +316,7 @@ fn windows_waits_for_a_window_until_it_maps_its_time_is_up_or_it_is_cancelled() 
     std::thread::sleep(Duration::from_millis(20));
     assert!(mcp.replies().iter().all(|reply| reply["id"] != json!(101)));
 
-    let too_long = mcp.call("windows", json!({"wait_ms": 60_000}));
+    let too_long = mcp.call("windows", json!({"seat": seat, "wait_ms": 60_000}));
     assert_eq!(too_long["isError"], json!(true));
 }
 
@@ -282,15 +324,16 @@ fn windows_waits_for_a_window_until_it_maps_its_time_is_up_or_it_is_cancelled() 
 #[test]
 fn at_most_64_calls_wait() {
     let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
     for id in 0..MAX_WAITING_CALLS {
         mcp.send(
             &json!({"jsonrpc": "2.0", "id": id + 500, "method": "tools/call",
                           "params": modern(json!({"name": "windows",
-                                                  "arguments": {"wait_ms": 10_000}}))}),
+                                                  "arguments": {"seat": seat, "wait_ms": 10_000}}))}),
         );
     }
     assert_eq!(mcp.replies(), Vec::<Value>::new());
-    let refused = mcp.call("windows", json!({"wait_ms": 10_000}));
+    let refused = mcp.call("windows", json!({"seat": seat, "wait_ms": 10_000}));
     assert_eq!(refused["isError"], json!(true));
 }
 
@@ -435,4 +478,124 @@ fn closing_the_input_stops_the_server_after_its_last_replies() {
     assert_eq!(replies[0]["id"], json!(9));
     let Mcp { server, .. } = mcp;
     assert_eq!(server.finish(), Stop::InputClosed);
+}
+
+/// Two seats through MCP alone, on a real clock: each lists its own outputs and windows, an id
+/// of the other's is unknown, the pointer and the keyboard reach a seat's own client, a window
+/// moves to a workspace, and a closed seat's handle fails plainly. A manual-clock Yuna holds one
+/// seat.
+#[test]
+fn seats_through_mcp_keep_to_their_own() {
+    let mut manual = Mcp::new(ClockMode::Manual);
+    manual.seat();
+    let second = manual.call("seat", json!({"action": "create"}));
+    assert_eq!(second["isError"], json!(true));
+
+    let mut mcp = Mcp::new(ClockMode::Real);
+    let a = mcp.seat();
+    let created = mcp.call(
+        "seat",
+        json!({"action": "create", "width": 1280, "height": 720, "rate": 60, "scale": 1}),
+    );
+    let b = created["structuredContent"]["seat"]
+        .as_u64()
+        .expect("a handle");
+    assert_eq!((a, b), (2, 3));
+    assert_eq!(
+        created["structuredContent"]["socket"],
+        Value::Null,
+        "no reaper, no socket"
+    );
+    let output_b = created["structuredContent"]["outputs"][0]["id"].clone();
+    assert_eq!(
+        created["structuredContent"]["outputs"][0]["logical"],
+        json!({"x": 2560.0, "y": 0.0, "width": 1280.0, "height": 720.0})
+    );
+    let listed = mcp.call("seat", json!({"action": "list"}));
+    assert_eq!(
+        listed["structuredContent"]["seats"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    let outputs_a = mcp.call("outputs", json!({"action": "list", "seat": a}));
+    assert_eq!(
+        outputs_a["structuredContent"]["outputs"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let theirs = mcp.call(
+        "outputs",
+        json!({"action": "remove", "seat": a, "output": output_b}),
+    );
+    assert_eq!(theirs["isError"], json!(true));
+    assert!(mcp.call("pointer", json!({"action": "get", "seat": 1}))["isError"] == json!(true));
+
+    let mut client =
+        crate::input_client::InputClient::connect(mcp.server.compositor(), SeatId(a), "agent-2");
+    let window = client.client.create_window();
+    client.client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    client.client.ack(window);
+    client.client.attach(window, 400, 300, RED);
+    client.client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    let found = mcp.call("windows", json!({"seat": a, "wait_ms": 5_000}));
+    let id = found["structuredContent"]["windows"][0]["id"].clone();
+    assert_eq!(found["structuredContent"]["windows"][0]["seat"], json!(a));
+    let none = mcp.call("windows", json!({"seat": b}));
+    assert_eq!(none["structuredContent"]["windows"], json!([]));
+
+    let clicked = mcp.call(
+        "pointer",
+        json!({"action": "click", "seat": a, "x": 26, "y": 26}),
+    );
+    let pointer = &clicked["structuredContent"]["pointer"];
+    assert_eq!(pointer["window"], id, "{clicked}");
+    assert_eq!(pointer["output"], json!(1));
+    assert_eq!(pointer["surface_position"], json!({"x": 10.0, "y": 10.0}));
+    assert_eq!(pointer["buttons"], json!([]));
+    let half = mcp.call("pointer", json!({"action": "click", "seat": a, "x": 26}));
+    assert_eq!(half["isError"], json!(true));
+    let typed = mcp.call(
+        "keyboard",
+        json!({"action": "type", "seat": a, "text": "hé"}),
+    );
+    assert_eq!(typed["structuredContent"]["keyboard_window"], id, "{typed}");
+    client.roundtrip(mcp.server.compositor());
+    assert_eq!(client.state.typed, "hé");
+    let on_b = mcp.call("keyboard", json!({"action": "tap", "seat": b, "keys": "a"}));
+    assert_eq!(on_b["structuredContent"]["keyboard_window"], Value::Null);
+    client.roundtrip(mcp.server.compositor());
+    assert_eq!(client.state.typed, "hé");
+
+    let moved = mcp.call(
+        "workspaces",
+        json!({"action": "move_window", "seat": a, "window": id, "workspace": "web"}),
+    );
+    let workspaces = &moved["structuredContent"]["outputs"][0]["workspaces"];
+    let web = workspaces
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|workspace| workspace["name"] == json!("web"))
+        .unwrap_or_else(|| panic!("{moved}"));
+    assert_eq!(web["windows"], json!([id]));
+    let not_ours = mcp.call(
+        "workspaces",
+        json!({"action": "move_window", "seat": b, "window": id, "workspace": "x"}),
+    );
+    assert_eq!(not_ours["isError"], json!(true));
+
+    let closed = mcp.call("seat", json!({"action": "close", "seat": a}));
+    assert_eq!(
+        closed["structuredContent"],
+        json!({"closed": a, "ended": [], "left_running": []})
+    );
+    let stale = mcp.call("keyboard", json!({"action": "tap", "seat": a, "keys": "a"}));
+    assert_eq!(stale["isError"], json!(true));
+    let text = stale["content"][0]["text"].as_str().expect("a reason");
+    assert!(text.contains("no seat 2"), "{text}");
+    assert_eq!(mcp.server.compositor().windows(), Vec::new());
 }

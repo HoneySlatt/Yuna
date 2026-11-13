@@ -5,6 +5,14 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- `yuna mcp` serves several agents, each on a seat of its own: `seat` creates one, with an
+  output and a Wayland socket its programs use, lists them and closes one, ending its programs.
+  `pointer` moves, clicks, drags and scrolls, `keyboard` presses keys, taps combinations and
+  types any text; `workspaces` lists, creates, shows and fills workspaces. Every tool but `clock`
+  names its seat, and nothing of one seat reaches another. `yuna mcp` no longer starts an output
+  of its own; its `--output` is each new seat's first output.
+- Clients get `cursor-shape` and drag and drop.
+
 - `yuna mcp` is an MCP server for one agent, on its standard input and output: a headless Yuna
   of its own, which speaks MCP's revisions 2026-07-28 and 2025-11-25. Its tools create, list and
   remove virtual outputs (`outputs`); start, list and stop programs, each with a clean
