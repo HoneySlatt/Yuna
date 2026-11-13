@@ -357,7 +357,10 @@ fn check_peeks(layout: &Layout) -> Result<(), String> {
                     // A pinned window of the workspace shown is in its peek, but not drawn
                     // while a fullscreen window of the special workspace covers the output.
                     let hidden_by_special = layout.window(p.window).is_some_and(|w| w.pinned)
-                        && layout.shown_special(output).ok().flatten().is_some();
+                        && !drawn.iter().any(|d| d.window == p.window)
+                        && drawn.iter().any(|d| {
+                            d.fullscreen && layout.window(d.window).is_some_and(|w| w.special)
+                        });
                     if workspace.shown && !drawn.contains(p) && !hidden_by_special {
                         return Err(format!("{p:?} is not as {output:?} draws it"));
                     }

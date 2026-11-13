@@ -619,8 +619,8 @@ own thread, both `took_us`.
   clipboard kept to their seat, and a seat's closing; its
   clients are `input_client.rs`'s, which bind a seat by name and hold a text field.
   `text_input.rs` in it tells text fields: entered and left with the keyboard, text outside
-  `us` committed, text composed, long text in pieces, and no seat's text in another's field. `captures.rs` in it captures
-  through MCP: an output's logical image, its edges on whole units, a frame on its way answered
+  `us` committed, text composed, long text in pieces, and no seat's text in another's field.
+  `captures.rs` in it captures through MCP: an output's logical image, its edges on whole units, a frame on its way answered
   at its boundary, a window, a region and the physical size with `pointer` aimed through them,
   the refusals, a closed seat, the last 16 ids, images too large. `screencopy.rs` captures
   through `ext-image-copy-capture-v1`, with `capture_client.rs`: both formats, a later frame

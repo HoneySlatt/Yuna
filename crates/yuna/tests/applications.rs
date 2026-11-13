@@ -889,20 +889,25 @@ impl Yuna {
         }
     }
 
-    /// Captures `region` until two captures [`STILL`] apart are the same image, and gives it.
+    /// Captures `region` every [`POLL`] until it has stayed the same image for [`STILL`], and
+    /// gives it: sampled through the whole second, so that a caret blinking or an animation is
+    /// not taken for still.
     fn still_capture(&self, seat: u64, region: &Value) -> Result<String, String> {
         let deadline = Instant::now() + PATIENCE;
         let mut last = self.capture(seat, region)?;
+        let mut since = Instant::now();
         loop {
-            std::thread::sleep(STILL);
+            std::thread::sleep(POLL);
             let now = self.capture(seat, region)?;
-            if now == last {
-                return Ok(now);
+            if now != last {
+                last = now;
+                since = Instant::now();
+            } else if since.elapsed() >= STILL {
+                return Ok(last);
             }
             if Instant::now() > deadline {
                 return Err(format!("{region} never stood still"));
             }
-            last = now;
         }
     }
 
