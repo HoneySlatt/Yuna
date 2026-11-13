@@ -37,7 +37,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
 | [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Accepted |
 | [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted; context corrected |
-| [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022 |
+| [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022; amended by 0043 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023 |
 | [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; amends the ROADMAP |
@@ -45,5 +45,6 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
 | [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted |
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009, 0021 |
-| [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted |
+| [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted |
+| [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |

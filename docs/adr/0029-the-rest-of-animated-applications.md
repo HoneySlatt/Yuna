@@ -1,7 +1,9 @@
 # 0029. The rest of animated applications, and the buffers CI's applications use
 
 - Status: Accepted; amends [0025](0025-applications-in-ci.md) (when an animated application's
-  rest is checked) and [0022](0022-the-headless-backend-in-yuna.md) (what CI tests of dmabufs)
+  rest is checked) and [0022](0022-the-headless-backend-in-yuna.md) (what CI tests of dmabufs);
+  amended by [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) (which SlimeEngine
+  client's rest M1.5 checks)
 - Date: 2026-11-12
 
 ## Context

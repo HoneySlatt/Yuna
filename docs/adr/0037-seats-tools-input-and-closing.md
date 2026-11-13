@@ -1,6 +1,7 @@
 # 0037. An agent's seat through MCP: its tools, its input, its keyboard, its closing
 
-- Status: Accepted
+- Status: Accepted; amended by [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md)
+  (how `type` types a character outside `us`)
 - Date: 2026-11-13
 
 ## Context
