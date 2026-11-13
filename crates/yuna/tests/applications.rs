@@ -27,6 +27,9 @@
 //! Every program comes from the development shell (`flake.nix`). Each process the test starts is
 //! killed if the test's thread ends first, so that a test killed or out of time leaves nothing.
 
+#[path = "common/application_environment.rs"]
+mod application_environment;
+
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -40,6 +43,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use application_environment::{application_environment, shell_variable};
 use smithay::reexports::rustix::io::Errno;
 use smithay::reexports::rustix::process::{
     Pid, Signal, getppid, kill_process, set_parent_process_death_signal,
@@ -259,34 +263,13 @@ fn qml(yuna: &Yuna) -> Command {
 
 /// `program`, to run in `yuna`, with an environment of its own: only what this file gives it.
 fn application(yuna: &Yuna, program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let home = yuna.home();
     let mut command = Command::new(program);
     command
         .env_clear()
-        // The store alone: nixpkgs' Qt also looks for plugins beside each folder of the PATH.
-        .env("PATH", shell_variable("YUNA_APPLICATIONS_PATH"))
-        .env("HOME", &home)
+        .envs(application_environment(&yuna.home()))
         .env("XDG_RUNTIME_DIR", yuna.runtime_dir())
-        .env("XDG_CONFIG_HOME", home.join("config"))
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("XDG_CACHE_HOME", home.join("cache"))
-        .env("XDG_STATE_HOME", home.join("state"))
-        // Unset, they would be /etc/xdg and /usr/share: the machine's settings, GTK's among them.
-        .env("XDG_CONFIG_DIRS", home.join("config-dirs"))
-        .env("XDG_DATA_DIRS", home.join("data-dirs"))
         // A path, so that nothing else in the runtime folder is ever reached.
         .env("WAYLAND_DISPLAY", &yuna.socket)
-        .env("FONTCONFIG_FILE", shell_variable("YUNA_FONTS_CONF"))
-        // The shell's Mesa, on the CPU, never the machine's GPU (ADR-0022).
-        .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH"))
-        .env(
-            "__EGL_VENDOR_LIBRARY_FILENAMES",
-            shell_variable("__EGL_VENDOR_LIBRARY_FILENAMES"),
-        )
-        .env("LIBGL_ALWAYS_SOFTWARE", "1")
-        .env("VK_DRIVER_FILES", shell_variable("YUNA_LAVAPIPE_ICD"))
-        // The machine's own layers, such as its Mesa's device_select, stay out.
-        .env("VK_LOADER_LAYERS_DISABLE", "~implicit~")
         .stdin(Stdio::null());
     dies_with_test(&mut command);
     command
@@ -310,13 +293,6 @@ fn dies_with_test(command: &mut Command) {
             Ok(())
         });
     }
-}
-
-/// A variable the development shell sets.
-fn shell_variable(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| {
-        panic!("{name} is not set: run the tests in the development shell, `nix develop`")
-    })
 }
 
 /// What Yuna counted, from its last `counters` line (`Compositor::counters`).

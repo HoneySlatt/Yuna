@@ -14,8 +14,9 @@ Designed on 2026-11-11. The first stage builds the headless core. Today Yuna run
 virtual outputs drawn offscreen, `xdg-shell` windows placed by its layout model, frames that
 follow damage and report when they could show; popups, the clipboard, dmabufs and fractional
 scale; real applications (Alacritty, GTK 4, Qt 6, Vulkan) run in it in CI, and it rests when
-they do. Pointer input and agents' control through MCP come next, then XWayland; the desktop
-session does not exist yet.
+they do. `yuna mcp` serves an agent through MCP: it starts programs, lists their windows,
+creates outputs and steps the clock. Agents' seats, their input and captures come next, then
+XWayland; the desktop session does not exist yet.
 
 ## Build
 

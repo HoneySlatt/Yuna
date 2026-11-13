@@ -22,6 +22,10 @@ tracing = "0.1.44"
 # Writes the logs to standard error. Only its formatter: no filter language, no ANSI colours, no
 # time crate; the level comes from YUNA_LOG.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+# The MCP server's messages, JSON-RPC on standard input and output (ADR-0033): `serde_json` reads
+# and writes them, `serde`'s derive reads each tool's arguments.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 # Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
 # Wayland protocol and of the protocols beyond the core one, unstable and staging ones included
 # (`ext-data-control-v1`, fractional scale, xdg-activation, xdg-dialog).

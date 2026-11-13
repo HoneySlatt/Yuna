@@ -63,9 +63,14 @@ impl Clock {
     /// The current time, on `CLOCK_MONOTONIC`'s scale.
     pub fn now(&self) -> Duration {
         match self.mode {
-            ClockMode::Real => self.system.now().into(),
+            ClockMode::Real => self.real_now(),
             ClockMode::Manual => self.manual_now,
         }
+    }
+
+    /// The real time, `CLOCK_MONOTONIC`, in either mode.
+    pub fn real_now(&self) -> Duration {
+        self.system.now().into()
     }
 
     /// In manual mode, moves time forward by `by` without running any deadline, as work that

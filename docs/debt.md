@@ -36,9 +36,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - The lead's floor and margin, 2 ms and 1 ms, are KWin's, not set from a miss rate measured on a
   GPU, where they matter: `--gpu` was not run for ADR-0031
   ([measurements](measurements.md)). On llvmpipe the lead sits at its cap, one period.
-- Virtual time is not kept from running ahead of real time while real clients are connected
-  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
-  clock.
+- `Compositor::advance`, which the tests use, may run virtual time ahead of real time, while
+  [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) says never while real clients are
+  connected. MCP's `clock` refuses it; in the tests, every client is the test's own.
 - `--gpu`, its dmabuf feedback and a GPU's dmabufs were checked once, by hand, on the owner's
   RX 6900 XT ([measurements](measurements.md)); no test covers them: CI has no GPU, and the
   tests never use `--gpu` ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). The stories
@@ -108,3 +108,26 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
+
+## The MCP server
+
+- No real MCP client has run `yuna mcp` yet: Claude Code, Codex and OpenCode are untested. Its
+  tests speak both revisions as the specification reads ([survey](survey.md#agents-and-mcp));
+  which revision Codex speaks is not known. The owner's check, or C5's story, pays it.
+- `windows` finds a program's window by its client's process id or its application id: a window
+  opened by another process than the one started, a wrapper's child or a program started
+  through D-Bus, is found by its application id alone. C3's sockets per seat tie windows to
+  their seat ([ADR-0035](adr/0035-agents-seats.md)).
+- A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
+  and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them.
+  Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
+  client may kill Yuna sooner.
+- `windows` lists every window: past a few hundred, its reply passes Claude Code's 25,000 tokens
+  of tool output. A seat's own windows (C3) shorten it.
+- 64 programs run at most, counted by their first process: one that exits leaving its children
+  frees its place.
+- When Yuna stops, the processes under it are found through `/proc`, then signalled by pid: a
+  process that ends and is reaped by its own parent between the two frees a pid that another
+  process may take. The window is short; pidfds would close it.
+- The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
+  before it closes Yuna's input.

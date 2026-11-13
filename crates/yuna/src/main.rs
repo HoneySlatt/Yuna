@@ -1,24 +1,35 @@
 //! The `yuna` program: reads its command line, and runs the headless compositor until SIGTERM or
-//! SIGINT. The desktop session does not exist yet (Stage 2); the work in progress is in
-//! `docs/PLAN.md`.
+//! SIGINT, or, as `yuna mcp`, an MCP server of its own until its client closes its input
+//! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md)). The desktop session does not exist yet
+//! (Stage 2); the work in progress is in `docs/PLAN.md`.
 
 mod stop_signal;
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::process::ExitCode;
 
+use smithay::reexports::rustix;
 use tracing::level_filters::LevelFilter;
+use yuna::mcp::{Server, Stop};
 use yuna::{ClockMode, Compositor, Config, Device, Error, OutputMode};
 
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
 Usage: yuna --headless [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE]...
+       yuna mcp [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE]... [--manual-clock]
        yuna -h | --help
        yuna -V | --version
 
 Without an argument, Yuna would start the desktop session, which does not exist yet.
+
+Commands:
+  mcp                An MCP server for one agent, on standard input and output: a headless
+                     Yuna of its own, whose tools start programs, list windows, create and
+                     remove outputs, and read the clock. Logs to standard error; stops when
+                     its input closes, or on SIGTERM or SIGINT, and ends its programs then.
 
 Options:
       --headless     Run without a screen, on virtual outputs drawn offscreen. Prints
@@ -28,6 +39,8 @@ Options:
       --output MODE  Add a virtual output of WIDTHxHEIGHT physical pixels, refreshed RATE
                      times a second, at SCALE physical pixels per logical unit; outputs are
                      laid out left to right. Default: one output, 3840x2160@240,1.5.
+      --manual-clock With mcp: time moves only when the clock tool advances it, never past
+                     real time.
   -h, --help         Print this help
   -V, --version      Print the version
 
@@ -44,15 +57,19 @@ enum Request {
     /// No argument: the desktop session, which does not exist yet.
     Session,
     Headless(Headless),
+    /// `yuna mcp`.
+    Mcp(Headless),
     /// Arguments Yuna does not take; the reason says why.
     Invalid(String),
 }
 
-/// What `--headless` runs.
+/// What `--headless` and `mcp` run.
 #[derive(Debug, PartialEq)]
 struct Headless {
     gpu: bool,
     outputs: Vec<OutputMode>,
+    /// The manual clock, which `mcp` alone takes.
+    manual_clock: bool,
 }
 
 /// Reads the arguments that follow the program's name. They are `OsString`s, so that an argument
@@ -63,20 +80,31 @@ fn read_request(arguments: impl IntoIterator<Item = OsString>) -> Request {
         [] => Request::Session,
         [one] if one == "-h" || one == "--help" => Request::Help,
         [one] if one == "-V" || one == "--version" => Request::Version,
-        _ => read_headless(&arguments),
+        [first, rest @ ..] if first == "mcp" => read_headless(rest, true),
+        _ => read_headless(&arguments, false),
     }
 }
 
-fn read_headless(arguments: &[OsString]) -> Request {
-    let mut headless = false;
+/// Reads `--headless`'s options, or, for `mcp`, its own: no `--headless`, which it is already,
+/// and `--manual-clock`.
+fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
+    let mut headless = mcp;
     let mut gpu = false;
+    let mut manual_clock = false;
     let mut outputs = Vec::new();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
             Some("--headless") if !headless => headless = true,
             Some("--gpu") if !gpu => gpu = true,
-            Some(flag @ ("--headless" | "--gpu")) => {
+            Some("--manual-clock") if mcp && !manual_clock => manual_clock = true,
+            Some("--headless") if mcp => {
+                return Request::Invalid("mcp is headless already: drop --headless".to_owned());
+            }
+            Some("--manual-clock") if !mcp => {
+                return Request::Invalid("--manual-clock is mcp's".to_owned());
+            }
+            Some(flag @ ("--headless" | "--gpu" | "--manual-clock")) => {
                 return Request::Invalid(format!("{flag} is given twice"));
             }
             Some("--output") => match arguments.next().map(|mode| read_output(mode)) {
@@ -101,7 +129,16 @@ fn read_headless(arguments: &[OsString]) -> Request {
     if outputs.is_empty() {
         outputs.push(OutputMode::default());
     }
-    Request::Headless(Headless { gpu, outputs })
+    let headless = Headless {
+        gpu,
+        outputs,
+        manual_clock,
+    };
+    if mcp {
+        Request::Mcp(headless)
+    } else {
+        Request::Headless(headless)
+    }
 }
 
 /// Reads `WIDTHxHEIGHT@RATE,SCALE`, and checks it as an output's mode.
@@ -131,6 +168,7 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Request::Headless(headless) => run_headless(headless),
+        Request::Mcp(headless) => run_mcp(headless),
         Request::Invalid(reason) => usage_error(&reason),
     }
 }
@@ -152,23 +190,9 @@ fn run_headless(headless: Headless) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = Config {
-        outputs: headless.outputs,
-        device: if headless.gpu {
-            Device::Gpu
-        } else {
-            Device::Software
-        },
-        clock: ClockMode::Real,
-        listen: true,
-    };
-    let mut compositor = match Compositor::new(config) {
+    let mut compositor = match start_compositor(headless) {
         Ok(compositor) => compositor,
-        Err(Error::InvalidOutput(reason)) => return usage_error(&reason.to_string()),
-        Err(error) => {
-            print_error(&format!("yuna: {error}\n"));
-            return ExitCode::FAILURE;
-        }
+        Err(exit) => return exit,
     };
     if let Some(name) = compositor.socket_name() {
         // A reader that left does not stop the compositor: its clients may know the socket.
@@ -176,6 +200,86 @@ fn run_headless(headless: Headless) -> ExitCode {
     }
     match compositor.run_until(stop) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "the compositor stopped");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Starts the compositor `headless` asks for, listening on a socket; reports why it cannot.
+fn start_compositor(headless: Headless) -> Result<Compositor, ExitCode> {
+    let config = Config {
+        outputs: headless.outputs,
+        device: if headless.gpu {
+            Device::Gpu
+        } else {
+            Device::Software
+        },
+        clock: if headless.manual_clock {
+            ClockMode::Manual
+        } else {
+            ClockMode::Real
+        },
+        listen: true,
+    };
+    match Compositor::new(config) {
+        Ok(compositor) => Ok(compositor),
+        Err(Error::InvalidOutput(reason)) => Err(usage_error(&reason.to_string())),
+        Err(error) => {
+            print_error(&format!("yuna: {error}\n"));
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// `yuna mcp`: the MCP server on standard input and output, until its input closes or a signal
+/// stops it. Yuna becomes its children's subreaper, so that every process its programs start
+/// stays under it, to be reaped and ended.
+fn run_mcp(headless: Headless) -> ExitCode {
+    start_logging();
+    let signals = stop_signal::install().and_then(|stop| {
+        let children = stop_signal::install_children()?;
+        rustix::process::set_child_subreaper(Some(rustix::process::getpid()))?;
+        Ok((stop, children))
+    });
+    let (stop, children) = match signals {
+        Ok(signals) => signals,
+        Err(error) => {
+            print_error(&format!("yuna: cannot handle signals: {error}\n"));
+            return ExitCode::FAILURE;
+        }
+    };
+    let streams = io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .and_then(|input| Ok((input, io::stdout().as_fd().try_clone_to_owned()?)));
+    let (input, output): (OwnedFd, OwnedFd) = match streams {
+        Ok(streams) => streams,
+        Err(error) => {
+            print_error(&format!(
+                "yuna: cannot use standard input and output: {error}\n"
+            ));
+            return ExitCode::FAILURE;
+        }
+    };
+    let compositor = match start_compositor(headless) {
+        Ok(compositor) => compositor,
+        Err(exit) => return exit,
+    };
+    let server = match Server::new(compositor, input, output, Some(children)) {
+        Ok(server) => server,
+        Err(error) => {
+            print_error(&format!("yuna: {error}\n"));
+            return ExitCode::FAILURE;
+        }
+    };
+    match server.run(stop) {
+        Ok(Stop::InputClosed | Stop::Signal) => ExitCode::SUCCESS,
+        Ok(Stop::Broken(reason)) => {
+            tracing::error!(%reason, "the client broke the connection");
+            ExitCode::FAILURE
+        }
         Err(error) => {
             tracing::error!(%error, "the compositor stopped");
             ExitCode::FAILURE
@@ -288,6 +392,7 @@ mod tests {
             Request::Headless(Headless {
                 gpu: false,
                 outputs: vec![mode(3840, 2160, 240.0, 1.5)],
+                manual_clock: false,
             })
         );
     }
@@ -306,8 +411,45 @@ mod tests {
             Request::Headless(Headless {
                 gpu: true,
                 outputs: vec![mode(1920, 1080, 60.0, 1.0), mode(2560, 1440, 144.0, 1.25)],
+                manual_clock: false,
             })
         );
+    }
+
+    #[test]
+    fn mcp_takes_the_headless_options_and_the_manual_clock() {
+        assert_eq!(
+            request(&["mcp"]),
+            Request::Mcp(Headless {
+                gpu: false,
+                outputs: vec![mode(3840, 2160, 240.0, 1.5)],
+                manual_clock: false,
+            })
+        );
+        assert_eq!(
+            request(&[
+                "mcp",
+                "--manual-clock",
+                "--output",
+                "1920x1080@60,1",
+                "--gpu"
+            ]),
+            Request::Mcp(Headless {
+                gpu: true,
+                outputs: vec![mode(1920, 1080, 60.0, 1.0)],
+                manual_clock: true,
+            })
+        );
+        for bad in [
+            &["mcp", "--headless"][..],
+            &["mcp", "--manual-clock", "--manual-clock"],
+            &["--headless", "--manual-clock"],
+            &["--headless", "mcp"],
+            &["mcp", "--output"],
+            &["mcp", "extra"],
+        ] {
+            assert!(matches!(request(bad), Request::Invalid(_)), "{bad:?}");
+        }
     }
 
     #[test]

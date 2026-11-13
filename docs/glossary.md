@@ -54,9 +54,13 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
-- **Manual clock**: the compositor's clock in tests: it starts at the real monotonic time and moves
-  only when a test advances it, running each deadline it passes, in order
-  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+- **Manual clock**: the compositor's clock in tests, and in `yuna mcp --manual-clock`: it starts at
+  the real monotonic time and moves only when a test, or an agent through the `clock` tool,
+  advances it, running each deadline it passes, in order
+  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)). An agent never moves it past real
+  time.
+- **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
+  `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for the keyboard until it is dismissed, as an open menu
   holds it; granted only with a serial Yuna's seat sent, and only to a popup not dismissed. While
@@ -70,6 +74,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   1,023.
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
+- **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
+  turn stays under Yuna, its **subreaper**, and ends with it.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has

@@ -9,8 +9,9 @@ comes next is in [`PLAN.md`](PLAN.md).
 One Cargo workspace; its crates live in `crates/`.
 
 - **`yuna`** (`crates/yuna`): the compositor. Its library is the headless compositor, which the
-  program runs and tests drive in their own process; its binary, `src/main.rs`, reads the command
-  line and runs `yuna --headless` until SIGTERM. The desktop session does not exist yet (Stage 2).
+  program runs and tests drive in their own process, and the MCP server around it; its binary,
+  `src/main.rs`, reads the command line and runs `yuna --headless` until SIGTERM, or `yuna mcp`
+  until its client closes its input. The desktop session does not exist yet (Stage 2).
 - **`yuna-layout`** (`crates/yuna-layout`): the layout model. It knows seats, outputs, workspaces
   and windows by plain ids, decides where every window goes, and holds no Wayland or Smithay
   object, so that every behaviour is a test without a compositor
@@ -22,7 +23,9 @@ One Cargo workspace; its crates live in `crates/`.
 - `yuna` → Smithay, at a pinned git revision, with only its `wayland_frontend`, `desktop` and
   `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
-  its logs; `yuna-layout`. Its tests use `wayland-client` and `wayland-protocols`' client side,
+  its logs; `serde`, with its derive, and `serde_json` for MCP's messages
+  ([ADR-0033](adr/0033-the-mcp-server.md)); `yuna-layout`. rustix, which Smithay re-exports,
+  makes its system calls: pipes, signals, `waitpid`, `prctl`. Its tests use `wayland-client` and `wayland-protocols`' client side,
   staging protocols included, and proptest, without its default features.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
@@ -151,7 +154,9 @@ operation, and an example measures the model:
   display it opens until the process ends, so that compositors started and dropped on several
   threads, as tests run them, never lose the display Smithay shares among them.
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
-- `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, and SIGTERM.
+- `mcp/`: the MCP server, [below](#the-mcp-server).
+- `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, SIGTERM, and
+  SIGCHLD for `yuna mcp`.
 
 ### Time and deadlines
 
@@ -388,10 +393,57 @@ is disabled at once and destroyed 10 s later, at the end of a round, so that a c
 to bind it before it learnt of the removal is not ended for it. The last output is never removed,
 and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
+### The MCP server
+
+`yuna mcp` is a headless Yuna of one MCP client's own: it reads JSON-RPC requests from its
+standard input, one per line, and writes the replies to its standard output, nothing else
+([ADR-0033](adr/0033-the-mcp-server.md)). `mcp/`, one job per file:
+
+- `protocol.rs`: the messages and the revisions. A request that names 2026-07-28 in its `_meta`
+  is served on its own, with `server/discover`, `tools/list` and `tools/call`; one that names
+  another revision gets -32022. A client that opens with `initialize` is answered 2025-11-25,
+  and its requests without `_meta`'s revision are served under it, `ping` included: the one
+  state kept across requests.
+- `stdio.rs`: the lines, at most 1 MiB, and the queue of replies.
+- `tools.rs`: the tools' schemas, their arguments, read with serde, and their results, given
+  both as `structuredContent` and as text. A tool that does several things takes an `action`.
+- `programs.rs`: the programs `spawn` starts.
+- `mod.rs`: `Server`, which holds the compositor and runs the tools.
+
+Everything runs in the compositor's event loop. The sources of the client's input and output,
+of SIGCHLD and of the waiting calls' timers only note what came; after each round,
+`Server::dispatch` reaps the programs that ended, reads one chunk of input, answers each whole
+line, answers the calls whose window came or whose time is up, sends the compositor's events and
+writes the replies. While 16 MiB of replies wait, no further line is answered and the client's
+input is not read. A line over 1 MiB, or an input or output that fails, ends the connection.
+
+The tools: `outputs` lists, creates and removes outputs; `spawn` starts, lists and stops
+programs; `windows` lists the windows, as `Compositor::windows` describes them, and with
+`wait_ms` waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting
+call is answered once the layout has placed the window, which on the manual clock takes a
+`clock` advance; `notifications/cancelled` drops it unanswered; 64 wait at most. `clock` reads
+the time, and advances a manual clock, never past real time.
+
+A program gets an environment of its own: from Yuna's, only the variables that find its
+programs, libraries, locale and drivers (`programs::KEPT_VARIABLES`); `WAYLAND_DISPLAY`, the
+socket's full path; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's session bus
+nor their sound server is found; then the agent's variables. It inherits no descriptor of
+Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
+log file. A log keeps 1 MiB; past it, the pipe is read 64 KiB every 100 ms and counted, so that a
+program writing without end waits on its pipe and Yuna does not spin. 64 programs run at most,
+128 are remembered. Each leads its own process group, which `stop` signals, its first process
+gone or not. Yuna is its children's subreaper: a process whose parent ends becomes Yuna's, so
+that the whole tree is reaped and ended by Yuna. When Yuna stops, every process under it, found
+through `/proc`, gets SIGTERM, then SIGKILL 2 s later, while the compositor still serves its
+clients; then the folder of logs and runtime folders, `yuna-mcp-<pid>` in `XDG_RUNTIME_DIR`, is
+removed.
+
 ### The program
 
 `yuna --headless` starts the compositor with real time and a socket in `XDG_RUNTIME_DIR`, prints
-`WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM or SIGINT. The signal handler writes to a pipe
+`WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM or SIGINT. `yuna mcp` starts the same
+compositor, on the manual clock with `--manual-clock`, and serves MCP until its input closes or
+SIGTERM or SIGINT comes. The signal handler writes to a pipe
 the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
@@ -407,7 +459,9 @@ one it was presented at, later when the frame was late.
   written with `wayland-client` (`client.rs` and `client/`; `selection_client.rs` for the
   selections), each test a short story with exact figures: the windows' in `main.rs`, then one
   file per subject (`popups.rs`, `activation.rs`, `dialogs.rs`, `window_cap.rs`, `scale.rs`,
-  `dmabuf.rs`, `selection.rs`, `outputs.rs`).
+  `dmabuf.rs`, `selection.rs`, `outputs.rs`). `mcp.rs` in it drives the MCP server through two
+  socket pairs, its input and its output: both revisions, every tool but `spawn`, waits,
+  cancellation and timeouts, a client that does not read, a line too long, an input that closes.
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no
@@ -442,6 +496,10 @@ one it was presented at, later when the frame was late.
   ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
+- `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
+  logs, an orphan adopted, `stop`, the whole tree ended when its input closes, and Alacritty
+  started through `spawn` and found through `windows`. Applications get the environment of
+  `tests/common/application_environment.rs`, which `applications.rs` shares.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as
   agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
   [ADR-0029](adr/0029-the-rest-of-animated-applications.md)). One `yuna` per application, all at

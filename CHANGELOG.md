@@ -5,6 +5,13 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- `yuna mcp` is an MCP server for one agent, on its standard input and output: a headless Yuna
+  of its own, which speaks MCP's revisions 2026-07-28 and 2025-11-25. Its tools create, list and
+  remove virtual outputs (`outputs`); start, list and stop programs, each with a clean
+  environment and a log (`spawn`); list windows, waiting for one if asked (`windows`); and read
+  the clock, or step it with `--manual-clock` (`clock`). Closing its input stops it and ends
+  every program it started.
+
 - `yuna --headless` runs Yuna without a screen, on virtual outputs drawn offscreen, and prints
   `WAYLAND_DISPLAY=<socket>`; SIGTERM or Ctrl-C stops it and removes its socket.
 - `--output WIDTHxHEIGHT@RATE,SCALE` adds a virtual output; the default is one output of

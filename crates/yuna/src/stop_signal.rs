@@ -1,6 +1,7 @@
 //! Stopping cleanly on SIGTERM and SIGINT: the signal handler writes a byte to a pipe whose read
 //! end the compositor's event loop watches, so that the loop wakes and returns, and the Wayland
-//! socket and its lock file are removed.
+//! socket and its lock file are removed. SIGCHLD, for `yuna mcp`, writes to a pipe of its own, so
+//! that the loop reaps the programs that ended.
 //!
 //! The handler is set with the C library's `signal`, which the standard library links already:
 //! calloop's own signal source needs the `nix` crate, a dependency the owner has not accepted.
@@ -14,9 +15,10 @@ use rustix::pipe::{PipeFlags, pipe_with};
 use rustix::process::Signal;
 use smithay::reexports::rustix;
 
-/// The pipe's write end, for the handler: set once, before the handler is installed, and never
-/// closed while the process runs.
+/// The pipes' write ends, for the handlers: each set once, before its handler is installed, and
+/// never closed while the process runs.
 static STOP_PIPE: AtomicI32 = AtomicI32::new(-1);
+static CHILDREN_PIPE: AtomicI32 = AtomicI32::new(-1);
 
 /// `SIG_ERR`, `(void (*)(int)) -1`, as `signal` returns it.
 const SIG_ERR: usize = usize::MAX;
@@ -30,10 +32,21 @@ unsafe extern "C" {
     fn signal(signum: c_int, handler: usize) -> usize;
 }
 
-/// Writes one byte to the pipe. Only async-signal-safe work: an atomic load and `write(2)`,
-/// which rustix makes as a raw system call, without `errno` or a lock.
+/// Writes one byte to the stop pipe.
 extern "C" fn on_stop_signal(_signal: c_int) {
-    let fd: RawFd = STOP_PIPE.load(Ordering::Relaxed);
+    write_byte(&STOP_PIPE);
+}
+
+/// Writes one byte to the children's pipe.
+extern "C" fn on_child_signal(_signal: c_int) {
+    write_byte(&CHILDREN_PIPE);
+}
+
+/// Writes one byte to the pipe whose write end `pipe` holds. Only async-signal-safe work: an
+/// atomic load and `write(2)`, which rustix makes as a raw system call, without `errno` or a
+/// lock.
+fn write_byte(pipe: &AtomicI32) {
+    let fd: RawFd = pipe.load(Ordering::Relaxed);
     if fd < 0 {
         return;
     }
@@ -47,15 +60,29 @@ extern "C" fn on_stop_signal(_signal: c_int) {
 /// Installs the handler for SIGTERM and SIGINT, and returns the pipe's read end, which becomes
 /// readable when either arrives.
 pub fn install() -> io::Result<OwnedFd> {
+    install_on(&STOP_PIPE, on_stop_signal, &[Signal::TERM, Signal::INT])
+}
+
+/// Installs the handler for SIGCHLD, and returns the pipe's read end, which becomes readable
+/// when a child ends.
+pub fn install_children() -> io::Result<OwnedFd> {
+    install_on(&CHILDREN_PIPE, on_child_signal, &[Signal::CHILD])
+}
+
+/// Makes a pipe whose write end `pipe` keeps, and installs `handler` for `signals`.
+fn install_on(
+    pipe: &AtomicI32,
+    handler: extern "C" fn(c_int),
+    signals: &[Signal],
+) -> io::Result<OwnedFd> {
     let (read, write) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
     // Kept open for the life of the process: the handler may run at any time.
-    STOP_PIPE.store(write.into_raw_fd(), Ordering::Relaxed);
-    let handler: extern "C" fn(c_int) = on_stop_signal;
-    for stop in [Signal::TERM, Signal::INT] {
+    pipe.store(write.into_raw_fd(), Ordering::Relaxed);
+    for &signal_number in signals {
         // SAFETY: `signal` is declared with its C signature, pointer-sized values passed as
         // `usize`; the handler is an `extern "C" fn(c_int)` that does only async-signal-safe
         // work, and the pipe it writes to is open before it is installed.
-        let previous = unsafe { signal(stop.as_raw(), handler as usize) };
+        let previous = unsafe { signal(signal_number.as_raw(), handler as usize) };
         if previous == SIG_ERR {
             return Err(io::Error::last_os_error());
         }

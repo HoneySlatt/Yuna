@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction, RegistrationToken};
+use smithay::reexports::calloop::{
+    EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
+};
 use smithay::reexports::wayland_server::{BindError, Display};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
@@ -257,22 +259,28 @@ impl Compositor {
         while !self.state.stop_requested {
             let wakeups = self.state.counters.wakeups;
             self.dispatch(None)?;
-            if self.state.counters.wakeups != wakeups {
-                // One line per round that woke, so that a test outside the process reads what
-                // the program did, and that nothing was done at rest.
-                let counters = self.state.counters;
-                tracing::debug!(
-                    frames_drawn = counters.frames_drawn,
-                    frame_callbacks = counters.frame_callbacks,
-                    configures = counters.configures,
-                    commits = counters.commits,
-                    wakeups = counters.wakeups,
-                    "counters"
-                );
-            }
+            self.log_counters_after(wakeups);
         }
         tracing::info!("stopping");
         Ok(())
+    }
+
+    /// Logs the [`Counters`] at the `debug` level, in one line whose message is `counters`,
+    /// if the compositor woke since it had counted `wakeups`: one line per round that woke, so
+    /// that a test outside the process reads what the program did, and that nothing was done at
+    /// rest.
+    pub(crate) fn log_counters_after(&self, wakeups: u64) {
+        if self.state.counters.wakeups != wakeups {
+            let counters = self.state.counters;
+            tracing::debug!(
+                frames_drawn = counters.frames_drawn,
+                frame_callbacks = counters.frame_callbacks,
+                configures = counters.configures,
+                commits = counters.commits,
+                wakeups = counters.wakeups,
+                "counters"
+            );
+        }
     }
 
     /// With the manual clock, moves time forward by `by`, running every deadline it passes in
@@ -299,6 +307,28 @@ impl Compositor {
     /// The clock's time, on `CLOCK_MONOTONIC`'s scale.
     pub fn now(&self) -> Duration {
         self.state.clock.now()
+    }
+
+    /// How the clock's time moves.
+    pub fn clock_mode(&self) -> ClockMode {
+        self.state.clock.mode()
+    }
+
+    /// The real time, `CLOCK_MONOTONIC`, whatever the clock's mode: the limit of a manual
+    /// clock that an agent steps ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
+    pub fn real_now(&self) -> Duration {
+        self.state.clock.real_now()
+    }
+
+    /// Whether the layout changed since it was last arranged: the windows' places are those of
+    /// the last arrangement until the next refresh.
+    pub(crate) fn arrangement_pending(&self) -> bool {
+        self.state.layout_dirty
+    }
+
+    /// The event loop's handle, for the MCP server's sources.
+    pub(crate) fn loop_handle(&self) -> LoopHandle<'static, State> {
+        self.event_loop.handle()
     }
 
     /// The clock's earliest armed deadline; none at rest.
@@ -459,7 +489,7 @@ impl Compositor {
     /// popups and surfaces left behind, then sends the events written to every client. A client
     /// that cannot take them is ended by the display, and freed at the next round's end; the
     /// others go on.
-    fn flush(&mut self) {
+    pub(crate) fn flush(&mut self) {
         self.free_departed_clients();
         // Smithay's popup trees and grabs forget their destroyed popups.
         self.state.popups.cleanup();

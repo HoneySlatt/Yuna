@@ -25,6 +25,7 @@ mod compositor;
 mod dialog;
 mod dmabuf;
 mod frames;
+pub mod mcp;
 mod output;
 mod popups;
 mod render;

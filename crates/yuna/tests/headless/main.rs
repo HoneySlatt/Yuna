@@ -11,6 +11,7 @@ mod activation;
 mod client;
 mod dialogs;
 mod dmabuf;
+mod mcp;
 mod misbehaving;
 mod outputs;
 mod popups;

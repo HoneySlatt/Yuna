@@ -53,6 +53,7 @@ pin the versions of `cargo deny` and `lychee`, and a check could pass for the wr
 nix develop -c scripts/check.sh           # every check; what CI runs
 nix develop -c cargo run -- --help        # Yuna's options
 nix develop -c cargo run -- --headless --output 1920x1080@60,1   # Yuna without a screen
+nix develop -c cargo run -- mcp            # an MCP server on standard input and output
 nix develop -c cargo test --workspace     # the tests alone
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
@@ -70,6 +71,12 @@ nix develop -c target/release/examples/frame_time
 It needs no screen of its own. On the owner's machine, agents run it inside `agent-headless`,
 one measure at a time.
 
+`yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
+input and output, with the same options and `--manual-clock`
+([ADR-0033](docs/adr/0033-the-mcp-server.md)). For Claude Code, for example:
+`claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes, and ends the
+programs it started then.
+
 `yuna --headless` prints `WAYLAND_DISPLAY=<socket>`; a client started with that variable connects
 to it. It draws on llvmpipe; `--gpu` draws on the GPU's render node instead, and is never used by
 the tests. SIGTERM or Ctrl-C stops it and removes its socket. To run one of the tests'
@@ -81,6 +88,8 @@ clock, with clients written with `wayland-client`; they need the shell's Mesa. T
 applications' tests (`crates/yuna/tests/applications.rs`) run the program with real applications
 and check that it rests; they need the shell's applications, and take about 15 s.
 Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATIONS_OUTPUT` names.
+`crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
+in about 3 s; the MCP server's exchanges are tested in the compositor's tests (`mcp.rs` there).
 SlimeEngine's `window` example runs in an ignored test, given the path of its binary, as the
 weekly job runs it:
 
@@ -157,7 +166,10 @@ Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` an
 of `wayland-protocols`, for tests only; and, in the shell, Mesa, libglvnd, libxkbcommon,
 xkeyboard-config, a font, and the applications the tests run
 ([ADR-0025](docs/adr/0025-applications-in-ci.md)); on 2026-11-12 too, the action
-`actions/cache`, for SlimeEngine's binary. Smithay is pinned to one revision
+`actions/cache`, for SlimeEngine's binary. For the MCP server (M1.5), the owner accepted on
+2026-11-13 `serde`, with its `derive` feature, and `serde_json`
+([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
+([ADR-0034](docs/adr/0034-captures.md)). Smithay is pinned to one revision
 ([ADR-0017](docs/adr/0017-smithays-revision.md)); its patches live in Yuna's fork
 ([ADR-0021](docs/adr/0021-smithays-fork.md), [`docs/smithay-patches.md`](docs/smithay-patches.md)).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
