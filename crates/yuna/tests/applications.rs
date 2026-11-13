@@ -178,6 +178,9 @@ fn pause_vkcube_and_rest() -> Result<String, String> {
     if !yuna.program_runs(seat, &cube).map_err(failure)? {
         return Err(failure("it left during the rest window".to_owned()));
     }
+    if !yuna.window_shown(seat).map_err(failure)? {
+        return Err(failure("its window was not shown at rest".to_owned()));
+    }
     yuna.stop()?;
     Ok(format!(
         "vkcube, paused by its space key: quiet after {} frames drawn, {} commits; then {rest}",
@@ -278,6 +281,9 @@ fn editor_at_rest() -> Result<String, String> {
     if !yuna.program_runs(seat, &program).map_err(failure)? {
         return Err(failure("it left during the rest window".to_owned()));
     }
+    if !yuna.window_shown(seat).map_err(failure)? {
+        return Err(failure("its window was not shown at rest".to_owned()));
+    }
     yuna.stop()?;
     Ok(format!(
         "SlimeEngine's editor: quiet after {} frames drawn, {} commits; then {rest}",
@@ -293,14 +299,18 @@ const INTERFACE_FIELD: (f64, f64) = (572.0, 20.0);
 const INTERFACE_FIELD_AREA: (u32, u32, u32, u32) = (492, 6, 160, 28);
 const INTERFACE_VIEW_BUTTON: (f64, f64) = (152.0, 20.0);
 const INTERFACE_STATUS_AREA: (u32, u32, u32, u32) = (744, 0, 176, 46);
-/// How long the story watches those parts stay the same before its input.
+/// The size of the window those places assume.
+const INTERFACE_WINDOW: (f64, f64) = (936.0, 1048.0);
+/// How long a part of a window must stay the same to count as still.
 const STILL: Duration = Duration::from_secs(1);
 
 /// The done-when of M1.5: an agent, through MCP alone, opens one of SlimeEngine's examples,
 /// types, clicks, and checks the result by capture. It starts `interface`, clicks its text field
 /// and waits for the field to ask for an input method, types text with characters outside `us`,
-/// committed through `text-input-v3`, shows text being composed, and clicks a button; after each
-/// step, a capture of the part of the window it changes must differ from the one before.
+/// committed through `text-input-v3`, shows text being composed, and clicks a button. Before each
+/// step, the part of the window it changes is captured once it stands still; after the step, a
+/// capture of it must differ. The window's size and a field not enabled before the click are
+/// checked first.
 #[test]
 #[ignore = "needs SlimeEngine's examples, which the weekly job builds"]
 fn an_agent_types_and_clicks_in_slimeengines_interface_and_checks_by_capture() {
@@ -339,18 +349,22 @@ fn interface_story() -> Result<String, String> {
     };
     let field_area = area(INTERFACE_FIELD_AREA);
     let status_area = area(INTERFACE_STATUS_AREA);
+    let size = (
+        window["rect"]["width"].as_f64(),
+        window["rect"]["height"].as_f64(),
+    );
+    if size != (Some(INTERFACE_WINDOW.0), Some(INTERFACE_WINDOW.1)) {
+        return Err(failure(format!(
+            "its window is {size:?}, not the {INTERFACE_WINDOW:?} the story's places assume"
+        )));
+    }
     yuna.wait_for_frames().map_err(failure)?;
-    let field_before = yuna.capture(seat, &field_area).map_err(failure)?;
-    let status_before = yuna.capture(seat, &status_area).map_err(failure)?;
-    // Both parts are still without input, so that a change is the input's: the list beside them
-    // scrolls with time, they do not.
-    std::thread::sleep(STILL);
-    if yuna.capture(seat, &field_area).map_err(failure)? != field_before
-        || yuna.capture(seat, &status_area).map_err(failure)? != status_before
-    {
-        return Err(failure(
-            "its field or its bar changes without input".to_owned(),
-        ));
+    let keyboard = |yuna: &Yuna| {
+        yuna.call("keyboard", json!({"action": "get", "seat": seat}))
+            .map(|got| got["structuredContent"]["text_field"] == json!(true))
+    };
+    if keyboard(&yuna).map_err(failure)? {
+        return Err(failure("a field was enabled before the click".to_owned()));
     }
 
     let click = |(x, y): (f64, f64)| {
@@ -361,13 +375,7 @@ fn interface_story() -> Result<String, String> {
     };
     click(INTERFACE_FIELD).map_err(failure)?;
     let started = Instant::now();
-    loop {
-        let keyboard = yuna
-            .call("keyboard", json!({"action": "get", "seat": seat}))
-            .map_err(failure)?;
-        if keyboard["structuredContent"]["text_field"] == json!(true) {
-            break;
-        }
+    while !keyboard(&yuna).map_err(failure)? {
         if started.elapsed() > PATIENCE {
             return Err(failure(
                 "its field never asked for an input method".to_owned(),
@@ -377,34 +385,32 @@ fn interface_story() -> Result<String, String> {
     }
     let field_enabled = started.elapsed();
 
-    yuna.call(
-        "keyboard",
-        json!({"action": "tap", "seat": seat, "keys": "ctrl+a"}),
-    )
-    .map_err(failure)?;
-    yuna.call(
-        "keyboard",
-        json!({"action": "type", "seat": seat, "text": "Grüße"}),
-    )
-    .map_err(failure)?;
-    let typed = yuna
-        .capture_changed(seat, &field_area, &field_before)
+    // Each step is checked against a capture taken once the part it changes stood still after
+    // the step before, so that only that step's input can change it.
+    let key = |action: &str, field: &str, value: &str| {
+        yuna.call(
+            "keyboard",
+            json!({"action": action, "seat": seat, field: value}),
+        )
+    };
+    key("tap", "keys", "ctrl+a").map_err(failure)?;
+    let selected = yuna.still_capture(seat, &field_area).map_err(failure)?;
+    key("type", "text", "Grüße").map_err(failure)?;
+    yuna.capture_changed(seat, &field_area, &selected)
         .map_err(failure)?;
-    yuna.call(
-        "keyboard",
-        json!({"action": "preedit", "seat": seat, "text": "ña"}),
-    )
-    .map_err(failure)?;
+    let typed = yuna.still_capture(seat, &field_area).map_err(failure)?;
+    key("preedit", "text", "ña").map_err(failure)?;
     yuna.capture_changed(seat, &field_area, &typed)
         .map_err(failure)?;
+    let status = yuna.still_capture(seat, &status_area).map_err(failure)?;
     click(INTERFACE_VIEW_BUTTON).map_err(failure)?;
-    yuna.capture_changed(seat, &status_area, &status_before)
+    yuna.capture_changed(seat, &status_area, &status)
         .map_err(failure)?;
     yuna.stop()?;
     Ok(format!(
         "SlimeEngine's interface through MCP: its field enabled {} ms after the click; the \
          field changed when typed into and when text was composed, and its bar when a button \
-         was clicked",
+         was clicked, each against the part at rest after the step before",
         field_enabled.as_millis()
     ))
 }
@@ -881,6 +887,29 @@ impl Yuna {
             }
             std::thread::sleep(POLL);
         }
+    }
+
+    /// Captures `region` until two captures [`STILL`] apart are the same image, and gives it.
+    fn still_capture(&self, seat: u64, region: &Value) -> Result<String, String> {
+        let deadline = Instant::now() + PATIENCE;
+        let mut last = self.capture(seat, region)?;
+        loop {
+            std::thread::sleep(STILL);
+            let now = self.capture(seat, region)?;
+            if now == last {
+                return Ok(now);
+            }
+            if Instant::now() > deadline {
+                return Err(format!("{region} never stood still"));
+            }
+            last = now;
+        }
+    }
+
+    /// Whether `seat`'s first window is still shown, placed on an output.
+    fn window_shown(&self, seat: u64) -> Result<bool, String> {
+        let listed = self.call("windows", json!({"seat": seat}))?;
+        Ok(!listed["structuredContent"]["windows"][0]["rect"].is_null())
     }
 
     /// Whether `program` of `seat` still runs, as `spawn list` says.
