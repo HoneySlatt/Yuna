@@ -171,8 +171,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Claude Code 2.1.318 ran the done-when's story through `yuna mcp` alone
   ([measurements](measurements.md)); Codex and OpenCode are untested, and which revision of MCP
   each client speaks, Claude Code's included, is not recorded.
-- A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
-  and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them.
+- A `yuna mcp` killed by SIGKILL, or one that panics, a bug unwinding past its stopping, leaves
+  its programs running, their Wayland connection closed, and its folder of logs, up to 128 MiB,
+  in `XDG_RUNTIME_DIR`: nothing ends or removes them.
   Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
   client may kill Yuna sooner.
 - `windows` lists every window of its seat: past a few hundred, its reply passes Claude Code's

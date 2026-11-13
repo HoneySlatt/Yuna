@@ -50,8 +50,9 @@ impl State {
 
     /// Gives the text field enabled where `seat`'s keyboard is `text` as committed, replacing
     /// any text being composed, in pieces of [`MAX_TEXT_BYTES`] at most. Refused when no text
-    /// field is enabled there.
+    /// field is enabled there, and for a NUL.
     pub(crate) fn commit_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        refuse_nul(text)?;
         let mut rest = text;
         while !rest.is_empty() {
             let mut end = rest.len().min(MAX_TEXT_BYTES);
@@ -65,10 +66,12 @@ impl State {
         Ok(())
     }
 
-    /// Shows `text` as being composed in the text field enabled where `seat`'s keyboard is, its
-    /// cursor at its end; empty text clears it. Refused when no text field is enabled there,
-    /// and past [`MAX_TEXT_BYTES`].
+    /// Shows `text` as being composed in the text field enabled where agent seat `seat`'s
+    /// keyboard is, its cursor at its end; empty text clears it. Refused on the owner's seat,
+    /// when no text field is enabled there, for a NUL, and past [`MAX_TEXT_BYTES`].
     pub(crate) fn compose_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        self.agent_pointer(seat)?;
+        refuse_nul(text)?;
         if text.len() > MAX_TEXT_BYTES {
             return Err(Error::Refused(format!(
                 "text composed holds {MAX_TEXT_BYTES} bytes at most"
@@ -102,4 +105,15 @@ impl State {
         text_input.done(false);
         Ok(())
     }
+}
+
+/// Refuses text holding a NUL, which a Wayland string cannot carry: libwayland's strings end at
+/// the first one, and wayland-rs panics on it.
+fn refuse_nul(text: &str) -> Result<(), Error> {
+    if text.contains('\0') {
+        return Err(Error::Refused(
+            "text may not hold a NUL character".to_owned(),
+        ));
+    }
+    Ok(())
 }

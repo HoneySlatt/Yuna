@@ -132,8 +132,12 @@ fn keysym_of_char(character: char) -> Keysym {
     }
 }
 
-/// The keysym an XKB name gives: exactly as written, else ignoring case ("return").
+/// The keysym an XKB name gives: exactly as written, else ignoring case ("return"). None for a
+/// name holding a NUL, which xkbcommon cannot take.
 fn keysym_of_name(name: &str) -> Option<Keysym> {
+    if name.contains('\0') {
+        return None;
+    }
     [xkb::KEYSYM_NO_FLAGS, xkb::KEYSYM_CASE_INSENSITIVE]
         .into_iter()
         .map(|flags| xkb::keysym_from_name(name, flags))
@@ -157,7 +161,7 @@ impl State {
 
     /// The agent seat `seat`'s pointer; refused for the owner's seat, which takes no input from
     /// here, and for a seat that does not exist.
-    fn agent_pointer(&self, seat: SeatId) -> Result<PointerHandle<State>, Error> {
+    pub(crate) fn agent_pointer(&self, seat: SeatId) -> Result<PointerHandle<State>, Error> {
         if seat == OWNER_SEAT {
             return Err(Error::Refused(
                 "input goes to agents' seats alone".to_owned(),
@@ -584,8 +588,10 @@ impl State {
 
     /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its key in
     /// the seat's keymap, Shift held where it needs it; lacking one, committed to the text field
-    /// enabled there, or, with none, through an injected keymap. Refused, with nothing typed, past [`MAX_TYPED`] characters, for a character that is
-    /// no keysym, and when a key the text needs is held.
+    /// enabled there, or, with none, through an injected keymap. Text being composed in that
+    /// field is cleared first, as an input method's commit replaces it. Refused, with nothing
+    /// typed, past [`MAX_TYPED`] characters, for a character that is no keysym, and when a key
+    /// the text needs is held.
     pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         if text.chars().count() > MAX_TYPED {
@@ -611,6 +617,9 @@ impl State {
             return Err(Error::Refused(
                 "a key the text needs is held: release it first".to_owned(),
             ));
+        }
+        if !text.is_empty() && self.text_field_enabled(seat) {
+            self.compose_text(seat, "")?;
         }
         for step in steps {
             match step {

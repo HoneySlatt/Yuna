@@ -445,8 +445,10 @@ clock's time.
    [ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): a client's text
    field (`text-input-v3`) is entered with its surface's keyboard focus and left with it. Once
    its client enables it, Yuna sends it text committed, in pieces of 4,000 bytes at most, and
-   text being composed, which shows until text is committed or an empty one clears it. The
-   owner's seat has no input method: its clients' fields are never entered.
+   text being composed, which shows until the next text typed or an empty one clears it. The
+   owner's seat has no input method: its clients' fields are never entered, and it takes no
+   text. Text or a key name holding a NUL, which a Wayland string or xkbcommon cannot take, is
+   refused.
 5. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
    `enter` serial, is recorded on the seat; Yuna does not draw cursors yet.
 
