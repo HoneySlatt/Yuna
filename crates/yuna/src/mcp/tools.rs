@@ -38,8 +38,8 @@ pub fn definitions() -> Value {
             "title": "Seats",
             "description": "Create a seat of your own, list the seats, or close one. A seat has \
                 its own pointer, keyboard, focus and clipboard, its own outputs and workspaces, \
-                and its own Wayland socket, which the programs it starts use; nothing of one \
-                seat reaches another. Create one first: every other tool but clock takes its \
+                and its own Wayland socket, which the programs it starts use; no input, focus \
+                or clipboard of one seat reaches another. Create one first: every other tool but clock takes its \
                 handle. Closing it releases what it holds, disconnects its windows, ends its \
                 programs (SIGTERM, then SIGKILL 2 s later) and removes its outputs; it answers \
                 once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",

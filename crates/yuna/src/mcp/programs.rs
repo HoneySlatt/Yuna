@@ -437,8 +437,11 @@ impl Programs {
 
     /// The living processes under Yuna that belong to `seat`, whose Wayland clients have the
     /// process ids `client_pids`. A process belongs to it when it, or a process above it under
-    /// Yuna, is one of the seat's programs still running, leads or is in the process group of
-    /// one of them, is one of its clients, or has the seat's `YUNA_SEAT` in its environment. A
+    /// Yuna, is one of the seat's programs still running, is in the process group one of its
+    /// programs led, running or ended (an orphan stays in it), is one of its clients, or has the
+    /// seat's `YUNA_SEAT` in its environment; and when nothing says it is another seat's: another
+    /// seat's `YUNA_SEAT`, or another seat's running program or its group, so that a pid an
+    /// ended program freed and another seat's program took is never ended with this seat. A
     /// process that leaves its group and its parents and empties its environment is not found.
     pub fn seat_processes(&self, seat: SeatId, client_pids: &[i32]) -> Vec<Pid> {
         let groups: Vec<i32> = self
@@ -451,6 +454,14 @@ impl Programs {
             .list
             .iter()
             .filter(|program| program.seat == seat && program.end.is_none())
+            .map(|program| program.pid.as_raw_nonzero().get())
+            .collect();
+        // Another seat's running programs: a process that is one, or in one's group, is that
+        // seat's, whatever a reused pid says.
+        let others: Vec<i32> = self
+            .list
+            .iter()
+            .filter(|program| program.seat != seat && program.end.is_none())
             .map(|program| program.pid.as_raw_nonzero().get())
             .collect();
         let processes = processes_under(rustix::process::getpid());
@@ -467,10 +478,17 @@ impl Programs {
                     break false;
                 };
                 chain.push(current);
+                let named = seat_in_environment(current);
+                let foreign = named.is_some_and(|named| named != seat)
+                    || others.contains(&current)
+                    || others.contains(&process.group);
+                if foreign {
+                    break false;
+                }
                 let direct = running.contains(&current)
                     || groups.contains(&process.group)
                     || client_pids.contains(&current)
-                    || environment_names_seat(current, seat);
+                    || named == Some(seat);
                 if direct {
                     break true;
                 }
@@ -504,6 +522,11 @@ impl Programs {
             }
             kept
         });
+    }
+
+    /// The processes living under Yuna now.
+    pub fn living(&self) -> Vec<Pid> {
+        living_descendants(rustix::process::getpid())
     }
 
     /// Whether a process still runs under Yuna.
@@ -565,15 +588,16 @@ pub fn program_environment(
 /// The variable that names a program's seat, which its processes inherit.
 pub const SEAT_VARIABLE: &str = "YUNA_SEAT";
 
-/// Whether process `pid`'s environment, as it was when it started, holds `YUNA_SEAT=<seat>`.
-fn environment_names_seat(pid: i32, seat: SeatId) -> bool {
-    let Ok(environment) = fs::read(format!("/proc/{pid}/environ")) else {
-        return false;
-    };
-    let wanted = format!("{SEAT_VARIABLE}={}", seat.0);
+/// The seat process `pid`'s environment names, as it was when the process started: its
+/// `YUNA_SEAT`.
+fn seat_in_environment(pid: i32) -> Option<SeatId> {
+    let environment = fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{SEAT_VARIABLE}=");
     environment
         .split(|&byte| byte == 0)
-        .any(|entry| entry == wanted.as_bytes())
+        .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))
+        .and_then(|value| std::str::from_utf8(value).ok()?.parse().ok())
+        .map(SeatId)
 }
 
 /// Reads a program's output as it comes, into `log`, up to [`LOG_LIMIT`]; the source goes when
@@ -724,14 +748,6 @@ fn living_descendants(root: Pid) -> Vec<Pid> {
         .filter(|(_, process)| !process.zombie)
         .filter_map(|(pid, _)| Pid::from_raw(pid))
         .collect()
-}
-
-/// Whether process `pid` lives: neither gone nor a zombie.
-pub fn is_alive(pid: Pid) -> bool {
-    fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_nonzero().get()))
-        .ok()
-        .and_then(|stat| read_stat(&stat))
-        .is_some_and(|process| !process.zombie)
 }
 
 /// A `/proc/<pid>/stat` line: `pid (name) state ppid pgrp …`, the name possibly holding spaces

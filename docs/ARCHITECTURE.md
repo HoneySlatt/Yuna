@@ -415,8 +415,8 @@ server makes for the seat an agent names; the owner's seat takes none. Its event
 clock's time.
 
 1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
-   is found among the windows that output shows, top to bottom, each window's popups before it,
-   a window cut to its rectangle: the surface whose input region holds the point. Smithay
+   is found among the windows that output shows, as drawn, top to bottom, each window's popups
+   before it, a window cut to its rectangle: the surface whose input region holds the point. Smithay
    sends `enter`, `leave` and `motion`. After each arrangement, a pointer is moved onto what is
    under it then, when that changed.
 2. A button press focuses the window under it: its keyboard follows at the next refresh. The
@@ -428,6 +428,9 @@ clock's time.
    focused client a keymap of its own for them, then the seat's back.
 4. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
    `enter` serial, is recorded on the seat; Yuna does not draw cursors yet.
+
+A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
+(`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0007](adr/0007-surviving-a-crash.md)).
 
 Removing a seat (`Compositor::remove_seat`), in order: the keys and buttons it holds are
 released, its popup grab ends, and its focus leaves every surface; those events are sent; its
@@ -493,11 +496,13 @@ window or program unknown there:
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
-then ends its processes: every process under Yuna that is, or descends from, one of the seat's
-programs still running, is in one of their process groups, is one of its clients, or has
-`YUNA_SEAT=<id>` in `/proc/<pid>/environ`. Each gets SIGTERM; 2 s later, SIGKILL goes to those
-left and to any found again; the call is answered once all are gone, or 1 s after SIGKILL, with
-what was ended and what is left. The seat's programs are then forgotten, their logs deleted. A
+fails the `windows` calls waiting on it, then ends its processes: every process under Yuna that
+is, or descends from, one of the seat's programs still running, is in a process group one of
+them led, is one of its clients, or has `YUNA_SEAT=<id>` in `/proc/<pid>/environ`; unless
+another seat's `YUNA_SEAT`, or another seat's running program or its group, says it is that
+seat's, as a reused pid would be. Each gets SIGTERM; 2 s later, SIGKILL goes to those still under
+Yuna and to any found again; the call is answered once all are gone, or 1 s after SIGKILL, with
+what was ended and what is left, or when Yuna stops. The seat's programs are then forgotten, their logs deleted. A
 process that empties its environment and leaves its group and its parents is not found
 ([debt](debt.md)).
 
@@ -540,7 +545,8 @@ one it was presented at, later when the frame was late.
   `dmabuf.rs`, `selection.rs`, `outputs.rs`). `seats.rs` in it tells agents' seats: windows on
   their own outputs, the test that no input of one seat reaches another, the owner's or a client
   that bound another seat's `wl_seat`, a click's focus, text read back through the keymaps the
-  client got, wheel and cursor, a popup grab and a drag from a press, and a seat's closing; its
+  client got, wheel and cursor, a popup grab and a drag from a press, activation and the
+  clipboard kept to their seat, and a seat's closing; its
   clients are `input_client.rs`'s, which bind a seat by name. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
@@ -581,7 +587,8 @@ one it was presented at, later when the frame was late.
   included.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
-  that ends its processes and no other seat's, and Alacritty started through `spawn`, found
+  that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
+and Alacritty started through `spawn`, found
   through `windows`, clicked and typed into: its shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` shares.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless`, as

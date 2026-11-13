@@ -91,6 +91,10 @@ pub(crate) struct State {
     pub timer_fired: bool,
     pub stop_requested: bool,
     pub woke: bool,
+    /// The seats whose socket paused on an `accept` error in this round, and those whose pause
+    /// ended (`Compositor::pause_and_resume_sockets`).
+    pub paused_sockets: Vec<SeatId>,
+    pub resumed_sockets: Vec<SeatId>,
     pub departed_clients: DepartedClients,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -156,6 +160,8 @@ impl State {
             timer_fired: false,
             stop_requested: false,
             woke: false,
+            paused_sockets: Vec::new(),
+            resumed_sockets: Vec::new(),
             departed_clients: DepartedClients::default(),
             // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
             compositor_state: CompositorState::new_v6::<State>(dh),

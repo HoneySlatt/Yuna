@@ -1,7 +1,7 @@
 //! The test client's `xdg-activation-v1`: tokens asked with or without a serial and a surface,
 //! and activation requests.
 
-use wayland_client::protocol::wl_surface;
+use wayland_client::protocol::{wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1};
 use yuna::Compositor;
@@ -34,11 +34,36 @@ impl Client {
         self.token(index).expect("a token").to_owned()
     }
 
+    /// Asks an activation token with `serial` of `seat`, any `wl_seat` of the connection, for
+    /// `window`'s surface, and waits for it.
+    pub fn request_token_on(
+        &mut self,
+        compositor: &mut Compositor,
+        seat: &wl_seat::WlSeat,
+        serial: u32,
+        window: usize,
+    ) -> String {
+        let surface = self.state.windows[window].surface.clone();
+        let index = self.ask_token_on(Some(seat), Some(serial), Some(&surface));
+        self.roundtrip(compositor);
+        self.token(index).expect("a token").to_owned()
+    }
+
     /// Asks an activation token, with the seat's `serial` and for `surface` when given, without
     /// waiting for it, and returns its index for [`Client::token`]. Its object is destroyed once
     /// the token comes.
     pub fn ask_token(
         &mut self,
+        serial: Option<u32>,
+        surface: Option<&wl_surface::WlSurface>,
+    ) -> usize {
+        self.ask_token_on(None, serial, surface)
+    }
+
+    /// [`Client::ask_token`] with `seat` rather than the client's own `wl_seat` when given.
+    fn ask_token_on(
+        &mut self,
+        seat: Option<&wl_seat::WlSeat>,
         serial: Option<u32>,
         surface: Option<&wl_surface::WlSurface>,
     ) -> usize {
@@ -52,7 +77,8 @@ impl Client {
             .expect("xdg_activation_v1")
             .get_activation_token(&qh, index);
         if let Some(serial) = serial {
-            token.set_serial(serial, self.state.seat.as_ref().expect("wl_seat"));
+            let seat = seat.or(self.state.seat.as_ref()).expect("wl_seat");
+            token.set_serial(serial, seat);
         }
         if let Some(surface) = surface {
             token.set_surface(surface);

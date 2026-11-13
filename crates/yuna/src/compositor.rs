@@ -27,6 +27,10 @@ use crate::output::OutputMode;
 use crate::render::Device;
 use crate::state::{OWNER_SEAT, State};
 
+/// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
+/// listens again.
+pub const SOCKET_PAUSE: Duration = Duration::from_millis(100);
+
 /// How to start a compositor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -260,12 +264,23 @@ impl Compositor {
                 Generic::new(socket, Interest::READ, Mode::Level),
                 move |_, socket, state| {
                     state.woke = true;
-                    while let Some(stream) = socket.accept()? {
-                        if let Err(error) = state.insert_client(seat, stream) {
-                            tracing::warn!(%error, "a client could not connect");
+                    loop {
+                        match socket.accept() {
+                            Ok(Some(stream)) => {
+                                if let Err(error) = state.insert_client(seat, stream) {
+                                    tracing::warn!(%error, "a client could not connect");
+                                }
+                            }
+                            Ok(None) => return Ok(PostAction::Continue),
+                            // Out of descriptors, most often: one seat's programs must not stop
+                            // Yuna (ADR-0007). The socket rests a moment rather than spin.
+                            Err(error) => {
+                                tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
+                                state.paused_sockets.push(seat);
+                                return Ok(PostAction::Disable);
+                            }
                         }
                     }
-                    Ok(PostAction::Continue)
                 },
             )
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
@@ -385,6 +400,7 @@ impl Compositor {
             // A timer that fired has removed itself.
             self.timer = None;
         }
+        self.pause_and_resume_sockets()?;
         if std::mem::take(&mut self.state.clients_readable) {
             self.display
                 .dispatch_clients(&mut self.state)
@@ -398,6 +414,29 @@ impl Compositor {
             self.state.counters.wakeups += 1;
         }
         self.flush();
+        Ok(())
+    }
+
+    /// Arms a timer of [`SOCKET_PAUSE`] for each seat socket that paused on an `accept` error,
+    /// and listens again on each whose pause ended, while its seat lives.
+    fn pause_and_resume_sockets(&mut self) -> Result<(), Error> {
+        let handle = self.event_loop.handle();
+        for seat in std::mem::take(&mut self.state.paused_sockets) {
+            handle
+                .insert_source(Timer::from_duration(SOCKET_PAUSE), move |_, _, state| {
+                    state.woke = true;
+                    state.resumed_sockets.push(seat);
+                    TimeoutAction::Drop
+                })
+                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        }
+        for seat in std::mem::take(&mut self.state.resumed_sockets) {
+            if let Some(token) = self.seat_sockets.get(&seat) {
+                handle
+                    .enable(token)
+                    .map_err(|e| Error::EventLoop(e.to_string()))?;
+            }
+        }
         Ok(())
     }
 

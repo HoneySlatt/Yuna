@@ -588,7 +588,28 @@ fn seats_through_mcp_keep_to_their_own() {
     );
     assert_eq!(not_ours["isError"], json!(true));
 
-    let closed = mcp.call("seat", json!({"action": "close", "seat": a}));
+    // A call waiting on the seat fails when it closes, rather than wait out its time.
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 900, "method": "tools/call",
+                     "params": modern(json!({"name": "windows", "arguments":
+                         {"seat": a, "app_id": "never", "wait_ms": 40_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 901, "method": "tools/call",
+                     "params": modern(json!({"name": "seat", "arguments":
+                         {"action": "close", "seat": a}}))}));
+    let mut replies = Vec::new();
+    let until = Instant::now() + Duration::from_secs(5);
+    while replies.len() < 2 && Instant::now() < until {
+        replies.extend(mcp.replies());
+    }
+    let reply = |id: u64| {
+        replies
+            .iter()
+            .find(|reply| reply["id"] == json!(id))
+            .map(|reply| reply["result"].clone())
+            .expect("a reply")
+    };
+    let closed = reply(901);
+    assert_eq!(reply(900)["isError"], json!(true), "{replies:?}");
     assert_eq!(
         closed["structuredContent"],
         json!({"closed": a, "ended": [], "left_running": []})

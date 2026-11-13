@@ -114,6 +114,8 @@ pub struct InputState {
     /// The last offer a drag entered with.
     drag_offer: Option<wl_data_offer::WlDataOffer>,
     pub events: Vec<InputEvent>,
+    /// The interface of every global the client was told of.
+    pub globals: Vec<String>,
     /// The keymap last sent, and its state with the modifiers last sent.
     xkb: Option<(xkb::Keymap, xkb::State)>,
     /// What the keys pressed type, through the keymap they came with.
@@ -294,6 +296,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for InputState {
         else {
             return;
         };
+        state.globals.push(interface.clone());
         match interface.as_str() {
             "wl_seat" => {
                 let index = state.seats.len();

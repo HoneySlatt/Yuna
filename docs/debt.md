@@ -104,8 +104,16 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   focus, not the serial it names: that client may set a selection with any serial, not only in
   answer to its own input. Checking it needs a patch to Smithay; a test pins the gap down
   (`the_serial_of_the_client_with_the_focus_is_not_checked`).
-- A drag's icon and every cursor are recorded, not drawn: a capture (C4) shows neither. Touch
-  has no drag: Yuna has no touch.
+- A drag's icon is dropped, and the cursors clients ask are recorded, not drawn: a capture (C4)
+  shows neither. Touch has no drag: Yuna has no touch.
+- Every seat's `wl_output` and `xdg-output` globals, like its `wl_seat`, are announced to every
+  client: a program of one agent sees, and may bind, another agent's outputs, their names,
+  modes and places, and a toolkit that lists monitors lists them. No input or focus crosses
+  seats by them. The filter per client comes at Stage 3 with `wl_seat`'s
+  ([ADR-0035](adr/0035-agents-seats.md)).
+- An `accept` that fails on a seat's socket, out of descriptors most often, pauses that socket
+  100 ms (`SOCKET_PAUSE`); nothing bounds the clients one seat connects. The owner's socket, in
+  `yuna --headless`, is Smithay's, which returns the error and stops Yuna.
 - Smithay keeps a record of every seat it made and offers no way to drop one: each seat closed
   leaves its record, without keyboard or pointer, until Yuna stops. An agent that makes and
   closes seats without end grows it.
@@ -137,6 +145,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   frees its place.
 - When Yuna stops or a seat closes, the processes are found through `/proc`, then signalled by
   pid: a process that ends and is reaped by its own parent between the two frees a pid that
-  another process may take. The window is short; pidfds would close it.
+  another process may take. The window is short; pidfds would close it. A seat's closing ends
+  the process groups its ended programs led, as an orphan stays in its group; a process of
+  another seat in such a group, a pid reused, is spared by its `YUNA_SEAT` or its own program,
+  not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.

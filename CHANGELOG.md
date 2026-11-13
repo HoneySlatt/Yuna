@@ -9,7 +9,7 @@ What changed for users, newest first. Yuna has no release yet: everything below 
   output and a Wayland socket its programs use, lists them and closes one, ending its programs.
   `pointer` moves, clicks, drags and scrolls, `keyboard` presses keys, taps combinations and
   types any text; `workspaces` lists, creates, shows and fills workspaces. Every tool but `clock`
-  names its seat, and nothing of one seat reaches another. `yuna mcp` no longer starts an output
+  names its seat, and no input, focus or clipboard of one seat reaches another. `yuna mcp` no longer starts an output
   of its own; its `--output` is each new seat's first output.
 - Clients get `cursor-shape` and drag and drop.
 

@@ -384,6 +384,7 @@ impl Server {
                 break Ok(());
             }
             if let Err(error) = self.dispatch(None) {
+                self.stop(Stop::Broken(format!("the compositor failed: {error}")));
                 break Err(error);
             }
         };
@@ -401,6 +402,18 @@ impl Server {
         let _ = handle.disable(&self.input_source);
         if let Some(source) = &self.output_source {
             let _ = handle.disable(source);
+        }
+        // A closing still waiting is answered: Yuna's stopping ends what it waited for.
+        let living = self.living_under_yuna();
+        for closing in std::mem::take(&mut self.closings) {
+            handle.remove(closing.timer);
+            let left: Vec<Pid> = closing
+                .signalled
+                .iter()
+                .copied()
+                .filter(|pid| living.contains(pid))
+                .collect();
+            self.answer_closing(closing, &left);
         }
         let until = Instant::now() + LAST_WRITE_WAIT;
         while !self.queue.is_empty() && self.queue.write_to(&self.output).is_ok() {
@@ -719,6 +732,7 @@ impl Server {
             Ok(pids) => pids,
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
+        self.fail_waits_of(seat);
         let processes = match &self.programs {
             Some((programs, _)) => programs.seat_processes(seat, &client_pids),
             None => Vec::new(),
@@ -759,6 +773,26 @@ impl Server {
         None
     }
 
+    /// Answers the `windows` calls that wait on `seat`, which closed: a stale handle fails
+    /// plainly ([ADR-0035](../../../../docs/adr/0035-agents-seats.md)).
+    fn fail_waits_of(&mut self, seat: SeatId) {
+        let handle = self.compositor.loop_handle();
+        let mut index = 0;
+        while index < self.waits.len() {
+            if self.waits[index].call.seat != seat.0 {
+                index += 1;
+                continue;
+            }
+            let wait = self.waits.remove(index);
+            handle.remove(wait.timer);
+            let result = ToolResult::failed(format!("seat {} was closed", seat.0));
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+        }
+    }
+
     /// Arms the timer that ends a closing's stage `after` from now.
     fn arm_closing_stage(
         &self,
@@ -783,23 +817,25 @@ impl Server {
         let Some(index) = self.closings.iter().position(|closing| closing.key == key) else {
             return;
         };
+        let living = self.living_under_yuna();
         if self.closings[index].killed {
             let closing = self.closings.remove(index);
             let left: Vec<Pid> = closing
                 .signalled
                 .iter()
                 .copied()
-                .filter(|&pid| programs::is_alive(pid))
+                .filter(|pid| living.contains(pid))
                 .collect();
             self.answer_closing(closing, &left);
             return;
         }
         let closing = &self.closings[index];
+        // Only processes still under Yuna: a pid that left it may be another's now.
         let mut targets: Vec<Pid> = closing
             .signalled
             .iter()
             .copied()
-            .filter(|&pid| programs::is_alive(pid))
+            .filter(|pid| living.contains(pid))
             .collect();
         if let Some((programs, _)) = &self.programs {
             for pid in programs.seat_processes(closing.seat, &closing.client_pids) {
@@ -828,14 +864,26 @@ impl Server {
         }
     }
 
-    /// Answers each closing whose processes have all ended.
+    /// The processes living under Yuna; none without programs.
+    fn living_under_yuna(&self) -> Vec<Pid> {
+        self.programs
+            .as_ref()
+            .map(|(programs, _)| programs.living())
+            .unwrap_or_default()
+    }
+
+    /// Answers each closing whose processes have all ended, or left Yuna.
     fn answer_closings_done(&mut self) {
+        if self.closings.is_empty() {
+            return;
+        }
+        let living = self.living_under_yuna();
         let mut index = 0;
         while index < self.closings.len() {
             if self.closings[index]
                 .signalled
                 .iter()
-                .any(|&pid| programs::is_alive(pid))
+                .any(|pid| living.contains(pid))
             {
                 index += 1;
                 continue;

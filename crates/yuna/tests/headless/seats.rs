@@ -318,6 +318,18 @@ fn text_types_through_the_keymaps_the_client_reads() {
             .type_text(a, &"a".repeat(yuna::MAX_TYPED + 1))
             .is_err()
     );
+    // A key the text needs, held, refuses the whole text: nothing typed, no Shift left held.
+    client.roundtrip(&mut compositor);
+    client.state.typed.clear();
+    compositor.key(a, "a", true).expect("a press");
+    assert!(compositor.type_text(a, "bA").is_err());
+    compositor.key(a, "a", false).expect("a release");
+    assert!(
+        compositor.key(a, "Shift_L", false).is_err(),
+        "Shift is not held"
+    );
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.state.typed, "a");
 }
 
 /// A wheel step scrolls 15 units and 120ths of a step; the cursor a client asks with its
@@ -370,7 +382,8 @@ fn the_wheel_scrolls_and_the_cursor_is_the_one_its_client_asked() {
 
 /// A menu opened on a right press takes its grab with the press's serial; a click outside the
 /// client's surfaces dismisses it. A client of another seat that names A's seat and A's serial
-/// is refused its grab: its popup is dismissed.
+/// is refused its grab, its popup dismissed: that serial went to no window of its own, and it
+/// names a seat not its client's, two checks that each refuse it.
 #[test]
 fn a_popup_grab_takes_a_press_serial_of_the_seat_of_its_client() {
     let (mut compositor, a, b) = two_seats();
@@ -626,4 +639,80 @@ fn closing_a_seat_lets_go_of_everything_before_its_clients_end() {
     compositor
         .check_popups_and_keyboard()
         .expect("the popups and the keyboards are sound");
+}
+
+/// The serial of the last keyboard `enter` among `events`.
+fn last_enter(events: &[InputEvent]) -> u32 {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            InputEvent::KeyboardEnter { serial, .. } => Some(*serial),
+            _ => None,
+        })
+        .expect("a keyboard enter")
+}
+
+/// Activation and the clipboard keep to their seat: a token asked with A's seat and A's serial
+/// activates a window of A; asked by a client of B naming A's seat and serial, or carried over to
+/// B, it is not valid there and only marks B's window urgent. No agent's client sees
+/// `ext-data-control-v1`, which reaches any seat's selections; the owner's clients do.
+#[test]
+fn activation_and_the_clipboard_keep_to_their_seat() {
+    let (mut compositor, a, b) = two_seats();
+    let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let owner = InputClient::connect(&mut compositor, OWNER_SEAT, "seat0");
+    let first = open(&mut on_a, &mut compositor);
+    let second = open(&mut on_a, &mut compositor);
+    let spy_first = open(&mut spy, &mut compositor);
+    let spy_second = open(&mut spy, &mut compositor);
+    settle(&mut compositor);
+    roundtrip_all(&mut compositor, &mut [&mut on_a, &mut spy]);
+    let [window_1, _] = windows_of(&compositor, a)[..] else {
+        panic!("two windows on A");
+    };
+    let [spy_window_1, _] = windows_of(&compositor, b)[..] else {
+        panic!("two windows on B");
+    };
+    let serial = last_enter(&on_a.take_events());
+    let seat_a = on_a.wl_seat("agent-2");
+    let valid = on_a
+        .client
+        .request_token_on(&mut compositor, &seat_a, serial, second);
+    on_a.client.activate(&valid, first);
+    on_a.roundtrip(&mut compositor);
+    settle(&mut compositor);
+    assert_eq!(compositor.keyboard_window(a), Some(window_1));
+    assert!(!compositor.is_urgent(window_1));
+
+    // The spy names A's seat and A's serial, for its own window: not valid on B.
+    let seat_a_of_spy = spy.wl_seat("agent-2");
+    let stolen = spy
+        .client
+        .request_token_on(&mut compositor, &seat_a_of_spy, serial, spy_second);
+    spy.client.activate(&stolen, spy_first);
+    spy.roundtrip(&mut compositor);
+    settle(&mut compositor);
+    assert!(compositor.is_urgent(spy_window_1));
+    // A valid token of A, carried over to B, is not valid there either.
+    roundtrip_all(&mut compositor, &mut [&mut on_a]);
+    let serial = last_enter(&on_a.take_events());
+    let carried = on_a
+        .client
+        .request_token_on(&mut compositor, &seat_a, serial, first);
+    spy.client.activate(&carried, spy_first);
+    spy.roundtrip(&mut compositor);
+    settle(&mut compositor);
+    let focused_b = compositor
+        .windows()
+        .into_iter()
+        .find(|window| window.seat == b && window.focused)
+        .map(|window| window.id);
+    assert_ne!(focused_b, Some(spy_window_1));
+
+    let data_control = "ext_data_control_manager_v1".to_owned();
+    assert!(!on_a.state.globals.contains(&data_control));
+    assert!(!spy.state.globals.contains(&data_control));
+    assert!(owner.state.globals.contains(&data_control));
 }

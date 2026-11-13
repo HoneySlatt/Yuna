@@ -183,7 +183,14 @@ impl State {
             under_from_surface_tree(surface, location - origin, (0, 0), WindowSurfaceType::ALL)
                 .map(|(found, at)| (found, origin + at.to_f64()))
         };
-        for placed in output.placed.iter().rev() {
+        // What the output shows, as drawn (`frames.rs`): a window scrolled out is not, nor
+        // its popups.
+        let shown = output
+            .placed
+            .iter()
+            .rev()
+            .filter(|placed| placed.rect.overlaps(&output.rect));
+        for placed in shown {
             let Some(toplevel) = self
                 .windows
                 .get(&placed.window)
@@ -574,7 +581,8 @@ impl State {
 
     /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its key in
     /// the seat's keymap, Shift held where it needs it, or, lacking one, through an injected
-    /// keymap. Refused past [`MAX_TYPED`] characters, and for a character that is no keysym.
+    /// keymap. Refused, with nothing typed, past [`MAX_TYPED`] characters, for a character that is
+    /// no keysym, and when a key the text needs is held.
     pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         if text.chars().count() > MAX_TYPED {
@@ -584,6 +592,23 @@ impl State {
         }
         let steps = self.typing_steps(seat, text)?;
         let shift = self.keycode_of(seat, "Shift_L")?;
+        // Checked before anything is pressed, so that a refusal types nothing and leaves no
+        // Shift held.
+        let held = self
+            .seat(seat)
+            .map(|data| data.keyboard.pressed_keys())
+            .unwrap_or_default();
+        let needs_held = steps.iter().any(|step| match step {
+            Typed::Key(key, with_shift) => {
+                held.contains(key) || (*with_shift && held.contains(&shift))
+            }
+            Typed::Injected(_) => false,
+        });
+        if needs_held {
+            return Err(Error::Refused(
+                "a key the text needs is held: release it first".to_owned(),
+            ));
+        }
         for step in steps {
             match step {
                 Typed::Key(key, with_shift) => {

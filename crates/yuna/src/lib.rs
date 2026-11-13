@@ -41,7 +41,9 @@ use std::fmt;
 
 pub use activation::TOKEN_LIFETIME;
 pub use clock::{Clock, ClockMode};
-pub use compositor::{Compositor, Config, Counters, OutputDescription, WindowDescription};
+pub use compositor::{
+    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription,
+};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
     BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_SCROLL_STEPS,

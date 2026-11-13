@@ -52,6 +52,11 @@ impl Yuna {
 
     /// Starts `yuna mcp` with no seat.
     fn start_without_seat(name: &str) -> Yuna {
+        Yuna::start_with(name, None)
+    }
+
+    /// Starts `yuna mcp` with no seat, and at most `descriptors` open files when given.
+    fn start_with(name: &str, descriptors: Option<u32>) -> Yuna {
         let folder =
             std::env::temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
         fs::DirBuilder::new()
@@ -59,7 +64,21 @@ impl Yuna {
             .mode(0o700)
             .create(folder.join("runtime"))
             .expect("a runtime folder");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_yuna"))
+        let yuna = env!("CARGO_BIN_EXE_yuna");
+        let mut command = match descriptors {
+            None => Command::new(yuna),
+            Some(limit) => {
+                let mut shell = Command::new(in_path("sh"));
+                shell.args([
+                    "-c",
+                    "ulimit -n \"$1\" && shift && exec \"$0\" \"$@\"",
+                    yuna,
+                ]);
+                shell.arg(limit.to_string());
+                shell
+            }
+        };
+        let mut child = command
             .args(["mcp", "--output", "1920x1080@60,1"])
             .env("XDG_RUNTIME_DIR", folder.join("runtime"))
             .env("YUNA_LOG", "info")
@@ -529,7 +548,8 @@ fn printed(log: &std::path::Path, name: &str) -> i32 {
 /// Closing a seat ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)) ends its
 /// processes and those alone, and answers once they are gone: its program, which ignores
 /// SIGTERM and gets SIGKILL 2 s later, and a daemon that left its parents and its group, found
-/// by `YUNA_SEAT`. Another seat's program runs on. A daemon that also empties its environment
+/// by `YUNA_SEAT`. Another seat's programs run on, one that joined the closed seat's process
+/// group included, and `spawn stop` refuses another seat's program. A daemon that also empties its environment
 /// escapes the closing, as the ADR says, but not Yuna's stopping. The seat's socket goes.
 #[test]
 fn closing_a_seat_ends_its_processes_and_no_other_seats() {
@@ -581,9 +601,29 @@ fn closing_a_seat_ends_its_processes_and_no_other_seats() {
         "spawn",
         json!({"action": "start", "seat": 3, "command": ["sleep", "600"]}),
     );
+    let neighbour_id = neighbour["structuredContent"]["program"]["id"].clone();
     let neighbour = neighbour["structuredContent"]["program"]["pid"]
         .as_i64()
         .expect("a pid") as i32;
+    let not_ours = yuna.call(
+        "spawn",
+        json!({"action": "stop", "seat": SEAT, "program": neighbour_id}),
+    );
+    assert_eq!(not_ours["isError"], json!(true), "another seat's program");
+    // A process of seat 3 in the process group seat 2's program leads, as a pid reused by
+    // another seat would be: its `YUNA_SEAT` says it is seat 3's.
+    let joiner = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": 3, "command": ["python3", "-c", format!(
+            "import os, time\nos.setpgid(0, {shell})\nprint('joined=%d' % os.getpid(), flush=True)\ntime.sleep(600)"
+        )]}),
+    );
+    let joiner_log = PathBuf::from(
+        joiner["structuredContent"]["program"]["log"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{joiner}")),
+    );
+    let joiner = printed(&joiner_log, "joined");
 
     let began = Instant::now();
     let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
@@ -608,7 +648,7 @@ fn closing_a_seat_ends_its_processes_and_no_other_seats() {
         "{took:?}"
     );
     assert!(!alive(shell) && !alive(daemon));
-    assert!(alive(neighbour) && alive(escaped));
+    assert!(alive(neighbour) && alive(escaped) && alive(joiner));
     assert!(!socket_2.exists(), "its socket is removed");
     let gone = yuna.call("spawn", json!({"action": "list", "seat": SEAT}));
     assert_eq!(gone["isError"], json!(true));
@@ -618,6 +658,51 @@ fn closing_a_seat_ends_its_processes_and_no_other_seats() {
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
     wait_for("every process's end", || {
-        (!alive(escaped) && !alive(neighbour)).then_some(())
+        (!alive(escaped) && !alive(neighbour) && !alive(joiner)).then_some(())
     });
+}
+
+/// Whether a Wayland server answers on `stream`: a `wl_display.sync` written by hand, object 1,
+/// opcode 0, a message of 12 bytes creating object 2, gets `wl_callback.done` back.
+fn answers_wayland(stream: &mut std::os::unix::net::UnixStream) -> bool {
+    use std::io::Read;
+    let mut request = Vec::new();
+    for word in [1_u32, 12 << 16, 2] {
+        request.extend_from_slice(&word.to_ne_bytes());
+    }
+    stream
+        .set_read_timeout(Some(PATIENCE))
+        .expect("a read timeout");
+    let mut reply = [0; 64];
+    stream.write_all(&request).is_ok() && matches!(stream.read(&mut reply), Ok(1..))
+}
+
+/// A seat's programs that open connections until Yuna runs out of descriptors never stop Yuna
+/// (ADR-0007): its seat's socket rests, Yuna keeps answering, and once they close, a new client
+/// connects again.
+#[test]
+fn running_out_of_descriptors_pauses_a_seats_socket_and_stops_nothing() {
+    let mut yuna = Yuna::start_with("descriptors", Some(96));
+    let created = yuna.call("seat", json!({"action": "create"}));
+    let socket = PathBuf::from(
+        created["structuredContent"]["socket"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{created}")),
+    );
+    let flood: Vec<std::os::unix::net::UnixStream> = (0..150)
+        .filter_map(|_| std::os::unix::net::UnixStream::connect(&socket).ok())
+        .collect();
+    assert!(flood.len() > 96, "the kernel's backlog holds the rest");
+    wait_for("the socket's pause", || {
+        yuna.log().contains("a seat's socket pauses").then_some(())
+    });
+    let listed = yuna.call("seat", json!({"action": "list"}));
+    assert_eq!(listed["structuredContent"]["seats"][0]["seat"], json!(SEAT));
+    drop(flood);
+    let mut client = wait_for("a new connection", || {
+        std::os::unix::net::UnixStream::connect(&socket).ok()
+    });
+    assert!(answers_wayland(&mut client), "{}", yuna.log());
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
 }
