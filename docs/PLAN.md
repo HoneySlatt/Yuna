@@ -147,6 +147,12 @@ milestone first needs it.
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
   lead, on the real clock ([measurements](measurements.md)).
+- **For C2 to C5**, from the design's challenge: a bounded reply queue per client, its input
+  no longer read while full, a line over 1 MiB ending it; MCP's timeouts on real time, `wait`
+  under 60 s; programs with a clean environment (no `DISPLAY`, no D-Bus) and logs the agent
+  reads; one seat per manual-clock Yuna, an `advance` past real time refused; ids checked
+  against the seat that owns them; button serials for popup grabs; a capture's mapping to
+  logical coordinates.
 - **C1, frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
   the boundary minus a lead measured per output, at most a period; feedback sent at its
   boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
