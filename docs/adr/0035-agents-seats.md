@@ -1,6 +1,6 @@
 # 0035. Agents' seats in one Yuna
 
-- Status: Accepted
+- Status: Accepted; amended by [0042](0042-main-on-smithays-fork.md) (the seat filter comes at M1.6)
 - Date: 2026-11-13
 
 ## Context

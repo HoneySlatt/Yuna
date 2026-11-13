@@ -101,14 +101,15 @@ it is met.
 | Configuration | KDL, reloaded live ([ADR-0008](adr/0008-configuration-in-kdl.md)) |
 | Licence | GPL-3.0-or-later, public ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
-| Base | Smithay, its patches kept in Yuna ([ADR-0011](adr/0011-built-on-smithay.md)) |
-| Renderer | OpenGL first ([ADR-0012](adr/0012-opengl-first.md)) |
-| Code | Our own; niri and jay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md)) |
+| Base | Smithay, left step by step, gone by the end of Stage 2 ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
+| Renderer | OpenGL first; Vulkan decided on a prototype's figures ([ADR-0012](adr/0012-opengl-first.md), [ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)) |
+| Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate ([ADR-0015](adr/0015-agents-workspaces.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
-| Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
+| Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md`; main on it from M1.6 ([ADR-0021](adr/0021-smithays-fork.md), [ADR-0042](adr/0042-main-on-smithays-fork.md)) |
 | Headless backend | Yuna's own code on upstream Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
@@ -121,7 +122,9 @@ it is met.
 | The KDL reader | the milestone that reads the configuration |
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
-| Vulkan | when a measure asks for it ([ADR-0012](adr/0012-opengl-first.md)) |
+| Vulkan alone, Vulkan with a GLES fallback, or GLES | M1.9, on the prototype's figures ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)) |
+| Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| Yuna's X11 window manager or Smithay's | M1.8's design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | The owner's own shell on uwui | after uwui's first stage ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)) |
 | Public release | the owner's go |
 
@@ -138,22 +141,28 @@ it is met.
   controlled clock, rendering on the GPU or a CPU renderer.
 - The core protocols an application needs; XWayland.
 - Agents' control: an MCP server, a seat per agent, captures, input, presentation times.
-- Emulated VRR timing and HDR colour descriptions on virtual outputs.
+- Emulated VRR timing and HDR colour descriptions on virtual outputs; `color-management-v1`, Yuna's
+  first protocol handler of its own.
 - Animations on springs and curves, checked frame by frame on the test clock.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
+- A throwaway prototype of Vulkan against GLES, measured on every tier
+  ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)).
 
 **Exit.** SlimeEngine's and Aerith's windowed examples, and uwui's once it has some
 ([ADR-0025](adr/0025-applications-in-ci.md)), run in Yuna headless in CI, driven by an agent
 through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
 and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
-verdict; the rivals' figures are in `docs/measurements.md`.
+verdict; the rivals' figures and Vulkan's against GLES are in `docs/measurements.md`.
 
 ### Stage 2 — The desktop → 0.2
 
-**Goal.** Yuna replaces Umbriel as the owner's daily compositor, without HDR yet.
+**Goal.** Yuna replaces Umbriel as the owner's daily compositor, without HDR yet, on a base of its
+own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
-- DRM and libinput, several outputs at different rates, hotplug with workspaces put back, mirroring.
+- First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
+  on wayland-rs; WLCS run against it.
+- DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5.
 - Amane on top through standard protocols.
@@ -162,7 +171,7 @@ verdict; the rivals' figures are in `docs/measurements.md`.
 - The crash restart and session restore.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
-power are met on the high tier and the laptop.
+power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
 
 ### Stage 3 — Agents on the desktop → 0.3
 
