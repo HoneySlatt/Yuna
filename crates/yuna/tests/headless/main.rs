@@ -24,6 +24,7 @@ mod screencopy;
 mod seats;
 mod selection;
 mod selection_client;
+mod text_input;
 mod window_cap;
 
 use std::cell::Cell;

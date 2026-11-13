@@ -18,7 +18,7 @@ use crate::{RED, manual_compositor, run_armed_deadlines};
 const WINDOW: (i32, i32) = (400, 300);
 
 /// A compositor with the owner's seat and two agents' seats, A and B, each with an output.
-fn two_seats() -> (Compositor, SeatId, SeatId) {
+pub(crate) fn two_seats() -> (Compositor, SeatId, SeatId) {
     let mut compositor = manual_compositor();
     let mode = OutputMode::new(1920, 1080, 60.0, 1.0).expect("a mode");
     let a = compositor.add_seat().expect("a seat");
@@ -30,7 +30,7 @@ fn two_seats() -> (Compositor, SeatId, SeatId) {
 }
 
 /// Opens a window of `input`'s client with a buffer of [`WINDOW`]'s size.
-fn open(input: &mut InputClient, compositor: &mut Compositor) -> usize {
+pub(crate) fn open(input: &mut InputClient, compositor: &mut Compositor) -> usize {
     let window = input.client.open_window(compositor);
     input.client.ack(window);
     input.client.attach(window, WINDOW.0, WINDOW.1, RED);
@@ -40,13 +40,13 @@ fn open(input: &mut InputClient, compositor: &mut Compositor) -> usize {
 }
 
 /// Runs every refresh due, twice over, so that outputs of two rates are all arranged.
-fn settle(compositor: &mut Compositor) {
+pub(crate) fn settle(compositor: &mut Compositor) {
     run_armed_deadlines(compositor);
     run_armed_deadlines(compositor);
 }
 
 /// Seat `seat`'s windows, in the order they opened.
-fn windows_of(compositor: &Compositor, seat: SeatId) -> Vec<WindowId> {
+pub(crate) fn windows_of(compositor: &Compositor, seat: SeatId) -> Vec<WindowId> {
     compositor
         .windows()
         .into_iter()
@@ -79,7 +79,7 @@ fn inside(compositor: &Compositor, window: WindowId) -> (OutputId, f64, f64) {
 }
 
 /// Moves `seat`'s pointer inside `window` and clicks `button` there.
-fn click(compositor: &mut Compositor, seat: SeatId, window: WindowId, button: u32) {
+pub(crate) fn click(compositor: &mut Compositor, seat: SeatId, window: WindowId, button: u32) {
     let (output, x, y) = inside(compositor, window);
     let pointer = compositor
         .pointer_move(seat, Some(output), x, y)

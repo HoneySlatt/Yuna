@@ -99,7 +99,7 @@ impl SeatData {
     }
 
     /// An agent's seat: its `wl_seat` global, named `agent-<id>`, a keyboard of
-    /// [`AGENT_KEYBOARD_LAYOUT`] and a pointer.
+    /// [`AGENT_KEYBOARD_LAYOUT`], a pointer, and Yuna as its input method (`text_input.rs`).
     pub(crate) fn agent(
         id: SeatId,
         seat_state: &mut SeatState<State>,
@@ -123,6 +123,7 @@ impl SeatData {
             )
             .map_err(|e| Error::Keyboard(e.to_string()))?;
         let pointer = seat.add_pointer();
+        crate::text_input::act_as_input_method(&seat);
         let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
         let keymap = xkb::Keymap::new_from_names(
             &context,

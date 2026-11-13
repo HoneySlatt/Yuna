@@ -37,6 +37,7 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::dialog::XdgDialogState;
 use smithay::wayland::shell::xdg::{XDG_POPUP_ROLE, XdgShellState};
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
@@ -123,6 +124,8 @@ pub(crate) struct State {
     _xdg_dialog_state: XdgDialogState,
     /// `ext-image-copy-capture-v1` and its sessions (`screencopy.rs`).
     pub screencopy: ScreencopyState,
+    /// `text-input-v3` (`text_input.rs`).
+    _text_input_state: TextInputManagerState,
     /// The captures waiting for their output's refresh (`capture.rs`).
     pub pending_captures: Vec<PendingCapture>,
     /// The agents' captures copied or failed, until the compositor's user takes them.
@@ -194,6 +197,7 @@ impl State {
             xdg_activation_state: XdgActivationState::new::<State>(dh),
             _xdg_dialog_state: XdgDialogState::new::<State>(dh),
             screencopy: ScreencopyState::new(dh),
+            _text_input_state: crate::text_input::text_input_global(dh),
             pending_captures: Vec::new(),
             captured: Vec::new(),
             next_capture_ticket: 1,

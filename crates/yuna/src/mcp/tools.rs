@@ -234,22 +234,29 @@ pub fn definitions() -> Value {
         {
             "name": "keyboard",
             "title": "Keyboard",
-            "description": "Press, release or tap keys on a seat's keyboard, or type text, to \
-                the window its keyboard is on. Keys are named as XKB names them: Return, a, F5, \
-                BackSpace, Left. tap takes keys joined by +, the last pressed while the others \
-                are held: ctrl+shift+t; ctrl, shift, alt, super and altgr name modifiers. type \
-                types text through the seat's us layout, any character included. A click \
-                focuses a window; the keyboard follows it at the output's next refresh.",
+            "description": "Press, release or tap keys on a seat's keyboard, type text, or show \
+                text being composed, to the window its keyboard is on, or read where it is. Keys \
+                are named as XKB names them: Return, a, F5, BackSpace, Left. tap takes keys \
+                joined by +, the last pressed while the others are held: ctrl+shift+t; ctrl, \
+                shift, alt, super and altgr name modifiers. type types text through the seat's \
+                us layout, any character included: one outside it is committed to the text \
+                field there when it speaks text-input-v3. preedit shows text being composed in \
+                that text field, as an input method does, until the next type replaces it; \
+                empty text clears it. The result tells the window the keyboard is on and \
+                whether a text field is enabled there. A click focuses a window; the keyboard \
+                follows it at the output's next refresh.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["press", "release", "tap", "type"] },
+                    "action": { "type": "string",
+                        "enum": ["get", "press", "release", "tap", "type", "preedit"] },
                     "seat": seat,
                     "key": { "type": "string", "minLength": 1,
                         "description": "press, release: the key's name" },
                     "keys": { "type": "string", "minLength": 1,
                         "description": "tap: keys joined by +" },
-                    "text": { "type": "string", "description": "type: the text" }
+                    "text": { "type": "string",
+                        "description": "type: the text; preedit: the text being composed" }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false
@@ -434,10 +441,12 @@ impl Button {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KeyboardCall {
+    Get { seat: u64 },
     Press { seat: u64, key: String },
     Release { seat: u64, key: String },
     Tap { seat: u64, keys: String },
     Type { seat: u64, text: String },
+    Preedit { seat: u64, text: String },
 }
 
 /// `spawn`'s arguments.
@@ -883,6 +892,12 @@ mod tests {
             Ok(KeyboardCall::Type { .. })
         ));
         assert!(matches!(
+            arguments(args(
+                json!({"action": "preedit", "seat": 2, "text": "にほ"})
+            )),
+            Ok(KeyboardCall::Preedit { .. })
+        ));
+        assert!(matches!(
             arguments(args(json!({"action": "advance", "by_ms": 4.5}))),
             Ok(ClockCall::Advance {
                 by_ms: Some(_),
@@ -907,6 +922,7 @@ mod tests {
                 .is_err()
         );
         assert!(arguments::<KeyboardCall>(args(json!({"action": "tap", "seat": 2}))).is_err());
+        assert!(arguments::<KeyboardCall>(args(json!({"action": "preedit", "seat": 2}))).is_err());
         assert!(arguments::<OutputsCall>(args(json!({"action": "rotate"}))).is_err());
         assert!(arguments::<OutputsCall>(args(json!({}))).is_err());
         assert!(arguments::<OutputsCall>(args(json!({"action": "create", "width": -1}))).is_err());

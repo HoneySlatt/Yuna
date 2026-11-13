@@ -123,6 +123,17 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
 
+## Text input
+
+- Smithay `8fd9fe0` sends `enter` to a text field made after its surface took the keyboard only
+  when an input method program runs, not when the compositor is the input method
+  (`zwp_text_input_manager_v3.get_text_input`): a client that makes its text field late is
+  entered at its surface's next keyboard focus. winit makes it at start.
+- Smithay `8fd9fe0` drops what an enabled text field tells of itself, its surrounding text, its
+  content type and its cursor's rectangle, when no input method program runs: an agent cannot
+  read them.
+- The owner's seat has no input method: a real one, `input-method-v2`, comes with the desktop.
+
 ## Captures
 
 - Smithay `8fd9fe0` asks a session's buffer constraints (`capture_constraints`) without naming

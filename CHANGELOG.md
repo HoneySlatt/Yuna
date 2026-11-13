@@ -5,6 +5,11 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- `yuna mcp` is the input method of each agent's seat: `keyboard type` commits a character
+  outside the `us` layout to a text field that speaks `text-input-v3`, with no keymap change;
+  `keyboard preedit` shows text being composed there; `keyboard get` and every `keyboard` result
+  tell whether a text field is enabled where the keyboard is.
+
 - `yuna mcp`'s `capture` gives a PNG of a seat's output, a region of it or one of its windows,
   at the logical size by default, where a pixel is a unit `pointer` takes, or at the physical
   size. Its result tells how the image maps to the output and gives an id, through which

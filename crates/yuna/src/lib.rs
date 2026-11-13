@@ -38,6 +38,7 @@ mod seats;
 mod selection;
 mod shell;
 mod state;
+mod text_input;
 
 use std::fmt;
 
@@ -61,6 +62,7 @@ pub use screencopy::{MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT};
 pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
+pub use text_input::MAX_TEXT_BYTES;
 pub use yuna_layout;
 
 /// Why the compositor could not start, or refused a request.

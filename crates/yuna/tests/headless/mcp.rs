@@ -569,6 +569,35 @@ fn seats_through_mcp_keep_to_their_own() {
     assert_eq!(on_b["structuredContent"]["keyboard_window"], Value::Null);
     client.roundtrip(mcp.server.compositor());
     assert_eq!(client.state.typed, "hé");
+    assert_eq!(typed["structuredContent"]["text_field"], json!(false));
+    let refused = mcp.call(
+        "keyboard",
+        json!({"action": "preedit", "seat": a, "text": "にほ"}),
+    );
+    assert_eq!(refused["isError"], json!(true), "no field enabled");
+
+    // Its text field enabled, text composed shows, and a character outside `us` is committed.
+    client.enable_text_field(true);
+    client.roundtrip(mcp.server.compositor());
+    let read = mcp.call("keyboard", json!({"action": "get", "seat": a}));
+    assert_eq!(
+        read["structuredContent"],
+        json!({"keyboard_window": id, "text_field": true})
+    );
+    let composed = mcp.call(
+        "keyboard",
+        json!({"action": "preedit", "seat": a, "text": "にほ"}),
+    );
+    assert_eq!(composed["isError"], json!(false), "{composed}");
+    client.roundtrip(mcp.server.compositor());
+    assert_eq!(client.state.preedit.as_deref(), Some("にほ"));
+    mcp.call(
+        "keyboard",
+        json!({"action": "type", "seat": a, "text": "日本"}),
+    );
+    client.roundtrip(mcp.server.compositor());
+    assert_eq!(client.state.preedit, None);
+    assert_eq!(client.state.received, "hé日本");
 
     let moved = mcp.call(
         "workspaces",

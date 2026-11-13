@@ -158,6 +158,8 @@ operation, and an example measures the model:
   to logical coordinates ([below](#captures)).
 - `screencopy.rs`: `ext-image-copy-capture-v1` and its output sources, a thin layer over
   Smithay's modules and `capture.rs`.
+- `text_input.rs`: `text-input-v3`, Yuna as the input method of agents' seats, a thin layer
+  over Smithay's module ([below](#seats-and-input)).
 - `scale.rs`: the scale each surface is told: `wp_fractional_scale_v1`, and `wl_surface`'s
   preferred buffer scale and transform.
 - `dmabuf.rs`: `linux-dmabuf`: its global, and the import of each client's dmabuf.
@@ -435,10 +437,17 @@ clock's time.
    press's serial, recorded with that window, may start a popup grab, a drag or an activation
    token there. A wheel step scrolls 15 units, and 120 in `axis_value120`.
 3. A key is pressed by its XKB keycode, the name an agent gives looked up in the seat's keymap.
-   Text is typed key by key through that keymap, Shift held where a character needs it; a run
-   of characters the keymap lacks goes through Smithay's `inject_text_keysyms`, which gives the
-   focused client a keymap of its own for them, then the seat's back.
-4. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
+   Text is typed key by key through that keymap, Shift held where a character needs it. A run
+   of characters the keymap lacks is committed to the text field enabled where the keyboard is,
+   through `text-input-v3`; with none, it goes through Smithay's `inject_text_keysyms`, which
+   gives the focused client a keymap of its own for them, then the seat's back.
+4. Yuna is the input method of each agent's seat (`text_input.rs`,
+   [ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): a client's text
+   field (`text-input-v3`) is entered with its surface's keyboard focus and left with it. Once
+   its client enables it, Yuna sends it text committed, in pieces of 4,000 bytes at most, and
+   text being composed, which shows until text is committed or an empty one clears it. The
+   owner's seat has no input method: its clients' fields are never entered.
+5. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
    `enter` serial, is recorded on the seat; Yuna does not draw cursors yet.
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
@@ -548,7 +557,8 @@ window or program unknown there:
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
 - `pointer` moves, presses, releases, clicks and scrolls, moving first when given a place, on an
   output or in a capture's image, and tells where the pointer is and what is under it; `keyboard` presses, releases and taps keys,
-  and types text, and tells the window the keyboard is on ([Seats and input](#seats-and-input)).
+  types text and shows text being composed, and tells the window the keyboard is on and whether
+  a text field is enabled there ([Seats and input](#seats-and-input)).
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
@@ -603,7 +613,9 @@ one it was presented at, later when the frame was late.
   that bound another seat's `wl_seat`, a click's focus, text read back through the keymaps the
   client got, wheel and cursor, a popup grab and a drag from a press, activation and the
   clipboard kept to their seat, and a seat's closing; its
-  clients are `input_client.rs`'s, which bind a seat by name. `captures.rs` in it captures
+  clients are `input_client.rs`'s, which bind a seat by name and hold a text field.
+  `text_input.rs` in it tells text fields: entered and left with the keyboard, text outside
+  `us` committed, text composed, long text in pieces, and no seat's text in another's field. `captures.rs` in it captures
   through MCP: an output's logical image, its edges on whole units, a frame on its way answered
   at its boundary, a window, a region and the physical size with `pointer` aimed through them,
   the refusals, a closed seat, the last 16 ids, images too large. `screencopy.rs` captures

@@ -1,7 +1,9 @@
 //! A client with a seat's input, for tests: it binds every `wl_seat`, takes the pointer and the
 //! keyboard of the one a test names, and records each event in order. It decodes the keys it
 //! gets through the keymaps it is sent, as an application does, so that a test reads the text
-//! typed. It sets cursor shapes (`cursor-shape-v1`) and drags (`wl_data_device`).
+//! typed. It sets cursor shapes (`cursor-shape-v1`) and drags (`wl_data_device`). It holds a
+//! text field (`text-input-v3`) of that seat from the start, as an application binds one before
+//! its window has the keyboard, and applies what each `done` gives it.
 //!
 //! An [`InputClient`] is a test [`Client`] with these objects on an event queue of their own,
 //! over the same connection, as `selection_client.rs` does: the windows and the input are one
@@ -18,6 +20,9 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum, event_created_child};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
+};
+use wayland_protocols::wp::text_input::zv3::client::{
+    zwp_text_input_manager_v3, zwp_text_input_v3,
 };
 use yuna::Compositor;
 use yuna::yuna_layout::SeatId;
@@ -85,6 +90,20 @@ pub enum InputEvent {
     Drop,
 }
 
+/// One event of the client's text field, in the order it came.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextEvent {
+    Enter(wl_surface::WlSurface),
+    Leave(wl_surface::WlSurface),
+    Preedit {
+        text: Option<String>,
+        begin: i32,
+        end: i32,
+    },
+    Commit(Option<String>),
+    Done(u32),
+}
+
 /// What a drag's source was told.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DragSource {
@@ -111,6 +130,17 @@ pub struct InputState {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     cursor_shape: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
     data_device: Option<wl_data_device::WlDataDevice>,
+    text_inputs: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+    /// The `commit` requests the client sent its text field, which each `done` names.
+    text_commits: u32,
+    /// What the text field was sent since its last `done`.
+    pending_preedit: Option<String>,
+    pending_commit: Option<String>,
+    /// The events of its text field.
+    pub text_events: Vec<TextEvent>,
+    /// The text being composed in its text field, as the last `done` applied it.
+    pub preedit: Option<String>,
     /// The last offer a drag entered with.
     drag_offer: Option<wl_data_offer::WlDataOffer>,
     pub events: Vec<InputEvent>,
@@ -120,6 +150,9 @@ pub struct InputState {
     xkb: Option<(xkb::Keymap, xkb::State)>,
     /// What the keys pressed type, through the keymap they came with.
     pub typed: String,
+    /// The text the client took, in order: what its keys typed, and what its text field was
+    /// given as committed.
+    pub received: String,
     pub sources: Vec<DragSource>,
 }
 
@@ -160,6 +193,10 @@ impl InputClient {
             state.pointer = Some(pointer);
         }
         state.keyboard = Some(wl_seat.get_keyboard(&qh, ()));
+        state.text_input = state
+            .text_inputs
+            .as_ref()
+            .map(|manager| manager.get_text_input(&wl_seat, &qh, ()));
         state.data_device = state
             .data_device_manager
             .as_ref()
@@ -236,6 +273,19 @@ impl InputClient {
             .set_shape(serial, shape);
     }
 
+    /// Enables its text field, or disables it, and commits that state, as an application does
+    /// when a field takes or loses the focus.
+    pub fn enable_text_field(&mut self, enabled: bool) {
+        let field = self.state.text_input.as_ref().expect("zwp_text_input_v3");
+        if enabled {
+            field.enable();
+        } else {
+            field.disable();
+        }
+        field.commit();
+        self.state.text_commits += 1;
+    }
+
     /// Starts a drag from `origin` of a new source offering `text/plain` for a copy, naming
     /// `serial`; returns the source's index.
     pub fn start_drag(&mut self, origin: &wl_surface::WlSurface, serial: u32) -> usize {
@@ -309,6 +359,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for InputState {
             }
             "wl_data_device_manager" => {
                 state.data_device_manager = Some(registry.bind(name, version.min(3), qh, ()));
+            }
+            "zwp_text_input_manager_v3" => {
+                state.text_inputs = Some(registry.bind(name, 1, qh, ()));
             }
             _ => {}
         }
@@ -445,9 +498,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for InputState {
             } => {
                 let pressed = key_state == WEnum::Value(wl_keyboard::KeyState::Pressed);
                 if pressed && let Some((_, xkb_state)) = &state.xkb {
-                    state
-                        .typed
-                        .push_str(&xkb_state.key_get_utf8(xkb::Keycode::new(key + 8)));
+                    let text = xkb_state.key_get_utf8(xkb::Keycode::new(key + 8));
+                    state.typed.push_str(&text);
+                    state.received.push_str(&text);
                 }
                 InputEvent::Key {
                     key,
@@ -472,6 +525,54 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for InputState {
             _ => return,
         };
         state.events.push(event);
+    }
+}
+
+impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for InputState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_text_input_v3::ZwpTextInputV3,
+        event: zwp_text_input_v3::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let event = match event {
+            zwp_text_input_v3::Event::Enter { surface } => TextEvent::Enter(surface),
+            zwp_text_input_v3::Event::Leave { surface } => TextEvent::Leave(surface),
+            zwp_text_input_v3::Event::PreeditString {
+                text,
+                cursor_begin,
+                cursor_end,
+            } => {
+                state.pending_preedit.clone_from(&text);
+                TextEvent::Preedit {
+                    text,
+                    begin: cursor_begin,
+                    end: cursor_end,
+                }
+            }
+            zwp_text_input_v3::Event::CommitString { text } => {
+                state.pending_commit.clone_from(&text);
+                TextEvent::Commit(text)
+            }
+            zwp_text_input_v3::Event::Done { serial } => {
+                // As the protocol asks: a done applies what came before it, the preedit shown
+                // replaced by the new one or cleared, and only when it names the client's last
+                // commit.
+                let preedit = state.pending_preedit.take();
+                let commit = state.pending_commit.take();
+                if serial == state.text_commits {
+                    state.preedit = preedit;
+                    if let Some(commit) = commit {
+                        state.received.push_str(&commit);
+                    }
+                }
+                TextEvent::Done(serial)
+            }
+            _ => return,
+        };
+        state.text_events.push(event);
     }
 }
 
@@ -538,5 +639,6 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for InputState {
 }
 
 wayland_client::delegate_noop!(InputState: ignore wl_data_device_manager::WlDataDeviceManager);
+wayland_client::delegate_noop!(InputState: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
 wayland_client::delegate_noop!(InputState: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 wayland_client::delegate_noop!(InputState: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);

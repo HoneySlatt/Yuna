@@ -1274,24 +1274,29 @@ impl Server {
             Err(reason) => return ToolResult::failed(reason),
         };
         let seat = match &call {
-            KeyboardCall::Press { seat, .. }
+            KeyboardCall::Get { seat }
+            | KeyboardCall::Press { seat, .. }
             | KeyboardCall::Release { seat, .. }
             | KeyboardCall::Tap { seat, .. }
-            | KeyboardCall::Type { seat, .. } => *seat,
+            | KeyboardCall::Type { seat, .. }
+            | KeyboardCall::Preedit { seat, .. } => *seat,
         };
         let seat = match self.agent_seat(seat) {
             Ok(seat) => seat,
             Err(failed) => return failed,
         };
         let result = match call {
+            KeyboardCall::Get { .. } => Ok(()),
             KeyboardCall::Press { key, .. } => self.compositor.key(seat, &key, true),
             KeyboardCall::Release { key, .. } => self.compositor.key(seat, &key, false),
             KeyboardCall::Tap { keys, .. } => self.compositor.tap_keys(seat, &keys),
             KeyboardCall::Type { text, .. } => self.compositor.type_text(seat, &text),
+            KeyboardCall::Preedit { text, .. } => self.compositor.compose_text(seat, &text),
         };
         match result {
             Ok(()) => ToolResult::done(json!({
                 "keyboard_window": self.compositor.keyboard_window(seat).map(|window| window.0),
+                "text_field": self.compositor.text_field_enabled(seat),
             })),
             Err(error) => ToolResult::failed(error.to_string()),
         }

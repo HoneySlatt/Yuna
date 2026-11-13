@@ -10,9 +10,10 @@
 //! seat is on its own clients' surfaces: no event of one seat reaches another's client.
 //!
 //! Keys are pressed by their XKB keycode. Text is typed through the seat's `us` keymap, Shift
-//! held where a character needs it; a character the keymap lacks is typed through Smithay's
-//! `inject_text_keysyms`, which gives the focused client a keymap of its own for it, then the
-//! seat's back. Events carry Yuna's clock's time.
+//! held where a character needs it. A character the keymap lacks is committed to the text field
+//! enabled where the keyboard is, through `text-input-v3` (`text_input.rs`); with none, it is
+//! typed through Smithay's `inject_text_keysyms`, which gives the focused client a keymap of its
+//! own for it, then the seat's back. Events carry Yuna's clock's time.
 
 use std::any::Any;
 
@@ -139,10 +140,12 @@ fn keysym_of_name(name: &str) -> Option<Keysym> {
         .find(|keysym| keysym.raw() != 0)
 }
 
-/// What a step of typed text does: press a key, Shift with it or not; or type characters the
-/// keymap lacks through an injected keymap.
+/// What a step of typed text does: press a key, Shift with it or not; commit characters the
+/// keymap lacks to the text field enabled where the keyboard is; or, with none, type them
+/// through an injected keymap.
 enum Typed {
     Key(Keycode, bool),
+    Committed(String),
     Injected(Vec<Keysym>),
 }
 
@@ -580,8 +583,8 @@ impl State {
     }
 
     /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its key in
-    /// the seat's keymap, Shift held where it needs it, or, lacking one, through an injected
-    /// keymap. Refused, with nothing typed, past [`MAX_TYPED`] characters, for a character that is
+    /// the seat's keymap, Shift held where it needs it; lacking one, committed to the text field
+    /// enabled there, or, with none, through an injected keymap. Refused, with nothing typed, past [`MAX_TYPED`] characters, for a character that is
     /// no keysym, and when a key the text needs is held.
     pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.agent_pointer(seat)?;
@@ -602,7 +605,7 @@ impl State {
             Typed::Key(key, with_shift) => {
                 held.contains(key) || (*with_shift && held.contains(&shift))
             }
-            Typed::Injected(_) => false,
+            Typed::Committed(_) | Typed::Injected(_) => false,
         });
         if needs_held {
             return Err(Error::Refused(
@@ -621,6 +624,7 @@ impl State {
                         self.key(seat, shift, false)?;
                     }
                 }
+                Typed::Committed(text) => self.commit_text(seat, &text)?,
                 Typed::Injected(keysyms) => {
                     let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
                         continue;
@@ -636,8 +640,10 @@ impl State {
         Ok(())
     }
 
-    /// What typing `text` on `seat` does, step by step, its injected characters grouped.
+    /// What typing `text` on `seat` does, step by step, its committed or injected characters
+    /// grouped.
     fn typing_steps(&self, seat: SeatId, text: &str) -> Result<Vec<Typed>, Error> {
+        let text_field = self.text_field_enabled(seat);
         let keymap = self
             .seat(seat)
             .and_then(|data| data.keymap.as_ref())
@@ -652,6 +658,10 @@ impl State {
             }
             match key_for_keysym(keymap, keysym) {
                 Some((key, shift)) => steps.push(Typed::Key(key, shift)),
+                None if text_field => match steps.last_mut() {
+                    Some(Typed::Committed(committed)) => committed.push(character),
+                    _ => steps.push(Typed::Committed(character.to_string())),
+                },
                 None => match steps.last_mut() {
                     Some(Typed::Injected(keysyms)) => keysyms.push(keysym),
                     _ => steps.push(Typed::Injected(vec![keysym])),

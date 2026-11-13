@@ -381,11 +381,25 @@ impl Compositor {
     }
 
     /// Types `text` on agent seat `seat`'s keyboard, to the surface it is on, through its `us`
-    /// keymap, Shift held where a character needs it; a character the keymap lacks is typed
-    /// through a keymap given to the client for it. At most [`MAX_TYPED`](crate::MAX_TYPED)
-    /// characters.
+    /// keymap, Shift held where a character needs it. A character the keymap lacks is committed
+    /// to the text field enabled there, through `text-input-v3`, or, with none, typed through a
+    /// keymap given to the client for it. At most [`MAX_TYPED`](crate::MAX_TYPED) characters.
     pub fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.state.type_text(seat, text)
+    }
+
+    /// Whether a text field is enabled where agent seat `seat`'s keyboard is: its client asked
+    /// for an input method through `text-input-v3`, and Yuna is its seat's.
+    pub fn text_field_enabled(&self, seat: SeatId) -> bool {
+        self.state.text_field_enabled(seat)
+    }
+
+    /// Shows `text` as being composed in the text field enabled where agent seat `seat`'s
+    /// keyboard is, as an input method does, its cursor at its end, until text is committed;
+    /// empty text clears it. Refused when no text field is enabled there, and past
+    /// [`MAX_TEXT_BYTES`](crate::MAX_TEXT_BYTES) bytes.
+    pub fn compose_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        self.state.compose_text(seat, text)
     }
 
     /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
