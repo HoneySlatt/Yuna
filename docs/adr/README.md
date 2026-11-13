@@ -31,7 +31,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted |
 | [0021](0021-smithays-fork.md) | Smithay's fork: a private repository, generic patches | Accepted; amends 0017 |
 | [0022](0022-the-headless-backend-in-yuna.md) | The headless backend: Yuna's own code, drawn on llvmpipe by default | Accepted; amends 0011; amended by 0029 |
-| [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted |
+| [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted; amended by 0031 |
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
@@ -39,3 +39,5 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted; context corrected |
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
+| [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023 |
+| [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; amends the ROADMAP |

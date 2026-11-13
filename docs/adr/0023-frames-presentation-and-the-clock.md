@@ -1,6 +1,7 @@
 # 0023. Frames, presentation times and the clock
 
-- Status: Accepted
+- Status: Accepted; amended by [0031](0031-frames-drawn-ahead-of-their-boundary.md) (when a frame
+  is drawn, when its feedback is sent)
 - Date: 2026-11-12
 
 ## Context

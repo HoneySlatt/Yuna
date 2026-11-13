@@ -67,7 +67,7 @@ it is met.
 |---|---|---|
 | At rest | 0 frames, 0 own wake-ups a second, 0 % of a core | every thread's context switches over 10 s, headless and on the desktop |
 | Motion | no missed frame at 240 Hz while scrolling, animating or switching workspaces | presentation feedback over scripted gestures, headless and on the owner's monitor |
-| Input to present | at the 99th percentile, one frame, 4.17 ms on the high tier | input given through the compositor, presentation time read |
+| Input to present | at a fixed rate, no commit presented after the first boundary it could reach, and end to end at the 99th percentile against gamescope and KWin; under VRR or tearing, one frame, 4.17 ms on the high tier ([ADR-0032](adr/0032-input-to-present-read-by-mode.md)) | input given through the compositor, presentation feedback and the frame log read |
 | A frame's cost | GPU and CPU time per frame, set from the rivals' at Stage 1 | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
 | Memory | set from the rivals' at Stage 1 | resident memory at rest with 15 windows |
@@ -110,7 +110,7 @@ it is met.
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
 | Smithay's fork | A private repository, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
 | Headless backend | Yuna's own code on upstream Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
-| Frames and clock | Drawn on damage, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)) |
+| Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 
