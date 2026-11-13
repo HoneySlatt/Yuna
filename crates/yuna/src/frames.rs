@@ -1,11 +1,20 @@
-//! The frame loop ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
+//! The frame loop ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
+//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
 //!
 //! A commit of a surface shown on an output, or a change of the layout, arms that output's next
-//! refresh boundary; nothing is armed otherwise. At the boundary, in order: the layout is
-//! arranged once if it changed, and the configures that changed are sent; the output is drawn
-//! if anything on it is damaged; its shown surfaces get their frame callbacks and their
-//! presentation feedback. A frame is presented at the first boundary at or after its drawing
-//! ended, and never at the boundary of an earlier frame.
+//! refresh; nothing is armed otherwise. The refresh is due at once when the output is idle: no
+//! frame waits for its boundary, and the boundary after its last refresh has passed. Otherwise
+//! it is due at a boundary minus the output's *lead*, so that its drawing ends before the
+//! boundary: the first boundary after its last refresh whose time minus the lead is not yet
+//! past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
+//! [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period; a drawing is timed from its
+//! deadline to its end.
+//!
+//! At the refresh, in order: the layout is arranged once if it changed, and the configures that
+//! changed are sent; the output is drawn if anything on it is damaged; its shown surfaces get
+//! their frame callbacks. Their presentation feedback is taken then and held until the boundary
+//! the frame is presented at: the one it aimed at if its drawing ended by then, else the first
+//! after. It is sent at that boundary, through a deadline of its own.
 //!
 //! A window shown on no output is hidden: it is told `suspended`, its content updates are
 //! discarded, and its frame callbacks go out at most once a second, through one deadline armed
@@ -15,7 +24,7 @@
 //! A window's popups go with it: drawn just above it, called back, reported presented or
 //! discarded, and entering or leaving outputs with its own surfaces.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
@@ -30,10 +39,11 @@ use smithay::utils::{Monotonic, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
     SurfaceAttributes, SurfaceData, TraversalAction, with_surface_tree_downward,
 };
-use smithay::wayland::presentation::Refresh;
+use smithay::wayland::presentation::{PresentationFeedbackCachedState, Refresh};
 use yuna_layout::{OutputId, Placed, WindowId};
 
 use crate::clock::Deadline;
+use crate::output::VirtualOutput;
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::state::{OWNER_SEAT, State};
@@ -41,8 +51,18 @@ use crate::state::{OWNER_SEAT, State};
 /// The shortest time between two frame callbacks of a hidden window.
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long a drawing counts in its output's lead after it ended.
+pub const DRAWING_WINDOW: Duration = Duration::from_millis(500);
+
+/// The least a drawing counts in its output's lead, KWin's: power states of a CPU or a GPU may
+/// slow the next drawing ([ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
+pub const DRAWING_FLOOR: Duration = Duration::from_millis(2);
+
+/// What the lead keeps beyond the longest recent drawing, KWin's.
+pub const LEAD_MARGIN: Duration = Duration::from_millis(1);
+
 impl State {
-    /// Marks the layout changed: every output arranges it again at its next boundary.
+    /// Marks the layout changed: every output arranges it again at its next refresh.
     pub(crate) fn mark_layout_changed(&mut self) {
         self.layout_dirty = true;
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
@@ -51,7 +71,8 @@ impl State {
         }
     }
 
-    /// Arms `output`'s next refresh boundary, unless it is armed already.
+    /// Arms `output`'s next refresh, unless it is armed already: at once when the output is
+    /// idle, else at the boundary it aims at minus its lead. See the module's documentation.
     pub(crate) fn schedule_refresh(&mut self, output: OutputId) {
         let deadline = Deadline::Refresh(output);
         if self.clock.is_armed(deadline) {
@@ -62,13 +83,28 @@ impl State {
             return;
         };
         let output = &mut self.outputs[index];
-        let boundary = output.boundaries.first_after(now);
+        // The boundary after its last refresh has passed, so no frame waits for its own.
+        let idle = now >= output.boundaries.at(output.last_refresh + 1);
+        let (at, boundary) = if idle {
+            (now, output.boundaries.first_at_or_after(now))
+        } else {
+            let lead = output.drawings.lead(now, output.mode.period());
+            let boundary = output
+                .boundaries
+                .first_at_or_after(now.saturating_add(lead))
+                .max(output.last_refresh + 1);
+            (
+                output.boundaries.at(boundary).saturating_sub(lead),
+                boundary,
+            )
+        };
         output.armed_boundary = boundary;
-        let at = output.boundaries.at(boundary);
+        output.armed_at = at;
+        output.armed_at_once = idle;
         self.clock.arm(deadline, at);
     }
 
-    /// What a commit of `surface`, in the toplevel of `root`, arms: its output's next boundary
+    /// What a commit of `surface`, in the toplevel of `root`, arms: its output's next refresh
     /// when the window is shown; when no output shows it, its content update is discarded and
     /// its frame callbacks wait for the hidden windows' deadline. While the layout waits to be
     /// arranged, every output is armed already, and the arrangement decides for mapped windows.
@@ -103,11 +139,12 @@ impl State {
     pub(crate) fn fire(&mut self, deadline: Deadline) {
         match deadline {
             Deadline::Refresh(output) => self.refresh(output),
+            Deadline::Presentation(output) => self.send_presentations(output),
             Deadline::HiddenFrames => self.send_hidden_frames(),
         }
     }
 
-    /// An output's refresh boundary. See the module's documentation.
+    /// An output's refresh. See the module's documentation.
     fn refresh(&mut self, output: OutputId) {
         if self.layout_dirty {
             self.arrange();
@@ -124,22 +161,35 @@ impl State {
             }
         }
         let output = &mut self.outputs[index];
-        let boundary = output.armed_boundary;
+        let aimed = output.armed_boundary;
         let seq = match drawing {
-            Drawing::Drawn => {
-                // When the drawing could first show, and never on an earlier frame's boundary.
-                let next_free = output.last_presented.map_or(0, |seq| seq + 1);
-                let seq = output
-                    .boundaries
-                    .first_at_or_after(now)
-                    .max(boundary)
-                    .max(next_free);
-                output.last_presented = Some(seq);
+            Drawing::Drawn { started, damaged } => {
+                let took = now.saturating_sub(output.armed_at);
+                output.drawings.record(now, took);
+                // When the drawing could first show, and never before the boundary it aimed at:
+                // an earlier one is the frame before's.
+                let seq = output.boundaries.first_at_or_after(now).max(aimed);
+                tracing::debug!(
+                    output = output.id.0,
+                    elements = shown.len(),
+                    damaged_rectangles = damaged,
+                    took_us = started.elapsed().as_micros(),
+                    lead_us = output
+                        .boundaries
+                        .at(aimed)
+                        .saturating_sub(output.armed_at)
+                        .as_micros(),
+                    at_once = output.armed_at_once,
+                    boundary = aimed,
+                    presented = seq,
+                    "frame drawn"
+                );
                 seq
             }
-            // Nothing new to show: content updates show with the frame already on its way.
-            Drawing::Unchanged => boundary.max(output.last_presented.unwrap_or(0)),
+            // Nothing new to show: content updates show with the frame this refresh aimed at.
+            Drawing::Unchanged => aimed,
             Drawing::Failed => {
+                output.last_refresh = output.last_refresh.max(aimed);
                 for placed in &shown {
                     if let Some(root) = self.root_of(placed.window) {
                         discard_presentation_feedback(&root);
@@ -148,10 +198,10 @@ impl State {
                 return;
             }
         };
-        let presented_at = output.boundaries.at(seq);
-        let refresh = Refresh::Fixed(output.mode.period());
+        output.last_refresh = output.last_refresh.max(seq);
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
+        let mut any = false;
         for placed in &shown {
             if let Some(root) = self.root_of(placed.window) {
                 for tree in window_surface_trees(&root) {
@@ -159,12 +209,51 @@ impl State {
                         &tree,
                         &mut feedback,
                         |_, _| Some(smithay_output.clone()),
-                        |_, _| Kind::empty(),
+                        |_, states| {
+                            any |= has_presentation_feedback(states);
+                            Kind::empty()
+                        },
                     );
                 }
             }
         }
-        feedback.presented::<Duration, Monotonic>(presented_at, refresh, seq, Kind::Vsync);
+        // Nothing to tell: no deadline, so that a frame nobody asked feedback for wakes nothing.
+        if !any {
+            return;
+        }
+        let output = &mut self.outputs[index];
+        output.held_feedback.push((seq, feedback));
+        let at = output.boundaries.at(seq);
+        self.clock.arm(Deadline::Presentation(output.id), at);
+    }
+
+    /// An output's presentation deadline: the feedback held for each boundary now reached is
+    /// sent, presented at that boundary; the deadline is armed again for the next one held.
+    fn send_presentations(&mut self, output: OutputId) {
+        let now = self.clock.now();
+        let Some(index) = self.output_index(output) else {
+            return;
+        };
+        let VirtualOutput {
+            boundaries,
+            held_feedback,
+            mode,
+            ..
+        } = &mut self.outputs[index];
+        let refresh = Refresh::Fixed(mode.period());
+        let mut next = None;
+        held_feedback.retain_mut(|(seq, feedback)| {
+            let at = boundaries.at(*seq);
+            if at > now {
+                next = Some(next.map_or(at, |next: Duration| next.min(at)));
+                return true;
+            }
+            feedback.presented::<Duration, Monotonic>(at, refresh, *seq, Kind::Vsync);
+            false
+        });
+        if let Some(at) = next {
+            self.clock.arm(Deadline::Presentation(output), at);
+        }
     }
 
     /// Draws output `index`, which shows `shown`, if anything on it is damaged.
@@ -199,15 +288,15 @@ impl State {
             ));
         }
         let output = &mut self.outputs[index];
-        match render::draw(&mut self.renderer, output, &elements, started) {
-            Ok(true) => {
+        match render::draw(&mut self.renderer, output, &elements) {
+            Ok(Some(damaged)) => {
                 self.counters.frames_drawn += 1;
                 if let Some(hook) = &mut self.draw_hook {
                     hook(&mut self.clock);
                 }
-                Drawing::Drawn
+                Drawing::Drawn { started, damaged }
             }
-            Ok(false) => Drawing::Unchanged,
+            Ok(None) => Drawing::Unchanged,
             Err(error) => {
                 tracing::warn!(%error, "a frame could not be drawn");
                 Drawing::Failed
@@ -400,13 +489,56 @@ impl State {
     }
 }
 
-/// What a refresh boundary's drawing did.
+/// What a refresh's drawing did.
 enum Drawing {
-    Drawn,
+    /// Drawn, from `started`, when its elements began to be built, which imports its clients'
+    /// new buffers; `damaged` rectangles.
+    Drawn { started: Instant, damaged: usize },
     /// Nothing was damaged.
     Unchanged,
     /// The renderer failed: logged, and the content updates are not shown.
     Failed,
+}
+
+/// An output's recent drawings, from which its lead is predicted.
+#[derive(Debug, Default)]
+pub(crate) struct Drawings {
+    /// When each drawing ended and how long it took from its deadline, oldest first, none
+    /// ended [`DRAWING_WINDOW`] or longer ago: at most one a boundary, so a scan stays short.
+    recent: VecDeque<(Duration, Duration)>,
+}
+
+impl Drawings {
+    /// Records a drawing that ended at `ended` and took `took` from its deadline.
+    pub(crate) fn record(&mut self, ended: Duration, took: Duration) {
+        self.forget_old(ended);
+        self.recent.push_back((ended, took));
+    }
+
+    /// The lead at `now` of an output of refresh period `period`: the longest drawing of the
+    /// last [`DRAWING_WINDOW`], at least [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most
+    /// `period`.
+    pub(crate) fn lead(&mut self, now: Duration, period: Duration) -> Duration {
+        self.forget_old(now);
+        let longest = self
+            .recent
+            .iter()
+            .map(|&(_, took)| took)
+            .max()
+            .unwrap_or(Duration::ZERO)
+            .max(DRAWING_FLOOR);
+        longest.saturating_add(LEAD_MARGIN).min(period)
+    }
+
+    fn forget_old(&mut self, now: Duration) {
+        while self
+            .recent
+            .front()
+            .is_some_and(|&(ended, _)| ended.saturating_add(DRAWING_WINDOW) <= now)
+        {
+            self.recent.pop_front();
+        }
+    }
 }
 
 /// When a hidden window whose last frame callbacks went out at `last` may get its next ones.
@@ -478,6 +610,16 @@ fn is_drawn(states: &SurfaceData) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a surface waits for presentation feedback.
+fn has_presentation_feedback(states: &SurfaceData) -> bool {
+    !states
+        .cached_state
+        .get::<PresentationFeedbackCachedState>()
+        .current()
+        .callbacks
+        .is_empty()
+}
+
 /// Tells the clients of the window whose toplevel surface is `root`, its popups included, that
 /// their content updates were not shown.
 fn discard_presentation_feedback(root: &WlSurface) {
@@ -489,5 +631,50 @@ fn discard_presentation_feedback(root: &WlSurface) {
                 feedback.discarded();
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+    const PERIOD_240_HZ: Duration = Duration::from_nanos(4_166_666);
+
+    #[test]
+    fn with_no_drawing_the_lead_is_the_floor_and_the_margin() {
+        let mut drawings = Drawings::default();
+        assert_eq!(drawings.lead(Duration::ZERO, PERIOD_240_HZ), 3 * MS);
+    }
+
+    #[test]
+    fn the_lead_is_the_longest_recent_drawing_and_the_margin() {
+        let mut drawings = Drawings::default();
+        let t = Duration::from_secs(100);
+        drawings.record(t, 2_500 * Duration::from_micros(1));
+        drawings.record(t + 4 * MS, MS);
+        assert_eq!(
+            drawings.lead(t + 5 * MS, PERIOD_240_HZ),
+            3_500 * Duration::from_micros(1)
+        );
+    }
+
+    #[test]
+    fn the_lead_is_at_most_one_period() {
+        let mut drawings = Drawings::default();
+        let t = Duration::from_secs(100);
+        drawings.record(t, 50 * MS);
+        assert_eq!(drawings.lead(t, PERIOD_240_HZ), PERIOD_240_HZ);
+    }
+
+    #[test]
+    fn a_drawing_stops_counting_half_a_second_after_it_ended() {
+        let mut drawings = Drawings::default();
+        let t = Duration::from_secs(100);
+        drawings.record(t, 3 * MS);
+        let just_before = t + DRAWING_WINDOW - Duration::from_nanos(1);
+        assert_eq!(drawings.lead(just_before, PERIOD_240_HZ), 4 * MS);
+        assert_eq!(drawings.lead(t + DRAWING_WINDOW, PERIOD_240_HZ), 3 * MS);
+        assert!(drawings.recent.is_empty());
     }
 }

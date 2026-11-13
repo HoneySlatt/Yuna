@@ -9,7 +9,7 @@
 //! asked otherwise is still given, since the protocol requires one, but is not valid.
 //!
 //! An activation with a valid token asks the layout ([`Layout::request_activation`]): the window
-//! takes the focus at the next refresh boundary, unless a fullscreen window holds the screen.
+//! takes the focus at the next refresh, unless a fullscreen window holds the screen.
 //! Refused, or with a token that is not valid, the window is marked urgent and nothing else
 //! changes, so that no program takes a game's screen. Urgent is the compositor's state, kept on
 //! the toplevel: it ends when the window gets the seat's focus, or closes. A request for a

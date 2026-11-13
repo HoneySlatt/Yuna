@@ -33,13 +33,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   window geometry starts inside its surface, its right and bottom edges may blend up to one pixel
   of its margin. It stays while such a client's pixels are scaled anyway
   ([Scale](ARCHITECTURE.md#scale)).
-- A frame is presented at least one period after the commit it shows: a commit arms the first
-  boundary after it, drawing starts there, and the frame is presented at the first boundary
-  after its drawing ends (`frames.rs`). At 240 Hz, a client waits over 4.17 ms however fast the
-  frame, so the bar's input-to-present budget, one frame, read headless, is missed by
-  construction; the manual clock, where drawing takes no time, hides it. M1.5 opens with the
-  design of frames drawn ahead of their boundary, in an ADR that amends
-  [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) (the owner's choice, 2026-11-12).
 - Virtual time is not kept from running ahead of real time while real clients are connected
   ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)); it matters when M1.5 steps the
   clock.

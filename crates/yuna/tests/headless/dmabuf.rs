@@ -16,7 +16,8 @@ use yuna::yuna_layout::WindowId;
 
 use crate::client::{Client, ProtocolError, memory_file, sealed_memory_file};
 use crate::{
-    OUTPUT, RED, advance_to, assert_rests, boundary, manual_compositor, millis, open_and_commit,
+    LEAD, OUTPUT, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
+    open_and_commit,
 };
 
 /// DRM_FORMAT_ARGB8888, `AR24`.
@@ -225,7 +226,7 @@ fn a_dmabuf_in_a_file_that_may_shrink_is_refused() {
         advance_to(&mut compositor, &mut staying, boundary(start, k));
         assert_eq!(
             staying.window(a).frames.last(),
-            Some(&millis(boundary(start, k)))
+            Some(&millis(boundary(start, k) - LEAD))
         );
         assert_eq!(staying.window(a).configures.len(), configures);
         let error = leaving.protocol_error(&mut compositor);
@@ -313,7 +314,7 @@ fn a_dmabuf_in_a_file_sealed_against_shrinking_is_drawn() {
         assert_eq!(compositor.counters().frames_drawn, drawn + 2);
         assert_eq!(
             client.window(w).frames.last(),
-            Some(&millis(boundary(start, k)))
+            Some(&millis(boundary(start, k) - LEAD))
         );
         assert_all_green(&mut compositor, window_pixels);
     }

@@ -34,9 +34,9 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use yuna::yuna_layout::{Direction, OutputId, Tiling, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 
-use crate::assert_rests;
 use crate::client::{Anchor, Client, ConstraintAdjustment, Gravity, Parent, Placement};
 use crate::selection_client::{SelectionClient, SelectionEvent};
+use crate::{LEAD, assert_rests, run_armed_deadlines};
 
 /// The clients that send random requests, beside the sentinel.
 const CLIENTS: usize = 3;
@@ -46,6 +46,8 @@ const CASES_PER_TEST: u32 = 80;
 const OUTPUT_SIZE: (u32, u32) = (1280, 720);
 const OUTPUT: OutputId = OutputId(1);
 const RATE: u32 = 60;
+/// 1 s / 60, to the nanosecond below.
+const PERIOD: Duration = Duration::from_nanos(16_666_666);
 const SCALE: f64 = 1.5;
 const TEXT: &str = "text/plain;charset=utf-8";
 
@@ -983,7 +985,7 @@ fn press(compositor: &mut Compositor, binding: KeyBinding) {
 }
 
 /// Focuses the window of the output's arrangement that `index` names, taken modulo their count,
-/// as a key binding would, and moves the clock to the next boundary, which gives it the
+/// as a key binding would, and moves the clock past the next refresh, which gives it the
 /// keyboard. Nothing happens when the output holds no window.
 fn focus_window(compositor: &mut Compositor, start: Duration, index: usize) {
     let placed = compositor.layout().arrange(OUTPUT).unwrap_or_default();
@@ -993,7 +995,7 @@ fn focus_window(compositor: &mut Compositor, start: Duration, index: usize) {
     let window = placed[i].window;
     // The layout may refuse it.
     let _ = compositor.change_layout(|layout| layout.focus_window(window));
-    let next = next_boundary(start, compositor.now());
+    let next = next_frame_boundary(start, compositor.now());
     compositor
         .advance(next - compositor.now())
         .expect("the manual clock moves");
@@ -1017,14 +1019,31 @@ fn boundary(start: Duration, k: u64) -> Duration {
     start + Duration::from_nanos(k * 1_000_000_000 / u64::from(RATE))
 }
 
-/// The first refresh boundary after `now`.
-fn next_boundary(start: Duration, now: Duration) -> Duration {
-    let elapsed = now.saturating_sub(start).as_nanos();
+/// The first refresh boundary at or after `time`.
+fn first_boundary_at_or_after(start: Duration, time: Duration) -> u64 {
+    let elapsed = time.saturating_sub(start).as_nanos();
     let mut k = u64::try_from(elapsed * u128::from(RATE) / 1_000_000_000).expect("a boundary");
-    while boundary(start, k) <= now {
+    while boundary(start, k) < time {
         k += 1;
     }
-    boundary(start, k)
+    k
+}
+
+/// A boundary by which the refresh a change at `now` arms has run: the first after `now` plus
+/// the lead. The refresh is due at once, or at a boundary minus the lead, the first after the
+/// output's last refresh whose deadline is not past (ADR-0031); every boundary a refresh before
+/// `now` aimed at is at most `now` plus the lead.
+fn next_frame_boundary(start: Duration, now: Duration) -> Duration {
+    let after = now + LEAD;
+    let k = first_boundary_at_or_after(start, after);
+    boundary(
+        start,
+        if boundary(start, k) == after {
+            k + 1
+        } else {
+            k
+        },
+    )
 }
 
 /// The sentinel: a well-behaved client whose window, window 1, is drawn at boundary 1.
@@ -1236,7 +1255,7 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
         for slot in &mut clients {
             *slot = Some(busy_client(&mut compositor));
         }
-        let next = next_boundary(start, compositor.now());
+        let next = next_frame_boundary(start, compositor.now());
         compositor
             .advance(next - compositor.now())
             .expect("the manual clock moves");
@@ -1273,33 +1292,44 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
         }
     }
 
-    // A key binding focuses the sentinel's window, which shows it; its next frame callback comes
-    // at the next boundary, not a nanosecond before.
+    // A key binding focuses the sentinel's window, which shows it. Three periods later the
+    // output is idle: the sentinel's frame callback, asked then, comes in the round that reads
+    // it; asked again, at the next boundary's deadline exactly, not a nanosecond before
+    // (ADR-0031).
     compositor
         .change_layout(|layout| layout.focus_window(WindowId(1)))
         .map_err(|error| TestCaseError::fail(format!("the sentinel cannot focus: {error}")))?;
-    let next = next_boundary(start, compositor.now());
+    let quiet = compositor.now() + 3 * PERIOD;
     compositor
-        .advance(next - compositor.now())
+        .advance(quiet - compositor.now())
         .expect("the manual clock moves");
     settle(&mut compositor, &mut sentinel, &mut clients);
     let frames = sentinel.window(0).frames.len();
     sentinel.request_frame(0);
     sentinel.commit(0);
     sentinel.roundtrip(&mut compositor);
-    let next = next_boundary(start, compositor.now());
+    prop_assert_eq!(
+        &sentinel.window(0).frames[frames..],
+        &[quiet.as_millis() as u32]
+    );
+    sentinel.request_frame(0);
+    sentinel.commit(0);
+    sentinel.roundtrip(&mut compositor);
+    let aimed = first_boundary_at_or_after(start, quiet);
+    let next = (aimed + 1).max(first_boundary_at_or_after(start, quiet + LEAD));
+    let due = boundary(start, next) - LEAD;
     compositor
-        .advance(next - Duration::from_nanos(1) - compositor.now())
+        .advance(due - Duration::from_nanos(1) - compositor.now())
         .expect("the manual clock moves");
     sentinel.roundtrip(&mut compositor);
-    prop_assert_eq!(sentinel.window(0).frames.len(), frames);
+    prop_assert_eq!(sentinel.window(0).frames.len(), frames + 1);
     compositor
-        .advance(next - compositor.now())
+        .advance(due - compositor.now())
         .expect("the manual clock moves");
     sentinel.roundtrip(&mut compositor);
     prop_assert_eq!(
-        &sentinel.window(0).frames[frames..],
-        &[next.as_millis() as u32]
+        &sentinel.window(0).frames[frames + 1..],
+        &[due.as_millis() as u32]
     );
 
     // Every client leaves: once the display has seen it and the next boundary has drawn it, Yuna
@@ -1310,10 +1340,7 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
     compositor
         .dispatch(Some(Duration::ZERO))
         .expect("the compositor dispatches");
-    let next = next_boundary(start, compositor.now());
-    compositor
-        .advance(next - compositor.now())
-        .expect("the manual clock moves");
+    run_armed_deadlines(&mut compositor);
     prop_assert_eq!(check(&compositor), Ok(()));
     prop_assert_eq!(
         compositor

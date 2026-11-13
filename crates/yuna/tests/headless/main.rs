@@ -34,6 +34,9 @@ const BLUE: u32 = 0xFF_00_00_FF;
 /// 1 s / 240, to the nanosecond below.
 const PERIOD: Duration = Duration::from_nanos(4_166_666);
 const OUTPUT: OutputId = OutputId(1);
+/// The lead of an output whose drawings take no time, as on the manual clock: the floor, 2 ms,
+/// plus the margin, 1 ms (ADR-0031).
+const LEAD: Duration = Duration::from_millis(3);
 
 fn manual_compositor() -> Compositor {
     Compositor::new(Config {
@@ -47,6 +50,15 @@ fn manual_compositor() -> Compositor {
 /// Refresh boundary `k` of an output created at `start`, at 240 Hz.
 fn boundary(start: Duration, k: u64) -> Duration {
     start + Duration::from_nanos(k * 1_000_000_000 / 240)
+}
+
+/// The first refresh boundary at or after `time`, at 240 Hz from `start`.
+fn first_boundary_at_or_after(start: Duration, time: Duration) -> u64 {
+    let mut k = 0;
+    while boundary(start, k) < time {
+        k += 1;
+    }
+    k
 }
 
 /// A frame callback's time: milliseconds, in 32 bits.
@@ -79,6 +91,19 @@ fn advance_to(compositor: &mut Compositor, client: &mut Client, to: Duration) {
     let by = to.saturating_sub(compositor.now());
     compositor.advance(by).expect("the manual clock moves");
     client.roundtrip(compositor);
+}
+
+/// Runs the deadlines armed now, a refresh then its presentation, and any they arm in turn: at
+/// most four, so that a deadline armed again and again fails the story's rest that follows.
+fn run_armed_deadlines(compositor: &mut Compositor) {
+    for _ in 0..4 {
+        let Some(at) = compositor.next_deadline() else {
+            return;
+        };
+        compositor
+            .advance(at.saturating_sub(compositor.now()))
+            .expect("the manual clock moves");
+    }
 }
 
 /// A story's end: once everything is drawn and answered, 10 s of clock draw nothing, send no
@@ -150,32 +175,35 @@ fn the_first_configure_is_the_tile_and_mapping_activates() {
     assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(1)));
 }
 
-/// Story 2: a buffer of the tile's size is drawn in exactly one frame, at the next boundary; its
-/// frame callback comes at that boundary; its feedback says presented there, sequence 1, with
-/// the output's period, VSYNC alone.
+/// Story 2: a buffer of the tile's size, committed as the output is created, is drawn in exactly
+/// one frame, at boundary 1 minus the lead; its frame callback comes then; its feedback is held
+/// until boundary 1 and says presented there, sequence 1, with the output's period, VSYNC alone.
 #[test]
-fn one_frame_at_the_next_boundary_with_its_callback_and_feedback() {
+fn one_frame_ahead_of_the_next_boundary_with_its_callback_and_feedback() {
     let mut compositor = manual_compositor();
     let mut client = Client::connect(&mut compositor);
     let start = compositor.now();
     let w = open_and_commit(&mut compositor, &mut client, RED);
     assert_eq!(compositor.counters().frames_drawn, 0);
 
+    let due = boundary(start, 1) - LEAD;
+    advance_to(&mut compositor, &mut client, due - Duration::from_nanos(1));
+    assert_eq!(compositor.counters().frames_drawn, 0);
+    assert!(client.window(w).frames.is_empty());
+
+    advance_to(&mut compositor, &mut client, due);
+    assert_eq!(compositor.counters().frames_drawn, 1);
+    assert_eq!(client.window(w).frames, vec![millis(due)]);
     advance_to(
         &mut compositor,
         &mut client,
         boundary(start, 1) - Duration::from_nanos(1),
     );
-    assert_eq!(compositor.counters().frames_drawn, 0);
-    assert!(client.window(w).frames.is_empty());
     assert!(client.window(w).feedback.is_empty());
 
     advance_to(&mut compositor, &mut client, boundary(start, 1));
-    assert_eq!(compositor.counters().frames_drawn, 1);
-    let window = client.window(w);
-    assert_eq!(window.frames, vec![millis(boundary(start, 1))]);
     assert_eq!(
-        window.feedback,
+        client.window(w).feedback,
         vec![Feedback::Presented {
             time: boundary(start, 1),
             refresh: PERIOD,
@@ -187,12 +215,13 @@ fn one_frame_at_the_next_boundary_with_its_callback_and_feedback() {
     // Nothing else is drawn until something changes.
     advance_to(&mut compositor, &mut client, boundary(start, 10));
     assert_eq!(compositor.counters().frames_drawn, 1);
+    assert_rests(&mut compositor);
 }
 
-/// A frame callback asked without new content still comes at the next boundary, with nothing
-/// drawn; its feedback says presented at that boundary.
+/// A frame callback asked without new content, while the output is not idle, comes at the next
+/// boundary minus the lead, with nothing drawn; its feedback says presented at that boundary.
 #[test]
-fn a_callback_without_damage_comes_at_the_next_boundary() {
+fn a_callback_without_damage_comes_ahead_of_the_next_boundary() {
     let mut compositor = manual_compositor();
     let mut client = Client::connect(&mut compositor);
     let start = compositor.now();
@@ -207,7 +236,10 @@ fn a_callback_without_damage_comes_at_the_next_boundary() {
     advance_to(&mut compositor, &mut client, boundary(start, 2));
     assert_eq!(compositor.counters().frames_drawn, 1);
     let window = client.window(w);
-    assert_eq!(window.frames.last(), Some(&millis(boundary(start, 2))));
+    assert_eq!(
+        window.frames.last(),
+        Some(&millis(boundary(start, 2) - LEAD))
+    );
     assert_eq!(
         window.feedback.last(),
         Some(&Feedback::Presented {
@@ -219,31 +251,52 @@ fn a_callback_without_damage_comes_at_the_next_boundary() {
     );
 }
 
-/// Story 3: a frame whose drawing ends after the boundary it started at is presented at the
-/// following one; a frame is never presented at the boundary of the frame before it. The
-/// drawing is made late with the draw hook, which passes manual time as drawing would take it.
+/// Story 3: a frame whose drawing ends after the boundary it aimed at is presented at the
+/// following one, and its feedback held until then. The slow drawing lengthens the lead, at most
+/// to one period, so the next frame is drawn a period ahead; half a second later the lead is
+/// back to the floor and the margin. The drawing is made late with the draw hook, which passes
+/// manual time as drawing would take it.
 #[test]
 fn a_late_frame_is_presented_at_the_following_boundary() {
     let mut compositor = manual_compositor();
     let mut client = Client::connect(&mut compositor);
     let start = compositor.now();
-    // The first frame takes 3 ms to draw, the others no time.
+    // The first frame takes 4 ms to draw, longer than the lead; the others no time.
     let first_frame = Rc::new(Cell::new(true));
     let hook_first_frame = Rc::clone(&first_frame);
     compositor.set_draw_hook(move |clock| {
         if hook_first_frame.replace(false) {
-            clock.pass(Duration::from_millis(3));
+            clock.pass(Duration::from_millis(4));
         }
     });
     let w = open_and_commit(&mut compositor, &mut client, RED);
 
-    // Drawn at boundary 1 (4.17 ms), done at 7.17 ms: presented at boundary 2 (8.33 ms).
+    // Drawn from boundary 1 minus 3 ms, done 1 ms after boundary 1: presented at boundary 2.
+    let done = boundary(start, 1) + Duration::from_millis(1);
     advance_to(&mut compositor, &mut client, boundary(start, 1));
     assert!(!first_frame.get());
-    assert_eq!(
-        compositor.now(),
-        boundary(start, 1) + Duration::from_millis(3)
+    assert_eq!(compositor.now(), done);
+    // The callback goes out when the frame is done; the feedback waits for its boundary.
+    assert_eq!(client.window(w).frames, vec![millis(done)]);
+    assert!(client.window(w).feedback.is_empty());
+
+    // The next frame, committed now, while the first waits: the lead is one period, 4 ms + 1 ms
+    // capped, so it is drawn one period ahead of boundary 3, the first whose deadline is not
+    // past.
+    client.ack(w);
+    client.attach(w, TILE.0, TILE.1, BLUE);
+    client.request_feedback(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    let ahead_of_3 = boundary(start, 3) - PERIOD;
+    advance_to(
+        &mut compositor,
+        &mut client,
+        ahead_of_3 - Duration::from_nanos(1),
     );
+    assert_eq!(compositor.counters().frames_drawn, 1);
+    advance_to(&mut compositor, &mut client, ahead_of_3);
+    assert_eq!(compositor.counters().frames_drawn, 2);
     assert_eq!(
         client.window(w).feedback,
         vec![Feedback::Presented {
@@ -253,21 +306,7 @@ fn a_late_frame_is_presented_at_the_following_boundary() {
             flags: Kind::Vsync,
         }]
     );
-    // The callback goes out when the frame is done.
-    assert_eq!(
-        client.window(w).frames,
-        vec![millis(boundary(start, 1) + Duration::from_millis(3))]
-    );
-
-    // The next frame, committed at 7.17 ms, is drawn at boundary 2 and done at once; boundary 2
-    // already shows the frame before it, so it is presented at boundary 3.
-    client.ack(w);
-    client.attach(w, TILE.0, TILE.1, BLUE);
-    client.request_feedback(w);
-    client.commit(w);
-    client.roundtrip(&mut compositor);
-    advance_to(&mut compositor, &mut client, boundary(start, 2));
-    assert_eq!(compositor.counters().frames_drawn, 2);
+    advance_to(&mut compositor, &mut client, boundary(start, 3));
     assert_eq!(
         client.window(w).feedback.last(),
         Some(&Feedback::Presented {
@@ -276,6 +315,265 @@ fn a_late_frame_is_presented_at_the_following_boundary() {
             seq: 3,
             flags: Kind::Vsync,
         })
+    );
+
+    // Half a second after the slow drawing ended, it no longer counts: the lead is 3 ms again.
+    let later = done + Duration::from_millis(500);
+    advance_to(
+        &mut compositor,
+        &mut client,
+        later - Duration::from_millis(1),
+    );
+    client.attach(w, TILE.0, TILE.1, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    // Idle: drawn at once, with no time taken, so it counts the floor.
+    assert_eq!(compositor.counters().frames_drawn, 3);
+    advance_to(&mut compositor, &mut client, later);
+    client.attach(w, TILE.0, TILE.1, BLUE);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    let k = first_boundary_at_or_after(start, later + LEAD);
+    assert_eq!(compositor.next_deadline(), Some(boundary(start, k) - LEAD));
+}
+
+/// An output idle long enough draws a commit at once, in the round that reads it: its callback
+/// comes then, and its feedback at the first boundary at or after the drawing. A second commit
+/// right after waits for the next boundary's deadline, which no other frame takes.
+#[test]
+fn an_idle_output_draws_at_once() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = open_and_commit(&mut compositor, &mut client, RED);
+    advance_to(&mut compositor, &mut client, boundary(start, 1));
+    // Configured activated at boundary 1: acknowledged and drawn at boundary 2.
+    client.ack(w);
+    client.attach(w, TILE.0, TILE.1, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    advance_to(&mut compositor, &mut client, boundary(start, 3));
+    let drawn = compositor.counters().frames_drawn;
+    assert_eq!(compositor.next_deadline(), None);
+
+    // Between boundaries 10 and 11.
+    let now = boundary(start, 10) + Duration::from_millis(1);
+    advance_to(&mut compositor, &mut client, now);
+    client.attach(w, TILE.0, TILE.1, BLUE);
+    client.request_frame(w);
+    client.request_feedback(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.counters().frames_drawn, drawn + 1);
+    assert_eq!(client.window(w).frames.last(), Some(&millis(now)));
+    assert_eq!(compositor.next_deadline(), Some(boundary(start, 11)));
+
+    client.attach(w, TILE.0, TILE.1, RED);
+    client.request_feedback(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.counters().frames_drawn, drawn + 1);
+    advance_to(&mut compositor, &mut client, boundary(start, 12));
+    assert_eq!(compositor.counters().frames_drawn, drawn + 2);
+    let presented: Vec<u64> = client
+        .window(w)
+        .feedback
+        .iter()
+        .filter_map(|feedback| match feedback {
+            Feedback::Presented { seq, .. } => Some(*seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(presented[presented.len() - 2..], [11, 12]);
+    assert_rests(&mut compositor);
+}
+
+/// A commit at its boundary's deadline exactly, while the output is not idle, is drawn at once
+/// and presented at that boundary; one a nanosecond later, at the next.
+#[test]
+fn a_commit_at_the_deadline_makes_its_boundary_and_one_after_it_the_next() {
+    for (late, expected) in [(Duration::ZERO, 2), (Duration::from_nanos(1), 3)] {
+        let mut compositor = manual_compositor();
+        let mut client = Client::connect(&mut compositor);
+        let start = compositor.now();
+        let w = open_and_commit(&mut compositor, &mut client, RED);
+        // Drawn ahead of boundary 1: the output is not idle until boundary 2.
+        advance_to(&mut compositor, &mut client, boundary(start, 1));
+        advance_to(
+            &mut compositor,
+            &mut client,
+            boundary(start, 2) - LEAD + late,
+        );
+        client.attach(w, TILE.0, TILE.1, BLUE);
+        client.request_feedback(w);
+        client.commit(w);
+        client.roundtrip(&mut compositor);
+        advance_to(&mut compositor, &mut client, boundary(start, 4));
+        assert_eq!(compositor.counters().frames_drawn, 2);
+        assert_eq!(
+            client.window(w).feedback.last(),
+            Some(&Feedback::Presented {
+                time: boundary(start, expected),
+                refresh: PERIOD,
+                seq: expected,
+                flags: Kind::Vsync,
+            }),
+            "a commit {late:?} after the deadline"
+        );
+    }
+}
+
+/// A client that answers each frame callback by asking another, without new content, gets one a
+/// period, never in a loop: the refresh that drew nothing counts, so the output is not idle
+/// again before the boundary after it. Nothing is drawn.
+#[test]
+fn callbacks_asked_without_damage_come_once_a_period() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let w = open_and_commit(&mut compositor, &mut client, RED);
+    advance_to(&mut compositor, &mut client, boundary(start, 1));
+    client.ack(w);
+    client.attach(w, TILE.0, TILE.1, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    let idle_at = boundary(start, 10) + Duration::from_millis(1);
+    advance_to(&mut compositor, &mut client, idle_at);
+    let drawn = compositor.counters().frames_drawn;
+
+    client.request_frame(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.window(w).frames.last(), Some(&millis(idle_at)));
+    for k in 12..22 {
+        let answered = client.window(w).frames.len();
+        client.request_frame(w);
+        client.commit(w);
+        client.roundtrip(&mut compositor);
+        assert_eq!(client.window(w).frames.len(), answered);
+        let due = boundary(start, k) - LEAD;
+        assert_eq!(compositor.next_deadline(), Some(due));
+        advance_to(&mut compositor, &mut client, due);
+        assert_eq!(client.window(w).frames[answered..], [millis(due)]);
+    }
+    assert_eq!(compositor.counters().frames_drawn, drawn);
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A client that commits once every ten boundaries, 2 ms before one, as a film may: alone, it
+/// finds the output idle, is drawn at once and makes that boundary. Beside a client that draws
+/// every frame, the boundary's deadline, 3 ms before it, has passed: it makes the next one
+/// (ADR-0031's two latch points).
+#[test]
+fn a_steady_client_makes_its_boundary_alone_and_the_next_beside_an_animating_one() {
+    for (animating, late) in [(false, 0), (true, 1)] {
+        let mut compositor = manual_compositor();
+        let mut steady = Client::connect(&mut compositor);
+        let mut animator = Client::connect(&mut compositor);
+        let start = compositor.now();
+        let s = open_and_commit(&mut compositor, &mut steady, RED);
+        let a = open_and_commit(&mut compositor, &mut animator, BLUE);
+        advance_to(&mut compositor, &mut steady, boundary(start, 1));
+        animator.roundtrip(&mut compositor);
+        if animating {
+            animator.attach(a, TILE.0, TILE.1, RED);
+            animator.request_frame(a);
+            animator.commit(a);
+            animator.roundtrip(&mut compositor);
+        }
+        // The animator answers each callback with a new frame, however it came.
+        let mut answered = animator.window(a).frames.len();
+        for frame in 1..=4_u64 {
+            let k = 10 * frame;
+            let commit_at = boundary(start, k) - Duration::from_millis(2);
+            while compositor.now() < commit_at {
+                let next = compositor
+                    .next_deadline()
+                    .map_or(commit_at, |at| at.min(commit_at));
+                advance_to(&mut compositor, &mut animator, next);
+                if animating && animator.window(a).frames.len() > answered {
+                    answered = animator.window(a).frames.len();
+                    animator.attach(a, TILE.0, TILE.1, BLUE);
+                    animator.request_frame(a);
+                    animator.commit(a);
+                    animator.roundtrip(&mut compositor);
+                }
+            }
+            steady.attach(s, TILE.0, TILE.1, BLUE);
+            steady.request_feedback(s);
+            steady.commit(s);
+            steady.roundtrip(&mut compositor);
+            let expected = k + late;
+            while compositor.now() < boundary(start, expected) {
+                let next = compositor
+                    .next_deadline()
+                    .map_or(boundary(start, expected), |at| {
+                        at.min(boundary(start, expected))
+                    });
+                advance_to(&mut compositor, &mut steady, next);
+                animator.roundtrip(&mut compositor);
+                if animating && animator.window(a).frames.len() > answered {
+                    answered = animator.window(a).frames.len();
+                    animator.attach(a, TILE.0, TILE.1, BLUE);
+                    animator.request_frame(a);
+                    animator.commit(a);
+                    animator.roundtrip(&mut compositor);
+                }
+            }
+            assert_eq!(
+                steady.window(s).feedback.last(),
+                Some(&Feedback::Presented {
+                    time: boundary(start, expected),
+                    refresh: PERIOD,
+                    seq: expected,
+                    flags: Kind::Vsync,
+                }),
+                "frame {frame}, beside an animating client: {animating}"
+            );
+        }
+    }
+}
+
+/// Drawings longer than a period, as llvmpipe's at 4K: the lead is one period, so each frame is
+/// drawn one period before the boundary it aims at, and presented late, at the first boundary
+/// after its drawing ends; the feedback says so.
+#[test]
+fn drawings_longer_than_a_period_are_drawn_a_period_ahead_and_presented_late() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    compositor.set_draw_hook(|clock| clock.pass(Duration::from_millis(7)));
+    let w = open_and_commit(&mut compositor, &mut client, RED);
+    // The first drawing, from boundary 1 minus 3 ms, ends at 8.17 ms: presented at boundary 2.
+    advance_to(&mut compositor, &mut client, boundary(start, 1));
+    client.ack(w);
+    client.attach(w, TILE.0, TILE.1, BLUE);
+    client.request_feedback(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    // Committed at 8.17 ms, the second aims at boundary 3, the first after boundary 2 whose
+    // deadline, one period before it, is not past: drawn from just after boundary 2 to 7 ms
+    // later, 15.33 ms, it is presented at boundary 4.
+    assert_eq!(compositor.next_deadline(), Some(boundary(start, 2)));
+    advance_to(&mut compositor, &mut client, boundary(start, 2));
+    assert_eq!(
+        compositor.next_deadline(),
+        Some(boundary(start, 3) - PERIOD)
+    );
+    advance_to(&mut compositor, &mut client, boundary(start, 4));
+    let presented: Vec<(u64, Duration)> = client
+        .window(w)
+        .feedback
+        .iter()
+        .filter_map(|feedback| match feedback {
+            Feedback::Presented { seq, time, .. } => Some((*seq, *time)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        presented,
+        vec![(2, boundary(start, 2)), (4, boundary(start, 4))]
     );
 }
 
@@ -360,7 +658,10 @@ fn a_hidden_window_is_suspended_and_called_once_a_second() {
     let start = compositor.now();
     let w = open_and_commit(&mut compositor, &mut client, RED);
     advance_to(&mut compositor, &mut client, boundary(start, 1));
-    assert_eq!(client.window(w).frames, vec![millis(boundary(start, 1))]);
+    assert_eq!(
+        client.window(w).frames,
+        vec![millis(boundary(start, 1) - LEAD)]
+    );
     // It asks again at once, as a game does.
     client.request_frame(w);
     client.commit(w);
@@ -392,7 +693,7 @@ fn a_hidden_window_is_suspended_and_called_once_a_second() {
     }
     let since_hidden = &client.window(w).frames[1..];
     let expected: Vec<u32> = (1..=5)
-        .map(|second| millis(boundary(start, 1) + Duration::from_secs(second)))
+        .map(|second| millis(boundary(start, 1) - LEAD + Duration::from_secs(second)))
         .collect();
     assert_eq!(since_hidden, expected.as_slice());
     assert_eq!(compositor.counters().frames_drawn, drawn_when_hidden);

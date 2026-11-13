@@ -17,7 +17,7 @@
 //! the grab ends: when its popups are gone or dismissed, or when the focus leaves their window. A
 //! grab asked otherwise is refused by dismissing the popup, as xdg-shell allows; a popup
 //! dismissed already takes none. Between refresh boundaries the keyboard moves only within the
-//! window it is on; a move to another window waits for the next boundary (`frames.rs`).
+//! window it is on; a move to another window waits for the next refresh (`frames.rs`).
 //!
 //! A popup is dismissed (`popup_done`) when its window unmaps or goes, when it commits without a
 //! buffer, and at once when it is created for a window that is not mapped or has
@@ -221,7 +221,7 @@ impl State {
         } else {
             tracing::debug!("a popup dismissed with the older grab takes no grab");
         }
-        // The keyboard stays in this window until the next boundary: on the topmost popup of the
+        // The keyboard stays in this window until the next refresh: on the topmost popup of the
         // grab, or back on the window when there is none.
         self.give_keyboard_to(Some(toplevel));
     }
@@ -500,7 +500,7 @@ impl State {
         Ok(())
     }
 
-    /// Arms the next boundary of the output the toplevel whose surface is `toplevel` is shown on,
+    /// Arms the next refresh of the output the toplevel whose surface is `toplevel` is shown on,
     /// so that a popup that left it is no longer drawn.
     fn refresh_output_of(&mut self, toplevel: &WlSurface) {
         if let Some(output) = self

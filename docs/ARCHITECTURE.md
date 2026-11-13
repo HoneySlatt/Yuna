@@ -155,15 +155,26 @@ operation, and an example measures the model:
 
 ### Time and deadlines
 
-The clock owns every deadline of the frame loop: one per output, its next refresh boundary, and
-one for the hidden windows. In real mode, time is `CLOCK_MONOTONIC`, and the compositor keeps one
-calloop timer armed at the earliest deadline, armed again before each wait; with no deadline,
-no timer. In manual mode, for tests, time starts at the real monotonic time and moves only through
-`Compositor::advance`, which runs each deadline it passes at its own time, in order. A draw hook
-can pass manual time while a frame draws, to make drawing late.
+The clock owns every deadline of the frame loop: two per output, its next refresh and the
+boundary its held presentation feedback waits for, and one for the hidden windows. Each round of
+the loop runs the deadlines due by its end, so that a refresh armed at once, on an idle output,
+runs in the round that read the commit. In real mode, time is `CLOCK_MONOTONIC`, and the
+compositor keeps one calloop timer armed at the earliest deadline, armed again before each wait;
+with no deadline, no timer. In manual mode, for tests, time starts at the real monotonic time and
+moves only through `Compositor::advance`, which runs each deadline it passes at its own time, in
+order. A draw hook can pass manual time while a frame draws, to make drawing late.
 
 An output's refresh boundary `k` comes `k / rate` seconds after the output was created, computed
 from the rate each time, so that errors never add up.
+
+A commit, or a change of the layout, arms its output's refresh
+([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). When the output is idle, the
+boundary after its last refresh passed, the refresh is due at once and aims at the first boundary
+at or after it. Otherwise it is due at a boundary minus the output's lead, the first after its
+last refresh whose deadline is not past. The lead is the longest drawing of the last half second,
+timed from its deadline to its end, at least 2 ms, plus 1 ms, at most one period
+(`frames.rs`, `Drawings`). On the manual clock a drawing takes no time unless the draw hook
+passes some, so the lead is 3 ms.
 
 ### A window's life
 
@@ -177,7 +188,7 @@ from the rate each time, so that errors never add up.
    ([ADR-0024](adr/0024-no-title-bars.md)), decorations on the server's side.
 3. Its first buffer: `Layout::open_window`, with its parent, its limits and its window geometry,
    clamped to the layout's `MAX_SIZE`; the window gets the next `WindowId`, never reused. The
-   layout changed: every output's next boundary is armed. An activation asked before, if any, is
+   layout changed: every output's next refresh is armed. An activation asked before, if any, is
    applied now. A window is refused when its client has 1,000 windows already
    (`MAX_WINDOWS_PER_CLIENT`) or the layout holds 10,000 (`MAX_WINDOWS`): the layout and the
    frame loop walk every window at each commit and refresh, and each window holds memory
@@ -187,7 +198,7 @@ from the rate each time, so that errors never add up.
    logged once per window. A refused window is not shown, and its client gets frame callbacks at
    the hidden windows' rate, never left waiting; its next buffer tries again.
 4. Each later commit passes its limits (`set_size_limits`) and its geometry (`commit_size`) on
-   when they changed, and arms its output's next boundary when it is shown.
+   when they changed, and arms its output's next refresh when it is shown.
 5. Fullscreen and maximise requests become `set_fullscreen` and `set_full_width`, and each gets a
    configure, as xdg-shell asks: at the next arrangement when the layout takes it, even if
    nothing changes; at once, with the state the window has, when the layout refuses it. Before
@@ -219,7 +230,7 @@ its place relative to the toplevel's window geometry.
    can no longer be placed. A commit without a buffer unmaps it: Smithay resets its role, its
    parent included, before Yuna sees the commit, so that it can never be shown again. Yuna then
    dismisses it with the popups over it, without a configure, and arms its window's output, which
-   draws them away at the next boundary. Any later commit of that popup is its client's protocol
+   draws them away at its next refresh. Any later commit of that popup is its client's protocol
    error.
 3. Its commits arm what its window's commits arm (`schedule_for_commit`), and its frame callbacks
    and presentation feedback go out with its window's.
@@ -231,13 +242,13 @@ its place relative to the toplevel's window geometry.
    grab. A granted grab sets Smithay's keyboard grab for popups, and the keyboard goes to the
    topmost grabbing popup. The grab ends when its popups are gone, or its topmost popup is
    dismissed, its other popups then dismissed too and the keyboard returning to the window; or
-   when the focus moves to another window, at a refresh boundary. A new grabbing popup on the
+   when the focus moves to another window, at a refresh. A new grabbing popup on the
    window, not on the topmost grabbing one, ends the older grab first: Smithay would answer it
    with a protocol error, which xdg-shell does not ask. If the new popup hung from one of the
    older grab's popups, it is dismissed with them and takes no grab.
-5. Between refresh boundaries the keyboard moves only within the window it is on: to the popup
+5. Between refreshes the keyboard moves only within the window it is on: to the popup
    that takes a grab there, or back to the window when the grab ends. A move to another window,
-   such as an activation asks, waits for the next boundary ([A frame](#a-frame), step 1).
+   such as an activation asks, waits for the next refresh ([A frame](#a-frame), step 1).
 6. Its window unmapping or going dismisses it. When the window's surface is destroyed first,
    Smithay keeps that surface's popup tree while its popups live; Yuna counts none of them as
    tracked, so that none takes a grab. A client that destroys a parent popup before its child
@@ -254,7 +265,7 @@ tokens of each client not used yet, without a timer, so that one client's tokens
 another's.
 
 With a valid token, `Layout::request_activation` decides: the window takes the focus at the next
-refresh boundary, unless a fullscreen window holds the screen
+refresh, unless a fullscreen window holds the screen
 ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). Refused, or with a token that is not valid
 or expired, the window is marked urgent and nothing else changes. Urgent is the compositor's
 state, kept on the toplevel: it ends when the window gets the seat's focus, at the arrangement
@@ -269,7 +280,7 @@ yet.
 
 ### A frame
 
-At an output's refresh boundary:
+At an output's refresh, due at once or a lead before the boundary it aims at:
 
 1. If the layout changed, it is arranged once, for every output. Each window is told its asked
    size and its states: tiled, fullscreen, activated if it has the seat's focus, suspended if it
@@ -285,11 +296,13 @@ At an output's refresh boundary:
    its output's physical size is drawn exactly ([Scale](#scale)). A popup's corner is rounded
    to the nearest pixel, and a popup is cut to the output, not to its window: a menu may
    overflow it. Yuna waits until the drawing is done.
-3. The surfaces shown there, windows' and their popups', get their frame callbacks, and their
-   presentation feedback: a frame whose drawing takes no time, as on the manual clock, is
-   presented at its own boundary; otherwise at the first boundary after its drawing ended; never
-   at the boundary of the frame before. `seq` is the boundary's number, the flags VSYNC, the
-   refresh the output's period.
+3. The surfaces shown there, windows' and their popups', get their frame callbacks. Their
+   presentation feedback is taken and held by the output until the boundary the frame is
+   presented at: the one it aimed at if its drawing ended by then, else the first after. It is
+   sent at that boundary, through the output's presentation deadline, armed only when a surface
+   asked feedback. `seq` is the boundary's number, the flags VSYNC, the refresh the output's
+   period. A refresh that drew nothing still counts as the output's last refresh, so that
+   callbacks asked without damage come once a period.
 
 A window shown on no output, on a workspace not shown or scrolled out of view, is hidden: its
 content updates are discarded, and its frame callbacks go out at most once a second, through the
@@ -372,7 +385,9 @@ the event loop watches, so that the loop returns and the socket is removed. At t
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
 process reads. `frame drawn` gives the frame's time, `took_us`: from when its elements begin to be
 built, which imports its clients' new buffers (a `wl_shm` buffer is copied then), to when its
-drawing is done.
+drawing is done. Beside it: `lead_us`, how long before its boundary the refresh was due;
+`at_once`, whether the output was idle; `boundary`, the boundary it aimed at; `presented`, the
+one it was presented at, later when the frame was late.
 
 ### Tests
 
@@ -389,21 +404,22 @@ drawing is done.
   speaks, and again after, the layout keeps its invariants and agrees with the shell
   (`Compositor::check_windows`), and the popups and the keyboard are sound
   (`Compositor::check_popups_and_keyboard`), both hidden from the documentation, for tests; a
-  well-behaved *sentinel* client gets its next frame callback at the exact boundary; and Yuna
-  rests.
+  well-behaved *sentinel* client, asking a frame callback once the output is idle, gets it in
+  the round that reads its commit, then, asking again, at the next frame's deadline exactly; and
+  Yuna rests.
 - `random_requests.rs` in it: proptest's random sequences of up to 99 steps. Up to three clients
   send any request with any values: toplevels, acknowledgements, buffers of 1 to 2,048 pixels a
   side, limits, geometry, fullscreen, maximise, parents, popups with any positioner, grabs,
   activation tokens, activations, viewports, fractional scale, selections, destruction in any
   order, departure, second roles; the test moves the clock by up to 2 s, presses key bindings,
-  and focuses a window and moves to the next boundary, which gives that window the keyboard. A
+  and focuses a window and moves past the next refresh, which gives that window the keyboard. A
   request that breaks the protocol ends its client, which is allowed. A step in six is a
   request of the client that has the keyboard, sent as a well-behaved client would: a token for
   the surface its keyboard is on with its last `enter` serial, an activation of another of its
   windows with its newest token, a grabbing menu on that surface, a selection. After each step
   Yuna must dispatch, the layout keep its invariants and agree with the shell, and the popups and
   the keyboard be sound; after the sequence, the sentinel, focused by a key binding, gets its
-  frame callback at the next boundary, and Yuna rests once every client has gone. Two tests share
+  frame callbacks as in `misbehaving.rs`, and Yuna rests once every client has gone. Two tests share
   the cases, so that they run at once on several cores: 80 cases start from a busy state, three
   clients with a window, a dialog and a menu each; 80 from the sentinel alone.
   `sequences_found_before` replays the sequences found failing, written out, since a seed in

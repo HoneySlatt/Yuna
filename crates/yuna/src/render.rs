@@ -6,7 +6,6 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
@@ -235,14 +234,12 @@ pub(crate) fn popup_elements(
 }
 
 /// Draws what changed of `output`'s elements, given front to back, and waits until the drawing
-/// is done. Returns whether anything was drawn. A frame drawn is logged with its time since
-/// `started`, when its elements began to be built: `took_us`.
+/// is done. Returns how many rectangles were damaged, or `None` when nothing was.
 pub(crate) fn draw(
     renderer: &mut GlesRenderer,
     output: &mut VirtualOutput,
     elements: &[WindowElement],
-    started: Instant,
-) -> Result<bool, Error> {
+) -> Result<Option<usize>, Error> {
     let id = output.id.0;
     let mut target = renderer
         .bind(&mut output.buffer)
@@ -254,7 +251,7 @@ pub(crate) fn draw(
         .render_output(renderer, &mut target, age, elements, BACKGROUND)
         .map_err(|e| Error::Renderer(format!("cannot draw output {id}: {e}")))?;
     let Some(damage) = result.damage else {
-        return Ok(false);
+        return Ok(None);
     };
     let damaged = damage.len();
     // The presentation time depends on when the drawing ends, not when it was sent.
@@ -262,14 +259,7 @@ pub(crate) fn draw(
         tracing::warn!(output = id, "waiting for a frame's drawing was interrupted");
     }
     output.drawn_once = true;
-    tracing::debug!(
-        output = id,
-        elements = elements.len(),
-        damaged_rectangles = damaged,
-        took_us = started.elapsed().as_micros(),
-        "frame drawn"
-    );
-    Ok(true)
+    Ok(Some(damaged))
 }
 
 /// The pixels of `region` of `output`'s last frame, as bytes R, G, B, A, row by row from the top.

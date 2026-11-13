@@ -10,6 +10,8 @@
 //! - each frame's time, from its `frame drawn` lines (`took_us`): from when Yuna starts to build
 //!   the frame, its clients' buffers imported, to when the drawing is done, on `CLOCK_MONOTONIC`.
 //!   It decides when the frame is presented;
+//! - how many frames were drawn at once, the output idle, how many were presented after the
+//!   boundary they aimed at, and their lead, from the same lines (ADR-0031);
 //! - the CPU time of each of Yuna's threads, from `/proc/<pid>/task/<tid>/schedstat`: on
 //!   llvmpipe, its `llvmpipe-N` threads rasterize, the work a GPU would do;
 //! - the GPU's busy time for Yuna, from the kernel's DRM usage statistics in
@@ -143,13 +145,15 @@ fn measure_in(run: &Run, options: &Options) -> Result<(), String> {
         }
     }
     let log = fs::read_to_string(&yuna.log).map_err(|e| format!("Yuna's log: {e}"))?;
-    let frame_times = frame_times(&log[before.log_length..after.log_length]);
+    let measured = &log[before.log_length..after.log_length];
+    let frame_times = frame_times(measured);
+    let timing = frame_timing(measured);
     let warnings: Vec<&str> = log
         .lines()
         .filter(|line| line.contains(" WARN ") || line.contains(" ERROR "))
         .take(5)
         .collect();
-    report(options, &before, &after, &frame_times, &warnings);
+    report(options, &before, &after, &frame_times, timing, &warnings);
     drop(clients);
     yuna.stop()
 }
@@ -424,6 +428,25 @@ fn frame_times(log: &str) -> Vec<u64> {
         .collect()
 }
 
+/// Of the frames in the log's lines: how many were drawn at once, the output idle; how many were
+/// presented after the boundary they aimed at, missed (ADR-0031); and each one's lead, in
+/// microseconds.
+fn frame_timing(log: &str) -> (usize, usize, Vec<u64>) {
+    let (mut at_once, mut missed, mut leads) = (0, 0, Vec::new());
+    for line in log.lines().filter(|line| line.contains("frame drawn")) {
+        if line.contains("at_once=true") {
+            at_once += 1;
+        }
+        if let (Some(aimed), Some(presented)) = (field(line, "boundary"), field(line, "presented"))
+            && presented > aimed
+        {
+            missed += 1;
+        }
+        leads.extend(field(line, "lead_us"));
+    }
+    (at_once, missed, leads)
+}
+
 /// Each thread of process `pid`: its name, and the CPU time it has used, in nanoseconds (the
 /// first field of `schedstat`).
 fn threads(pid: u32) -> Result<BTreeMap<u32, (String, u64)>, String> {
@@ -558,6 +581,7 @@ fn report(
     before: &Sample,
     after: &Sample,
     frame_times: &[u64],
+    timing: (usize, usize, Vec<u64>),
     warnings: &[&str],
 ) {
     let seconds = (after.at - before.at).as_secs_f64();
@@ -602,6 +626,16 @@ fn report(
         let period_us = 1e6 / output_rate(options);
         let longer = sorted.iter().filter(|&&us| us as f64 > period_us).count();
         println!("  {longer} frames took longer than the output's period, {period_us:.0} µs");
+        let (at_once, missed, mut leads) = timing;
+        leads.sort_unstable();
+        if !leads.is_empty() {
+            println!(
+                "  {at_once} drawn at once; {missed} presented after the boundary they aimed at; \
+                 lead median {} µs, longest {} µs",
+                percentile(&leads, 50.0),
+                leads[leads.len() - 1],
+            );
+        }
     }
 
     let mut kinds: BTreeMap<&str, (usize, u64)> = BTreeMap::new();
@@ -695,10 +729,19 @@ mod tests {
 
     #[test]
     fn fields_and_thread_kinds_are_read() {
-        let line = "DEBUG yuna::render: frame drawn output=1 elements=2 took_us=4170";
+        let line = "DEBUG yuna::frames: frame drawn output=1 elements=2 took_us=4170";
         assert_eq!(field(line, "took_us"), Some(4170));
         assert_eq!(field(line, "took"), None);
         assert_eq!(thread_kind("llvmpipe-12"), "llvmpipe");
         assert_eq!(thread_kind("yuna"), "yuna");
+    }
+
+    #[test]
+    fn missed_and_at_once_frames_are_counted() {
+        let log = "\
+            DEBUG yuna::frames: frame drawn output=1 took_us=900 lead_us=3000 at_once=false boundary=5 presented=5\n\
+            DEBUG yuna::frames: frame drawn output=1 took_us=4900 lead_us=0 at_once=true boundary=9 presented=10\n\
+            DEBUG yuna: counters frames_drawn=2\n";
+        assert_eq!(frame_timing(log), (1, 1, vec![3000, 0]));
     }
 }

@@ -173,7 +173,8 @@ impl Compositor {
 
     /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
     /// the clock's timer (`None`: as long as it takes), handles what came, runs the deadlines due
-    /// in real mode, and sends the events written.
+    /// by now, and sends the events written. With the manual clock, time does not move: only
+    /// the deadlines armed at its current time run, such as an idle output's refresh.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.arm_timer()?;
         self.event_loop
@@ -188,11 +189,9 @@ impl Compositor {
                 .dispatch_clients(&mut self.state)
                 .map_err(|e| Error::EventLoop(e.to_string()))?;
         }
-        if self.state.clock.mode() == ClockMode::Real {
-            let now = self.state.clock.now();
-            while let Some((_, deadline)) = self.state.clock.take_due(now) {
-                self.state.fire(deadline);
-            }
+        let now = self.state.clock.now();
+        while let Some((_, deadline)) = self.state.clock.take_due(now) {
+            self.state.fire(deadline);
         }
         if std::mem::take(&mut self.state.woke) {
             self.state.counters.wakeups += 1;
@@ -324,7 +323,7 @@ impl Compositor {
     }
 
     /// Changes the layout model, as a key binding would: every output arranges it again at its
-    /// next refresh boundary.
+    /// next refresh.
     pub fn change_layout<R>(&mut self, change: impl FnOnce(&mut Layout) -> R) -> R {
         let result = change(&mut self.state.layout);
         self.state.mark_layout_changed();

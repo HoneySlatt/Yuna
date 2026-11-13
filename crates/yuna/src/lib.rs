@@ -6,8 +6,9 @@
 //! A [`Compositor`] holds Smithay's protocol state, the layout model ([`yuna_layout`]), virtual
 //! outputs drawn offscreen by one GLES renderer, and a [`Clock`] that owns the frame loop's
 //! deadlines. Frames follow damage: a commit of a shown surface, or a change of the layout, arms
-//! one refresh boundary; at rest nothing is armed
-//! ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
+//! its output's next refresh, drawn ahead of its boundary; at rest nothing is armed
+//! ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
+//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
 //!
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
 //! boundaries (`output.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the

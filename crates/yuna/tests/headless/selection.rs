@@ -14,21 +14,18 @@ use crate::selection_client::SelectionEvent::{
     Clipboard, ControlClipboard, ControlPrimary, Primary,
 };
 use crate::{
-    BLUE, OUTPUT, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
-    open_and_commit,
+    BLUE, LEAD, OUTPUT, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
+    open_and_commit, run_armed_deadlines,
 };
 
 const TEXT: &str = "text/plain;charset=utf-8";
 /// The seat's serials count up from 1 for the whole process: no test gets near this one.
 const NEVER_SENT: u32 = u32::MAX;
 
-/// Runs the deadline still armed, the last frame of a story, then checks that Yuna rests.
+/// Runs the deadlines still armed, the last frame of a story and its presentation, then checks
+/// that Yuna rests.
 fn settle_and_rest(compositor: &mut Compositor) {
-    if let Some(at) = compositor.next_deadline() {
-        compositor
-            .advance(at.saturating_sub(compositor.now()))
-            .expect("the manual clock moves");
-    }
+    run_armed_deadlines(compositor);
     assert_rests(compositor);
 }
 
@@ -355,7 +352,7 @@ fn misbehaving_selection_requests_leave_the_others_running() {
     advance_to(&mut compositor, &mut other.client, boundary(start, 3));
     assert_eq!(
         other.client.window(window).frames[frames_before..],
-        [millis(boundary(start, 3))]
+        [millis(boundary(start, 3) - LEAD)]
     );
     settle_and_rest(&mut compositor);
 }
@@ -410,7 +407,7 @@ fn a_data_control_client_that_breaks_the_protocol_leaves_alone() {
     advance_to(&mut compositor, &mut focused.client, boundary(start, 2));
     assert_eq!(
         focused.client.window(window).frames[frames_before..],
-        [millis(boundary(start, 2))]
+        [millis(boundary(start, 2) - LEAD)]
     );
     settle_and_rest(&mut compositor);
 }

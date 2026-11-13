@@ -16,3 +16,6 @@ What changed for users, newest first. Yuna has no release yet: everything below 
   viewporter and fractional scale, presentation time, a keyboard, the clipboard, the primary
   selection and `ext-data-control`.
 - Alacritty, GTK 4, Qt 6 and Vulkan applications run in it, and it draws nothing while they rest.
+- A frame is drawn just ahead of its output's refresh, or at once after a quiet moment, and is
+  presented at the boundary it aimed at when drawn in time: a commit shows about one period after
+  it, no longer two. Presentation feedback arrives at the boundary itself, as from a monitor.

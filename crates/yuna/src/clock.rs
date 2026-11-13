@@ -23,8 +23,10 @@ pub enum ClockMode {
 /// What a deadline is for. Each is armed at most once at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Deadline {
-    /// An output's next refresh boundary.
+    /// An output's next refresh: at its boundary minus its lead, or at once when it is idle.
     Refresh(OutputId),
+    /// The boundary an output's held presentation feedback waits for.
+    Presentation(OutputId),
     /// The next frame callbacks of windows that are not shown.
     HiddenFrames,
 }
@@ -36,7 +38,7 @@ pub struct Clock {
     system: SystemClock<Monotonic>,
     /// Manual mode's time; unused in real mode.
     manual_now: Duration,
-    /// Armed deadlines, in the order they were first armed: one per output and one more at
+    /// Armed deadlines, in the order they were first armed: two per output and one more at
     /// most, so a scan costs less than any ordered structure.
     deadlines: Vec<(Duration, Deadline)>,
 }

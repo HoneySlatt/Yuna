@@ -19,8 +19,8 @@ use crate::client::{Client, Parent, Placement, ProtocolError};
 use crate::popups::pixel;
 use crate::selection_client::{SelectionClient, SelectionEvent};
 use crate::{
-    BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, millis,
-    open_and_commit,
+    BLUE, LEAD, OUTPUT, PERIOD, RED, TILE, advance_to, assert_rests, boundary,
+    first_boundary_at_or_after, manual_compositor, millis, open_and_commit,
 };
 
 const GREEN: u32 = 0xFF_00_FF_00;
@@ -37,51 +37,64 @@ struct Sentinel {
     window: usize,
 }
 
-/// Connects the sentinel and draws its window at boundary 1: window 1, the first column.
+/// Connects the sentinel and draws its window ahead of boundary 1: window 1, the first column.
 fn sentinel(compositor: &mut Compositor, start: Duration) -> Sentinel {
     let mut client = Client::connect(compositor);
     let window = open_and_commit(compositor, &mut client, GREEN);
     advance_to(compositor, &mut client, boundary(start, 1));
     assert_eq!(
         client.window(window).frames,
-        vec![millis(boundary(start, 1))]
+        vec![millis(boundary(start, 1) - LEAD)]
     );
     Sentinel { client, window }
 }
 
-/// The first refresh boundary after `now`, at 240 Hz from `start`.
-fn next_boundary(start: Duration, now: Duration) -> Duration {
-    let elapsed = now.saturating_sub(start).as_nanos();
-    let mut k = u64::try_from(elapsed * 240 / 1_000_000_000).expect("a boundary");
-    while boundary(start, k) <= now {
-        k += 1;
-    }
-    boundary(start, k)
+/// The boundary of the frame a commit at `now` arms, on an output whose drawings take no time
+/// and whose last refresh aimed earlier: the first whose deadline, the boundary minus the lead,
+/// is not past. By then that frame is drawn and presented.
+fn next_frame_boundary(start: Duration, now: Duration) -> Duration {
+    boundary(start, first_boundary_at_or_after(start, now + LEAD))
 }
 
 /// The end of every story: Yuna's state is sound before any client speaks, so that a dispatch
 /// cannot hide a client the display ended and Yuna kept, and again once the sentinel has spoken;
-/// Yuna still dispatches; the sentinel's frame callback, asked now, comes at the next boundary
-/// exactly, not a nanosecond before; then rest.
+/// Yuna still dispatches. Three periods later the output is idle: the sentinel's frame callback,
+/// asked then, comes in the round that reads it. Asked again at once, it comes at the deadline
+/// of the next boundary exactly, not a nanosecond before ([ADR-0031]); then rest.
+///
+/// [ADR-0031]: ../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md
 fn the_others_go_on(compositor: &mut Compositor, start: Duration, sentinel: &mut Sentinel) {
     assert_sound(compositor);
     sentinel.client.roundtrip(compositor);
     assert_sound(compositor);
 
     let w = sentinel.window;
+    let quiet = compositor.now() + 3 * PERIOD;
+    advance_to(compositor, &mut sentinel.client, quiet);
     let frames = sentinel.client.window(w).frames.len();
     sentinel.client.request_frame(w);
     sentinel.client.commit(w);
     sentinel.client.roundtrip(compositor);
-    let next = next_boundary(start, compositor.now());
+    assert_eq!(sentinel.client.window(w).frames[frames..], [millis(quiet)]);
+
+    sentinel.client.request_frame(w);
+    sentinel.client.commit(w);
+    sentinel.client.roundtrip(compositor);
+    let aimed = first_boundary_at_or_after(start, quiet);
+    let next = (aimed + 1).max(first_boundary_at_or_after(start, quiet + LEAD));
+    let due = boundary(start, next) - LEAD;
     advance_to(
         compositor,
         &mut sentinel.client,
-        next - Duration::from_nanos(1),
+        due - Duration::from_nanos(1),
     );
-    assert_eq!(sentinel.client.window(w).frames.len(), frames);
-    advance_to(compositor, &mut sentinel.client, next);
-    assert_eq!(sentinel.client.window(w).frames[frames..], [millis(next)]);
+    assert_eq!(sentinel.client.window(w).frames.len(), frames + 1);
+    advance_to(compositor, &mut sentinel.client, due);
+    assert_eq!(
+        sentinel.client.window(w).frames[frames + 1..],
+        [millis(due)]
+    );
+    advance_to(compositor, &mut sentinel.client, boundary(start, next));
     assert_rests(compositor);
 }
 
@@ -343,7 +356,7 @@ fn absurd_limits_are_clamped_or_dropped() {
         client.attach(w, 500, 400, BLUE);
         client.commit(w);
         client.roundtrip(&mut compositor);
-        let at = next_boundary(start, compositor.now());
+        let at = next_frame_boundary(start, compositor.now());
         advance_to(&mut compositor, &mut client, at);
         assert_eq!((first.width, first.height), asked);
         let info = compositor
@@ -379,7 +392,7 @@ fn a_window_geometry_outside_its_buffer_is_cut_to_it() {
         client.attach(w, 640, 480, BLUE);
         client.commit(w);
         client.roundtrip(&mut compositor);
-        let at = next_boundary(start, compositor.now());
+        let at = next_frame_boundary(start, compositor.now());
         advance_to(&mut compositor, &mut client, at);
         let (_, _, width, height) = drawn_at(&compositor, 2);
         assert_eq!((width, height), drawn, "{geometry:?}");
@@ -453,7 +466,7 @@ fn protocol_breaches_end_their_client_alone() {
     for (breach, expected) in breaches {
         let mut client = Client::connect(&mut compositor);
         let w = open_and_commit(&mut compositor, &mut client, BLUE);
-        let at = next_boundary(start, compositor.now());
+        let at = next_frame_boundary(start, compositor.now());
         advance_to(&mut compositor, &mut client, at);
         breach(&mut client, w);
         client.commit(w);
@@ -631,7 +644,7 @@ fn a_client_leaving_with_a_grab_a_selection_and_tokens() {
         Some(&SelectionEvent::ControlClipboard(None))
     );
     assert_eq!(compositor.layout().window(WindowId(2)), None);
-    let at = next_boundary(start, compositor.now());
+    let at = next_frame_boundary(start, compositor.now());
     advance_to(&mut compositor, &mut sentinel.client, at);
     let sentinel_surface = sentinel.client.window(sentinel.window).surface.clone();
     assert_eq!(

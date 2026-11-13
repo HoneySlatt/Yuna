@@ -13,8 +13,8 @@ use yuna::{Compositor, MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW, OWNER_SEAT};
 
 use crate::client::{Client, ConstraintAdjustment, Feedback, Kind, Parent, Placement};
 use crate::{
-    BLUE, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
-    open_and_commit,
+    BLUE, LEAD, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
+    open_and_commit, run_armed_deadlines,
 };
 
 const GREEN: u32 = 0xFF_00_FF_00;
@@ -88,7 +88,7 @@ fn a_popup_is_placed_drawn_over_its_window_and_called_back() {
     assert_eq!(compositor.counters().frames_drawn, drawn_before + 1);
 
     let popup = client.popup(p);
-    assert_eq!(popup.frames, vec![millis(boundary(start, 2))]);
+    assert_eq!(popup.frames, vec![millis(boundary(start, 2) - LEAD)]);
     assert_eq!(
         popup.feedback,
         vec![Feedback::Presented {
@@ -264,7 +264,10 @@ fn a_hidden_windows_popups_are_called_back_once_a_second_and_go_with_it() {
     let w = mapped_window(&mut compositor, &mut client, start);
     let p = client.map_popup(&mut compositor, Parent::Window(w), menu(), GREEN);
     advance_to(&mut compositor, &mut client, boundary(start, 2));
-    assert_eq!(client.popup(p).frames, vec![millis(boundary(start, 2))]);
+    assert_eq!(
+        client.popup(p).frames,
+        vec![millis(boundary(start, 2) - LEAD)]
+    );
     // It asks again at once, as a game's overlay may.
     client.request_popup_frame(p);
     client.commit_popup(p);
@@ -292,7 +295,7 @@ fn a_hidden_windows_popups_are_called_back_once_a_second_and_go_with_it() {
     }
     let since_hidden = &client.popup(p).frames[1..];
     let expected: Vec<u32> = (1..=3)
-        .map(|second| millis(boundary(start, 2) + Duration::from_secs(second)))
+        .map(|second| millis(boundary(start, 2) - LEAD + Duration::from_secs(second)))
         .collect();
     assert_eq!(since_hidden, expected.as_slice());
     assert_eq!(compositor.counters().frames_drawn, drawn_when_hidden);
@@ -420,7 +423,10 @@ fn a_cycle_of_popup_parents_is_dismissed() {
     // The window and its own popups still work.
     let p = client.map_popup(&mut compositor, Parent::Window(w), menu(), GREEN);
     advance_to(&mut compositor, &mut client, boundary(start, 2));
-    assert_eq!(client.popup(p).frames, vec![millis(boundary(start, 2))]);
+    assert_eq!(
+        client.popup(p).frames,
+        vec![millis(boundary(start, 2) - LEAD)]
+    );
     assert_rests(&mut compositor);
 }
 
@@ -484,7 +490,10 @@ fn a_window_has_at_most_64_popups() {
     advance_to(&mut compositor, &mut other, boundary(start, 2));
     assert_eq!(
         other.window(steady).frames,
-        vec![millis(boundary(start, 1)), millis(boundary(start, 2))]
+        vec![
+            millis(boundary(start, 1) - LEAD),
+            millis(boundary(start, 2) - LEAD)
+        ]
     );
     client.roundtrip(&mut compositor);
     assert_rests(&mut compositor);
@@ -696,9 +705,7 @@ fn a_positioner_past_i32_max_is_dismissed_not_a_panic() {
     client.destroy_popup(p);
     client.roundtrip(&mut compositor);
     assert!(compositor.layout().window(WindowId(1)).is_some());
-    if let Some(at) = compositor.next_deadline() {
-        advance_to(&mut compositor, &mut client, at);
-    }
+    run_armed_deadlines(&mut compositor);
     assert_rests(&mut compositor);
 }
 

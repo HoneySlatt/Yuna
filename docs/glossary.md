@@ -61,6 +61,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Popup grab**: a popup's request for the keyboard until it is dismissed, as an open menu
   holds it; granted only with a serial Yuna's seat sent, and only to a popup not dismissed. While
   it holds, the keyboard stays within its window.
+- **Lead**: how long before a refresh boundary an output starts drawing its frame: its longest
+  drawing of the last half second, at least 2 ms, plus 1 ms, at most one period
+  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). An output is **idle** when the
+  boundary after its last refresh has passed; it then draws a commit at once.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
@@ -73,8 +77,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
-  well-behaved client that joined first; its frame callbacks, at the exact boundary, show that the
-  others did not stop its frames.
+  well-behaved client that joined first; its frame callbacks, at the exact deadline of its frame,
+  show that the others did not stop its frames.
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.

@@ -7,12 +7,14 @@ use std::time::Duration;
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesRenderbuffer;
+use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::utils::Transform;
 use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{OutputConfig, OutputId, Placed};
 
 use crate::Error;
+use crate::frames::Drawings;
 use crate::state::{OWNER_SEAT, State};
 
 /// The slowest refresh rate accepted, in Hz.
@@ -140,10 +142,18 @@ pub(crate) struct VirtualOutput {
     pub drawn_once: bool,
     /// Its refresh boundaries, from its creation.
     pub boundaries: Boundaries,
-    /// The boundary its armed refresh deadline is at.
+    /// The boundary its armed refresh aims at, and when that refresh is due.
     pub armed_boundary: u64,
-    /// The boundary its last frame drawn was presented at.
-    pub last_presented: Option<u64>,
+    pub armed_at: Duration,
+    /// Whether that refresh was armed at once, the output being idle (ADR-0031).
+    pub armed_at_once: bool,
+    /// The latest boundary a refresh of it aimed at or was presented at; 0, its creation, at
+    /// first.
+    pub last_refresh: u64,
+    /// The presentation feedback of frames drawn, held until their boundary, with its number.
+    pub held_feedback: Vec<(u64, OutputPresentationFeedback)>,
+    /// Its recent drawings, from which its lead is predicted.
+    pub drawings: Drawings,
     /// The windows it shows, bottom to top, as the layout last arranged them.
     pub placed: Vec<Placed>,
 }
@@ -224,7 +234,11 @@ impl State {
             drawn_once: false,
             boundaries,
             armed_boundary: 0,
-            last_presented: None,
+            armed_at: Duration::ZERO,
+            armed_at_once: false,
+            last_refresh: 0,
+            held_feedback: Vec::new(),
+            drawings: Drawings::default(),
             placed: Vec::new(),
         });
         tracing::info!(
@@ -278,12 +292,6 @@ impl Boundaries {
             k += 1;
         }
         k
-    }
-
-    /// The first boundary strictly after `time`.
-    pub fn first_after(&self, time: Duration) -> u64 {
-        let k = self.first_at_or_after(time);
-        if self.at(k) == time { k + 1 } else { k }
     }
 }
 
@@ -341,21 +349,22 @@ mod tests {
     }
 
     #[test]
-    fn the_boundary_at_or_after_a_time_and_strictly_after_it() {
+    fn the_boundary_at_or_after_a_time() {
         let b = boundaries_at_240_hz();
         let start = b.at(0);
         assert_eq!(b.first_at_or_after(start), 0);
-        assert_eq!(b.first_after(start), 1);
         assert_eq!(b.first_at_or_after(b.at(1)), 1);
-        assert_eq!(b.first_after(b.at(1)), 2);
         assert_eq!(b.first_at_or_after(b.at(1) + Duration::from_nanos(1)), 2);
         assert_eq!(b.first_at_or_after(b.at(1) - Duration::from_nanos(1)), 1);
         // Before the output existed, its first boundary is its creation.
         assert_eq!(b.first_at_or_after(start - Duration::from_secs(1)), 0);
         for k in [7, 239, 240, 241, 100_000] {
             assert_eq!(b.first_at_or_after(b.at(k)), k);
-            assert_eq!(b.first_after(b.at(k)), k + 1);
-            assert_eq!(b.first_after(b.at(k) - Duration::from_nanos(1)), k);
+            assert_eq!(b.first_at_or_after(b.at(k) - Duration::from_nanos(1)), k);
+            assert_eq!(
+                b.first_at_or_after(b.at(k) + Duration::from_nanos(1)),
+                k + 1
+            );
         }
     }
 
