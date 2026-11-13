@@ -23,8 +23,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
   [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
-- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035); C1 and C2 done.
-  Next: C3, seats.
+- [M1.5](#m15--agents-control) designed on 2026-11-13 (ADR-0031 to ADR-0035, ADR-0037); C1 to
+  C3 done. Next: C4, captures.
 
 ## Status
 
@@ -131,7 +131,7 @@ milestone first needs it.
   ([ADR-0034](adr/0034-captures.md)); seats ([ADR-0035](adr/0035-agents-seats.md)).
 - **Steps.** C1: frames ahead (done). C2: `yuna mcp`, the MCP layer, `outputs`, `spawn`,
   `windows`, `clock` (done). C3: seats, their sockets, pointer and keyboard input,
-  `cursor-shape`, drag and drop. C4: captures. C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
+  `cursor-shape`, drag and drop (done). C4: captures. C5: `text-input-v3`, the owner's peek, the done-when story, the rest of
   `vkcube` and `window`, the measures.
 - **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
   captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
@@ -146,19 +146,20 @@ milestone first needs it.
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
 - **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
   lead, on the real clock ([measurements](measurements.md)).
-- **For C3 to C5**, from the design's challenge: one seat per manual-clock Yuna; ids checked
-  against the seat that owns them; button serials for popup grabs; a capture's mapping to
-  logical coordinates.
+- **For C4**, from the design's challenge: a capture's mapping to logical coordinates.
 - **C1, frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
   the boundary minus a lead measured per output, at most a period; feedback sent at its
   boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
   1080p and 240 Hz, 0.4 to 0.9 % of frames missed, the lead at its cap; at 4K every frame late,
   as before ([measurements](measurements.md)).
 - **C2, `yuna mcp`.** Done on 2026-11-13: both revisions; `outputs`, `spawn`, `windows`,
-  `clock`; the challenge's bounds on replies, lines, waits, programs' environment and logs, and
-  the clock behind real time. Alacritty starts and is found through MCP alone. A checker's
-  review found 15 points, fixed or written as debt. Not run with a real MCP client yet
+  `clock`, with the challenge's bounds. Not run with a real MCP client yet
   ([debt](debt.md#the-mcp-server)).
+- **C3, seats.** Done on 2026-11-13, its tools, input, keyboard and closing decided with the
+  owner ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)): `seat`, `workspaces`,
+  `pointer`, `keyboard`; a socket per seat; popup grabs and drags from a press; the test that
+  no input crosses seats. Alacritty is clicked and typed into through MCP alone. A checker's
+  eight findings are fixed or written as debt.
 
 ### M1.6 — Emulated VRR and HDR
 
