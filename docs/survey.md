@@ -116,3 +116,36 @@ that rests on it is reopened in an ADR.
   restarted animation starts from the current value.
 - Hyprland: Bézier curves, and springs since 0.57; an interrupted spring keeps its velocity.
 - KWin: animations retargeted while running; springs in some effects since 2026-07.
+
+## When a frame is drawn
+
+Read in their sources on 2026-11-12, at the commits named; latencies are derived from the code,
+not published. T is the refresh period.
+
+- **niri** (`589bc406`, `src/niri.rs`, `src/backend/tty.rs`): an idle output draws a commit at
+  once; a commit while a frame waits for vblank is drawn just after it. No prediction, no margin.
+  Frame callbacks after drawing, at most one per surface per refresh cycle, "to prevent
+  empty-damage commit busy loops". Its headless backend presents at once, refresh
+  unknown.
+- **sway** (`1652c54b`, `sway-output(5)`): `max_render_time off`, the default, composites right
+  after the refresh, about 2T for an animating client; `max_render_time <ms>` composites that
+  long before the next refresh, set by hand. wlroots' headless backend (`72956e71`) sends
+  `frame` from a timer, 60 Hz by default.
+- **KWin** (`ad9ba773`, `src/core/renderloop.cpp`, `renderjournal.cpp`,
+  `src/backends/drm/drm_commit_thread.cpp`): composites at the next vblank minus the expected
+  compositing time, capped at 2T: an exponential average of render times, each measured from
+  the scheduled wake-up and at least 2 ms, plus twice a decaying peak of overshoot, plus a safety
+  margin of the mode's vblank time and 1 ms, raised at once on a miss. After 100 idle refreshes it
+  starts at once. Its latency setting was removed in 2023 for "one hardcoded algorithm". Frame
+  callbacks after compositing; its virtual output sends `presented` from a timer at the frame's
+  target.
+- **Mutter** (`5bdc78fd`, `clutter/clutter/clutter-frame-clock.c`): dispatches at the next
+  presentation minus its longest update time and margins (1 ms and up to T/4, raised on a miss),
+  capped at 3T; after an idle period it dispatches at once, for "lowest average latency for
+  sporadic user input".
+- **gamescope** (`865a71c4`, `src/vblankmanager.cpp`): wakes at vblank minus a decaying peak of its
+  draw time, which jumps up at once, and a red zone of 1.65 ms; under T.
+- **Smithay** (`9ff2c5a4`) ships no scheduler; anvil repaints a fixed 0.6 T after each vblank.
+- Mesa's Vulkan WSI ends `vkWaitForPresentKHR` when `wp_presentation_feedback.presented` arrives,
+  whatever time it carries; its FIFO mode uses the `fifo-v1` and `commit-timing-v1` protocols
+  where offered.
