@@ -1493,11 +1493,63 @@ impl Layout {
     /// windows' minimum heights do not fit: that column costs up to the square of its windows.
     pub fn arrange(&self, output: OutputId) -> Result<Vec<Placed>, LayoutError> {
         let (si, oi) = self.output_index(output)?;
-        let seat = &self.seats[si];
-        let o = &seat.outputs[oi];
+        let o = &self.seats[si].outputs[oi];
+        let focused = self.focused(self.seats[si].id);
         let area = o.area(self.options.gap, &self.windows);
-        let focused = self.focused(seat.id);
-        let place = |a: Arranged| Placed {
+        let mut raw = Vec::new();
+        o.workspaces[o.shown].arrange(&area, &mut raw);
+        let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
+        let mut placed: Vec<Placed> = unpinned
+            .into_iter()
+            .map(|a| self.placed(focused, a))
+            .collect();
+        let mut special_covers = false;
+        if let Some(special) = &o.special {
+            let mut raw = Vec::new();
+            special.arrange(&area, &mut raw);
+            placed.extend(raw.into_iter().map(|a| self.placed(focused, a)));
+            special_covers = special.fullscreen_covers();
+        }
+        // A fullscreen window of the special workspace hides them too: nothing over a game.
+        if !special_covers {
+            placed.extend(pinned.into_iter().map(|a| self.placed(focused, a)));
+        }
+        Ok(placed)
+    }
+
+    /// The windows of one of an output's workspaces, the `index`-th as [`Layout::workspaces`]
+    /// lists them, shown or not, arranged as that output would show it alone: its tiled windows,
+    /// then its floating ones, then its pinned ones, without the special workspace over the
+    /// output. What the owner's peek at a workspace not shown draws, in a thumbnail or an
+    /// overview ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); it changes nothing,
+    /// and no client is asked a new size. A seat's workspaces are read whatever the seat: a peek
+    /// only reads. Refused for an unknown output, and for an index past its workspaces.
+    ///
+    /// Its cost is that of [`Layout::arrange`] for that workspace alone.
+    pub fn arrange_workspace(
+        &self,
+        output: OutputId,
+        index: usize,
+    ) -> Result<Vec<Placed>, LayoutError> {
+        let (si, oi) = self.output_index(output)?;
+        let o = &self.seats[si].outputs[oi];
+        let workspace = o.workspaces.get(index).ok_or(LayoutError::InvalidValue)?;
+        let focused = self.focused(self.seats[si].id);
+        let area = o.area(self.options.gap, &self.windows);
+        let mut raw = Vec::new();
+        workspace.arrange(&area, &mut raw);
+        let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
+        Ok(unpinned
+            .into_iter()
+            .chain(pinned)
+            .map(|a| self.placed(focused, a))
+            .collect())
+    }
+
+    /// A window as arranged, with what the model knows of its state; `focused` is its seat's
+    /// focused window.
+    fn placed(&self, focused: Option<WindowId>, a: Arranged) -> Placed {
+        Placed {
             window: a.window,
             rect: a.rect,
             configure: a.configure,
@@ -1508,23 +1560,7 @@ impl Layout {
                     .get(&a.window)
                     .is_some_and(|r| r.fake_fullscreen),
             activated: focused == Some(a.window),
-        };
-        let mut raw = Vec::new();
-        o.workspaces[o.shown].arrange(&area, &mut raw);
-        let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
-        let mut placed: Vec<Placed> = unpinned.into_iter().map(place).collect();
-        let mut special_covers = false;
-        if let Some(special) = &o.special {
-            let mut raw = Vec::new();
-            special.arrange(&area, &mut raw);
-            placed.extend(raw.into_iter().map(place));
-            special_covers = special.fullscreen_covers();
         }
-        // A fullscreen window of the special workspace hides them too: nothing over a game.
-        if !special_covers {
-            placed.extend(pinned.into_iter().map(place));
-        }
-        Ok(placed)
     }
 
     /// Where a window is and its state.

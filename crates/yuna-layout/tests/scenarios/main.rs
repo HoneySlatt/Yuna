@@ -11,6 +11,7 @@ mod floating;
 mod fullscreen;
 mod harness;
 mod outputs;
+mod peek;
 mod robustness;
 mod scrolling;
 mod seats;

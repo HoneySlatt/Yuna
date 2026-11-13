@@ -6,7 +6,9 @@
 //! - what every other seat's outputs show, and what it focuses, is unchanged: one seat never
 //!   reaches another (ADR-0015);
 //! - an operation that returns an error leaves the model exactly as it was;
-//! - a window opening is asked the size [`Layout::size_on_open`] gave just before.
+//! - a window opening is asked the size [`Layout::size_on_open`] gave just before;
+//! - every workspace of every output peeks ([`Layout::arrange_workspace`]) at windows of its own,
+//!   the one shown as its output draws them, the others without the seat's focus.
 //!
 //! Clients are random too: they ask minimum and maximum sizes, commit sizes other than the ones
 //! they are asked, and open dialogs, with sizes of 1, small, typical, huge and nonsense.
@@ -332,6 +334,41 @@ fn acting_seat(layout: &Layout, op: &Op) -> Option<SeatId> {
     }
 }
 
+/// Each workspace of each output, peeked at: its own windows alone, each once; the one shown as
+/// its output draws them; the others without the seat's focus.
+fn check_peeks(layout: &Layout) -> Result<(), String> {
+    for seat in SEATS.map(SeatId) {
+        for output in layout.outputs(seat).unwrap_or_default() {
+            let drawn = layout.arrange(output).map_err(|e| e.to_string())?;
+            let workspaces = layout.workspaces(output).map_err(|e| e.to_string())?;
+            for (index, workspace) in workspaces.iter().enumerate() {
+                let peeked = layout
+                    .arrange_workspace(output, index)
+                    .map_err(|e| format!("peek at {output:?}'s workspace {index}: {e}"))?;
+                let mut seen = Vec::new();
+                for p in &peeked {
+                    if !workspace.windows.contains(&p.window) || seen.contains(&p.window) {
+                        return Err(format!(
+                            "the peek at {output:?}'s workspace {index} shows {p:?}"
+                        ));
+                    }
+                    seen.push(p.window);
+                    if workspace.shown && !drawn.contains(p) {
+                        return Err(format!("{p:?} is not as {output:?} draws it"));
+                    }
+                    if !workspace.shown && p.activated {
+                        return Err(format!("{p:?}, on a workspace not shown, has the focus"));
+                    }
+                }
+            }
+            if layout.arrange_workspace(output, workspaces.len()).is_ok() {
+                return Err(format!("{output:?} peeks past its workspaces"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Everything a seat holds that can be read: what its outputs show, their workspaces and special
 /// workspaces, its focus, and the place and state of each of its windows, hidden ones included.
 /// Compared before and after another seat's operation.
@@ -529,6 +566,8 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
                 "step {step}, {op:?}: invariant broken: {error}"
             )));
         }
+        check_peeks(&layout)
+            .map_err(|e| TestCaseError::fail(format!("step {step}, {op:?}: {e}")))?;
         if result.is_err() {
             prop_assert_eq!(
                 &before,

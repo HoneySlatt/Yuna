@@ -75,7 +75,10 @@ The flow of an operation:
 The compositor then reads `Layout::arrange(output)`: the windows that output shows, bottom to top,
 each with the size its client is asked, its rectangle in logical coordinates on the output's
 physical pixel grid, whether it is told it is fullscreen, and whether it has its seat's focus.
-Nothing in the model runs between operations.
+Nothing in the model runs between operations. `Layout::arrange_workspace(output, index)`
+arranges any of an output's workspaces as that output would show it alone, changing nothing:
+what the owner's peek at a workspace not shown draws, in a thumbnail or an overview
+([ADR-0015](adr/0015-agents-workspaces.md)). Nothing draws a peek before the desktop.
 
 Clients do not always take the size they are given
 ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). The compositor passes on each client's
@@ -112,7 +115,8 @@ operation, and an example measures the model:
 - `crates/yuna-layout/tests/properties.rs`: random sequences of operations over two seats and up
   to three outputs, with clients that ask limits, commit sizes of their own and open dialogs,
   checking the invariants, that one seat never changes another's, that a refused operation
-  changes nothing, and that `Layout::size_on_open` foretells a new window's size;
+  changes nothing, that `Layout::size_on_open` foretells a new window's size, and that a peek
+  at each workspace shows its own windows, the one shown as its output draws them;
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 
