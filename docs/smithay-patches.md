@@ -1,6 +1,6 @@
 # Smithay's patches
 
-The changes Yuna's fork of Smithay makes, each with its reason. The fork is the private repository
+The changes Yuna's fork of Smithay makes, each with its reason. The fork is the repository
 `HoneySlatt/smithay`, branch `yuna`, one commit per patch on top of the upstream revision Yuna pins
 ([ADR-0021](adr/0021-smithays-fork.md)). Yuna never contributes them upstream
 ([ADR-0011](adr/0011-built-on-smithay.md)).

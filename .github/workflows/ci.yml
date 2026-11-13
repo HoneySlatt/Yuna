@@ -1,7 +1,6 @@
 # Runs scripts/check.sh, every automated check of the definition of done (AGENTS.md), in the same Nix
-# development shell that agents and the owner use. The repository is private and its CI minutes are
-# counted, so CI stays lean (ADR-0009): one job. Actions are pinned to commit SHAs, their release in
-# a comment.
+# development shell that agents and the owner use: one job while one is enough (ADR-0036). Actions
+# are pinned to commit SHAs, their release in a comment.
 name: CI
 
 on:

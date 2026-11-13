@@ -1,6 +1,6 @@
 # 0009. GPL-3.0-or-later, private until ready; the logo apart
 
-- Status: Accepted
+- Status: Accepted; amended by [0036](0036-yuna-is-public.md) (the repository is public)
 - Date: 2026-11-11
 
 ## Context

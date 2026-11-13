@@ -16,8 +16,8 @@ Yuna is a Wayland compositor in Rust, for Linux, in two modes ([ADR-0001](adr/00
   and colour; VRR without flicker on an OLED; games and films served first; less power than any
   rival; agents working on hidden workspaces of the owner's GPU, never touching the owner's input.
 
-It is made for its owner first, a heavy gamer and a cinephile. It is private until ready, under
-GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md)).
+It is made for its owner first, a heavy gamer and a cinephile. It is public, under
+GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)).
 
 ## 2. Principles
 
@@ -99,7 +99,7 @@ it is met.
 | Machines | Linux; AMD and Intel first ([ADR-0006](adr/0006-machines-and-gpus.md)) |
 | Crashes | Socket kept, restart within 1 s, windows restored ([ADR-0007](adr/0007-surviving-a-crash.md)) |
 | Configuration | KDL, reloaded live ([ADR-0008](adr/0008-configuration-in-kdl.md)) |
-| Licence | GPL-3.0-or-later, private until ready ([ADR-0009](adr/0009-gpl-private-until-ready.md)) |
+| Licence | GPL-3.0-or-later, public ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
 | Base | Smithay, its patches kept in Yuna ([ADR-0011](adr/0011-built-on-smithay.md)) |
 | Renderer | OpenGL first ([ADR-0012](adr/0012-opengl-first.md)) |
@@ -108,7 +108,7 @@ it is met.
 | Agents | Their own outputs and seats, at full rate ([ADR-0015](adr/0015-agents-workspaces.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
-| Smithay's fork | A private repository, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
+| Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md` ([ADR-0021](adr/0021-smithays-fork.md)) |
 | Headless backend | Yuna's own code on upstream Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
@@ -224,4 +224,4 @@ before 1.0.
 | 0.6 | 6, effects and polish |
 | 1.0 | after the later work and its audit |
 
-Releases are private: a version, a CHANGELOG and a tag, after the owner's go.
+Releases: a version, a CHANGELOG and a tag, after the owner's go.

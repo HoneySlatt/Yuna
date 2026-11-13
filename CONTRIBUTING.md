@@ -136,8 +136,8 @@ otherwise.
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
-each push to `main`, each pull request, and every Monday. The repository is private and its CI
-minutes are counted: CI stays lean, one job ([ADR-0009](docs/adr/0009-gpl-private-until-ready.md)).
+each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
+([ADR-0036](docs/adr/0036-yuna-is-public.md)).
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window` example in Yuna every Thursday, on demand, and on a push that changes the drawing path; it
 builds the example once per pinned revision and keeps the binary in GitHub's cache

@@ -2,9 +2,8 @@
 # (ADR-0025, ADR-0029). A workflow of its own, beside CI's one job, since it runs on other events:
 # weekly, on demand, and when Yuna's drawing path changes. The example is built at the SlimeEngine
 # revision below, in Yuna's development shell, so that it links the shell's own libraries; its
-# binary is cached per revision. SlimeEngine pins Rust 1.99.0; Yuna's 1.99.1 builds it. The
-# repository is private and its CI minutes are counted (ADR-0009). Actions are pinned to commit
-# SHAs, their release in a comment.
+# binary is cached per revision. SlimeEngine pins Rust 1.99.0; Yuna's 1.99.1 builds it. Actions
+# are pinned to commit SHAs, their release in a comment.
 name: SlimeEngine
 
 on:

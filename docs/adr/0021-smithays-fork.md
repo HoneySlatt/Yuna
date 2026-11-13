@@ -1,6 +1,7 @@
 # 0021. Smithay's fork: a private repository, generic patches
 
-- Status: Accepted; amends [0017](0017-smithays-revision.md) (when main moves to the fork)
+- Status: Accepted; amends [0017](0017-smithays-revision.md) (when main moves to the fork); amended
+  by [0036](0036-yuna-is-public.md) (the fork is public)
 - Date: 2026-11-11
 
 ## Context
