@@ -151,7 +151,13 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         .expect("the yuna binary runs");
     let mut running = Running { child, runtime_dir };
 
+    // Read on a thread from the start: a pipe may hold as little as one page when the user's
+    // pipes are many, and Yuna, blocked writing its log, would never print its socket.
     let mut stderr = running.child.stderr.take().expect("its standard error");
+    let log_reader = std::thread::spawn(move || {
+        let mut log = String::new();
+        stderr.read_to_string(&mut log).map(|_| log)
+    });
     let stdout = running.child.stdout.take().expect("its standard output");
     let mut line = String::new();
     BufReader::new(stdout)
@@ -190,6 +196,8 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         "xdg_wm_dialog_v1",
         "wp_viewporter",
         "wp_fractional_scale_manager_v1",
+        "wp_cursor_shape_manager_v1",
+        "zwp_text_input_manager_v3",
     ] {
         assert!(
             globals.interfaces.contains(interface),
@@ -213,8 +221,10 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
     assert!(status.success(), "{status}");
     assert!(!socket_path.exists(), "the socket was left behind");
 
-    let mut log = String::new();
-    stderr.read_to_string(&mut log).expect("its log reads");
+    let log = log_reader
+        .join()
+        .expect("the log's reader does not panic")
+        .expect("its log reads");
     let dmabuf_offered = log.contains("linux-dmabuf offered");
     assert!(
         dmabuf_offered || log.contains("the renderer imports no dmabuf"),
