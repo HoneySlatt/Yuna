@@ -426,7 +426,17 @@ impl Yuna {
 }
 
 impl Drop for Yuna {
+    /// Closes Yuna's input, so that it ends its programs, the `vkcube` among them, as it stops;
+    /// kills it if it has not stopped 10 s later.
     fn drop(&mut self) {
+        drop(self.input.take());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

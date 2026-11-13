@@ -666,8 +666,8 @@ own thread, both `took_us`.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
-and Alacritty started through `spawn`, found
-  through `windows`, clicked and typed into: its shell runs the command typed. Applications get the environment of
+  and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its
+  shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` shares.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless` or
   `yuna mcp`, as agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
@@ -689,8 +689,8 @@ and Alacritty started through `spawn`, found
   ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): `window` draws
   120 frames and leaves; `editor` rests with its window open; and M1.5's done-when, an agent
   that opens `interface` through MCP alone, clicks its text field, types `Grüße`, shows text
-  being composed and clicks a button, a capture of the part each step changes differing after
-  it, and the same parts unchanged before any input.
+  being composed and clicks a button; before each step, the part it changes is captured once
+  it stands still, and must differ after it.
 
 ## The tools around the code
 

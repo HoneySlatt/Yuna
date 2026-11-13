@@ -93,17 +93,21 @@ Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATION
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
 in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's
 tests (`mcp.rs` and `seats.rs` there).
-SlimeEngine's `window` example runs in an ignored test, given the path of its binary, as the
-weekly job runs it:
+SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on
+`interface`, given a folder that holds them, as the weekly job runs them:
 
 ```sh
 nix develop -c cargo test -p yuna --test applications -- --nocapture
 YUNA_APPLICATIONS_OUTPUT=3840x2160@240,1.5 nix develop -c cargo test -p yuna --test applications
-YUNA_SLIMEENGINE_WINDOW=<binary> nix develop -c cargo test -p yuna --test applications -- --ignored
+YUNA_SLIMEENGINE_EXAMPLES=<folder> nix develop -c cargo test -p yuna --test applications -- --ignored
 ```
 
-The example is built at the revision `.github/workflows/slimeengine.yml` pins, in this shell:
-`cargo build --release --locked --example window` in SlimeEngine's checkout.
+The folder is made as `.github/workflows/slimeengine.yml` makes it, in this shell, from
+SlimeEngine's checkout at the revision it pins: the `window`, `interface` and `editor` binaries
+(`cargo build --release --locked -p slime-examples --example window --example interface
+--example editor`), `cooked/`, the examples' data cooked (`cargo run --release --locked -p
+slime-cook -- cook examples/assets <folder>/cooked`), and `assets/`, a copy of
+`examples/assets`.
 
 The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
 compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
@@ -151,9 +155,11 @@ otherwise.
 each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
 ([ADR-0036](docs/adr/0036-yuna-is-public.md)).
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
-`window` example in Yuna every Thursday, on demand, and on a push that changes the drawing path; it
-builds the example once per pinned revision and keeps the binary in GitHub's cache
-([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md)). Its
+`window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
+changes the drawing path or what the agent's story uses; it builds the examples and cooks their
+data once per pinned revision and keeps the folder in GitHub's cache
+([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md),
+[ADR-0043](docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)). Its
 times are in [`docs/measurements.md`](docs/measurements.md).
 
 ## Dependencies

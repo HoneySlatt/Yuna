@@ -10,8 +10,9 @@ Machine and Mesa as in B4 below. Build: release, commit `6023949`. One series, r
 `.delegation/m1.5-c5-measures/series.sh` (local) under the agents' lock of exclusive runs, after
 30 s with no build, game or other measure of this session; other sessions' work kept the load
 average at 3.4 to 4.1 at the start, and the series' own runs raised it to 13.5 at its end.
-Command: `nix develop -c target/release/examples/agent_time <row>`, outside `agent-headless`,
-since `yuna mcp` opens no display; three runs of each row. Two `vkcube` on lavapipe, started
+Command: `nix develop -c target/release/examples/agent_time <row>`, the rows `--output
+3840x2160@240,1.5`, `--output 1920x1080@240,1` and `--gpu --output 3840x2160@240,1.5`, outside
+`agent-headless`, since `yuna mcp` opens no display; three runs of each row. Two `vkcube` on lavapipe, started
 through `spawn`, cover the output; each window lasts 10 s, after 3 s of warm-up. The ranges
 give the three runs' medians, and the highest p99 and longest. `--gpu` drew on the RX 6900 XT's
 render node, with the owner's consent, no game running.
@@ -41,7 +42,7 @@ without:
 - A capture's copy holds the main thread for as long as the renderer reads the pixels back:
   47 ms at 4K on llvmpipe, 8 ms at 1080p, 4 ms at 4K on the GPU, up to 39 ms. While an agent
   captures without pause, the output draws 6 % fewer frames on the GPU, 20 % fewer at 1080p and
-  37 % fewer at 4K on llvmpipe, and misses 12 % of its frames at 1080p on llvmpipe. The bar's
+  37 % fewer at 4K on llvmpipe, and misses 12.4 to 13.2 % of its frames at 1080p on llvmpipe. The bar's
   budget for an agent's output, full rate while its programs draw, is missed while it captures
   ([debt](debt.md#captures)).
 - The encoding, on its own thread, takes longer than the copy: 30 ms at 1080p, 68 to 79 ms at 4K.

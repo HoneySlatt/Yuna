@@ -140,11 +140,11 @@ pub fn definitions() -> Value {
         {
             "name": "windows",
             "title": "Windows",
-            "description": "List a seat's windows, in the order they opened: id, application \
-                id (null when its client gave none), title, process id, output, workspace (null \
-                for an unnamed one), logical rectangle (null when hidden), focus. With wait_ms, \
-                waits up to that long for a window that matches the filters, when none does \
-                yet.",
+            "description": "List a seat's windows, in the order they opened: id, seat, \
+                application id (null when its client gave none), title, process id, output, \
+                workspace (null for an unnamed one), logical rectangle (null when hidden), \
+                focus, floating, fullscreen. With wait_ms, waits up to that long for a window \
+                that matches the filters, when none does yet.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

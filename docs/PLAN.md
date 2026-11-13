@@ -148,7 +148,8 @@ milestone first needs it.
   method of agents' seats, `keyboard preedit` and `get`; `Layout::arrange_workspace`, the
   peek. `vkcube` paused and SlimeEngine's `editor` rest with their windows open; `window`
   cannot, by its design. The story passes in the weekly job, and Claude Code ran it through
-  MCP alone. A call takes about 60 µs; a 4K capture holds the main thread 4 ms on the GPU,
+  MCP alone. Presentation times are read through captures alone ([debt](debt.md#the-mcp-server)).
+  A call takes about 60 µs; a 4K capture holds the main thread 4 ms on the GPU,
   47 ms on llvmpipe, which costs frames ([measurements](measurements.md), [debt](debt.md#captures)).
 
 ### M1.6 — Emulated VRR and HDR

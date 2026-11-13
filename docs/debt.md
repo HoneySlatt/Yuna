@@ -36,6 +36,8 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - The lead's floor and margin, 2 ms and 1 ms, are KWin's. On the GPU at 4K and 240 Hz, with
   two `vkcube` on lavapipe, 0 or 1 frame in 2,400 was missed in C5's runs; the lead itself was
   not read there ([measurements](measurements.md)). On llvmpipe it sits at its cap, one period.
+  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)'s budget, no frame missed, is missed:
+  0.4 to 0.9 % on llvmpipe at 1080p, 0 or 1 frame in 2,400 on the GPU at 4K.
 - `Compositor::advance`, which the tests use, may run virtual time ahead of real time, while
   [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) says never while real clients are
   connected. MCP's `clock` refuses it; in the tests, every client is the test's own.
@@ -130,8 +132,13 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   (`zwp_text_input_manager_v3.get_text_input`): a client that makes its text field late is
   entered at its surface's next keyboard focus. winit makes it at start.
 - Smithay `8fd9fe0` drops what an enabled text field tells of itself, its surrounding text, its
-  content type and its cursor's rectangle, when no input method program runs: an agent cannot
-  read them.
+  cursor's rectangle and the content type it changes later, when no input method program runs.
+  The content type it is enabled with reaches `TextInputActivation::activated`, which Yuna
+  ignores: an agent reads none of them.
+- Smithay `8fd9fe0` keeps every text field a client makes, unbounded, in its seat's list, and
+  walks the list at each `commit` and each object destroyed: a client that makes n fields and
+  leaves costs about n² steps on the main thread (`text_input_handle.rs`). Not measured; it
+  matters when agents' seats are in the owner's Yuna (Stage 3), and ADR-0028 bounds the like.
 - The owner's seat has no input method: a real one, `input-method-v2`, comes with the desktop.
 
 ## Captures
@@ -152,8 +159,8 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   ([measurements](measurements.md)): the full rate of an agent's output is missed meanwhile, and
   on the desktop a capture would cost a game frames. A readback into a buffer the GPU fills
   while the loop goes on, read at a later refresh, would free it: to be planned with the owner,
-  by Stage 3, when agents capture on the desktop. A client's frame copies the whole output once a refresh for all the sessions that
-  wait on it, 16 at most.
+  by Stage 3, when agents capture on the desktop. A client's frame copies the whole output once
+  a refresh for all the sessions that wait on it, 16 at most.
 - An agent's capture is refused past 8,000 pixels a side once its pixels are read, not when it
   is asked: one readback wasted, one capture of a seat at a time.
 - On a manual clock, a capture copied has no time limit until the clock reaches its frame's
@@ -176,6 +183,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   in `XDG_RUNTIME_DIR`: nothing ends or removes them.
   Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
   client may kill Yuna sooner.
+- An agent reads presentation times only through a capture: its frame's `boundary` and
+  `presented_ns`. No tool gives a program's presentation feedback, which the program reads
+  itself through `wp_presentation`.
 - `windows` lists every window of its seat: past a few hundred, its reply passes Claude Code's
   25,000 tokens of tool output.
 - A process that empties its environment and leaves its process group and its parents, a

@@ -14,8 +14,8 @@ on:
     # The drawing path: the renderer, the outputs, the frame loop, the buffers, the clock; the
     # commits and wl_shm, the configures and the scale a client is told; the event loop and the
     # program, whose log the test reads; what the agent's story uses: the MCP server, seats,
-    # input, text input, captures; the tests that run the examples; what builds Yuna and the
-    # shell.
+    # input, text input, captures, and the layout that places the story's window; the tests that
+    # run the examples and their environment; what builds Yuna and the shell.
     paths:
       - "crates/yuna/src/render.rs"
       - "crates/yuna/src/output.rs"
@@ -33,6 +33,8 @@ on:
       - "crates/yuna/src/capture.rs"
       - "crates/yuna/src/mcp/**"
       - "crates/yuna/tests/applications.rs"
+      - "crates/yuna/tests/common/application_environment.rs"
+      - "crates/yuna-layout/**"
       - "Cargo.lock"
       - "flake.nix"
       - "flake.lock"
