@@ -177,3 +177,44 @@ Read on 2026-11-13 (modelcontextprotocol.io, the clients' documentation, crates.
 - **Seats**: upstream Smithay announces each `wl_seat` global to every client, with no filter per
   client; GLFW keeps the first seat it sees, SDL2 one input for all seats, vkcube the first
   pointer.
+
+## An own base and Vulkan
+
+Read on 2026-11-13 for the design study of [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)
+to [ADR-0042](adr/0042-main-on-smithays-fork.md).
+
+- **jay** ([github.com/mahkoh/jay](https://github.com/mahkoh/jay)): first commit 2022-01-02;
+  about 60,000 hand-written lines and its author its only user by 2022-05-31 (issue 37); 1.0 on
+  2024-04-07; 3,218 commits, 97 % by one author. Its own wire protocol, generated from text
+  descriptions (`wire/`, `build/wire.rs`); its own io_uring loop; its own DRM ioctls; FFI to
+  libgbm and libinput; its own XKB (`kbvm`); logind over its own D-Bus client; its own X11 window
+  manager. Its Vulkan renderer (about 9,800 lines, Vulkan 1.3) is the default, OpenGL kept for
+  older hardware; colour works only on Vulkan. Its open defects are mostly drivers': NVIDIA,
+  colour pipelines, atomic commits, `VK_ERROR_DEVICE_LOST`. In 2022 its author refused wayland-rs
+  because no compositor in daily use was built on it.
+- **Bases**: Mutter, KWin, wlroots, Weston, Mir, Louvre and Hyprland write their own handlers and
+  link libwayland-server. Hyprland replaced wlroots in 2024 with its own backend, aquamarine, and
+  kept libwayland ([blog.vaxry.net](https://blog.vaxry.net/articles/2024-wlrootsRewrite)). No
+  other Rust compositor without Smithay was found in daily use.
+- **wayland-rs** ([github.com/Smithay/wayland-rs](https://github.com/Smithay/wayland-rs)):
+  wayland-server filters globals per client (`GlobalDispatch::can_view`); wayland-backend bounds a
+  client's buffer at 4,096 bytes and its file descriptors at 28 a message, and tests each case
+  against libwayland. A message of more than four arguments allocates when dispatched (pull
+  request 985). No measured benchmark of its dispatch was found. No `AI.md` in wayland-rs,
+  calloop, drm-rs or gbm.rs; Smithay's covers contributions to Smithay.
+- **Smithay**: its Vulkan renderer is draft pull request 2165 (opened 2026-09-09, "very early");
+  its author on colour (pull request 982, 2026-05-12): "I am not sure I'll bother implementing
+  HDR support for the GL renderer". CI runs four groups of WLCS.
+- **Vulkan in compositors**: HDR through Vulkan in production in jay and gamescope only. wlroots
+  tries GLES2 before Vulkan, does colour only on Vulkan, and has HDR banding there (issue 4131).
+  KWin does HDR in OpenGL; its Vulkan renderer is planned (issue 169, open since 2023). Mutter and
+  Hyprland have none. No published figure compares a compositor's frame cost, latency or power in
+  GL and Vulkan; one user report (wlroots issue 4035, Intel) has Vulkan using more power.
+- **Drivers** (Mesa 26.3.0 source): RADV, ANV and lavapipe offer dmabuf import, DRM format
+  modifiers, foreign queues, external semaphores and fences, and timeline semaphores; lavapipe
+  offers modifiers only with `/dev/udmabuf`. RADV reports Vulkan 1.4 on GFX9, the laptop's Vega 3,
+  without `host_image_copy`. jay says modifiers fail on AMD before RX 5000; the kernel lists
+  modifiers for Raven. The laptop itself is unread.
+- **Bindings**: `ash` 0.38 has had no release since 2024-04-01; `jay-ash` regenerates its
+  bindings every six hours; `vulkanalia` is maintained; `shaderc-rs` is archived; `naga` is pure
+  Rust.
