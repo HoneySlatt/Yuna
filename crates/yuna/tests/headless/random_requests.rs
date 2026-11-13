@@ -1428,6 +1428,29 @@ fn sequences_found_before() {
                 }),
             ],
         ),
+        // A window's surface destroyed, the workspace shown again and the clock moved, then the
+        // focused client's menu unmapped: found by CI on main after M1.5.
+        (
+            true,
+            vec![
+                by_first(Request::Commit {
+                    target: Target::Window(0),
+                    buffer: Buffer::Keep,
+                    frame: false,
+                }),
+                by_first(Request::Destroy(Object::Surface(0))),
+                Step::Layout(KeyBinding::FocusWorkspace(0)),
+                Step::Advance(14),
+                Step::Client {
+                    who: Who::Focused,
+                    request: Request::Commit {
+                        target: Target::Popup(0),
+                        buffer: Buffer::Remove,
+                        frame: false,
+                    },
+                },
+            ],
+        ),
     ];
     for (busy, steps) in found {
         if let Err(error) = run(busy, &steps, &mut Reach::default()) {

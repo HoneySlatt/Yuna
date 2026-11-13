@@ -479,7 +479,8 @@ impl State {
 
     /// Checks Yuna's popups and the keyboard they take, for tests. Every popup tracked, all
     /// clients together, is in the tree of the mapped window its chain of parents leads to, and
-    /// in no tree twice. The popup grab, while Yuna holds one, has not ended, is on a mapped
+    /// in no tree twice; one whose window's surface is destroyed, or whose chain is gone, is in
+    /// no live window's tree. The popup grab, while Yuna holds one, has not ended, is on a mapped
     /// window, and its topmost popup is tracked there, which keeps the grab's other popups, under
     /// it, tracked too. The keyboard is on a live surface or on none, or, while an arrangement is
     /// pending, on a surface gone since the last one: that arrangement moves it. Says which rule
@@ -508,7 +509,24 @@ impl State {
                     }
                 }
                 Some(root) if is_mapped(&root) && is_tracked(&root, surface) => {}
-                _ => {
+                // A popup whose chain of parents is gone, its role reset by a commit without a
+                // buffer after its window's surface was destroyed: Smithay still finds it in the
+                // dead window's tree. It must be in no live window's tree.
+                None => {
+                    if let Some(window) = self
+                        .toplevels
+                        .values()
+                        .map(|toplevel| toplevel.wl_surface())
+                        .find(|window| is_tracked(window, surface))
+                    {
+                        return Err(format!(
+                            "the popup {}, whose parents are gone, is tracked in the tree of {}",
+                            surface.id(),
+                            window.id()
+                        ));
+                    }
+                }
+                Some(_) => {
                     return Err(format!(
                         "the popup {} is tracked, but not in the tree of a mapped window its \
                          parents lead to",
