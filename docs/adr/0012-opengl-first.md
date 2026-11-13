@@ -1,6 +1,6 @@
 # 0012. OpenGL first, the pipeline independent of the renderer
 
-- Status: Accepted
+- Status: Accepted; amended by [0041](0041-vulkan-decided-on-a-measure.md) (how Vulkan is decided)
 - Date: 2026-11-11
 
 ## Context

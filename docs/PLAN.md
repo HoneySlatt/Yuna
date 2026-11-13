@@ -11,18 +11,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 - The design session ran on 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
   [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar.
-- [M1.1](#m11--the-workspace-and-its-checks) is done (2026-11-11): the workspace, its checks and CI;
-  Rust 1.99.1 ([ADR-0016](adr/0016-the-rust-toolchain.md)) and Smithay `8fd9fe0`
-  ([ADR-0017](adr/0017-smithays-revision.md)) pinned.
-- [M1.2](#m12--the-layout-model) is done (2026-11-11): the layout model, `crates/yuna-layout`;
-  workspaces ([ADR-0018](adr/0018-workspaces.md)), behaviours
-  ([ADR-0019](adr/0019-the-layouts-behaviours.md)) and the model's shape
-  ([ADR-0020](adr/0020-the-layout-models-shape.md)) decided with the owner.
-- [M1.3](#m13--hdr-through-smithay-a-prototype) is done (2026-11-12): HDR through Smithay works on
-  the owner's monitor; [ADR-0011](adr/0011-built-on-smithay.md) holds.
-- [M1.4](#m14--the-headless-compositor) is done (2026-11-12):
-  [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
-  [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
+- M1.1 to M1.4 are done (2026-11-11 and 12), with [ADR-0016](adr/0016-the-rust-toolchain.md)
+  to [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
+- A design study on 2026-11-13, at the owner's request: Yuna leaves Smithay step by step, keeps
+  wayland-rs, and decides Vulkan on a prototype's figures
+  ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
+  [ADR-0042](adr/0042-main-on-smithays-fork.md)). It changes M1.6, M1.8 and M1.9.
 - [M1.5](#m15--agents-control) is done (2026-11-13): ADR-0031 to ADR-0035, ADR-0037, ADR-0038,
   ADR-0043. Next: M1.6, on the owner's go.
 
@@ -38,7 +32,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
-| [M1.9](#m19--the-rivals-measured) | The rivals' figures, and the bar's budgets set from them | Planned |
+| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
 | [M1.10](#m110--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
 ## Stage 1 — The headless core
@@ -50,11 +44,9 @@ milestone first needs it.
 ### M1.1 — The workspace and its checks
 
 - **Goal.** Any agent builds, checks and tests Yuna with one command, and CI runs it.
-- **Delivers.** A Cargo workspace; the toolchain pinned; `flake.nix` with every tool the checks
-  use; `scripts/check.sh` (format, lints as errors, tests, documentation, `cargo deny` allowing only
-  licences compatible with GPL-3.0-or-later, links, the size of `AGENTS.md` and of this file);
-  CI on GitHub; `CONTRIBUTING.md`; `docs/ARCHITECTURE.md`; `docs/glossary.md`. Smithay's revision
-  chosen and pinned.
+- **Delivers.** A Cargo workspace, the toolchain pinned, `flake.nix`, `scripts/check.sh` and CI
+  ([CONTRIBUTING](../CONTRIBUTING.md)); `docs/ARCHITECTURE.md`; `docs/glossary.md`. Smithay's
+  revision chosen and pinned.
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **Measured.** The check's time, warm and cold; CI's job time.
 - **Result.** Done on 2026-11-11. The check takes 1.2 s warm and about 13 s cold locally, CI's job
@@ -158,8 +150,11 @@ milestone first needs it.
 ### M1.6 — Emulated VRR and HDR
 
 - **Goal.** Virtual outputs behave as the owner's monitor does for VRR and HDR.
-- **Delivers.** A virtual output's VRR range and its presentation at variable intervals; its HDR
-  capabilities announced through `color-management-v1`, and each surface's colour description
+- **Delivers.** First, main on Smithay's fork, seats and outputs filtered per client
+  ([ADR-0042](adr/0042-main-on-smithays-fork.md)). A virtual output's VRR range and its
+  presentation at variable intervals; its HDR capabilities announced through
+  `color-management-v1`, Yuna's first handler of its own on wayland-server
+  ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)), and each surface's colour description
   recorded for tests to read.
 - **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads the
   colour description Aerith's or mpv's surface sent.
@@ -179,7 +174,8 @@ milestone first needs it.
 ### M1.8 — XWayland
 
 - **Goal.** X11 applications run, crisp at scale 1.5.
-- **Delivers.** XWayland started on demand, through Smithay's window manager; X11 windows rendered
+- **Delivers.** XWayland started on demand, through Smithay's window manager or Yuna's own, chosen
+  in its design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)); X11 windows rendered
   at the physical size where they can scale themselves.
 - **Done when.** An X11 test program and a Wine program run headless at 1.5, their captures sharp
   against reference images.
@@ -187,12 +183,15 @@ milestone first needs it.
 
 ### M1.9 — The rivals measured
 
-- **Goal.** The bar's budgets set from facts.
+- **Goal.** The bar's budgets set from facts, and Vulkan decided on them.
 - **Delivers.** niri, Hyprland, KWin, dwl, mango and Umbriel measured at rest and in motion: wake-ups,
   CPU and GPU time, memory, power, frames during scrolling and animations; headless where they allow
-  it, on the owner's desktop by hand otherwise, after the owner's consent.
+  it, on the owner's desktop by hand otherwise, after the owner's consent. A throwaway Vulkan
+  prototype measured against GLES on every tier, the laptop included
+  ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)).
 - **Done when.** Each has its figures in `docs/measurements.md`, with versions and dates, or a
-  written reason; the ROADMAP's budgets are set from them, in an ADR.
+  written reason; the ROADMAP's budgets are set from them, in an ADR; the owner has chosen the
+  renderer on the prototype's figures, in another.
 
 ### M1.10 — The stage's audit
 

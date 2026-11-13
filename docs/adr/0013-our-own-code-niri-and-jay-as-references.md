@@ -1,6 +1,7 @@
 # 0013. Our own code; niri and jay as references
 
-- Status: Accepted
+- Status: Accepted; amended by [0039](0039-leaving-smithay-step-by-step.md) (Smithay as a reading
+  reference)
 - Date: 2026-11-11
 
 ## Context
