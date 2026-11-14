@@ -23,7 +23,7 @@ The owner chose, on 2026-11-14:
 - `windows` takes `colour: true`, and then gives for each window every surface of its tree that
   declared a description, the window's own, its subsurfaces' and popups': the transfer function,
   primaries, luminances, target volume, max_cll and max_fall, and intent.
-  `Compositor::windows` gives the same to tests.
+  `Compositor::window_colours` gives the same to tests.
 
 ## Alternatives considered
 
