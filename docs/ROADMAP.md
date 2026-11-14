@@ -43,7 +43,7 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 | Animations | Hyprland |
 | Power at rest and in motion | dwl, mango |
 | HDR and colour | KWin |
-| XWayland at a fractional scale | Umbriel |
+| XWayland at a fractional scale | none: sharp at the largest scale and the right size on every output ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 | Games: latency, VRR, upscaling | gamescope, KWin |
 | A test compositor for agents | the series of headless compositors of SlimeEngine's M6d.6 (Weston, sway, KWin, Mutter) |
 
@@ -114,6 +114,7 @@ it is met.
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
+| XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 
 ### Open
 
@@ -164,7 +165,7 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   on wayland-rs; WLCS run against it.
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
 - The desktop at a fixed rate: no VRR flicker.
-- XWayland crisp at 1.5.
+- XWayland crisp at 1.5 and the right size on every output.
 - Amane on top through standard protocols.
 - The touchpad's gestures; the configuration live; per-application rules, terminal swallowing;
   input methods (`input-method-v2`).
