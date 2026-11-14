@@ -10,6 +10,8 @@
 //! - each frame's time, from its `frame drawn` lines (`took_us`): from when Yuna starts to build
 //!   the frame, its clients' buffers imported, to when the drawing is done, on `CLOCK_MONOTONIC`.
 //!   It decides when the frame is presented;
+//! - the time between two frames' presentations (`presented_at_us`), against the output's
+//!   shortest refresh, 1/rate: under VRR, none may come sooner (ADR-0045);
 //! - how many frames were drawn at once, the output idle, how many were presented after the
 //!   boundary they aimed at, and their lead, from the same lines (ADR-0031);
 //! - the CPU time of each of Yuna's threads, from `/proc/<pid>/task/<tid>/schedstat`: on
@@ -148,12 +150,21 @@ fn measure_in(run: &Run, options: &Options) -> Result<(), String> {
     let measured = &log[before.log_length..after.log_length];
     let frame_times = frame_times(measured);
     let timing = frame_timing(measured);
+    let intervals = presentation_intervals(measured);
     let warnings: Vec<&str> = log
         .lines()
         .filter(|line| line.contains(" WARN ") || line.contains(" ERROR "))
         .take(5)
         .collect();
-    report(options, &before, &after, &frame_times, timing, &warnings);
+    report(
+        options,
+        &before,
+        &after,
+        &frame_times,
+        &intervals,
+        timing,
+        &warnings,
+    );
     drop(clients);
     yuna.stop()
 }
@@ -428,6 +439,19 @@ fn frame_times(log: &str) -> Vec<u64> {
         .collect()
 }
 
+/// The times between consecutive frames' presentations in the log's lines, in microseconds.
+fn presentation_intervals(log: &str) -> Vec<u64> {
+    let times: Vec<u64> = log
+        .lines()
+        .filter(|line| line.contains("frame drawn"))
+        .filter_map(|line| field(line, "presented_at_us"))
+        .collect();
+    times
+        .windows(2)
+        .map(|pair| pair[1].saturating_sub(pair[0]))
+        .collect()
+}
+
 /// Of the frames in the log's lines: how many were drawn at once, the output idle; how many were
 /// presented after the boundary they aimed at, missed (ADR-0031); and each one's lead, in
 /// microseconds.
@@ -581,6 +605,7 @@ fn report(
     before: &Sample,
     after: &Sample,
     frame_times: &[u64],
+    intervals: &[u64],
     timing: (usize, usize, Vec<u64>),
     warnings: &[&str],
 ) {
@@ -626,6 +651,26 @@ fn report(
         let period_us = 1e6 / output_rate(options);
         let longer = sorted.iter().filter(|&&us| us as f64 > period_us).count();
         println!("  {longer} frames took longer than the output's period, {period_us:.0} µs");
+        let mut sorted_intervals = intervals.to_vec();
+        sorted_intervals.sort_unstable();
+        if !sorted_intervals.is_empty() {
+            // Whole microseconds on both sides: an interval one under the period is not sooner.
+            let sooner = sorted_intervals
+                .iter()
+                .filter(|&&us| (us as f64) < period_us - 1.0)
+                .count();
+            println!(
+                "  between two presentations, {} intervals: shortest {} µs, 1st percentile {} \
+                 µs, median {} µs, 99th percentile {} µs, longest {} µs; {sooner} sooner than \
+                 the period",
+                sorted_intervals.len(),
+                sorted_intervals[0],
+                percentile(&sorted_intervals, 1.0),
+                percentile(&sorted_intervals, 50.0),
+                percentile(&sorted_intervals, 99.0),
+                sorted_intervals[sorted_intervals.len() - 1],
+            );
+        }
         let (at_once, missed, mut leads) = timing;
         leads.sort_unstable();
         if !leads.is_empty() {
@@ -743,5 +788,15 @@ mod tests {
             DEBUG yuna::frames: frame drawn output=1 took_us=4900 lead_us=0 at_once=true boundary=9 presented=10\n\
             DEBUG yuna: counters frames_drawn=2\n";
         assert_eq!(frame_timing(log), (1, 1, vec![3000, 0]));
+    }
+
+    #[test]
+    fn presentation_intervals_are_read_between_consecutive_frames() {
+        let log = "\
+            DEBUG yuna::frames: frame drawn output=1 presented=5 presented_at_us=1000\n\
+            DEBUG yuna::frames: counters frames_drawn=1\n\
+            DEBUG yuna::frames: frame drawn output=1 presented=6 presented_at_us=5167\n\
+            DEBUG yuna::frames: frame drawn output=1 presented=8 presented_at_us=15000\n";
+        assert_eq!(presentation_intervals(log), vec![4167, 9833]);
     }
 }

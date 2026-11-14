@@ -4,6 +4,30 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.6 — Presentation times under emulated VRR (2026-11-14)
+
+On the manual clock, the VRR stories (`crates/yuna/tests/headless/vrr.rs`) pin the emulation on a
+1920 × 1080 output of 48 to 240 Hz, after six frames of warm-up from a pause of 1 s: at 100 fps,
+every presentation 10 ms after the last and one refresh later; at 300 fps, none sooner than
+1/240 s, the frames that could not be shown discarded; at 24 fps, 41.667 ms apart within 1 µs,
+three refreshes later each, as amdgpu's BTR inserts them; at 23.976 fps, at most 2 of 41
+intervals a whole number of 1/240 s periods, against all of them on a fixed 240 Hz output.
+Checked against the owner's monitor: not yet, the trace waits for its run
+([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+
+On the real clock: machine as in M1.5's B4 below, Linux 7.3.1. Build: release, commit `e04dee7`
+with the log's `presented_at_us`. One run, with the owner's consent, under the agents' lock of
+exclusive runs, no game running; other agents' builds ran meanwhile. Command: `nix develop -c
+agent-headless -- target/release/examples/frame_time --output 1920x1080@240,1,vrr=48 --seconds
+20`: two `vkcube` on lavapipe, Yuna on llvmpipe, 20 s after 3 s of warm-up.
+
+- 4,515 frames drawn, 225.7 a second; a frame's time median 2,343 µs, p99 7,792 µs, longest
+  40.4 ms.
+- Between two presentations, 4,514 intervals: shortest 4,166 µs, p1 4,166 µs, median 4,167 µs,
+  p99 8,391 µs, longest 52.0 ms; none sooner than 1/240 s.
+- 15 frames presented after the refresh they aimed at; Yuna's own CPU, llvmpipe apart, 1,316 µs
+  a frame.
+
 ## M1.5, C5 — An agent's calls and captures (2026-11-13)
 
 Machine and Mesa as in B4 below. Build: release, commit `6023949`. One series, run with

@@ -184,6 +184,7 @@ impl State {
                     at_once = output.armed_at_once,
                     boundary = aimed.seq,
                     presented = presented.seq,
+                    presented_at_us = presented.at.as_micros() as u64,
                     "frame drawn"
                 );
                 presented
