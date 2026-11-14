@@ -17,13 +17,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
 - [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0045 to ADR-0051. Next:
   M1.7, on the owner's go.
-- A design session on 2026-11-14 drew the line between Yuna and the shell, portals included, and
-  placed each part in the stages ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
-- A design session on 2026-11-14 took from the owner's other projects what Yuna lacked
-  ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): M1.10 added; reduced motion joins M1.7.
-- The owner put development first on 2026-11-14: agents never hold back for a game, a measure
-  reports what disturbs it, and Stage 3 is removed
-  ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
+- A design session on 2026-11-14 ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md),
+  [ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md),
+  [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md),
+  [ADR-0061](adr/0061-yunas-uses.md)): the line between Yuna and the shell; what the owner's
+  other projects taught; development first and Stage 3 removed; Yuna's uses. M1.10 and M1.11
+  added; reduced motion joins M1.7.
 
 ## Status
 
@@ -39,7 +38,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
-| [M1.11](#m111--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
+| [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
+| [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
 ## Stage 1 — The headless core
 
@@ -185,7 +185,20 @@ milestone first needs it.
 - **Measured.** A frame's presentation times in Yuna against headless sway's, for the same
   program.
 
-### M1.11 — The stage's audit
+### M1.11 — The agents' toolbox
+
+- **Goal.** An agent sees inside the programs it drives and makes the situations it tests
+  ([ADR-0061](adr/0061-yunas-uses.md)).
+- **Delivers.** Through MCP: each program's Wayland protocol trace and its log; the accessibility
+  tree of a seat's windows, its dependency put to the owner; outputs plugged and unplugged, scale
+  and mode changed, a slow or stuck client, keyboard layouts, the clipboard and drag and drop
+  between programs; a call that waits for an event. Budgets for `yuna mcp`'s start, memory and
+  instances together.
+- **Done when.** An agent finds, through MCP alone, a program's protocol error and a button by its
+  name in the accessibility tree, and checks a window's behaviour across an output unplugged.
+- **Measured.** Those budgets, on the high tier.
+
+### M1.12 — The stage's audit
 
 - **Goal.** Stage 1 examined whole before 0.1.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
@@ -202,8 +215,6 @@ milestone first needs it.
   shortcut that stops them ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - A command that sets one configuration key until the next reload, as `hyprctl keyword` does,
   beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
-- A window where the owner watches an agent's headless Yuna, fed by its captures
-  ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
 - From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be

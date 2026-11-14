@@ -16,6 +16,18 @@ Yuna is a Wayland compositor in Rust, for Linux, in two modes ([ADR-0001](adr/00
   and colour; VRR without flicker on an OLED; games and films served first; less power than any
   rival; agents working in headless Yunas on the owner's GPU, never touching the owner's input.
 
+Its uses, and the owner's programs that stand for them ([ADR-0061](adr/0061-yunas-uses.md)):
+
+| Use | The owner's programs | What Yuna gives |
+|---|---|---|
+| Development by hand | Zed, VS Code, Neovim, browsers, Podman, QEMU | XWayland, virtual machines' keyboard grab, a test output in a window |
+| Development by agents | Pluto, Claude Code, the owner's projects | a headless Yuna each, MCP, traces, logs, accessibility tree, situations on demand |
+| Office and the web | LibreOffice, Brave, Firefox, Element, Signal | portals, sharing, picture in picture, windows back in place after a reboot |
+| Games | Steam, Heroic, emulators | VRR without flicker, tearing, scanout, pointer lock, gamescope nested |
+| Films and series | mpv, Jellyfin, browsers | exact cadence, HDR per display |
+| Capture and streaming | OBS, Discord | captures that cost a game no frame, HDR or SDR, windows never captured |
+| Creation | Kdenlive, Resolve, GIMP, Krita, Inkscape, Blender, Wine plugins, Magnolia, Unreal, SlimeEngine | colour measured, Wine and plugin windows placed, pointer warp |
+
 It is made for its owner first, a heavy gamer and a cinephile. It is public, under
 GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)).
 
@@ -45,7 +57,9 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 | Power at rest and in motion | dwl, mango |
 | HDR and colour | KWin |
 | XWayland at a fractional scale | none: sharp at the largest scale and the right size on every output ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
-| Games: latency, VRR, upscaling | gamescope, KWin |
+| Games: latency, VRR | gamescope, KWin |
+| Capture and streaming: a game's frames and latency during a capture | gamescope, KWin [ADR-0061](adr/0061-yunas-uses.md) |
+| Creation: colour accuracy, a tablet's latency and pressure | KWin [ADR-0061](adr/0061-yunas-uses.md) |
 | A test compositor for agents | the series of headless compositors of SlimeEngine's M6d.6 (Weston, sway, KWin, Mutter) |
 
 ### Machines
@@ -77,6 +91,10 @@ it is met.
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |
 | HDR | the output's luminance and colours as the colour description says, against KWin on the same content | captures of the output buffer in CI; the owner's monitor by eye and by sensor |
 | The laptop | every feature, effects lighter, no missed frame at its refresh rate | the same measures on the laptop |
+| A capture | no frame of a game lost and its direct scanout kept while captured; the capture's GPU time | presentation feedback with and without a capture running |
+| Colour accuracy | set from KWin's at Stage 5 | captures of the output buffer against the colours asked; the owner's monitor by probe |
+| A tablet | set from KWin's, once a tablet is at hand | input to present of the pen; pressure and tilt passed on |
+| `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
 | An agent's output | full rate while its programs draw, nothing at rest; no input of an agent reaching the owner's seat | presentation feedback; a test that tries |
 
 ### Without a figure
@@ -189,6 +207,10 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   pointer constraints and relative pointer, `fifo-v1` and `commit-timing-v1`, a hidden game paced
   at its configured rate.
 - The package's NixOS and home-manager modules; the clients' messages fuzzed weekly.
+- The owner's uses [ADR-0061](adr/0061-yunas-uses.md): tablets, pointer warp, `xdg-foreign` and the placing of Wine's
+  and plugins' windows; `keyboard-shortcuts-inhibit`; windows never captured; a test output in a
+  window; picture in picture; windows back in place after a reboot, on by default; the GPU's loss
+  on demand for agents; VKMS studied first.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
@@ -204,18 +226,21 @@ stages keep their numbers.
 **Goal.** Games are better on Yuna than on any other compositor.
 
 - VRR in a high band with smoothed changes, its prototype measured with a light sensor.
-- Tearing on request, direct scanout and overlay planes, game mode, shortcuts inhibited; games
-  told apart in the fullscreen state.
-- FSR upscaling of games; virtual outputs for streaming.
+- Tearing on request, direct scanout and overlay planes, game mode; games told apart in the
+  fullscreen state; settings for what a game turns off ([ADR-0061](adr/0061-yunas-uses.md)).
+- gamescope nested in Yuna, tested; a smaller game scaled by the display hardware where it can;
+  virtual outputs for streaming; a capture that costs a game no frame.
 
 **Exit.** The owner's games run with their VRR flicker measured below the bar's figure, and
-latency, frames and upscaling at least as good as gamescope's.
+latency and frames at least as good as gamescope's.
 
 ### Stage 5 — The image → 0.4
 
 **Goal.** HDR and colour as reliable as KWin's, or better.
 
-- HDR output, SDR brightness, tone and gamut mapping, ICC profiles.
+- HDR output, SDR brightness, tone and gamut mapping, ICC profiles; a profile per display, from
+  its EDID corrected by a guided adjustment or a probe; colour accuracy measured; HDR captures
+  kept HDR or converted to SDR [ADR-0061](adr/0061-yunas-uses.md).
 - The night light, captures and screen sharing correct under HDR; films at an exact multiple of
   their rate, and told apart in the fullscreen state; no sleep while a video plays.
 - OLED care: luminance read from the panel, static elements protected from burn-in.

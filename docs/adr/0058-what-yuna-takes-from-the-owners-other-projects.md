@@ -1,6 +1,6 @@
 # 0058. What Yuna takes from the owner's other projects
 
-- Status: Accepted; amends 0007, 0010, 0016, 0023, 0046
+- Status: Accepted; amends 0007, 0010, 0016, 0023, 0046; amended by 0061
 - Date: 2026-11-14
 
 ## Context
