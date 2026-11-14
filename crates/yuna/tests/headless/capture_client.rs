@@ -83,6 +83,17 @@ impl CaptureClient {
     /// Connects a client of `seat` and binds the capture globals; panics when one is missing.
     pub fn connect(compositor: &mut Compositor, seat: SeatId) -> CaptureClient {
         let client = Client::connect_to(compositor, seat);
+        CaptureClient::bind_capture(client, compositor)
+    }
+
+    /// As [`CaptureClient::connect`], for a client shown every output's `wl_output`
+    /// (`Client::connect_seeing_every_seat`).
+    pub fn connect_spy(compositor: &mut Compositor, seat: SeatId) -> CaptureClient {
+        let client = Client::connect_seeing_every_seat(compositor, seat);
+        CaptureClient::bind_capture(client, compositor)
+    }
+
+    fn bind_capture(client: Client, compositor: &mut Compositor) -> CaptureClient {
         let queue = client.connection().new_event_queue();
         client
             .connection()

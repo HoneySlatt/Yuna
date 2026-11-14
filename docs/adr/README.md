@@ -35,7 +35,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029, 0049 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
-| [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Accepted |
+| [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Superseded by 0042 |
 | [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted; context corrected |
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022; amended by 0043 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
@@ -50,7 +50,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Accepted; amends 0012 |
-| [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035 |
+| [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035; supersedes 0027; amended by 0044 |
 | [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |
 | [0044](0044-the-fork-over-https-a-branch-per-base.md) | The fork over HTTPS, a branch per base | Accepted; amends 0021 |
 | [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) | Emulated VRR: amdgpu's rule, checked against the owner's monitor | Accepted; amends 0023, 0031 |

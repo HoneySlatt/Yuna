@@ -195,7 +195,7 @@ impl Compositor {
                 handle
                     .insert_source(socket, |stream, _, state| {
                         state.woke = true;
-                        if let Err(error) = state.insert_client(OWNER_SEAT, stream) {
+                        if let Err(error) = state.insert_client(OWNER_SEAT, stream, false) {
                             tracing::warn!(%error, "a client could not connect");
                         }
                     })
@@ -230,7 +230,17 @@ impl Compositor {
     /// socket. Refused for a seat that does not exist.
     pub fn connect_client_to(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
-        self.state.insert_client(seat, ours)?;
+        self.state.insert_client(seat, ours, false)?;
+        Ok(theirs)
+    }
+
+    /// Connects a client of `seat` that is shown every seat's `wl_seat` and every output's
+    /// `wl_output`, as the per-client filter of ADR-0042 never shows a client. Only for tests of
+    /// the layer below the filter: that a client holding another seat's globals gets none of its
+    /// input, focus or serials.
+    pub fn connect_client_seeing_every_seat(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
+        let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
+        self.state.insert_client(seat, ours, true)?;
         Ok(theirs)
     }
 
@@ -268,7 +278,7 @@ impl Compositor {
                     loop {
                         match socket.accept() {
                             Ok(Some(stream)) => {
-                                if let Err(error) = state.insert_client(seat, stream) {
+                                if let Err(error) = state.insert_client(seat, stream, false) {
                                     tracing::warn!(%error, "a client could not connect");
                                 }
                             }

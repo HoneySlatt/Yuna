@@ -178,9 +178,10 @@ xkeyboard-config, a font, and the applications the tests run
 `actions/cache`, for SlimeEngine's binary. For the MCP server (M1.5), the owner accepted on
 2026-11-13 `serde`, with its `derive` feature, and `serde_json`
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
-([ADR-0034](docs/adr/0034-captures.md)). Smithay is pinned to one revision
-([ADR-0017](docs/adr/0017-smithays-revision.md)); its patches live in Yuna's fork
-([ADR-0021](docs/adr/0021-smithays-fork.md), [`docs/smithay-patches.md`](docs/smithay-patches.md)).
+([ADR-0034](docs/adr/0034-captures.md)). Smithay is Yuna's public fork, read over HTTPS and
+pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
+[ADR-0044](docs/adr/0044-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
+[`docs/smithay-patches.md`](docs/smithay-patches.md).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 

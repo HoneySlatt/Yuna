@@ -1,6 +1,6 @@
 //! Agents' seats ([ADR-0035](../../../../docs/adr/0035-agents-seats.md),
 //! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): each seat's windows
-//! open on its own outputs, its pointer and keyboard reach its own clients alone, a click
+//! open on its own outputs, a client sees its own seat's globals alone, its pointer and keyboard reach its own clients alone, a click
 //! focuses, text types through the keymap its client reads, a popup grab and a drag take a
 //! press's serial of the seat's own, and a seat that closes lets go of everything first.
 //!
@@ -10,7 +10,7 @@
 use yuna::yuna_layout::{OutputId, SeatId, WindowId};
 use yuna::{BUTTON_LEFT, BUTTON_RIGHT, Compositor, OWNER_SEAT, OutputMode};
 
-use crate::client::{Parent, Placement};
+use crate::client::{Client, Parent, Placement};
 use crate::input_client::{InputClient, InputEvent, Shape};
 use crate::{RED, manual_compositor, run_armed_deadlines};
 
@@ -108,9 +108,52 @@ fn input_events(events: &[InputEvent]) -> Vec<&InputEvent> {
         .collect()
 }
 
+/// The names of the outputs `client` was shown, in order.
+fn output_names(client: &Client) -> Vec<&str> {
+    let mut names: Vec<&str> = client
+        .state
+        .output_names
+        .iter()
+        .map(|(_, name)| name.as_str())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// ADR-0042: a client is shown its own seat's `wl_seat` and its seat's outputs' `wl_output`s
+/// alone, the owner's clients as agents'; an output added later is announced to its own seat's
+/// clients alone.
+#[test]
+fn a_client_sees_its_own_seat_and_its_outputs_alone() {
+    let (mut compositor, a, b) = two_seats();
+    let owner = InputClient::connect(&mut compositor, OWNER_SEAT, "seat0");
+    let on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    let on_b = InputClient::connect(&mut compositor, b, "agent-3");
+    assert_eq!(owner.seat_names(), ["seat0"]);
+    assert_eq!(on_a.seat_names(), ["agent-2"]);
+    assert_eq!(on_b.seat_names(), ["agent-3"]);
+    let mut owners = Client::connect(&mut compositor);
+    let mut as_ = Client::connect_to(&mut compositor, a);
+    let mut bs = Client::connect_to(&mut compositor, b);
+    assert_eq!(output_names(&owners), ["HEADLESS-1"]);
+    assert_eq!(output_names(&as_), ["HEADLESS-2"]);
+    assert_eq!(output_names(&bs), ["HEADLESS-3"]);
+
+    let mode = OutputMode::new(1280, 720, 60.0, 1.0).expect("a mode");
+    compositor.add_output(b, mode).expect("an output");
+    for client in [&mut owners, &mut as_, &mut bs] {
+        client.roundtrip(&mut compositor);
+        client.roundtrip(&mut compositor);
+    }
+    assert_eq!(output_names(&owners), ["HEADLESS-1"]);
+    assert_eq!(output_names(&as_), ["HEADLESS-2"]);
+    assert_eq!(output_names(&bs), ["HEADLESS-3", "HEADLESS-4"]);
+}
+
 /// The test ADR-0015 and ADR-0035 ask for: an agent's input never reaches another seat. Seat A's
 /// pointer, buttons, wheel and keys reach A's client alone: not B's, not the owner's, and not a
-/// client of B that bound A's `wl_seat`, which upstream Smithay announces to it. B's input
+/// client of B that bound A's `wl_seat`, a spy the filter of ADR-0042 would never show it, made
+/// here to check the layer below: every focus is on a seat's own clients. B's input
 /// reaches B's client alone, the window of that client of B included, which bound no pointer
 /// of B: it gets nothing. Input to the owner's seat, or to another seat's output, is refused.
 #[test]
@@ -118,9 +161,10 @@ fn an_agents_input_reaches_its_own_seats_clients_alone() {
     let (mut compositor, a, b) = two_seats();
     let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
     let mut on_b = InputClient::connect(&mut compositor, b, "agent-3");
-    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let mut spy = InputClient::connect_spy(&mut compositor, b, "agent-2");
     let mut owner = InputClient::connect(&mut compositor, OWNER_SEAT, "seat0");
-    assert_eq!(on_a.seat_names(), ["seat0", "agent-2", "agent-3"]);
+    assert_eq!(on_a.seat_names(), ["agent-2"]);
+    assert_eq!(spy.seat_names(), ["seat0", "agent-2", "agent-3"]);
     open(&mut on_a, &mut compositor);
     open(&mut on_b, &mut compositor);
     open(&mut spy, &mut compositor);
@@ -388,7 +432,7 @@ fn the_wheel_scrolls_and_the_cursor_is_the_one_its_client_asked() {
 fn a_popup_grab_takes_a_press_serial_of_the_seat_of_its_client() {
     let (mut compositor, a, b) = two_seats();
     let mut client = InputClient::connect(&mut compositor, a, "agent-2");
-    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let mut spy = InputClient::connect_spy(&mut compositor, b, "agent-2");
     let window = open(&mut client, &mut compositor);
     let spy_window = open(&mut spy, &mut compositor);
     settle(&mut compositor);
@@ -473,7 +517,7 @@ fn a_drag_crosses_its_seats_windows_and_never_starts_from_another_seat() {
     let (mut compositor, a, b) = two_seats();
     let mut source = InputClient::connect(&mut compositor, a, "agent-2");
     let mut target = InputClient::connect(&mut compositor, a, "agent-2");
-    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let mut spy = InputClient::connect_spy(&mut compositor, b, "agent-2");
     let source_window = open(&mut source, &mut compositor);
     open(&mut target, &mut compositor);
     let spy_window = open(&mut spy, &mut compositor);
@@ -630,7 +674,7 @@ fn closing_a_seat_lets_go_of_everything_before_its_clients_end() {
     assert!(compositor.remove_seat(a).is_err(), "closed already");
     assert!(compositor.remove_seat(OWNER_SEAT).is_err());
     let late = InputClient::connect(&mut compositor, b, "agent-3");
-    assert_eq!(late.seat_names(), ["seat0", "agent-3"]);
+    assert_eq!(late.seat_names(), ["agent-3"]);
     assert_eq!(compositor.add_seat().expect("a seat"), SeatId(4));
     on_b.roundtrip(&mut compositor);
     compositor
@@ -661,7 +705,7 @@ fn last_enter(events: &[InputEvent]) -> u32 {
 fn activation_and_the_clipboard_keep_to_their_seat() {
     let (mut compositor, a, b) = two_seats();
     let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
-    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let mut spy = InputClient::connect_spy(&mut compositor, b, "agent-2");
     let owner = InputClient::connect(&mut compositor, OWNER_SEAT, "seat0");
     let first = open(&mut on_a, &mut compositor);
     let second = open(&mut on_a, &mut compositor);

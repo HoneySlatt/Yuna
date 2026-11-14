@@ -236,7 +236,11 @@ impl State {
             Some((rect.x.round() as i32, rect.y.round() as i32).into()),
         );
         output.set_preferred(smithay_mode);
-        let global = output.create_global::<State>(&self.display_handle);
+        // Shown to its seat's clients alone (ADR-0042).
+        let global = output
+            .create_global_with_filter::<State>(&self.display_handle, move |client| {
+                crate::seats::belongs_to(client, seat)
+            });
         let damage = OutputDamageTracker::from_output(&output);
         let boundaries = Boundaries {
             created_at: self.clock.now(),

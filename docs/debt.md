@@ -62,10 +62,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - A toplevel made again on a surface that kept its old buffer is mapped at its next commit, never
   configured; xdg-shell calls that its client's error, and wlroots refuses it. Yuna should end
   that client with a protocol error.
-- Smithay is built without overflow checks, so that a popup positioner's absurd values cannot
-  panic a debug build ([ADR-0027](adr/0027-smithay-without-overflow-checks.md)): any overflow
-  inside Smithay wraps silently. A saturating patch in the fork replaces the setting when main
-  moves to the fork.
 - A popup is placed when it is created and when it asks again; a reactive popup
   (`set_reactive`) is not placed again when its window moves or resizes. A popup of a window
   shown on no output is placed without constraint.
@@ -90,9 +86,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   `xdg_popup` while the first lives, which xdg-shell forbids. Yuna refuses it itself, with
   `xdg_surface.already_constructed`; for a second `xdg_surface` on the surface, xdg-shell names
   `xdg_wm_base.role`, which Yuna cannot send: Smithay keeps the `xdg_wm_base` to itself.
-- With two agents' seats in one Yuna, a program of the second may bind the first's `wl_seat`,
-  which upstream Smithay announces to every client: it then gets no input, never another seat's.
-  The filter per client comes at Stage 3 ([ADR-0035](adr/0035-agents-seats.md)).
 - The owner's seat has no pointer headless, and takes no input: its clients' tokens and popup
   grabs carry a keyboard `enter` serial alone, and they start no drag. Its input comes with the
   desktop (Stage 2).
@@ -108,11 +101,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   (`the_serial_of_the_client_with_the_focus_is_not_checked`).
 - A drag's icon is dropped, and the cursors clients ask are recorded, not drawn: a capture
   shows neither, and a client asking cursors painted into its frames gets none. Touch has no drag: Yuna has no touch.
-- Every seat's `wl_output` and `xdg-output` globals, like its `wl_seat`, are announced to every
-  client: a program of one agent sees, and may bind, another agent's outputs, their names,
-  modes and places, and a toolkit that lists monitors lists them. No input or focus crosses
-  seats by them. The filter per client comes at Stage 3 with `wl_seat`'s
-  ([ADR-0035](adr/0035-agents-seats.md)).
 - An `accept` that fails on a seat's socket, out of descriptors most often, pauses that socket
   100 ms (`SOCKET_PAUSE`); nothing bounds the clients one seat connects. The owner's socket, in
   `yuna --headless`, is Smithay's, which returns the error and stops Yuna.

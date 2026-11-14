@@ -420,9 +420,10 @@ The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` gl
 and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
 and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat
 whose socket it came through, recorded in its `ClientState`: its windows open on that seat's
-workspaces, and each seat's focus goes only to its own clients' surfaces. Upstream Smithay
-announces every `wl_seat` to every client: a client may bind another seat's, and then gets no
-input, since that seat's focus is never on its surfaces.
+workspaces, and each seat's focus goes only to its own clients' surfaces. A client is shown its
+own seat's `wl_seat` and its seat's outputs' `wl_output`s alone, through the filter per client of
+Yuna's fork of Smithay ([ADR-0042](adr/0042-main-on-smithays-fork.md)); a client that held
+another seat's would still get no input, since that seat's focus is never on its surfaces.
 
 Input (`input.rs`) reaches an agent's seat only through the compositor's calls, which the MCP
 server makes for the seat an agent names; the owner's seat takes none. Its events carry Yuna's

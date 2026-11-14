@@ -1,6 +1,6 @@
 # 0027. Smithay built without overflow checks in debug builds
 
-- Status: Accepted
+- Status: Superseded by [0042](0042-main-on-smithays-fork.md) (a saturating patch in the fork)
 - Date: 2026-11-12
 
 ## Context

@@ -233,6 +233,10 @@ pub(crate) struct ClientState {
     pub compositor: CompositorClientState,
     /// The seat it belongs to: the one whose socket it connected through.
     pub seat: SeatId,
+    /// Whether it is shown every seat's and output's globals, not only its own seat's: only for
+    /// tests of what a client holding another seat's globals would get
+    /// (`Compositor::connect_client_seeing_every_seat`).
+    pub sees_every_seat: bool,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -240,10 +244,15 @@ pub(crate) struct ClientState {
 }
 
 impl ClientState {
-    pub(crate) fn new(seat: SeatId, departed: DepartedClients) -> ClientState {
+    pub(crate) fn new(
+        seat: SeatId,
+        sees_every_seat: bool,
+        departed: DepartedClients,
+    ) -> ClientState {
         ClientState {
             compositor: CompositorClientState::default(),
             seat,
+            sees_every_seat,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
