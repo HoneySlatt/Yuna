@@ -32,7 +32,9 @@
 //!    refresh are copied after its drawing (`capture.rs`).
 //! 4. While the motion is not over at the boundary sampled, the next refresh is armed as for
 //!    something new, whether this one drew, found nothing changed or failed: the last frame is
-//!    the arrangement, and then nothing is armed.
+//!    the arrangement, and then nothing is armed. Under VRR, a refresh of the motion that found
+//!    nothing changed shows its frame again, so that the panel refreshes where the loop counts
+//!    a refresh and the motion keeps the shortest refresh.
 //!
 //! What a client is told follows its place, not its drawn rectangle: a window is told it is
 //! visible, `enter` and full-rate callbacks, when its place comes onto the output, at an
@@ -285,6 +287,15 @@ impl State {
                     "frame drawn"
                 );
                 presented
+            }
+            // While a motion runs, a VRR panel is shown the same frame again, so that it refreshes
+            // where this refresh is counted and keeps the motion's pace: shown nothing, it would
+            // show the next frame sooner than a shortest refresh after this one, and after a few
+            // such refreshes insert its own below its range.
+            Drawing::Unchanged
+                if output.in_motion && matches!(output.timing, Timing::Variable(_)) =>
+            {
+                output.timing.present(now, aimed, output.last_refresh)
             }
             // Nothing new to show: content updates show with the frame this refresh aimed at.
             Drawing::Unchanged => aimed,

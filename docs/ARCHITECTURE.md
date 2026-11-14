@@ -365,6 +365,11 @@ DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
   committed tree, read before Smithay takes it, a change of the layout, a popup gone. After two
   refreshes in a row armed for something new that drew nothing, all is paced again
   (`content_misses`), so that buffers outside the output never loop.
+- While a motion runs, a refresh that finds nothing changed shows the same frame again: the
+  panel then refreshes where the frame loop counts a refresh, and the motion keeps the shortest
+  refresh to its end. Shown nothing, the panel would make no refresh there: the next frame would
+  show sooner than a shortest refresh after the one counted, its feedback numbered after it, and
+  after about 20 ms without a frame the panel would insert refreshes below its range.
 - `seq` counts every refresh, the panel's own included; `wp_presentation` version 2 is told
   1/max as the refresh, version 1 zero.
 - The range is at least twice as wide as its least rate; a narrower one takes a path of the
@@ -408,7 +413,7 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    presentation deadline, armed only when a surface asked feedback. `seq` is the boundary's
    number, the flags VSYNC, the refresh the output's period. A refresh that drew nothing still
    counts as the output's last refresh, so that callbacks asked without damage come once a
-   period.
+   period; under VRR, while a motion runs, it shows its frame again ([VRR outputs](#vrr-outputs)).
 4. While the output's motion is not over at the time sampled, the refresh arms the next one, as
    for something new, whether it drew, found nothing changed or failed. The last frame shows the
    arrangement exactly; then nothing is armed. At that refresh the windows are told once what the
@@ -778,6 +783,15 @@ own thread, both `took_us`.
   configure for each window from each; a pointer and a click mid-scroll reaching the window drawn
   under them; a window's capture where its frame drew it; the special workspace's fade read in
   its pixels; animations off drawing one frame; and `windows` through MCP mid-motion and at rest.
+  Its frame-by-frame stories (`step_frames`) check every refresh's time and frame against the
+  reference: a switch turned back mid-way, the special workspace's fade toggled mid-way, reduced
+  motion's scroll in one frame and fade over half its time, a window closed and one opened
+  mid-scroll; beside them, a popup drawn at its window's drawn rectangle mid-scroll.
+  `motion_pacing.rs` in it times drawings with the draw hook, on a scroll under a floating
+  window whose frame callbacks and feedback tell each refresh and where its frame was shown:
+  drawings of 70 % of a period missing nothing, one of 1.5 periods missing one boundary, every
+  drawing 1.2 periods shown every other boundary, each ending on time; and a scroll on a VRR
+  output refreshing at the shortest refresh.
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no
