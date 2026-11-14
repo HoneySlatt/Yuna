@@ -32,6 +32,8 @@
           pkgs.lychee
           # Lists the Markdown files the link check reads.
           pkgs.git
+          # The X server Yuna starts for X11 programs, found on PATH (ADR-0067).
+          pkgs.xwayland
         ];
 
         # Linked by Smithay's keyboard (xkbcommon).
