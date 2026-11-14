@@ -1,6 +1,7 @@
 # 0062. The compositor's comfort and look
 
-- Status: Accepted; amends 0005, 0010
+- Status: Accepted; amends 0005, 0010; point 8 reopened by the owner on 2026-11-14: the wear map
+  is one candidate, OLED care is chosen at Stage 5's design from a survey
 - Date: 2026-11-14
 
 ## Context

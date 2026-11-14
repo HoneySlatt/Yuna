@@ -207,12 +207,12 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   pointer constraints and relative pointer, `fifo-v1` and `commit-timing-v1`, a hidden game paced
   at its configured rate.
 - The package's NixOS and home-manager modules; the clients' messages fuzzed weekly.
-- The owner's uses [ADR-0061](adr/0061-yunas-uses.md): tablets, pointer warp, `xdg-foreign` and the placing of Wine's
-  and plugins' windows; `keyboard-shortcuts-inhibit`; windows never captured; a test output in a
+- The owner's uses ([ADR-0061](adr/0061-yunas-uses.md)): tablets, pointer warp, `xdg-foreign`, Wine's and plugins'
+  windows placed; `keyboard-shortcuts-inhibit`; windows never captured; a test output in a
   window; picture in picture; windows back in place after a reboot, on by default; the GPU's loss
   on demand for agents; VKMS studied first.
 - Hot corners; tabbed columns; focus following the mouse and floating windows' sizes remembered,
-  as settings [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
+  as settings ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
@@ -242,11 +242,12 @@ latency and frames at least as good as gamescope's.
 
 - HDR output, SDR brightness, tone and gamut mapping, ICC profiles; a profile per display, from
   its EDID corrected by a guided adjustment or a probe; colour accuracy measured; HDR captures
-  kept HDR or converted to SDR [ADR-0061](adr/0061-yunas-uses.md).
+  kept HDR or converted to SDR ([ADR-0061](adr/0061-yunas-uses.md)).
 - The night light, captures and screen sharing correct under HDR; films at an exact multiple of
   their rate, and told apart in the fullscreen state; no sleep while a video plays.
-- OLED care: luminance read from the panel, static elements protected from burn-in by a wear map
-  of each output [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
+- OLED care: luminance read from the panel, static elements protected from burn-in. Its means
+  are chosen at Stage 5's design, from a survey of what panels, other systems and studies of
+  burn-in do; a wear map of each output is one candidate ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 
 **Exit.** The owner's films and HDR games show correctly, measured against KWin on the same content.
 
@@ -258,7 +259,7 @@ latency and frames at least as good as gamescope's.
   close animations; the wallpaper's animated transitions.
 - The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
   Alt-Tab with previews, the capture tool's polish, a colour picker; snap zones for floating
-  windows; shapes that morph [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
+  windows; shapes that morph ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - Sandboxed applications kept from sensitive protocols; reduced transparency for blur and glass.
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.

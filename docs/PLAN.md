@@ -201,7 +201,8 @@ milestone first needs it.
 ## Ideas
 
 - Scripts inside Yuna, on events only, bounded in time; an effect governor that lightens the
-  costliest effect near a frame's deadline; a replay capsule for agents, after M1.11 [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
+  costliest effect near a frame's deadline; a replay capsule for agents, after M1.11
+  ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
   (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
 - The RemoteDesktop and InputCapture portals, for remote control or a mouse shared between
