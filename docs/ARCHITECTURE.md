@@ -325,6 +325,8 @@ emulates amdgpu driving a DisplayPort Adaptive-Sync monitor:
   included; `wp_presentation` version 2 is told 1/max as the refresh, version 1 zero.
 - The range is at least twice as wide as its least rate; a narrower one takes a path of the
   driver Yuna does not emulate.
+- A test replays a trace of the owner's monitor (`tests/fixtures/vrr-trace-pg32ucdm.txt`):
+  frames on time match it; late frames wait longer on the monitor ([debt](debt.md#vrr)).
 
 ### A frame
 

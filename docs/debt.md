@@ -124,6 +124,20 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - `wp_presentation` is version 2 in wayland-protocols 0.32.13: the `variable_rate` flag of
   version 3, which tells a client its output runs under VRR, cannot be sent yet.
 
+## VRR
+
+- A frame later than BTR's inserted refreshes waits longer on the owner's monitor than the
+  emulation says: about as long again as it was late, on every rate the trace covers, with
+  one refresh more once it is later than 1/240 s. The rule is seen in the trace, not found in
+  the driver's code read; the emulation shows such a frame at once. The replay leaves late
+  frames out (`vrr.rs`, `the_emulation_replays_the_owners_monitor`).
+- After a perturbation, the monitor may keep BTR's count of refreshes where the emulation
+  changes it: at 25 fps, 4 refreshes a frame for about half the steady frames, where the
+  emulation shows 3. BTR's history follows the flips' commit times, which the trace and the
+  emulation do not see the same way.
+- Both come from one trace, recorded while other builds loaded the machine; a quieter trace, or
+  the driver's commit path read, would tell more ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+
 ## Text input
 
 - Smithay `8fd9fe0` sends `enter` to a text field made after its surface took the keyboard only

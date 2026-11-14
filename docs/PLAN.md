@@ -117,10 +117,9 @@ milestone first needs it.
   positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
   versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
   `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
-- **Where it stands** (2026-11-14). D1 to D5 are done, each checked; the measures of the
-  emulation on both clocks are in [measurements](measurements.md). D6 waits for the owner's run
-  of the throwaway `vrr-trace` program, kept uncommitted on the local branch `m1.6-d6`; then
-  a test replays the trace through `vrr.rs`, and the closing review ends the milestone.
+- **Where it stands** (2026-11-14). D1 to D6 are done, each checked. The owner's trace of the
+  monitor is replayed by a test: frames on time match it, late ones are debt
+  ([measurements](measurements.md), [debt](debt.md#vrr)). The closing review ends the milestone.
 - **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads
   the colour description mpv's surface sent (Aerith's once its relay passes colours on).
 - **Measured.** Presentation times against the emulated range, and against the monitor's trace.

@@ -34,8 +34,17 @@ every presentation 10 ms after the last and one refresh later; at 300 fps, none 
 1/240 s, the frames that could not be shown discarded; at 24 fps, 41.667 ms apart within 1 µs,
 three refreshes later each, as amdgpu's BTR inserts them; at 23.976 fps, at most 2 of 41
 intervals a whole number of 1/240 s periods, against all of them on a fixed 240 Hz output.
-Checked against the owner's monitor: not yet, the trace waits for its run
-([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+Checked against the owner's monitor ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)):
+the owner ran the throwaway `vrr-trace` from a text console on 2026-11-14, Linux 7.3.1, mode
+3840 × 2160 at 240.016 Hz, VRR on, while other builds loaded the machine; the reduced trace is
+`crates/yuna/tests/fixtures/vrr-trace-pg32ucdm.txt`. Idle, the panel refreshed every 12.497
+ms, BTR's middle period. Per frame, the monitor showed 3 refreshes of 13.9, 13.3 and 11.1 ms at
+24, 25 and 30 fps, 2 of 10.4 ms at 48 fps, one from 60 fps, at most 240 Hz above; a flip's event
+came about 500 µs after its submission, the vertical blank's 269 lines. Replayed through
+`vrr.rs`, for frames submitted within 200 µs of their period: the interval between two
+presentations within 100 µs of the monitor's for 87 % (24 fps) to 100 % (300 fps) of them,
+median error 1.6 to 15 µs; the count of refreshes the same for 98 to 100 %, but 52 % at 25 fps.
+Frames submitted late wait longer on the monitor ([debt](debt.md#vrr)).
 
 On the real clock: machine as in M1.5's B4 below, Linux 7.3.1. Build: release, commit `e04dee7`
 with the log's `presented_at_us`. One run, with the owner's consent, under the agents' lock of

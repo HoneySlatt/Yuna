@@ -374,4 +374,108 @@ mod tests {
             (seq + 2, last + inserted * 2)
         );
     }
+
+    /// The owner's monitor's trace (ADR-0045): each rate's flips, as `vrr-trace` recorded them.
+    const TRACE: &str = include_str!("../tests/fixtures/vrr-trace-pg32ucdm.txt");
+
+    /// A flip of the trace: when it was submitted, when its event came, and its refresh.
+    struct TracedFlip {
+        submit: Duration,
+        event: Duration,
+        seq: u64,
+    }
+
+    /// The trace's rates, each with its flips, in order.
+    fn traced_rates() -> Vec<(u32, Vec<TracedFlip>)> {
+        let mut rates: Vec<(u32, Vec<TracedFlip>)> = Vec::new();
+        for line in TRACE.lines().filter(|line| !line.starts_with('#')) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            match fields[..] {
+                ["rate", millihertz] => {
+                    rates.push((millihertz.parse().expect("a rate"), Vec::new()));
+                }
+                [submit, event, seq] => {
+                    let number = |text: &str| text.parse::<u64>().expect("a number");
+                    rates.last_mut().expect("a rate first").1.push(TracedFlip {
+                        submit: Duration::from_nanos(number(submit)),
+                        event: Duration::from_nanos(number(event)),
+                        seq: number(seq),
+                    });
+                }
+                _ => panic!("a malformed line: {line}"),
+            }
+        }
+        rates
+    }
+
+    /// Replays a rate's submissions through the panel, its first flip as the panel's start, and
+    /// gives, for each flip after `warm_up` whose submission and the one before came within
+    /// 200 µs of the rate's period, the error of the interval since the flip before and whether
+    /// the count of refreshes between them matched. Frames submitted late are left out: the
+    /// monitor holds them longer than the emulation does ([debt](../../../docs/debt.md#vrr)).
+    fn replay_steady(
+        millihertz: u32,
+        flips: &[TracedFlip],
+        warm_up: usize,
+    ) -> Vec<(Duration, bool)> {
+        let period = Duration::from_nanos(1_000_000_000_000 / u64::from(millihertz));
+        let on_time = |k: usize| {
+            (flips[k].submit - flips[k - 1].submit).abs_diff(period) < Duration::from_micros(200)
+        };
+        let first = &flips[0];
+        let mut panel = Panel::new(48_000, 240_016, first.event);
+        panel.flip(first.submit, 0, first.event);
+        let mut before = (0, first.event);
+        let mut found = Vec::new();
+        for (k, flip) in flips.iter().enumerate().skip(1) {
+            let (seq, start) = panel.first_reachable(flip.submit);
+            panel.flip(flip.submit, seq, start);
+            if k > warm_up && on_time(k) && on_time(k - 1) {
+                let traced = flip.event - flips[k - 1].event;
+                found.push((
+                    (start - before.1).abs_diff(traced),
+                    seq - before.0 == flip.seq - flips[k - 1].seq,
+                ));
+            }
+            before = (seq, start);
+        }
+        found
+    }
+
+    /// ADR-0045's check: the owner's monitor's trace, replayed. For frames on time, at every rate
+    /// from 23.976 to 300 fps, the time between two presentations is the monitor's within
+    /// 100 µs for at least 85 % of them (the trace's event times are whole microseconds, its
+    /// submissions jitter), and the count of refreshes between them is the monitor's for at
+    /// least 95 %. At 25 fps, the monitor keeps 4 refreshes a frame after a perturbation where
+    /// the emulation goes back to 3, about half the time: at least 50 % there.
+    #[test]
+    fn the_emulation_replays_the_owners_monitor() {
+        let rates = traced_rates();
+        assert_eq!(rates.len(), 10);
+        for (millihertz, flips) in rates {
+            let found = replay_steady(millihertz, &flips, 10);
+            assert!(
+                found.len() > 150,
+                "{millihertz}: {} frames on time",
+                found.len()
+            );
+            let share = |count: usize| count as f64 / found.len() as f64;
+            let timed = share(
+                found
+                    .iter()
+                    .filter(|(error, _)| *error <= Duration::from_micros(100))
+                    .count(),
+            );
+            let counted = share(found.iter().filter(|(_, same)| *same).count());
+            let least_counted = if millihertz == 25_000 { 0.5 } else { 0.95 };
+            assert!(
+                timed >= 0.85,
+                "{millihertz}: {timed:.3} of intervals within 100 µs"
+            );
+            assert!(
+                counted >= least_counted,
+                "{millihertz}: {counted:.3} of refresh counts"
+            );
+        }
+    }
 }
