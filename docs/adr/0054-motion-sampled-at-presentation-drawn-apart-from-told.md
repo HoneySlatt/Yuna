@@ -28,7 +28,7 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
   frame before: a frame drawn at once that shows sooner than expected is followed by one that
   samples the boundary after the one it sampled, never an earlier one.
 - **A motion starts when Yuna applies the change**, at the refresh that arranges it, so that its
-  first frame shows at most one period of motion.
+  first frame shows less than two periods of motion.
 - **While a motion of an output is unfinished at the time a refresh sampled**, that refresh arms
   the next one, whether it drew or found nothing changed, and a refresh whose drawing failed
   too. The last frame shows the target exactly; then nothing is armed.

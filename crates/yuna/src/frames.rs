@@ -18,9 +18,9 @@
 //!
 //! At the refresh, in order:
 //!
-//! 1. If the layout changed, it is arranged for every output, and handed to the motion
-//!    (`yuna_motion::Motion::update`, which arranges each output again for itself), as an
-//!    animated change or, after an output or a seat was
+//! 1. If the layout changed, it is handed to the motion (`yuna_motion::Motion::update`, which
+//!    arranges each output for itself), then arranged again for every output, as an animated
+//!    change or, after an output or a seat was
 //!    removed, one instant for that seat's outputs alone, so that one seat's outputs coming and
 //!    going never cut another seat's motion short
 //!    ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); an output added starts at rest.
@@ -255,13 +255,16 @@ impl State {
         let Some(index) = self.output_index(output) else {
             return;
         };
-        if self.motion.end(output, sample_at).is_some() {
+        // The frame the buffer holds: a failed drawing leaves the one before.
+        let held = self.outputs[index].sampled_at;
+        if self.motion.end(output, held).is_some() {
             // The next boundary has a frame of its own, whether this one drew, found nothing
-            // changed or failed: a motion never stops short of its end.
+            // changed or failed: a motion never stops short of its end, and a failed drawing of
+            // its last frame is drawn again.
             self.outputs[index].in_motion = true;
             self.schedule_refresh_for_content(output);
         } else if std::mem::take(&mut self.outputs[index].in_motion) {
-            self.tell_motion_ended(output, sample_at);
+            self.tell_motion_ended(output, held);
         }
     }
 

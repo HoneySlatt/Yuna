@@ -247,9 +247,13 @@ with games' VRR:
 - `SpringParams::time_to_rest` and `Motion::set_settings` have no caller but tests: the 1.5 s
   refusal of [ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md) and settings
   changed live come with the configuration file (Stage 2).
-- If the refresh that samples a motion's end fails to draw, clients are told the motion ended
-  and nothing more is armed: the output keeps a frame of the motion until its next damage. A
-  failed drawing cannot be caused headless; none was seen.
+- A failed drawing of a motion's last frame is drawn again at the next boundary; no test covers
+  it, since a drawing cannot be made to fail headless.
+- At each arrangement and each motion's end, every window not told visible is looked up in the
+  layout, a search of its seat each: the cost grows with the square of the windows. Reading
+  fullscreen states once per arrangement would make it linear.
+- `ten_thousand_columns` runs 10,000 windows through an animated update but times nothing: a
+  quadratic search coming back would fail no check; `examples/motion_timing.rs` shows it.
 - On a VRR output, a motion that starts after a pause shows its second frame about 12 ms after
   its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
   shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):

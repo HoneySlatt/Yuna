@@ -883,7 +883,8 @@ own thread, both `took_us`.
   found failing, written out, both ways, since a seed in `random_requests.proptest-regressions`
   replays its case only while the generator stays the same. Each test prints how often the
   requests that need the keyboard took effect, as the compositor's state and the clients' own
-  events show it; those rates and the tests' times are in [`measurements.md`](measurements.md).
+  events show it; M1.4's rates and times are in [`measurements.md`](measurements.md), not
+  measured again since the two tests with animations on came.
   `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
