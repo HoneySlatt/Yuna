@@ -14,6 +14,7 @@
 pub mod description;
 pub(crate) mod protocol;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use smithay::output::Output;
@@ -22,6 +23,7 @@ use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
     wp_image_description_info_v1::WpImageDescriptionInfoV1,
 };
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::{TraversalAction, get_role, with_surface_tree_downward};
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
@@ -55,7 +57,9 @@ pub(crate) struct SurfaceColour {
 #[derive(Debug)]
 pub(crate) struct ColourState {
     next_identity: u64,
-    pub feedbacks: Vec<WpColorManagementSurfaceFeedbackV1>,
+    /// By object, so that each one's destruction costs a constant time, however many a client
+    /// holds.
+    pub feedbacks: HashMap<ObjectId, WpColorManagementSurfaceFeedbackV1>,
     /// The SDR record of surfaces whose seat has no output, made when first needed.
     sdr: Option<Arc<Record>>,
     /// Information objects made during the dispatch, answered after it.
@@ -67,7 +71,7 @@ impl ColourState {
         ColourState {
             // 0 is invalid in the protocol.
             next_identity: 1,
-            feedbacks: Vec::new(),
+            feedbacks: HashMap::new(),
             sdr: None,
             pending_information: Vec::new(),
         }
@@ -157,16 +161,13 @@ impl State {
         }
     }
 
-    /// Tells each feedback object whose surface's preferred description changed, and forgets
-    /// those whose surface is gone. Called after each arrangement, which moves windows.
+    /// Tells each feedback object whose surface's preferred description changed. Called after
+    /// each arrangement, which moves windows. A feedback object whose surface is gone is inert:
+    /// it stays until its client destroys it.
     pub(crate) fn update_preferred_descriptions(&mut self) {
-        let feedbacks = std::mem::take(&mut self.colour.feedbacks);
-        let mut kept = Vec::with_capacity(feedbacks.len());
+        let feedbacks: Vec<WpColorManagementSurfaceFeedbackV1> =
+            self.colour.feedbacks.values().cloned().collect();
         for feedback in feedbacks {
-            if !feedback.is_alive() {
-                continue;
-            }
-            // A feedback object whose surface is gone is inert; it stays until destroyed.
             if let Some((surface, told)) = protocol::feedback_state(&feedback) {
                 let identity = self.preferred_record(&surface).identity;
                 if identity != told {
@@ -174,9 +175,7 @@ impl State {
                     protocol::set_told(&feedback, identity);
                 }
             }
-            kept.push(feedback);
         }
-        self.colour.feedbacks = kept;
     }
 
     /// The colours the surfaces of `window` declared, at their last commit: its own surface's,

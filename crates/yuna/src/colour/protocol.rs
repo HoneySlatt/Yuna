@@ -156,7 +156,7 @@ impl Dispatch<WpColorManagerV1, ()> for State {
                         told: Mutex::new(identity),
                     },
                 );
-                state.colour.feedbacks.push(feedback);
+                state.colour.feedbacks.insert(feedback.id(), feedback);
             }
             Request::CreateParametricCreator { obj } => {
                 data_init.init(obj, Mutex::new(Params::default()));
@@ -302,7 +302,7 @@ impl Dispatch<WpColorManagementSurfaceFeedbackV1, Feedback> for State {
         object: &WpColorManagementSurfaceFeedbackV1,
         _feedback: &Feedback,
     ) {
-        state.colour.feedbacks.retain(|f| f != object);
+        state.colour.feedbacks.remove(&object.id());
     }
 }
 
