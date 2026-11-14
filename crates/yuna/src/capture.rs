@@ -254,7 +254,7 @@ fn logical_units(mode: &OutputMode) -> (u32, u32) {
 /// physical span [(`origin` + i) × `scale`, …) from the output's edge, `read_start` of which
 /// were not read. Weights are each pixel's share of the span, cut to the `read_length` pixels
 /// read, and add up to 1.
-fn axis_taps(
+pub(crate) fn axis_taps(
     origin: f64,
     count: u32,
     scale: f64,

@@ -4,6 +4,56 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.8 — The X11 element's area filter, on llvmpipe (2026-11-14)
+
+Machine as in M1.4's B4 below: Ryzen 7 5800X (16 threads), Linux 7.3.1, Mesa 26.2.6 from the
+development shell. Build: the test profile (debug), from commit `30b9999` with the X11 element's
+changes not yet committed; the drawing is llvmpipe's, built for release by Nix. Two runs, under
+the agents' exclusive lock; the table gives the first. Command:
+
+```sh
+nix develop -c cargo test -p yuna --lib --locked x11_element_drawing_time -- --ignored --nocapture --test-threads=1
+```
+
+The test `x11_element_drawing_time_at_4k` (`crates/yuna/src/render/x11_surface.rs`) draws a
+3840 × 2160 output whole, 200 times after 10 to warm up, with one X11 window of noise, XWayland's
+scale 1.5. A frame's time is `render::draw`'s: from the start of the drawing to the end of its
+wait for the renderer, the background cleared included. Two cases on an output at 1: a window as
+wide as X11 sees that output, 5760 × 3240 X11 pixels, which covers it, the heaviest a window gets;
+and 3840 × 2160 X11 pixels, drawn at 2560 × 1440. Each is drawn through the area filter, then
+through the renderer's own bilinear filter, Smithay's default shader, at the same size. The plain
+copy is 3840 × 2160 X11 pixels on an output at 1.5.
+
+| What is drawn | A frame: median | 90th percentile | longest |
+|---|---|---|---|
+| The background alone, at 1 | 1,558 µs | 1,694 µs | 1,904 µs |
+| 5760 × 3240 to 3840 × 2160, area filter | 22,135 µs | 24,123 µs | 29,026 µs |
+| 5760 × 3240 to 3840 × 2160, bilinear | 8,011 µs | 8,471 µs | 9,198 µs |
+| 3840 × 2160 to 2560 × 1440, area filter | 15,875 µs | 16,366 µs | 17,485 µs |
+| 3840 × 2160 to 2560 × 1440, bilinear | 4,729 µs | 4,937 µs | 5,181 µs |
+| 3840 × 2160 copied at 1.5 | 6,743 µs | 7,289 µs | 12,517 µs |
+
+- **On llvmpipe, the area filter costs about three times the bilinear filter**: 20.6 ms against
+  6.5 ms for a window over the whole output, the background's 1.6 ms taken off, and 14.3 ms
+  against 3.2 ms at 2560 × 1440. It reads up to 3 × 3 texels a pixel at a ratio of 2/3, each a
+  sample of llvmpipe's bilinear filter, where the default shader takes one sample: most likely
+  the cause, not isolated. A frame with a window over a whole 4K output at 1 takes longer than a
+  60 Hz period on llvmpipe. Only an agent's seat with outputs of two scales pays it there; an
+  agent's single output is at XWayland's scale, where its windows are copied.
+- **The load**: before the first run, a load average of 1.80 over a minute (7.52 and 8.67 over 5
+  and 15 minutes, from earlier builds), the processor 95.5 % idle; after it, 3.94, most likely
+  the run's own, llvmpipe's 16 threads busy for its 17 s, and the processor 93.4 % idle. The
+  exclusive lock kept other measurements out; other sessions' builds were not watched during the
+  run.
+- **The second run**, on the element as it is to be committed (its damage and tests changed
+  since, not its drawing), gave every median within 2 % of the first: 21,785 µs and 7,974 µs
+  over the whole output, 15,865 µs and 4,731 µs at 2560 × 1440, 6,701 µs copied, 1,543 µs for
+  the background. It counts as disturbed: its load average was 5.11 over a minute, from the
+  checks run just before it, though the processor was 98.9 % idle at its start.
+- **Not measured on the GPU**: no measurement program draws X11 windows yet (`frame_time` draws
+  Wayland clients), and tests never take the GPU. ADR-0068 asks the GPU's figure; it comes with
+  M1.8's X11 window manager.
+
 ## M1.7 — Motion (2026-11-14)
 
 Machine and Mesa as in M1.4's B4 below. Build: release, commit `92fb627`. One run each, in

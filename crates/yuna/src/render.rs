@@ -2,18 +2,19 @@
 //! draws ([ADR-0012](../../../docs/adr/0012-opengl-first.md),
 //! [ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)).
 //!
-//! This is the only module that knows OpenGL; the layout and the frame loop do not.
+//! This is the only module that knows OpenGL; the layout and the frame loop do not. X11 windows'
+//! surfaces have an element of Yuna's own, in `render/x11_surface.rs`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
 };
 use smithay::backend::renderer::element::utils::CropRenderElement;
+use smithay::backend::renderer::element::{Kind, render_elements};
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, ffi};
 use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
 use smithay::desktop::PopupManager;
@@ -23,6 +24,15 @@ use yuna_layout::geometry::Rect;
 
 use crate::Error;
 use crate::output::{VirtualOutput, to_i32};
+
+#[expect(
+    dead_code,
+    reason = "M1.8's X11 window manager draws its windows with it; until it is written, only \
+              the module's tests do, and its surface's reading has no caller yet"
+)]
+pub(crate) mod x11_surface;
+
+use x11_surface::X11SurfaceElement;
 
 /// The EGL device the renderer draws on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,9 +48,13 @@ pub enum Device {
 /// What an output shows where no window is.
 const BACKGROUND: Color32F = Color32F::new(0.08, 0.08, 0.1, 1.0);
 
-/// An element of a frame: part of a client's surface, cut to its window's rectangle, or to the
-/// output for a popup.
-pub(crate) type WindowElement = CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>;
+render_elements! {
+    /// An element of a frame: part of a Wayland client's surface, cut to its window's rectangle,
+    /// or to the output for a popup; or an X11 window's surface (`render/x11_surface.rs`).
+    pub(crate) WindowElement<=GlesRenderer>;
+    Wayland=CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    X11=X11SurfaceElement,
+}
 
 /// Every EGL display Yuna opened, one per device, kept until the process ends. Smithay shares one
 /// display handle among the `EGLDisplay`s of a device and terminates it when the last one is
@@ -162,17 +176,7 @@ pub(crate) fn window_elements(
     output: &VirtualOutput,
 ) -> Vec<WindowElement> {
     let scale = output.mode.scale();
-    // `rect` lies on the output's pixel grid: its edges are whole pixels.
-    let to_physical = |x: f64, y: f64| -> Point<i32, Physical> {
-        (
-            ((x - output.rect.x) * scale).round() as i32,
-            ((y - output.rect.y) * scale).round() as i32,
-        )
-            .into()
-    };
-    let top_left = to_physical(rect.x, rect.y);
-    let bottom_right = to_physical(rect.right(), rect.bottom());
-    let crop = Rectangle::from_extremities(top_left, bottom_right);
+    let crop = window_pixels(rect, output);
     let offset: Point<i32, Physical> = (
         (f64::from(geometry.loc.x) * scale).ceil() as i32,
         (f64::from(geometry.loc.y) * scale).ceil() as i32,
@@ -181,14 +185,33 @@ pub(crate) fn window_elements(
     render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
         renderer,
         surface,
-        top_left - offset,
+        crop.loc - offset,
         scale,
         alpha,
         Kind::Unspecified,
     )
     .into_iter()
     .filter_map(|element| CropRenderElement::from_element(element, scale, crop))
+    .map(WindowElement::Wayland)
     .collect()
+}
+
+/// A window's rectangle `rect`, in the layout's logical coordinates, in `output`'s physical
+/// pixels, each edge rounded to the nearest: a window's rectangle lies on its output's pixel
+/// grid, its edges whole pixels up to rounding. Wayland and X11 windows are cut to it.
+fn window_pixels(rect: Rect, output: &VirtualOutput) -> Rectangle<i32, Physical> {
+    let scale = output.mode.scale();
+    let to_physical = |x: f64, y: f64| -> Point<i32, Physical> {
+        (
+            ((x - output.rect.x) * scale).round() as i32,
+            ((y - output.rect.y) * scale).round() as i32,
+        )
+            .into()
+    };
+    Rectangle::from_extremities(
+        to_physical(rect.x, rect.y),
+        to_physical(rect.right(), rect.bottom()),
+    )
 }
 
 /// The elements of the popups of the window whose toplevel surface is `toplevel` and whose
@@ -229,7 +252,8 @@ pub(crate) fn popup_elements(
                 Kind::Unspecified,
             )
             .into_iter()
-            .filter_map(|element| CropRenderElement::from_element(element, scale, crop)),
+            .filter_map(|element| CropRenderElement::from_element(element, scale, crop))
+            .map(WindowElement::Wayland),
         );
     }
     elements

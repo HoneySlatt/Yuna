@@ -500,6 +500,19 @@ logical size. One buffer pixel then covers one physical pixel: on whole pixels, 
 the layout put on the physical grid, the window is drawn exactly, with no blending at any edge.
 A client that draws at an integer buffer scale is scaled when drawn ([debt](debt.md)).
 
+X11 windows, from M1.8, are drawn by an element of Yuna's own (`render/x11_surface.rs`,
+[ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)); until M1.8's window
+manager calls it, only its tests do. Rootless Xwayland draws each window at XWayland's scale S,
+the largest of its seat's outputs when it started, into a buffer of scale 1: a buffer pixel is an
+X11 pixel. On an output of scale s, the buffer takes s / S physical pixels per X11 pixel, its
+size rounded once at its far edges, its window geometry's corner at the window's rectangle's,
+cut to the rectangle. At s = S it is copied texel for texel. Below S each pixel is the average of
+the X11 pixels it covers, weighted by how much of each, in a texture shader of Yuna's, the *area
+filter*: the average the captures' encoder takes ([Captures](#captures)). Above S, on an output
+added since Xwayland started, the renderer's bilinear filter scales it up. Smithay's surface
+element is not used for them: it rounds a client-scaled surface to whole logical units, so that
+one X11 width in three would be drawn a pixel off at S = 1.5.
+
 ### Buffers
 
 Clients' buffers come through `wl_shm` or `linux-dmabuf`. Yuna offers `linux-dmabuf` only when
