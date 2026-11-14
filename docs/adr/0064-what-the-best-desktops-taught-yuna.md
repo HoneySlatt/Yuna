@@ -1,6 +1,7 @@
 # 0064. What the best desktops taught Yuna
 
-- Status: Accepted; amends 0019, 0057
+- Status: Accepted; amends 0019, 0057; amended by
+  [0065](0065-what-hollow-asks-of-yuna.md) (the sharing indicator, the dead locker)
 - Date: 2026-11-14
 
 ## Context

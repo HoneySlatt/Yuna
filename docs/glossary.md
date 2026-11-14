@@ -55,6 +55,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   notifications silent, VRR in its band.
 - **The games' band**: the high, narrow range of refresh rates Yuna keeps a game's VRR in, by
   showing frames several times ([ADR-0014](adr/0014-vrr-without-flicker.md)).
+- **Greeter mode**: Yuna running under greetd as the login screen's compositor, without command
+  socket, MCP, global shortcuts, portals or XWayland ([ADR-0065](adr/0065-what-hollow-asks-of-yuna.md)).
 - **HDR10**: high dynamic range output as monitors take it: the PQ curve, BT.2020 primaries, at
   least 10 bits per channel, and static metadata sent with the picture (`HDR_OUTPUT_METADATA`).
 - **Headless mode**: Yuna running without a physical screen, on virtual outputs.

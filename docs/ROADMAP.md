@@ -220,6 +220,9 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   shortcuts per application, keys passed to X11 applications; brightness and DDC/CI; a cast's
   target changed live; the bell to the shell; custom output modes; no black flash at start;
   Hollow's interface of commands and events.
+- What Hollow asks ([ADR-0065](adr/0065-what-hollow-asks-of-yuna.md),
+  [client needs](client-needs.md)): the programs that capture told to the shell; a greeter mode
+  under greetd; a new locker relieving a dead one.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.

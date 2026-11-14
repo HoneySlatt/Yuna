@@ -72,4 +72,5 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010, 0058 |
 | [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened |
 | [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041 |
-| [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057 |
+| [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057; amended by 0065 |
+| [0065](0065-what-hollow-asks-of-yuna.md) | What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief | Accepted; amends 0064 |

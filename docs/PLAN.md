@@ -22,6 +22,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   added; reduced motion joins M1.7.
 - [M1.7](#m17--animations) is done (2026-11-14), with ADR-0052 to ADR-0056 and ADR-0059. Next:
   M1.8, on the owner's go.
+- Hollow's needs of Yuna are in [`client-needs.md`](client-needs.md), three decided in
+  [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 
 ## Status
 
@@ -163,7 +165,8 @@ milestone first needs it.
 - **Goal.** The owner's other projects measure and drive their programs in Yuna as in a headless
   sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
 - **Delivers.** A Nix package, built in CI; the virtual keyboard and pointer on agents' seats
-  only, tested never to reach the owner's; `docs/client-needs.md`; `docs/protocols.md` and its
+  only, tested never to reach the owner's; `docs/client-needs.md` completed, Hollow's needs in it
+  already; `docs/protocols.md` and its
   test against the globals announced; `scripts/test-check.sh`.
 - **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna as in sway, without
   changing their repositories; both tests run in `check.sh`.
