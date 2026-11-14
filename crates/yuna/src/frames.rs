@@ -4,9 +4,9 @@
 //! A commit of a surface shown on an output, or a change of the layout, arms that output's next
 //! refresh; nothing is armed otherwise. The refresh is due at once when the output is idle: no
 //! frame waits for its refresh, and one could begin now: at a fixed rate, the boundary after its
-//! last refresh has passed; under VRR, the panel can start a refresh now, a shortest refresh
-//! after the last one, drawn or not
-//! ([ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+//! last refresh has passed; under VRR, the panel can start a refresh a vertical blank from now,
+//! and, with nothing new to draw, a shortest refresh after the last one
+//! ([ADR-0050](../../../docs/adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)).
 //! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
 //! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
 //! whose time minus the lead is not yet past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
@@ -78,34 +78,56 @@ impl State {
         self.layout_dirty = true;
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
-            self.schedule_refresh(id);
+            self.schedule_refresh_for_content(id);
         }
+    }
+
+    /// Arms `output`'s next refresh for something new to draw: under VRR, unpaced, and sooner
+    /// than a refresh armed already for nothing new.
+    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId) {
+        if let Some(index) = self.output_index(output) {
+            self.outputs[index].content_pending = true;
+        }
+        self.schedule_refresh(output);
     }
 
     /// Arms `output`'s next refresh, unless it is armed already: at once when the output is
     /// idle, else at the boundary it aims at minus its lead. See the module's documentation.
+    /// Under VRR, a refresh armed for nothing new is paced; something new that comes before it
+    /// arms it again, sooner.
     pub(crate) fn schedule_refresh(&mut self, output: OutputId) {
         let deadline = Deadline::Refresh(output);
-        if self.clock.is_armed(deadline) {
-            return;
-        }
         let now = self.clock.now();
         let Some(index) = self.output_index(output) else {
             return;
         };
         let output = &mut self.outputs[index];
+        let paced = !output.content_pending;
+        if self.clock.is_armed(deadline) && (paced || output.armed_for_content) {
+            return;
+        }
         // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
         // may start a refresh now: no frame waits for its own.
-        let idle = output.timing.is_idle(now, output.last_refresh);
+        let idle = output.timing.is_idle(now, output.last_refresh, paced);
         let (at, aimed) = if idle {
-            (now, output.timing.reachable(now, output.last_refresh))
+            (
+                now,
+                output.timing.reachable(now, output.last_refresh, paced),
+            )
         } else {
             let lead = output.drawings.lead(now, output.mode.period());
-            let aimed = output
-                .timing
-                .reachable(now.saturating_add(lead), output.last_refresh);
+            let aimed =
+                output
+                    .timing
+                    .reachable(now.saturating_add(lead), output.last_refresh, paced);
             (aimed.at.saturating_sub(lead), aimed)
         };
+        if self.clock.is_armed(deadline) && output.armed_at <= at {
+            // The refresh armed for nothing new comes first already: it draws the new content.
+            output.armed_for_content = true;
+            return;
+        }
+        output.armed_for_content = !paced;
         output.armed_refresh = aimed;
         output.armed_at = at;
         output.armed_at_once = idle;
@@ -134,7 +156,11 @@ impl State {
             return;
         }
         if let Some(output) = shown_on {
-            self.schedule_refresh(output);
+            if std::mem::take(&mut self.committed_content) {
+                self.schedule_refresh_for_content(output);
+            } else {
+                self.schedule_refresh(output);
+            }
         } else if unseen {
             discard_presentation_feedback(root);
             if waits_for_frame(root) {
@@ -161,6 +187,9 @@ impl State {
         let Some(index) = self.output_index(output) else {
             return;
         };
+        // What waited is drawn now, or found unchanged.
+        self.outputs[index].content_pending = false;
+        self.outputs[index].armed_for_content = false;
         let shown = self.shown(index);
         let drawing = self.draw(index, &shown);
         let now = self.clock.now();

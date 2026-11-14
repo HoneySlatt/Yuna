@@ -26,7 +26,8 @@ use smithay::utils::ClockSource;
 use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorClientState, CompositorHandler, CompositorState, get_parent, get_role,
+    CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, get_parent,
+    get_role, with_states,
 };
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
@@ -133,6 +134,8 @@ pub(crate) struct State {
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     /// The next agent's capture's ticket: tickets increase and are never reused.
     pub next_capture_ticket: u64,
+    /// Whether the commit being handled brought a buffer or damage: something new to draw.
+    pub committed_content: bool,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
 }
@@ -204,6 +207,7 @@ impl State {
             pending_captures: Vec::new(),
             captured: Vec::new(),
             next_capture_ticket: 1,
+            committed_content: false,
             colour: {
                 crate::colour::protocol::manager_global(dh);
                 ColourState::new()
@@ -299,6 +303,12 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
+        // Read before the buffer handler takes them: a buffer or damage is something new to draw.
+        self.committed_content = with_states(surface, |states| {
+            let mut attributes = states.cached_state.get::<SurfaceAttributes>();
+            let current = attributes.current();
+            current.buffer.is_some() || !current.damage.is_empty()
+        });
         on_commit_buffer_handler::<State>(surface);
         let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);

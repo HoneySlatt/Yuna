@@ -14,6 +14,9 @@ use crate::{BLUE, RED, assert_rests, run_armed_deadlines};
 
 /// 1/240 s, the range's shortest refresh, to the nanosecond below.
 const SHORTEST: Duration = Duration::from_nanos(4_166_666);
+/// The vertical blank, the least time between a frame ready and its showing: 269 of 2,429
+/// lines of the shortest refresh, as the owner's monitor's mode (`vrr.rs`).
+const BLANK: Duration = Duration::from_nanos(461_438);
 
 fn compositor(vrr: bool) -> Compositor {
     let mut mode = OutputMode::new(1920, 1080, 240.0, 1.0).expect("a mode");
@@ -168,10 +171,10 @@ fn a_client_tells_vrr_from_a_fixed_rate_by_its_presentation_times() {
     );
 }
 
-/// After a pause, a frame is shown at once, and its refresh number counts the panel's own
-/// refreshes meanwhile, one every 1/48 s, though none woke Yuna.
+/// After a pause, a frame is shown a vertical blank after it is ready, and its refresh number
+/// counts the panel's own refreshes meanwhile, one every 1/48 s, though none woke Yuna.
 #[test]
-fn after_a_pause_a_frame_is_shown_at_once_and_counts_the_panels_own_refreshes() {
+fn after_a_pause_a_frame_is_shown_a_blank_later_and_counts_the_panels_own_refreshes() {
     let mut compositor = compositor(true);
     let mut client = Client::connect(&mut compositor);
     let window = mapped(&mut compositor, &mut client);
@@ -196,7 +199,7 @@ fn after_a_pause_a_frame_is_shown_at_once_and_counts_the_panels_own_refreshes() 
     client.roundtrip(&mut compositor);
     let shown = presented(&client.window(window).feedback);
     let (before, after) = (shown[shown.len() - 2], shown[shown.len() - 1]);
-    assert_eq!(after.0, ready);
+    assert_eq!(after.0, ready + BLANK);
     assert_eq!(after.1 - before.1, 1 + 48);
     run_armed_deadlines(&mut compositor);
     assert_rests(&mut compositor);
@@ -250,6 +253,40 @@ fn callbacks_asked_without_damage_come_at_most_once_a_shortest_refresh() {
         "{answered_at:?}"
     );
     assert_eq!(compositor.counters().frames_drawn, drawn);
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A refresh that drew nothing paces callbacks, never the next real frame: a frame committed
+/// just after one is shown a vertical blank after it is ready, as the monitor would show it.
+#[test]
+fn a_frame_after_a_refresh_that_drew_nothing_is_not_held_back() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    // A callback asked without damage: answered by a refresh that draws nothing.
+    let answered = client.window(window).frames.len();
+    client.request_frame(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.window(window).frames.len(), answered + 1);
+    let drawn = compositor.counters().frames_drawn;
+
+    let ready = compositor.now();
+    client.attach(window, 400, 300, BLUE);
+    client.request_feedback(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    assert_eq!(compositor.counters().frames_drawn, drawn + 1);
+    let shown = presented(&client.window(window).feedback);
+    assert_eq!(shown.last().map(|(time, _)| *time), Some(ready + BLANK));
     run_armed_deadlines(&mut compositor);
     assert_rests(&mut compositor);
 }

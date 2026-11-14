@@ -223,6 +223,11 @@ pub(crate) struct VirtualOutput {
     pub armed_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,
+    /// Whether something new waits to be drawn: a commit with a buffer or damage, or a change of
+    /// the layout. Under VRR, a refresh with nothing new is paced; one with something is not.
+    pub content_pending: bool,
+    /// Whether the armed refresh was armed for something new, unpaced.
+    pub armed_for_content: bool,
     /// The latest refresh a refresh of it aimed at or was presented at; refresh 0, its
     /// creation, at first.
     pub last_refresh: RefreshAt,
@@ -337,6 +342,8 @@ impl State {
             armed_refresh: creation,
             armed_at: Duration::ZERO,
             armed_at_once: false,
+            content_pending: false,
+            armed_for_content: false,
             last_refresh: creation,
             held_feedback: Vec::new(),
             drawings: Drawings::default(),
@@ -481,8 +488,11 @@ pub(crate) enum Timing {
 
 impl Timing {
     /// The first refresh a frame ready at `ready` can show at, after the output's `last`: at a
-    /// fixed rate, the first boundary at or after it; under VRR, the panel's answer.
-    pub fn reachable(&self, ready: Duration, last: RefreshAt) -> RefreshAt {
+    /// fixed rate, the first boundary at or after it; under VRR, the panel's answer. With
+    /// `paced`, for a refresh with nothing new to draw, not before a shortest refresh after
+    /// `last` either: the panel never learns of a refresh that drew nothing, and callbacks asked
+    /// without damage must come once a shortest refresh, never in a loop.
+    pub fn reachable(&self, ready: Duration, last: RefreshAt, paced: bool) -> RefreshAt {
         match self {
             Timing::Fixed(boundaries) => {
                 let seq = boundaries.first_at_or_after(ready).max(last.seq + 1);
@@ -492,11 +502,13 @@ impl Timing {
                 }
             }
             Timing::Variable(panel) => {
-                // A refresh that drew nothing showed no new frame, and the panel never learnt
-                // of it; it still counts as a refresh of the shortest length, so that callbacks
-                // asked without damage come once a shortest refresh, never in a loop.
-                let after_last = last.at.saturating_add(panel.shortest());
-                let (seq, at) = panel.first_reachable(ready.max(after_last));
+                let ready = if paced {
+                    let after_last = last.at.saturating_add(panel.shortest());
+                    ready.max(after_last.saturating_sub(panel.blank()))
+                } else {
+                    ready
+                };
+                let (seq, at) = panel.first_reachable(ready);
                 RefreshAt {
                     seq: seq.max(last.seq + 1),
                     at,
@@ -505,18 +517,21 @@ impl Timing {
         }
     }
 
-    /// Whether a frame drawn at `now` shows at once: the output is idle.
-    pub fn is_idle(&self, now: Duration, last: RefreshAt) -> bool {
+    /// Whether a frame drawn at `now` shows at once: the output is idle. Under VRR, a frame
+    /// shows a vertical blank after it is ready at the soonest.
+    pub fn is_idle(&self, now: Duration, last: RefreshAt, paced: bool) -> bool {
         match self {
             Timing::Fixed(boundaries) => now >= boundaries.at(last.seq + 1),
-            Timing::Variable(_) => self.reachable(now, last).at == now,
+            Timing::Variable(panel) => {
+                self.reachable(now, last, paced).at == now.saturating_add(panel.blank())
+            }
         }
     }
 
     /// Where a frame whose drawing ended at `ready` is presented, never before the refresh it
     /// aimed at: an earlier one is the frame before's. A VRR panel records it.
     pub fn present(&mut self, ready: Duration, aimed: RefreshAt, last: RefreshAt) -> RefreshAt {
-        let reached = self.reachable(ready, last);
+        let reached = self.reachable(ready, last, false);
         let presented = if reached.seq < aimed.seq {
             aimed
         } else {
