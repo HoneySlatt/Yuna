@@ -117,13 +117,10 @@ milestone first needs it.
   positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
   versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
   `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
-- **Where it stands** (2026-11-14). D1 to D6 are done, checked and reviewed; the closing
-  review's findings are fixed. The first trace showed that late frames under BTR wait longer
-  on the monitor than ADR-0045 says; the owner chose to model them before closing. Next: a
-  second trace, of deliberate probes (late and early frames, gaps, changes of rate), on a
-  quiet machine; the driver's flip path read; the model and a replay of every frame, with a
-  tolerance from the trace's jitter; then ADR-0045 amended. Also then: under VRR, a refresh
-  that drew nothing delays the next real frame up to 1/240 s (since B1's fix), to remove.
+- **Where it stands** (2026-11-14). D1 to D6 are done, checked and reviewed. A second trace of
+  probes, on a quiet machine, showed the panel's rules; the emulation follows them and replays
+  both traces, every frame ([ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md));
+  what it does not reproduce is debt for Stage 4 ([debt](debt.md#vrr)).
 - **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads
   the colour description mpv's surface sent (Aerith's once its relay passes colours on).
 - **Measured.** Presentation times against the emulated range, and against the monitor's trace.

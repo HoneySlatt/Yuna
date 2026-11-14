@@ -94,6 +94,12 @@ that rests on it is reopened in an ADR.
   refreshes of equal, fixed length near the range's middle, with hysteresis; at 48–240 Hz, a
   24 fps film gets 3 refreshes of 13.9 ms. Ranges under 2× take `apply_fixed_refresh`, which
   holds the top rate after five slow frames. KMS exposes only a `VRR_ENABLED` boolean.
+- In amdgpu's display code (Linux `e0d8e8de`, 2026-11-08, the same in 7.3): BTR's flip
+  timestamp is taken in the commit's plane loop; its writes of the refresh's range are deferred
+  from the vertical-update interrupt to a worker that takes the lock the flip holds; after five
+  flips close to a vertical update, a workaround holds the top rate and skips BTR; the commit
+  waits in 1 ms steps while the CRTC is in its blank. A flip event's time is the next active
+  area's start.
 - Under VRR, KWin, Mutter, niri and gamescope aim a frame at the last presentation plus 1/max and
   report the page flip's time; KWin and gamescope hold cursor-only updates, Mutter coalesces at
   30 Hz, gamescope can hold the Steam interface at its rate; none limits how fast the rate

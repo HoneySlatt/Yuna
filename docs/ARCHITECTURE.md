@@ -310,24 +310,30 @@ yet.
 
 ### VRR outputs
 
-An output created with a VRR range ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md))
-emulates amdgpu driving a DisplayPort Adaptive-Sync monitor:
+An output created with a VRR range ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)) emulates amdgpu driving a
+DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
 
+- A frame shows a vertical blank after it is ready at the soonest: 269 of 2,429 lines of the
+  shortest refresh, the owner's mode's, 461 µs at 240 Hz.
 - A refresh lasts at least 1/max and at most 1/min. A frame ready sooner than 1/max after the
-  refresh in progress began waits; a later one starts a refresh at once.
-- With no new frame, the panel refreshes by itself every 1/min. Below the range, BTR, freesync.c's
-  rule, shows each frame `n` times, in refreshes of a fixed length chosen from the time between
-  the last two frames; a frame ready during one of them waits for its end.
+  refresh in progress began waits; a later one starts a refresh at once. With no new frame, the
+  panel refreshes by itself every 1/min.
+- Below the range, BTR, freesync.c's rule, shows each frame `n` times; the first `n − 1`
+  refreshes have a fixed length, chosen from the time between the last two frames, and a frame
+  ready during one of them shows at its end; the last is variable again.
 - None of these refreshes is a timer: the panel computes them when a frame asks when it would
   show. An output at rest wakes nothing.
 - The frame loop is the same as at a fixed rate: at once when a refresh could begin now, else
-  at the refresh the frame can reach minus the lead. `seq` counts every refresh, the panel's own
-  included; `wp_presentation` version 2 is told 1/max as the refresh, version 1 zero.
+  at the refresh the frame can reach minus the lead. A refresh with nothing new to draw, which
+  answers callbacks asked without damage, comes at most once a shortest refresh; a commit with a
+  buffer or damage, or a change of the layout, is never held back by it (`content_pending`).
+- `seq` counts every refresh, the panel's own included; `wp_presentation` version 2 is told
+  1/max as the refresh, version 1 zero.
 - The range is at least twice as wide as its least rate; a narrower one takes a path of the
   driver Yuna does not emulate.
-- A test replays a trace of the owner's monitor (`tests/fixtures/vrr-trace-pg32ucdm.txt`):
-  frames on time match it; late frames under BTR wait longer on the monitor, a gap being
-  modelled from a second trace ([debt](debt.md#vrr)).
+- A test replays both traces, every frame (`tests/fixtures/`): what the emulation does not
+  reproduce is in the [debt](debt.md#vrr).
 
 ### A frame
 

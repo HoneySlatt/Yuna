@@ -53,8 +53,9 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035; supersedes 0027; amended by 0044 |
 | [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |
 | [0044](0044-the-fork-over-https-a-branch-per-base.md) | The fork over HTTPS, a branch per base | Accepted; amends 0021 |
-| [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) | Emulated VRR: amdgpu's rule, checked against the owner's monitor | Accepted; amends 0023, 0031 |
+| [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) | Emulated VRR: amdgpu's rule, checked against the owner's monitor | Accepted; amends 0023, 0031; amended by 0050 |
 | [0046](0046-color-management-v1-kwins-list.md) | `color-management-v1`: Yuna's own handler, KWin's list | Accepted |
 | [0047](0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md) | HDR virtual outputs: PQ announced, drawn at Stage 5 | Accepted |
 | [0048](0048-vrr-and-hdr-outputs-through-mcp.md) | VRR and HDR outputs through MCP, and surfaces' colours read | Accepted; amends 0033 |
 | [0049](0049-mpv-in-the-applications-tests.md) | mpv in the applications' tests | Accepted; amends 0025 |
+| [0050](0050-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0045 |
