@@ -224,3 +224,15 @@ with games' VRR:
   not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.
+
+## Motion
+
+- While a special workspace fades out, `Motion::update` asks the layout where each of its
+  windows is, a search of the seat's workspaces each: the cost grows with the square of the
+  windows for that time. A lookup by window in `yuna-layout` would make it linear.
+- A workspace that leaves its output while a switch shows it (an empty one the layout removes,
+  one moved to another output) closes up the switch: the workspace beside it shows at once. So
+  does leaving, with dynamic workspaces, a workspace whose last window just closed: it is gone
+  before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
+  as an empty slot until the switch ends would let it slide.
+- A second special workspace shown while the first fades out replaces it at once.

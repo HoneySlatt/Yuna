@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use yuna_layout::geometry::{Rect, Scale};
+use yuna_layout::geometry::{EPSILON, Rect, Scale};
 use yuna_layout::{
     ColumnId, Layer, Layout, OutputId, Placed, ShownWorkspaces, WindowId, WorkspaceId,
 };
@@ -786,14 +786,17 @@ fn focused_column(arranged: &[Placed], workspace: WorkspaceId) -> Option<ColumnI
         .and_then(|placed| placed.column)
 }
 
-/// How far `workspace`'s strip moved under the view in an update: the move of its anchor, a
-/// column there before and after, along the strip
+/// How far `workspace`'s strip moved under the view in an update: the move along the strip of
+/// its anchor, a column there before and after
 /// ([ADR-0052](../../../../docs/adr/0052-motion-in-a-pure-crate.md)).
 ///
-/// The anchor is the focused column after the update, `focus`, if it was there before; else the
-/// focused column before, if it is there after; else there is none, and the shift is 0. A column's
-/// position is its left edge plus the view: `rect.x + view_x`, the working area's left edge plus
-/// its strip position, which the layout changes only when the column moves along the strip.
+/// The anchor is a column that the update left in place on screen: the focused one after the
+/// update, `focus`, or before it, or else the one nearest the focused one. Shifting by its move
+/// keeps the camera still, so that what the operation left in place does not move, whatever the
+/// springs of the camera and of the windows. When no column stayed in place (the view moved to
+/// another column), the anchor is the focused column after the update if it was there before,
+/// else the focused column before if it is there after; with neither, the shift is 0. A column's
+/// position on the strip is its left edge plus the view: `rect.x + view_x`.
 fn anchor_shift(
     before: &[&Placed],
     after: &[Placed],
@@ -804,10 +807,33 @@ fn anchor_shift(
 ) -> f64 {
     let before_x = |column| column_left(before.iter().copied(), workspace, column);
     let after_x = |column| column_left(after.iter(), workspace, column);
-    [focus, old.focused_column]
-        .into_iter()
-        .flatten()
-        .find_map(|column| Some((after_x(column)? + view_x) - (before_x(column)? + old.view_x)))
+    let shift = |column| Some((after_x(column)? + view_x) - (before_x(column)? + old.view_x));
+    let in_place = |column: &ColumnId| match (before_x(*column), after_x(*column)) {
+        (Some(before), Some(after)) => (after - before).abs() < EPSILON,
+        _ => false,
+    };
+    let preferred = [focus, old.focused_column].into_iter().flatten();
+    let focus_x = focus.and_then(after_x);
+    let mut columns: Vec<ColumnId> = after
+        .iter()
+        .filter(|placed| placed.workspace == workspace)
+        .filter_map(|placed| placed.column)
+        .collect();
+    columns.sort_unstable();
+    columns.dedup();
+    let nearest = focus_x.and_then(|focus_x| {
+        columns.iter().copied().filter(in_place).min_by(|a, b| {
+            let distance = |column| after_x(column).map_or(f64::INFINITY, |x| (x - focus_x).abs());
+            distance(*a).total_cmp(&distance(*b))
+        })
+    });
+    preferred
+        .clone()
+        .filter(in_place)
+        .chain(nearest)
+        .chain(columns.iter().copied().filter(in_place))
+        .find_map(shift)
+        .or_else(|| preferred.into_iter().find_map(shift))
         .unwrap_or(0.0)
 }
 

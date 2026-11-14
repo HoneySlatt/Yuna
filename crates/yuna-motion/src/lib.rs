@@ -124,9 +124,12 @@
 //! widens or closes shifts every column on its right, and the view by as much, so that they stay
 //! on screen. The camera is first moved by the same shift, keeping its velocity, so that it
 //! keeps looking at the same columns; then it moves toward the new view. The shift is read from
-//! an anchor, a column there before and after: the focused column after the change, if it was
-//! there before; else the one focused before, if it is there after; else there is no anchor, and
-//! no shift. A focused column is the column of the strip's window that has the seat's focus,
+//! an anchor, a column there before and after that the change left in place on screen: the
+//! focused one, else the one nearest it. The camera then stays still, so that what the change
+//! left in place does not move, whatever the springs of the camera and of the windows. When no
+//! column stayed in place, as when the view moves to another column, the anchor is the focused
+//! column after the change, if it was there before; else the one focused before, if it is there
+//! after; else there is no anchor, and no shift. A focused column is the column of the strip's window that has the seat's focus,
 //! kept while the focus is elsewhere. Whatever the camera does not take up, the offsets do: the
 //! split between them decides how things move, never whether they jump.
 //!
@@ -187,9 +190,6 @@
 //!
 //! ## Limits
 //!
-//! - The layout gives out neither its seats nor its outputs' scales, so [`Motion::update`] takes
-//!   the outputs to follow with their scales, and rounds as the layout's own `Scale::snap`
-//!   does, which it does not export either.
 //! - A workspace sliding out of a switch, or fading out, keeps its camera as it was: the layout
 //!   gives no view for a workspace it does not show. If the layout moves that view meanwhile,
 //!   the windows whose places change reach them on their offsets.

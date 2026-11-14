@@ -9,9 +9,11 @@
 //!   floating and tiled within one workspace, or pinned), its fullscreen unchanged and its
 //!   workspace's too, is drawn with its corner at the same place, to 1e-6; its size may jump
 //!   ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)). One exception: when a
-//!   workspace leaves the output during a switch, the switch's stack closes up, and if it filled
-//!   the view, the workspaces beside it cannot all keep their places; at such an update, the
-//!   main workspaces' windows are not checked, the special and pinned ones are;
+//!   workspace leaves the output during a switch (one starting or one drawn), the switch's stack
+//!   closes up, and if it filled the view, the workspaces beside it cannot all keep their places;
+//!   at such an update, the main workspaces' windows are not checked, the special and pinned ones
+//!   are. A window that vanishes at an update is not checked: closing, or moving to a workspace
+//!   not shown, takes it away at once;
 //! - at rest, from the end the motion gives on, the frame is exactly the layout's arrangement,
 //!   and the end is then `None`;
 //! - every window whose place overlaps its output is told it is visible.
@@ -615,6 +617,12 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
                     .keys()
                     .map(|&output| (output, workspaces_of(&world.layout, output)))
                     .collect();
+                let shown_before: HashMap<OutputId, _> = before
+                    .keys()
+                    .filter_map(|&output| {
+                        Some((output, world.layout.shown_workspaces(output).ok()?))
+                    })
+                    .collect();
                 world.apply(op);
                 world.update(*change);
                 let after = world.frames(world.now);
@@ -628,7 +636,21 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
                                 .map(|&(workspace, _)| workspace)
                                 .collect();
                             let now_there = workspaces_of(&world.layout, *output);
-                            if !workspaces[output].is_subset(&now_there) {
+                            let switching = shown_before.get(output).is_some_and(|shown| {
+                                let main_changed = world
+                                    .layout
+                                    .shown_workspaces(*output)
+                                    .is_ok_and(|now| now.main.id != shown.main.id);
+                                let mains_drawn: HashSet<WorkspaceId> = was
+                                    .windows
+                                    .iter()
+                                    .filter(|d| d.placed.layer != Layer::Pinned)
+                                    .filter(|d| Some(d.workspace) != shown.special.map(|v| v.id))
+                                    .map(|d| d.workspace)
+                                    .collect();
+                                main_changed || mains_drawn.len() > 1
+                            });
+                            if switching && !workspaces[output].is_subset(&now_there) {
                                 exempt.extend(&workspaces[output]);
                                 exempt.extend(now_there);
                             }

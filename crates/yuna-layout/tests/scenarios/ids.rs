@@ -555,3 +555,20 @@ fn a_special_workspace_keeps_its_id_hidden_shown_again_and_on_another_output() {
     assert_eq!(column(&m, 1), column_before);
     m.check();
 }
+
+#[test]
+fn the_layout_gives_out_its_seats_and_its_outputs_scales() {
+    let mut m = Model::new();
+    m.ok(|l| l.add_output(OWNER, SIDE, output(1920.0, 2880, 1620, 1.5)));
+    assert_eq!(m.layout.seats(), vec![OWNER]);
+    assert_eq!(m.layout.output_scale(MAIN).unwrap().get(), 1.0);
+    assert_eq!(m.layout.output_scale(SIDE).unwrap().get(), 1.5);
+    assert_eq!(
+        m.layout.output_scale(OutputId(99)),
+        Err(LayoutError::UnknownOutput(OutputId(99)))
+    );
+    m.ok(|l| l.remove_output(SIDE));
+    m.ok(|l| l.remove_output(MAIN));
+    m.ok(|l| l.remove_seat(OWNER));
+    assert!(m.layout.seats().is_empty());
+}
