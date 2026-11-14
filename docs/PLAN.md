@@ -11,14 +11,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 - The design session ran on 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
   [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar.
-- M1.1 to M1.4 are done (2026-11-11 and 12), with [ADR-0016](adr/0016-the-rust-toolchain.md)
-  to [ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md).
-- A design study on 2026-11-13, at the owner's request: Yuna leaves Smithay step by step, keeps
-  wayland-rs, and decides Vulkan on a prototype's figures
-  ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
-  [ADR-0042](adr/0042-main-on-smithays-fork.md)). It changes M1.6, M1.8 and M1.9.
-- [M1.5](#m15--agents-control) is done (2026-11-13): ADR-0031 to ADR-0035, ADR-0037, ADR-0038,
-  ADR-0043. Next: M1.6, on the owner's go.
+- M1.1 to M1.5 are done (2026-11-11 to 13), with ADR-0016 to ADR-0038 and ADR-0043.
+- A design study on 2026-11-13: Yuna leaves Smithay step by step, keeps wayland-rs, and decides
+  Vulkan on a prototype's figures ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
+  [ADR-0042](adr/0042-main-on-smithays-fork.md)).
+- [M1.6](#m16--emulated-vrr-and-hdr) is under way: designed with the owner on 2026-11-14
+  (ADR-0044 to ADR-0049).
 
 ## Status
 
@@ -29,7 +27,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
-| [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
+| [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | In progress |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
@@ -96,69 +94,32 @@ milestone first needs it.
 
 - **Goal.** An agent drives an application through Yuna's MCP server, on a seat of its own
   ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Design.** Decided with the owner on 2026-11-13: frames ahead of their boundary
-  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md),
-  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)); `yuna mcp`, a private Yuna on stdio
-  with its own MCP layer ([ADR-0033](adr/0033-the-mcp-server.md)); captures
-  ([ADR-0034](adr/0034-captures.md)); seats ([ADR-0035](adr/0035-agents-seats.md)).
-- **Steps.** C1: frames ahead. C2: `yuna mcp`, `outputs`, `spawn`, `windows`, `clock`. C3:
-  seats, input, `cursor-shape`, drag and drop. C4: captures. C5: `text-input-v3`, the owner's
-  peek, the done-when story, the rest of `vkcube` and `window`, the measures. All done.
-- **Delivers.** The MCP server: outputs and workspaces created and removed, programs started, windows
-  captured (`ext-image-copy-capture-v1` inside), pointer and keyboard input on the agent's seat,
-  presentation times read, the clock stepped; `cursor-shape` and `text-input-v3`, moved from M1.4
-  so that input tests them. One seat per agent; a test that an agent's input never
-  reaches another seat. The layout model arranges a workspace not shown, for the owner's peek
-  ([ADR-0020](adr/0020-the-layout-models-shape.md)).
-- **Done when.** An agent, through MCP alone, opens one of SlimeEngine's examples (uwui's once it has
-  some, [ADR-0025](adr/0025-applications-in-ci.md)), types, clicks and checks
-  the result by capture. `vkcube`, paused by its space key, and SlimeEngine's `window` rest with
-  their window open, or the reason one cannot is written
-  ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
-- **Measured.** An MCP call's time; a capture's time on a 4K output; frames missed against their
-  lead, on the real clock ([measurements](measurements.md)).
-- **C1, frames ahead.** Done on 2026-11-13: Mutter's rule, at once when the output is idle, else at
-  the boundary minus a lead measured per output, at most a period; feedback sent at its
-  boundary. Eight stories pin it, the cadence of a steady client among them. On llvmpipe at
-  1080p and 240 Hz, 0.4 to 0.9 % of frames missed, the lead at its cap; at 4K every frame late,
-  as before ([measurements](measurements.md)).
-- **C2, `yuna mcp`.** Done on 2026-11-13: both revisions; `outputs`, `spawn`, `windows`,
-  `clock`, with the challenge's bounds. Not run with a real MCP client yet
-  ([debt](debt.md#the-mcp-server)).
-- **C3, seats.** Done on 2026-11-13, its tools, input, keyboard and closing decided with the
-  owner ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)): `seat`, `workspaces`,
-  `pointer`, `keyboard`; a socket per seat; popup grabs and drags from a press; the test that
-  no input crosses seats. Alacritty is clicked and typed into through MCP alone. A checker's
-  eight findings are fixed or written as debt.
-- **C4, captures.** Done on 2026-11-13, decided with the owner
-  ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)): `capture` of an output, a
-  region or a window, its mapping and an id `pointer` takes; `ext-image-copy-capture-v1` on each
-  client's own seat. Run with Alacritty and grim; not yet measured ([debt](debt.md#captures)).
-  A checker's twelve findings are fixed or written as debt.
-- **C5, text, peek, story, measures.** Done on 2026-11-13, decided with the owner
-  ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): Yuna is the input
-  method of agents' seats, `keyboard preedit` and `get`; `Layout::arrange_workspace`, the
-  peek. `vkcube` paused and SlimeEngine's `editor` rest with their windows open; `window`
-  cannot, by its design. The story passes in the weekly job, and Claude Code ran it through
-  MCP alone. Presentation times are read through captures alone ([debt](debt.md#the-mcp-server)).
-  A call takes about 60 µs; a 4K capture holds the main thread 4 ms on the GPU,
-  47 ms on llvmpipe, which costs frames ([measurements](measurements.md), [debt](debt.md#captures)).
-- **Result.** Done on 2026-11-13. The closing review found three blocking defects, a NUL in
-  text or a key name that ended `yuna mcp` and a property of the peek that failed one run in
-  twenty, and six to fix; all are fixed with their tests, or written as debt.
+- **Result.** Done on 2026-11-13, decided with the owner in ADR-0031 to ADR-0035, ADR-0037,
+  ADR-0038 and ADR-0043. Frames drawn ahead of their boundary; `yuna mcp` with its tools:
+  outputs, workspaces, programs, windows, captures, pointer and keyboard on the agent's own
+  seat and socket, the clock, text input; the owner's peek. An agent, through MCP alone, opens
+  SlimeEngine's `editor`, types, clicks and checks by capture; `vkcube` paused and `editor` rest
+  with their windows open, `window` cannot by its design. A call takes about 60 µs; a 4K capture
+  holds the main thread 4 ms on the GPU, 47 ms on llvmpipe ([measurements](measurements.md),
+  [debt](debt.md#captures)). The closing review's findings are fixed or written as debt.
 
 ### M1.6 — Emulated VRR and HDR
 
 - **Goal.** Virtual outputs behave as the owner's monitor does for VRR and HDR.
-- **Delivers.** First, main on Smithay's fork, seats and outputs filtered per client
-  ([ADR-0042](adr/0042-main-on-smithays-fork.md)). A virtual output's VRR range and its
-  presentation at variable intervals; its HDR capabilities announced through
-  `color-management-v1`, Yuna's first handler of its own on wayland-server
-  ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)), and each surface's colour description
-  recorded for tests to read.
-- **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads the
-  colour description Aerith's or mpv's surface sent.
-- **Measured.** Presentation times against the emulated range.
+- **Design.** Decided with the owner on 2026-11-14: the fork over HTTPS, a branch per base
+  ([ADR-0044](adr/0044-the-fork-over-https-a-branch-per-base.md)); amdgpu's VRR emulated, checked
+  against a trace of the monitor ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md));
+  `color-management-v1` with KWin's list ([ADR-0046](adr/0046-color-management-v1-kwins-list.md));
+  HDR outputs announce PQ, drawn at Stage 5 ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md));
+  `vrr_min`, `hdr` and `colour` through MCP ([ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md));
+  mpv in CI ([ADR-0049](adr/0049-mpv-in-the-applications-tests.md)).
+- **Steps.** D1: main on the fork, seats and outputs filtered per client, saturating
+  positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
+  versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
+  `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
+- **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads
+  the colour description mpv's surface sent (Aerith's once its relay passes colours on).
+- **Measured.** Presentation times against the emulated range, and against the monitor's trace.
 
 ### M1.7 — Animations
 
