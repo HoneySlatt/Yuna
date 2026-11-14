@@ -59,10 +59,10 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0048](0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md) | HDR virtual outputs: PQ announced, drawn at Stage 5 | Accepted |
 | [0049](0049-vrr-and-hdr-outputs-through-mcp.md) | VRR and HDR outputs through MCP, and surfaces' colours read | Accepted; amends 0033 |
 | [0050](0050-mpv-in-the-applications-tests.md) | mpv in the applications' tests | Accepted; amends 0025 |
-| [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046 |
+| [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046; amended by 0054 |
 | [0052](0052-motion-in-a-pure-crate.md) | Motion in a pure crate, the layout's jumps turned into offsets | Accepted; amends 0020 |
 | [0053](0053-springs-in-closed-form-keeping-their-velocity.md) | Springs in closed form, keeping their velocity; curves | Accepted |
-| [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) | Motion sampled at its presentation; what is drawn apart from what a client is told | Accepted; amends 0023, 0033, 0038 |
+| [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) | Motion sampled at its presentation; what is drawn apart from what a client is told | Accepted; amends 0023, 0033, 0038, 0051 |
 | [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033; amended by 0059 |
 | [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) | Motion's budget judged on the GPU, against a still baseline | Accepted |
 | [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004 |

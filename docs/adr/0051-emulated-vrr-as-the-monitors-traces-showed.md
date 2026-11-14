@@ -1,7 +1,9 @@
 # 0051. Emulated VRR, as the monitor's traces showed
 
 - Status: Accepted; amends [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)
-  (the panel's rules, what the replay checks)
+  (the panel's rules, what the replay checks); amended by
+  [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) (a refresh with nothing new
+  during motion)
 - Date: 2026-11-14
 
 ## Context

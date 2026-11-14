@@ -2,7 +2,9 @@
 
 - Status: Accepted; amends [0023](0023-frames-presentation-and-the-clock.md) (frames during
   motion, hidden windows), [0038](0038-captures-coordinates-windows-and-wayland.md) (captures
-  and clicks during motion), [0033](0033-the-mcp-server.md) (windows' drawn rectangles)
+  and clicks during motion), [0033](0033-the-mcp-server.md) (windows' drawn rectangles),
+  [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) (a VRR refresh with nothing new during
+  motion)
 - Date: 2026-11-14
 
 ## Context
@@ -27,6 +29,10 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
 - **While a motion of an output is unfinished at the boundary after the next**, every refresh
   that sampled it arms the next one, whether it drew or found nothing changed, and a refresh whose
   drawing failed too. The last frame shows the target exactly; then nothing is armed.
+- **On a VRR output, a motion's refresh that finds nothing changed shows its frame again**, so that
+  the panel refreshes where the frame loop counts one and the motion keeps the shortest refresh
+  to its end. At rest, such a refresh still flips nothing
+  ([ADR-0051](0051-emulated-vrr-as-the-monitors-traces-showed.md)).
 - **What is drawn follows the motion; what a client is told follows its place.** A window is told
   it is visible (`suspended` cleared, `enter`) when its place enters the output, and hidden only
   when its output's motions have ended with neither its place nor its drawn rectangle on it. A
@@ -53,5 +59,7 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
 
 - During a motion, the pointer's focus may name a window that has slid from under it until the
   pointer moves or the motion ends; a click always reaches what it shows.
+- At Stage 2, the DRM backend commits the unchanged buffer at those refreshes: amdgpu counts a
+  commit of the primary plane with a buffer as a flip (`amdgpu_dm.c`, read on 2026-11-14).
 - A film on a VRR output loses its exact multiples while a motion runs there; Stage 5 runs motion
   at a multiple of the film's rate.
