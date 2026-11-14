@@ -17,6 +17,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
 - [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0045 to ADR-0051. Next:
   M1.7, on the owner's go.
+- A design session on 2026-11-14 drew the line between Yuna and the shell, portals included, and
+  placed each part in the stages ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 
 ## Status
 
@@ -172,9 +174,11 @@ milestone first needs it.
   compositors.
 - Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
   (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
-- Idle built into Yuna rather than swayidle (the owner's idea, 2026-11-12): its own timer, outputs
-  dimmed and turned off, sleep, games, films and `idle-inhibit` keeping it awake, the shell's lock
-  client started ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)); Stage 2's design.
+- The RemoteDesktop and InputCapture portals, for remote control or a mouse shared between
+  machines, once a concrete use asks for them, with consent each session, an indicator and a
+  shortcut that stops them ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- A command that sets one configuration key until the next reload, as `hyprctl keyword` does,
+  beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
 - From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be

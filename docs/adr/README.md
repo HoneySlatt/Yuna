@@ -12,7 +12,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0001](0001-what-yuna-is.md) | What Yuna is: one compositor, two modes | Accepted |
 | [0002](0002-the-headless-mode-first.md) | The headless mode first, then the desktop | Accepted |
 | [0003](0003-a-parallel-project-uwui-first.md) | A parallel project, uwui first on any conflict | Accepted |
-| [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted |
+| [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted; amended by 0057 |
 | [0005](0005-the-layouts.md) | The layouts: scrolling columns, dwindle, floating, special workspaces | Accepted |
 | [0006](0006-machines-and-gpus.md) | Machines and GPUs | Accepted |
 | [0007](0007-surviving-a-crash.md) | Surviving a crash | Accepted |
@@ -60,3 +60,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0049](0049-vrr-and-hdr-outputs-through-mcp.md) | VRR and HDR outputs through MCP, and surfaces' colours read | Accepted; amends 0033 |
 | [0050](0050-mpv-in-the-applications-tests.md) | mpv in the applications' tests | Accepted; amends 0025 |
 | [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046 |
+| [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004 |

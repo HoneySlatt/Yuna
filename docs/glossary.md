@@ -43,6 +43,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   viewport (`wp_viewporter`) to its logical size: one buffer pixel per physical pixel.
 - **Full width**: a column that spans the working area, gaps aside; in dwindle, a window
   maximised over the working area. Umbriel calls it "maximize".
+- **Fullscreen state**: what Yuna tells the shell is fullscreen: a game, a film, plain fullscreen
+  or nothing; the shell decides what follows, such as holding notifications back
+  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Game mode**: the state Yuna enters when a game is fullscreen: effects and animations off,
   notifications silent, VRR in its band.
 - **The games' band**: the high, narrow range of refresh rates Yuna keeps a game's VRR in, by
@@ -79,6 +82,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   an open menu holds them; granted only with a serial its client's own seat sent to its window,
   and only to a popup not dismissed. While it holds, the keyboard stays within its window, and a
   click outside the client's surfaces dismisses it.
+- **Portal**: a D-Bus service an application calls to ask the desktop for something, such as
+  sharing the screen; those that need the compositor are served by `yuna-portal`, a program of
+  its own beside Yuna ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Lead**: how long before a refresh boundary an output starts drawing its frame: its longest
   drawing of the last half second, at least 2 ms, plus 1 ms, at most one period
   ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). An output is **idle** when the
@@ -104,14 +110,23 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
   well-behaved client that joined first; its frame callbacks, at the exact deadline of its frame,
   show that the others did not stop its frames.
+- **Share picker**: the selection Yuna draws when an application asks to share the screen, the same
+  as for captures; choosing is the consent
+  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.
 - **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it
   to hidden windows, to clients whose `xdg_wm_base` version has it (6 and later).
+- **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
+  includes, reloaded live; its format is a public interface
+  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Urgent**: said of a window that asked for the focus and did not get it, because its request
   came without a valid activation token or a fullscreen window held the screen; it stays urgent
   until it gets the focus or closes. Nothing shows it yet.
+- **Variant**: a named set of settings in the configuration, applied over it and switched on
+  command, such as the shell's compact mode
+  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed

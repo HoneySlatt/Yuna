@@ -113,6 +113,7 @@ it is met.
 | Headless backend | Yuna's own code on Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 
@@ -167,6 +168,10 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5 and the right size on every output.
 - Amane on top through standard protocols.
+- What Yuna takes from the shell's tools ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)):
+  idle with dimming and the lock started; the wallpaper; the theme file and variants; the
+  fullscreen state for the shell; `yuna-portal` with screen sharing, screenshots, global shortcuts,
+  inhibition and the wallpaper; the share picker; captures and recording; a night light in SDR.
 - The touchpad's gestures; the configuration live; per-application rules, terminal swallowing;
   input methods (`input-method-v2`).
 - The crash restart and session restore.
@@ -189,7 +194,8 @@ input reaches the owner's seat.
 **Goal.** Games are better on Yuna than on any other compositor.
 
 - VRR in a high band with smoothed changes, its prototype measured with a light sensor.
-- Tearing on request, direct scanout and overlay planes, game mode, shortcuts inhibited.
+- Tearing on request, direct scanout and overlay planes, game mode, shortcuts inhibited; games
+  told apart in the fullscreen state.
 - FSR upscaling of games; virtual outputs for streaming.
 
 **Exit.** The owner's games run with their VRR flicker measured below the bar's figure, and
@@ -200,8 +206,8 @@ latency, frames and upscaling at least as good as gamescope's.
 **Goal.** HDR and colour as reliable as KWin's, or better.
 
 - HDR output, SDR brightness, tone and gamut mapping, ICC profiles.
-- A night light correct under HDR; films at an exact multiple of their rate; no sleep while a video
-  plays.
+- The night light, captures and screen sharing correct under HDR; films at an exact multiple of
+  their rate, and told apart in the fullscreen state; no sleep while a video plays.
 - OLED care: luminance read from the panel, static elements protected from burn-in.
 
 **Exit.** The owner's films and HDR games show correctly, measured against KWin on the same content.
@@ -210,10 +216,11 @@ latency, frames and upscaling at least as good as gamescope's.
 
 **Goal.** The most beautiful desktop, at the lowest cost.
 
-- Blur and glass, animated borders, the built-in effects, exotic open and close animations.
+- Blur and glass, over the wallpaper too, animated borders, the built-in effects, exotic open and
+  close animations; the wallpaper's animated transitions.
 - The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
-  Alt-Tab with previews, screenshots, GPU-encoded recording, a colour picker.
-- Consent before capture; sandboxed applications kept from sensitive protocols.
+  Alt-Tab with previews, the capture tool's polish, a colour picker.
+- Sandboxed applications kept from sensitive protocols.
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.
 
