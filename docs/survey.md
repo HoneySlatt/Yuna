@@ -270,3 +270,107 @@ to [ADR-0042](adr/0042-main-on-smithays-fork.md).
 - **Bindings**: `ash` 0.38 has had no release since 2024-04-01; `jay-ash` regenerates its
   bindings every six hours; `vulkanalia` is maintained; `shaderc-rs` is archived; `naga` is pure
   Rust.
+
+## Wayland protocols: the rivals and the clients
+
+Read on 2026-11-14 from wayland.app's compositor tables and the compositors' own sources: niri
+26.04, KWin 6.8.3, Hyprland 0.57.2, Sway 1.12, Mutter 51 (Mutter from wayland.app and its `main`
+file list only). `Y` offered, `Yn` at version n, `N` not found, `?` unknown, `c` behind an option,
+`*` from wayland.app alone. Private protocols of KDE, Hyprland and GTK, and experimental `xx-`
+drafts, are left out. [ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)
+makes `docs/protocols.md` the list Yuna keeps from this.
+
+| Protocol | Status | What it does | niri | KWin | Hyprland | Sway | Mutter |
+|---|---|---|---|---|---|---|---|
+| wayland | core | Core: compositor, shm, seat, output, data device, subcompositor, fixes | Y | Y | Y | Y | Y* |
+| linux-dmabuf-v1 | stable | Share GPU buffers with clients, with format feedback | Y | Y5 | Y5 | Y | Y5* |
+| presentation-time | stable | Tell clients when a frame was shown | Y | Y2 | Y2 | Y | Y2* |
+| tablet-v2 | stable | Drawing tablets | Y | Y2 | Y1 | Y | Y2* |
+| viewporter | stable | Crop and scale a surface | Y | Y1 | Y1 | Y | Y1* |
+| xdg-shell | stable | Application windows: toplevels and popups | Y | Y6 | Y7 | Y | Y7* |
+| alpha-modifier-v1 | staging | Constant opacity for a surface | N | Y1 | Y1 | Y | N* |
+| color-management-v1 | staging | Colour spaces, HDR, image descriptions | N | Y2 | Y3c | Y2 | Y2* |
+| color-representation-v1 | staging | Pixel format hints: matrix, range, alpha mode | N | Y1 | N | Y | Y1* |
+| commit-timing-v1 | staging | Present a commit at a chosen time | N | Yc | Yc | N | Y1* |
+| content-type-v1 | staging | Hint: video, game, photo | N | Y1 | Y1 | Y1 | N* |
+| cursor-shape-v1 | staging | Client names a cursor shape; compositor draws it | Y | Y2 | Y2 | Y2 | Y2* |
+| drm-lease-v1 | staging | Lend a display to a VR client | Y | Y1 | Y1 | Y | Y1* |
+| ext-background-effect-v1 | staging | Ask for blur behind a surface | Y | Y1 | Y1 | N | Y1* |
+| ext-data-control-v1 | staging | Clipboard managers (read and set selections) | Y | Y1 | Y1 | Y1 | N* |
+| ext-foreign-toplevel-list-v1 | staging | List windows for taskbars (read only) | Y1* | N | Y1 | Y | N* |
+| ext-idle-notify-v1 | staging | Tell a client when the user is idle | Y | Y2 | Y2 | Y | N* |
+| ext-image-capture-source-v1 | staging | Pick what to capture: output or window | N (main: Y) | N | Y | Y1 | N* |
+| ext-image-copy-capture-v1 | staging | Copy a captured source into client buffers | N (main: Y) | N | Y1 | Y1 | N* |
+| ext-session-lock-v1 | staging | Screen lockers | Y | N | Y1 | Y | N* |
+| ext-transient-seat-v1 | staging | Short-lived seats for remote input | N | N | N | Y | N* |
+| ext-workspace-v1 | staging | List and switch workspaces | Y | N | Y1 | N | N* |
+| fifo-v1 | staging | Frame queue: a commit waits for the next refresh (vsync) | N | Y1 | Y1 | N | Y1* |
+| fractional-scale-v1 | staging | Tell a surface its fractional scale | Y | Y1 | Y1 | Y1 | Y1* |
+| linux-drm-syncobj-v1 | staging | Explicit GPU sync with timelines | N | Y1 | Y1 | Y1 | Y1* |
+| pointer-warp-v1 | staging | Client moves the pointer | N | Y1 | Y1 | N | Y1* |
+| security-context-v1 | staging | Sandboxed clients get a restricted socket | Y | Y1 | Y1 | Y | N* |
+| single-pixel-buffer-v1 | staging | One-colour buffers without memory | Y | Y1 | Y1 | Y | Y1* |
+| tearing-control-v1 | staging | Allow tearing (async present) for a surface | N | Y1 | Y1 | Y1 | N* |
+| xdg-activation-v1 | staging | Ask to focus a window with a token | Y | Y1 | Y1 | Y | Y1* |
+| xdg-dialog-v1 | staging | Mark a toplevel as a modal dialog | N | Y1 | Y1 | N | Y1* |
+| xdg-system-bell-v1 | staging | System bell | N | Y1 | Y1 | N | Y1* |
+| xdg-toplevel-drag-v1 | staging | Drag a whole toplevel (tab tear-off) | N | Y1 | N | N | Y1* |
+| xdg-toplevel-icon-v1 | staging | Window icons | N | Y1 | N | N | N* |
+| xdg-toplevel-tag-v1 | staging | Tag a window so placement is remembered | N | Y1 | Y1 | Y1 | Y1* |
+| xwayland-shell-v1 | staging | Pair X11 windows with surfaces (Xwayland) | N | Y | Y1 | ? | N* |
+| fullscreen-shell-unstable-v1 | unstable | Fullscreen shell for kiosks | N | N | N | N | ? |
+| idle-inhibit-unstable-v1 | unstable | Stop idle and screen blanking | Y | Y1 | Y1 | Y | Y1* |
+| input-method-unstable-v1 | unstable | Old input methods and input panel | N | Y | N | N | N* |
+| input-timestamps-unstable-v1 | unstable | High-resolution input timestamps | N | N | N | N | N* |
+| keyboard-shortcuts-inhibit-unstable-v1 | unstable | Let a client take the compositor shortcuts | Y | Y1 | Y1 | Y | Y1* |
+| linux-explicit-synchronization-unstable-v1 | unstable | Old explicit sync with fences (replaced) | N | N | N | N | N* |
+| pointer-constraints-unstable-v1 | unstable | Lock or confine the pointer | Y | Y1 | Y1 | Y | Y1* |
+| pointer-gestures-unstable-v1 | unstable | Swipe, pinch and hold gestures | Y | Y3 | Y3 | Y | Y3* |
+| primary-selection-unstable-v1 | unstable | Middle-click paste selection | Y | Y1 | Y1 | Y | Y1* |
+| relative-pointer-unstable-v1 | unstable | Unaccelerated relative motion | Y | Y1 | Y1 | Y | Y1* |
+| text-input-unstable-v3 | unstable | Text input from IME to client | Y | Y2 | Y1 | Y | Y2* |
+| xdg-decoration-unstable-v1 | unstable | Server-side or client-side title bars | Y | Y2 | Y2 | Y | N* |
+| xdg-foreign-unstable-v2 | unstable | Parent a window to another process's window | Y | Y | Y | Y | Y* |
+| xdg-output-unstable-v1 | unstable | Logical output position, size and name | Y | Y3 | Y3 | Y | Y3* |
+| xwayland-keyboard-grab-unstable-v1 | unstable | X11 keyboard grabs under Xwayland | N | Y | N | ? | Y (main) |
+| input-method-unstable-v2 | unstable | Input methods (IME) | Y | N | Y1 | Y | N* |
+| virtual-keyboard-unstable-v1 | unstable | Fake keyboard input | Y | N | Y1 | Y | N* |
+| wayland-drm | legacy Mesa | Old Mesa buffer sharing (replaced by dmabuf) | Y2* | N | Y2 | N | N* |
+| wlr-data-control-unstable-v1 | wlr | Clipboard managers (wlroots version) | Y | N | Y2 | Y | N* |
+| wlr-export-dmabuf-unstable-v1 | wlr | Old screen capture as dmabuf | N | N | N | Y | N* |
+| wlr-foreign-toplevel-management-unstable-v1 | wlr | List and control windows (taskbars) | Y | N | Y3 | Y | N* |
+| wlr-gamma-control-unstable-v1 | wlr | Set output gamma tables (night light) | Y | N | Y1 | Y1 | N* |
+| wlr-input-inhibitor-unstable-v1 | wlr | Grab all input (old lockers) | N | N | N | N | ? |
+| wlr-layer-shell-unstable-v1 | wlr | Panels, wallpapers, overlays | Y | Y5 | Y5 | Y | N* |
+| wlr-output-management-unstable-v1 | wlr | Configure outputs (modes, scale, position) | Y | N | Y4 | Y | N* |
+| wlr-output-power-management-unstable-v1 | wlr | Turn outputs on and off (DPMS) | N | N | Y1 | Y | N* |
+| wlr-screencopy-unstable-v1 | wlr | Screenshots and screen capture | Y | N | Y3 | Y | N* |
+| wlr-virtual-pointer-unstable-v1 | wlr | Fake pointer input | Y | N | Y2 | Y | N* |
+| xdg-session-management-v1 | staging | Save and restore app windows between sessions | N | Y | N | N | Y (main) |
+| text-input-unstable-v1 | unstable | Old text input (legacy) | N | Y | Y1 | N | ? |
+| xdg-foreign-unstable-v1 | unstable | Old xdg-foreign (replaced by v2) | N | N | N | Y | Y (main) |
+
+What clients bind, read in their sources on 2026-11-14:
+
+- **Mesa's Vulkan WSI** (`wsi_common_wayland.c`, main): `linux-drm-syncobj`, presentation time,
+  `tearing-control`, `fifo-v1`, `commit-timing-v1` (with timestamps on), `color-management`,
+  `linux-dmabuf` v3 or later. Every Vulkan client through Mesa, DXVK and VKD3D included.
+- **SDL3** (`SDL_waylandvideo.c`, main): relative pointer, pointer constraints, keyboard shortcuts
+  inhibit, idle inhibit, activation, fractional scale, cursor shape, and others. Whether it sends
+  `content-type` was not settled.
+- **Wine's `winewayland.drv`** (master): pointer constraints, relative pointer, `wlr-data-control`
+  (not the `ext-` one), text input v3, toplevel icon, pointer warp, colour management. Whether
+  Proton uses it by default is unknown.
+- **Xwayland** (master): `xwayland-shell` (rootless), `tearing-control`, `drm-lease`, relative
+  pointer, pointer constraints, `xwayland-keyboard-grab`, keyboard shortcuts inhibit,
+  `linux-drm-syncobj`.
+- **Flatpak** (main): `security-context-v1`, when built with it.
+- **Chromium**, and so Electron applications such as Discord (not read): session management, idle
+  notify and inhibit, `content-type`, pointer constraints, relative pointer, `xdg-foreign`,
+  toplevel drag, `linux-drm-syncobj`, colour management, and others.
+- **Firefox** (main): idle inhibit, pointer constraints, activation, colour management and
+  representation, session management.
+- **mpv** (master): `content-type`, `single-pixel-buffer`, presentation time, colour management,
+  idle inhibit.
+- **OBS** captures through the ScreenCast portal and PipeWire, not a Wayland protocol.
+- Steam's client and Discord's own code were not read.
