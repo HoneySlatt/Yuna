@@ -146,6 +146,9 @@ pub(crate) struct State {
     pub committed_content: bool,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
+    /// What XWayland's sources noted in this round, for the compositor to act on after it
+    /// (`xwayland/`).
+    pub xwayland_notes: Vec<crate::xwayland::Note>,
 }
 
 impl State {
@@ -223,6 +226,7 @@ impl State {
                 crate::colour::protocol::manager_global(dh);
                 ColourState::new()
             },
+            xwayland_notes: Vec::new(),
         })
     }
 
@@ -259,6 +263,9 @@ pub(crate) struct ClientState {
     /// tests of what a client holding another seat's globals would get
     /// (`Compositor::connect_client_seeing_every_seat`).
     pub sees_every_seat: bool,
+    /// Whether it is its seat's Xwayland: one Wayland client for all of the seat's X11 programs
+    /// ([ADR-0067](../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+    pub xwayland: bool,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -275,6 +282,7 @@ impl ClientState {
             compositor: CompositorClientState::default(),
             seat,
             sees_every_seat,
+            xwayland: false,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
@@ -289,7 +297,7 @@ impl ClientData for ClientState {
     /// display calls this under its own lock, so it only records the client: a call back into
     /// the display would wait for ever.
     fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
-        tracing::debug!(?reason, "a client left");
+        tracing::debug!(?reason, xwayland = self.xwayland, "a client left");
         self.departed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

@@ -32,14 +32,16 @@ One Cargo workspace; its crates live in `crates/`.
   its logs; `serde`, with its derive, and `serde_json` for MCP's messages
   ([ADR-0033](adr/0033-the-mcp-server.md)); `png` for a capture's image
   ([ADR-0034](adr/0034-captures.md)), which builds `miniz_oxide` twice, 0.8 for itself and 0.9
-  for `flate2`; `yuna-layout` and `yuna-motion`. rustix, which Smithay re-exports, makes its
-  system calls: pipes, signals, `waitpid`, `prctl`. Its tests use `wayland-client` and
-  `wayland-protocols`' client side, staging protocols included, proptest, without its default
-  features, and `png` to decode captures.
+  for `flate2`; x11rb's `RustConnection`, the X11 protocol in Rust, for its X11 window manager
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); `yuna-layout` and
+  `yuna-motion`. rustix, which Smithay re-exports, makes its system calls: pipes, sockets,
+  signals, `waitpid`, pidfds, `prctl`. Its tests use `wayland-client` and `wayland-protocols`'
+  client side, staging protocols included, proptest, without its default features, `png` to
+  decode captures, and x11rb for their X11 clients.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
-  own Mesa, loaded, never the host's drivers.
+  own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
 ## The layout model
 
@@ -224,6 +226,10 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   display it opens until the process ends, so that compositors started and dropped on several
   threads, as tests run them, never lose the display Smithay shares among them.
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+- `xwayland/`: each seat's X display, its Xwayland and its X11 window manager,
+  [below](#xwayland): `display.rs`, the display's number, sockets, lock and cookie; `server.rs`,
+  Xwayland's process; `manager.rs`, the manager's thread; `mod.rs`, each display's phases on
+  Yuna's loop.
 - `mcp/`: the MCP server, [below](#the-mcp-server).
 - `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, SIGTERM, and
   SIGCHLD for `yuna mcp`.
@@ -618,7 +624,8 @@ A seat's socket that fails to `accept`, out of descriptors most often, rests 100
 
 Removing a seat (`Compositor::remove_seat`), in order: the keys and buttons it holds are
 released, its popup grab ends, and its focus leaves every surface; those events are sent; its
-socket is removed; its clients are ended and freed, their windows closed; then its outputs, its
+socket is removed, and its X display, its Xwayland ended ([XWayland](#xwayland)); its clients are
+ended and freed, their windows closed; then its outputs, its
 place in the layout, and its `wl_seat` global, disabled now and destroyed later, as a removed
 output's is. A seat's outputs added or removed, or the seat removed, never end another seat's
 motion ([A frame](#a-frame)). Smithay keeps a record of every seat it made: a removed one's
@@ -635,6 +642,78 @@ held for a frame not yet at its boundary is discarded; its two deadlines are dis
 is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
 to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
+
+### XWayland
+
+X11 programs run on Xwayland, an X server that is a Wayland client of Yuna's: one per seat,
+started by the seat's first X11 connection, ended when idle, each behind a cookie of its own
+([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)). It is on in
+`yuna --headless` and `yuna mcp`, off in tests unless one asks (`Config::xwayland`). Xwayland is
+looked for on `PATH` once, when the compositor starts; without it, no seat gets a display, which
+is logged once. X11 windows are not managed yet: each window that asks to be mapped is mapped,
+and Yuna does not draw it.
+
+A seat gets its display with its Wayland socket: the owner's when the compositor listens, an
+agent's in `Compositor::listen_for_seat` (`xwayland/display.rs`).
+
+1. Its number is the first free one from 0, below 1,000 (`MAX_DISPLAYS`). The abstract socket
+   `@/tmp/.X11-unix/X<n>` is bound first: a name taken sends Yuna to the next number, and the
+   kernel frees it when Yuna dies. Then the lock `/tmp/.X<n>-lock`, Yuna's process id written
+   whole then linked to its name: a lock of a process that no longer exists is replaced, a live
+   one or one that cannot be read sends Yuna to the next number. Then, under that lock, the
+   file socket `/tmp/.X11-unix/X<n>`, the folder made sticky and open to every user if missing.
+   What `/tmp` cannot hold, the display goes without, once said: its abstract socket alone
+   serves it, which libxcb tries first. Both sockets listen with a backlog of 128.
+2. Its cookie, 16 bytes of `/dev/urandom`, is in an Xauthority file, one `FamilyWild` entry for
+   the display's number, mode 0600, written to a temporary file then renamed, in a folder of the
+   seat's own, mode 0700, beside its Wayland socket: `<socket>.x11/Xauthority`, in
+   `XDG_RUNTIME_DIR` for the owner's seat, in `yuna mcp`'s folder for an agent's.
+
+Each display then goes through three phases, on Yuna's loop (`xwayland/mod.rs`); none of them
+waits:
+
+1. **Watching.** calloop watches both sockets. The first connection, left in the backlog,
+   starts Xwayland (`xwayland/server.rs`): `Xwayland :<n> -rootless -terminate 10 -wm <fd>
+   -displayfd <fd> -listenfd <fd>… -auth <Xauthority> -nolisten tcp`, its Wayland connection a
+   socket pair whose end Yuna inserts as a client of the seat, marked as its Xwayland in its
+   `ClientState`, with the client scale S, the largest scale among the seat's outputs now, fixed
+   for this Xwayland's life ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+   On llvmpipe, Xwayland also gets `-shm` and `-extension GLX`: Mesa's GLX for Xwayland opens
+   the machine's display device even to draw on the CPU, and the software device touches no GPU.
+   It inherits no descriptor of Yuna's but those it is given, and Yuna's environment without
+   `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY`; its errors go to Yuna's. Yuna stops watching
+   the sockets, which Xwayland accepts on.
+2. **Serving.** Once Xwayland writes its number on `-displayfd`, the manager's thread connects
+   through `-wm` and takes charge, in this order (`xwayland/manager.rs`): XFixes'
+   disconnection mode, without which `-terminate` never fires while the manager is connected;
+   `RESOURCE_MANAGER`, `Xft.dpi` at 96 × S; XSETTINGS, `Xft/DPI` with it; Composite's manual
+   redirection and SubstructureRedirect on the root; `_NET_SUPPORTED` and
+   `_NET_SUPPORTING_WM_CHECK`; `WM_S0` last. Xwayland accepts its clients only once a client
+   owns `WM_S0`, so the first one finds every setting in place. The thread then reads X11's
+   events; what Yuna decides on comes to its loop through a calloop channel, and Yuna's commands
+   go back through a channel the thread reads when its wake-up socket says so. A start that has
+   not reached `WM_S0` within 30 s (`START_TIMEOUT`) is ended.
+3. **Paused.** Only after starts that fail in a row: below.
+
+Xwayland ends itself `-terminate`'s delay after its last X11 client leaves, its manager still
+connected, with status 0. It may also crash or be killed; Yuna ends it, with SIGKILL through its
+pidfd, when its start fails, when its manager fails or its thread panics, when it outlives its
+manager's connection by 5 s (`MANAGER_GRACE`), and with its seat. Its pidfd, which the loop
+watches, reaps it in both modes and in tests: Yuna handles SIGCHLD only in `yuna mcp`, whose
+reaping of every child may take it first, its status then unknown. Its Wayland client goes, its
+manager's thread ends, and the display is watched again. A failure is an Xwayland that ends
+before its manager owns `WM_S0`, or with another status than 0; in `yuna mcp`, an Xwayland whose
+status was taken by the programs' reaping ends unknown, and counts as a failure only before
+`WM_S0` ([debt](debt.md#xwayland)). After a clean end or a first failure, the display is watched
+again at once. Each further failure within 60 s of the one before (`FAILURE_MEMORY`) pauses it:
+1 s, then twice as long each time, up to 30 s (`FIRST_PAUSE`, `LONGEST_PAUSE`). A program that
+connects meanwhile waits in the backlog; at the longest pause, the connections waiting are
+closed, since no Xwayland could serve them and each would start one again. When the compositor
+drops, it ends its Xwaylands and waits until each is reaped, with no time limit, then removes the
+displays' files.
+
+At rest, before the first connection and after Xwayland ends, a seat's display holds two
+sockets and nothing else: no process, no timer, no wake-up.
 
 ### Colours
 
@@ -729,8 +808,9 @@ input is not read. A line over 1 MiB, or an input or output that fails, ends the
 The tools, each but `clock` naming its seat by its handle, an id of another seat's output,
 window or program unknown there:
 
-- `seat` creates a seat, with an output of the mode it gives, else `--output`'s, and a Wayland
-  socket, `seat-<id>` in Yuna's folder; lists the seats; closes one. A manual-clock Yuna holds one
+- `seat` creates a seat, with an output of the mode it gives, else `--output`'s, a Wayland
+  socket, `seat-<id>` in Yuna's folder, and an X display ([XWayland](#xwayland)); lists the
+  seats; closes one. A manual-clock Yuna holds one
   seat at a time.
 - `outputs` lists, creates and removes a seat's outputs; `workspaces` lists them with their
   windows, creates, removes and shows a named one, and moves a window to one. `seat` and
@@ -774,7 +854,8 @@ process that empties its environment and leaves its group and its parents is not
 
 A program gets an environment of its own: from Yuna's, only the variables that find its
 programs, libraries, locale and drivers (`programs::KEPT_VARIABLES`); `WAYLAND_DISPLAY`, its
-seat's socket's full path; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's
+seat's socket's full path; `DISPLAY` and `XAUTHORITY`, its seat's X display and Xauthority
+file, when the seat has one; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's
 session bus nor their sound server is found; then the agent's variables; then `YUNA_SEAT`, its
 seat's id, which the agent's cannot replace. It inherits no descriptor of
 Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
@@ -790,9 +871,11 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 ### The program
 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
-`XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM
-or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
+`XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, then, when Xwayland
+is on `PATH`, `DISPLAY=:<n>` and `XAUTHORITY=<file>`, the owner's seat's X display
+([XWayland](#xwayland)), and runs until SIGTERM or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
 clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
+Both turn XWayland on.
 Both run with animations off, each change shown at once; `--animations` turns them on, with
 `yuna-motion`'s default springs and curve, and `--reduced-motion` turns them on under reduced
 motion, one or the other
@@ -835,7 +918,14 @@ own thread, both `took_us`.
   the refusals, a closed seat, the last 16 ids, images too large. `screencopy.rs` captures
   through `ext-image-copy-capture-v1`, with `capture_client.rs`: both formats, a later frame
   waiting for new content at rest, another seat's output stopped, buffers that do not fit, a
-  removed output, the bound on sessions, a client that leaves with a frame waiting. `mcp.rs` in it drives the MCP
+  removed output, the bound on sessions, a client that leaves with a frame waiting.
+  `xwayland.rs` in it runs the shell's Xwayland, an x11rb client on a thread of its own while
+  the test runs the compositor's loop: no Xwayland before the first connection, which it serves;
+  `Xft.dpi` and XSETTINGS of the largest scale for the first client; a client without the cookie,
+  or with another seat's, refused; Xwayland ended when idle, the manager connected, and again
+  on the next connection; a crash, and a second one in a row paused; a number whose abstract
+  name is taken skipped; no display when XWayland is off or Xwayland is missing; no GPU driver
+  on llvmpipe; and Yuna at rest before and after. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
   not read, a line too long, an input that closes. `motion.rs` in it turns animations on: each

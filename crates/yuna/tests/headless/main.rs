@@ -31,6 +31,7 @@ mod selection_client;
 mod text_input;
 mod vrr;
 mod window_cap;
+mod xwayland;
 
 use std::cell::Cell;
 use std::rc::Rc;

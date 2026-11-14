@@ -22,7 +22,9 @@
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
 //! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);
 //! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
-//! surfaces declare of their colours (`colour/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! surfaces declare of their colours (`colour/`); each seat's X display, its Xwayland and its
+//! X11 window manager (`xwayland/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md`
+//! gives the flow across them.
 
 mod activation;
 mod capture;
@@ -45,6 +47,7 @@ mod shell;
 mod state;
 mod text_input;
 mod vrr;
+mod xwayland;
 
 use std::fmt;
 
@@ -69,6 +72,10 @@ pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use text_input::MAX_TEXT_BYTES;
+pub use xwayland::{
+    FAILURE_MEMORY, FIRST_PAUSE, IDLE_SECONDS, LONGEST_PAUSE, MANAGER_GRACE, MAX_DISPLAYS,
+    START_TIMEOUT, X11Display, XwaylandConfig,
+};
 pub use yuna_layout;
 pub use yuna_motion;
 

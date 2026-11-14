@@ -302,6 +302,7 @@ impl Driver {
                 reduced_motion: options.reduced_motion,
                 ..Settings::default()
             },
+            xwayland: None,
         })
         .map_err(|e| format!("Yuna does not start: {e}"))?;
         let output = compositor

@@ -276,3 +276,10 @@ with games' VRR:
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
 - No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
   key, until Stage 2.
+- In `yuna mcp`, the programs' reaping (`wait` on any child) may take an Xwayland's status before
+  its pidfd does: a crash after `WM_S0` then counts as a clean end, and starts no pause. A crash
+  loop in `yuna mcp` restarts Xwayland at each new X11 connection.
+- On llvmpipe, Xwayland runs without GLX: Mesa's GLX for Xwayland loads the machine's own drivers
+  and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
+  through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
+  node (checked on 2026-11-14 with the cards hidden, `glxinfo` on the GPU).

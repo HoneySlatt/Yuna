@@ -63,6 +63,7 @@ use tools::{
 };
 
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
+pub(crate) use programs::keep_descriptors_from_the_program;
 pub use programs::{
     END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
     SEAT_VARIABLE,
@@ -1358,7 +1359,8 @@ impl Server {
                     cwd: cwd.map(PathBuf::from),
                 };
                 let socket = programs.socket_path(seat);
-                match programs.start(&handle, seat, &socket, start) {
+                let x11 = self.compositor.x11_display(seat);
+                match programs.start(&handle, seat, &socket, x11.as_ref(), start) {
                     Ok(program) => ToolResult::done(json!({
                         "program": tools::program_json(program)
                     })),

@@ -5,6 +5,14 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- X11 programs can connect: each seat with a Wayland socket gets an X display of its own, and
+  the first X11 program to connect starts Xwayland for it, found on `PATH`, behind the seat's
+  own cookie; Xwayland stops 10 s after its last X11 program leaves, and a crash of it leaves
+  Yuna running. `yuna --headless` prints `DISPLAY=:<n>` and `XAUTHORITY=<file>` after
+  `WAYLAND_DISPLAY`; `yuna mcp`'s programs get their seat's. X11 programs read `Xft.dpi` and
+  XSETTINGS of the seat's largest output scale. Their windows are not shown yet. On llvmpipe,
+  the default, Xwayland draws on the CPU and offers no GLX.
+
 - Animations, off by default in `yuna --headless` and `yuna mcp`, where each change still shows
   at once; `--animations` turns them on in both. The view slides along the strip of columns,
   windows the layout moves slide to their new places, workspaces slide past each other when

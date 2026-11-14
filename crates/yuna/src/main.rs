@@ -8,6 +8,7 @@ mod stop_signal;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
 use smithay::reexports::rustix;
@@ -15,7 +16,7 @@ use tracing::level_filters::LevelFilter;
 use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
 use yuna::yuna_motion::Settings;
-use yuna::{ClockMode, Compositor, Config, Device, Error, OutputMode};
+use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
@@ -30,14 +31,16 @@ Without an argument, Yuna would start the desktop session, which does not exist 
 Commands:
   mcp                An MCP server on standard input and output: a headless Yuna of its own,
                      whose tools create seats, each with its own outputs, Wayland socket,
-                     pointer and keyboard, start programs on them, list windows, give
-                     input, and read the clock. Logs to standard error; stops when its
-                     input closes, or on SIGTERM or SIGINT, and ends its programs then.
+                     X display, pointer and keyboard, start programs on them, list
+                     windows, give input, and read the clock. Logs to standard error;
+                     stops when its input closes, or on SIGTERM or SIGINT, and ends its
+                     programs then.
 
 Options:
       --headless     Run without a screen, on virtual outputs drawn offscreen. Prints
-                     WAYLAND_DISPLAY=<socket> on standard output, logs to standard error,
-                     and stops on SIGTERM or SIGINT.
+                     WAYLAND_DISPLAY=<socket> on standard output, then, when Xwayland is
+                     found, DISPLAY=:<number> and XAUTHORITY=<file> for X11 programs; logs
+                     to standard error, and stops on SIGTERM or SIGINT.
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
       --animations   Move windows, the view and workspaces on springs, and fade the special
                      workspace, rather than show each change at once, as without it.
@@ -58,6 +61,8 @@ Options:
 
 Environment:
   XDG_RUNTIME_DIR    The folder the Wayland socket is created in; required.
+  PATH               Where Xwayland is looked for: the first X11 program to connect to a
+                     seat's display starts it. Without it, X11 programs get no display.
   YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.
 ";
 
@@ -239,7 +244,7 @@ fn read_output(text: &OsStr) -> Result<OutputMode, String> {
 fn main() -> ExitCode {
     match read_request(std::env::args_os().skip(1)) {
         Request::Help => print(HELP),
-        Request::Version => print(&format!("yuna {}\n", env!("CARGO_PKG_VERSION"))),
+        Request::Version => print(format!("yuna {}\n", env!("CARGO_PKG_VERSION"))),
         Request::Session => {
             print_error(
                 "yuna: the desktop session does not exist yet (Stage 2); run `yuna --headless`\n",
@@ -274,8 +279,15 @@ fn run_headless(headless: Headless) -> ExitCode {
         Err(exit) => return exit,
     };
     if let Some(name) = compositor.socket_name() {
+        let mut lines = format!("WAYLAND_DISPLAY={}\n", name.to_string_lossy()).into_bytes();
+        if let Some(x11) = compositor.x11_display(OWNER_SEAT) {
+            lines.extend_from_slice(format!("DISPLAY={}\nXAUTHORITY=", x11.name()).as_bytes());
+            // The path as it is, which may not be UTF-8.
+            lines.extend_from_slice(x11.xauthority.as_os_str().as_bytes());
+            lines.push(b'\n');
+        }
         // A reader that left does not stop the compositor: its clients may know the socket.
-        let _ = print(&format!("WAYLAND_DISPLAY={}\n", name.to_string_lossy()));
+        let _ = print(lines);
     }
     match compositor.run_until(stop) {
         Ok(()) => ExitCode::SUCCESS,
@@ -296,6 +308,7 @@ fn start_compositor(headless: Headless) -> Result<Compositor, ExitCode> {
         clock: ClockMode::Real,
         listen: true,
         announce_owner_seat: true,
+        xwayland: Some(XwaylandConfig::default()),
     };
     start(config)
 }
@@ -373,6 +386,8 @@ fn run_mcp(headless: Headless) -> ExitCode {
         listen: false,
         announce_owner_seat: false,
         animations: animations_of(&headless),
+        // Each seat `seat create` makes gets a display with its socket.
+        xwayland: Some(XwaylandConfig::default()),
     };
     let compositor = match start(config) {
         Ok(compositor) => compositor,
@@ -429,10 +444,10 @@ fn start_logging() {
 
 /// Writes to standard output. When the reader has left (`yuna --help | true`), the write fails and
 /// the program exits with a failure, without the panic of `print!` and without a message.
-fn print(text: &str) -> ExitCode {
+fn print(text: impl AsRef<[u8]>) -> ExitCode {
     let mut stdout = io::stdout().lock();
     match stdout
-        .write_all(text.as_bytes())
+        .write_all(text.as_ref())
         .and_then(|()| stdout.flush())
     {
         Ok(()) => ExitCode::SUCCESS,

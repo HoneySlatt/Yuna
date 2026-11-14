@@ -195,8 +195,9 @@ fn parent_of(pid: i32) -> Option<i32> {
     fields.next()?.parse().ok()
 }
 
-/// A program started through `spawn` gets its seat's socket and a runtime folder of its own, and
-/// neither `DISPLAY` nor the session bus; its output goes to its log. A process its program
+/// A program started through `spawn` gets its seat's socket, its seat's X display and cookie,
+/// never Yuna's own `DISPLAY` (ADR-0067), a runtime folder of its own, and no session bus; its
+/// output goes to its log. A process its program
 /// leaves behind is adopted by Yuna, as subreaper; `stop` signals a program; and when the
 /// client closes Yuna's input, every process under Yuna is ended, one that ignores SIGTERM
 /// included, and the programs' folder removed.
@@ -225,7 +226,25 @@ fn programs_get_a_clean_environment_and_their_whole_tree_ends_with_yuna() {
             .find_map(|line| line.strip_prefix(&format!("{name}=")))
             .map(str::to_owned)
     };
-    assert_eq!(variable("DISPLAY"), None);
+    let display = variable("DISPLAY").expect("its seat's DISPLAY");
+    assert_ne!(display, ":99", "Yuna's own DISPLAY reached a program");
+    assert!(
+        display
+            .strip_prefix(':')
+            .is_some_and(|n| n.parse::<u32>().is_ok()),
+        "{display}"
+    );
+    let xauthority = PathBuf::from(variable("XAUTHORITY").expect("its seat's XAUTHORITY"));
+    assert!(
+        xauthority.starts_with(yuna.runtime_dir()),
+        "{}",
+        xauthority.display()
+    );
+    assert!(
+        xauthority.ends_with("seat-2.x11/Xauthority"),
+        "{}",
+        xauthority.display()
+    );
     assert_eq!(variable("DBUS_SESSION_BUS_ADDRESS"), None);
     assert_eq!(variable("YUNA_SEAT").as_deref(), Some("2"));
     let socket = PathBuf::from(variable("WAYLAND_DISPLAY").expect("WAYLAND_DISPLAY"));

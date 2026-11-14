@@ -29,6 +29,7 @@ use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
 use crate::state::{OWNER_SEAT, State};
+use crate::xwayland::{X11Display, Xwayland, XwaylandConfig};
 
 /// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
 /// listens again.
@@ -55,11 +56,15 @@ pub struct Config {
     /// operation shows its result at once; `--animations` turns them on
     /// ([ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
     pub animations: Settings,
+    /// XWayland: each seat with a socket gets an X display, whose first X11 connection starts
+    /// Xwayland for it ([ADR-0067](../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+    /// Off with none, as in tests; `yuna --headless` and `yuna mcp` turn it on.
+    pub xwayland: Option<XwaylandConfig>,
 }
 
 impl Default for Config {
-    /// What `yuna --headless` runs: one default output, llvmpipe, real time, a socket, no
-    /// animation.
+    /// What `yuna --headless` runs, but for XWayland, which it turns on: one default output,
+    /// llvmpipe, real time, a socket, no animation.
     fn default() -> Config {
         Config {
             outputs: vec![OutputMode::default()],
@@ -71,6 +76,7 @@ impl Default for Config {
                 off: true,
                 ..Settings::default()
             },
+            xwayland: None,
         }
     }
 }
@@ -152,6 +158,8 @@ pub struct OutputDescription {
 /// Everything runs on the thread that created it: drive it with [`Compositor::dispatch`] and,
 /// with the manual clock, [`Compositor::advance`], or let [`Compositor::run_until`] run it.
 pub struct Compositor {
+    /// First, so that it drops first: its Xwaylands end while the display still serves them.
+    xwayland: Option<Xwayland>,
     event_loop: EventLoop<'static, State>,
     display: Display<State>,
     state: State,
@@ -164,7 +172,8 @@ pub struct Compositor {
 
 impl Compositor {
     /// Starts a compositor: its renderer, its globals, its outputs, and its socket if
-    /// `config.listen`. Each output's first frame is armed.
+    /// `config.listen`. Each output's first frame is armed. With XWayland on, the owner's seat
+    /// gets an X display when it has a socket, or a folder for its Xauthority file.
     pub fn new(config: Config) -> Result<Compositor, Error> {
         // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
         // starts.
@@ -230,7 +239,25 @@ impl Compositor {
             }
             None => None,
         };
+        let mut xwayland = config
+            .xwayland
+            .as_ref()
+            .and_then(|xwayland| Xwayland::new(xwayland, config.device));
+        if let Some(xwayland) = &mut xwayland {
+            // Beside the socket in XDG_RUNTIME_DIR, which the socket's creation required.
+            let folder = match (&socket_name, config.xwayland.as_ref()) {
+                (Some(name), _) => std::env::var_os("XDG_RUNTIME_DIR").map(|runtime| {
+                    crate::xwayland::folder_beside(&PathBuf::from(runtime).join(name))
+                }),
+                (None, Some(xwayland)) => xwayland.owner_display_folder.clone(),
+                (None, None) => None,
+            };
+            if let Some(folder) = folder {
+                xwayland.add_seat(OWNER_SEAT, &folder, &handle);
+            }
+        }
         Ok(Compositor {
+            xwayland,
             event_loop,
             display,
             state,
@@ -282,8 +309,9 @@ impl Compositor {
 
     /// Listens on a Wayland socket at `path` for agent seat `seat`: every client that connects
     /// through it belongs to that seat. The socket file and its lock are removed with the seat.
-    /// Refused for the owner's seat, a seat that does not exist or listens already, and a path
-    /// where a socket cannot be made.
+    /// With XWayland on, the seat gets an X display too, its Xauthority file in the folder
+    /// `<path>.x11`. Refused for the owner's seat, a seat that does not exist or listens already,
+    /// and a path where a socket cannot be made.
     pub fn listen_for_seat(&mut self, seat: SeatId, path: PathBuf) -> Result<(), Error> {
         if seat == OWNER_SEAT || self.state.seat(seat).is_none() {
             return Err(Error::Refused(format!("no agent seat {}", seat.0)));
@@ -321,15 +349,26 @@ impl Compositor {
             )
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         self.seat_sockets.insert(seat, token);
+        if let Some(xwayland) = &mut self.xwayland {
+            let folder = crate::xwayland::folder_beside(&path);
+            xwayland.add_seat(seat, &folder, &self.event_loop.handle());
+        }
         Ok(())
+    }
+
+    /// `seat`'s X display, while it has one: its number, its Xauthority file, and its
+    /// Xwayland's process id while one runs. None when XWayland is off, when Xwayland is not
+    /// found, and for a seat without a socket.
+    pub fn x11_display(&self, seat: SeatId) -> Option<X11Display> {
+        self.xwayland.as_ref()?.display(seat)
     }
 
     /// Removes agent seat `seat` ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)):
     /// releases the keys and buttons it holds and moves its focus off every surface; removes its
-    /// socket; ends its clients and frees them now, their windows closed; then removes its
-    /// outputs and its place in the layout, and disables its `wl_seat` global. Returns the
-    /// process ids of the clients it ended. Refused for the owner's seat and for a seat that does
-    /// not exist.
+    /// socket and its X display, ending its Xwayland; ends its clients and frees them now, their
+    /// windows closed; then removes its outputs and its place in the layout, and disables its
+    /// `wl_seat` global. Returns the process ids of the clients it ended. Refused for the owner's
+    /// seat and for a seat that does not exist.
     pub fn remove_seat(&mut self, seat: SeatId) -> Result<Vec<i32>, Error> {
         self.state.release_seat(seat)?;
         // The releases and the leaves reach the clients before their connections close.
@@ -339,6 +378,9 @@ impl Compositor {
         if let Some(token) = self.seat_sockets.remove(&seat) {
             // Dropping the source drops its socket, which removes its file and its lock.
             self.event_loop.handle().remove(token);
+        }
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.remove_seat(seat, &self.event_loop.handle());
         }
         let pids = self.state.end_seat_clients(seat);
         self.free_departed_clients();
@@ -437,10 +479,10 @@ impl Compositor {
         self.state.compose_text(seat, text)
     }
 
-    /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
-    /// the clock's timer (`None`: as long as it takes), handles what came, runs the deadlines due
-    /// by now, and sends the events written. With the manual clock, time does not move: only
-    /// the deadlines armed at its current time run, such as an idle output's refresh.
+    /// Runs one round of the event loop: waits up to `timeout` for a client, a connection, the
+    /// clock's timer or XWayland (`None`: as long as it takes), handles what came, runs the
+    /// deadlines due by now, and sends the events written. With the manual clock, time does not
+    /// move: only the deadlines armed at its current time run, such as an idle output's refresh.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.arm_timer()?;
         self.event_loop
@@ -451,6 +493,9 @@ impl Compositor {
             self.timer = None;
         }
         self.pause_and_resume_sockets()?;
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.handle_notes(&mut self.state, &self.event_loop.handle());
+        }
         if std::mem::take(&mut self.state.clients_readable) {
             self.display
                 .dispatch_clients(&mut self.state)

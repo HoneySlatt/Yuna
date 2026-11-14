@@ -243,17 +243,36 @@ impl State {
         stream: UnixStream,
         sees_every_seat: bool,
     ) -> Result<(), Error> {
+        let data = ClientState::new(seat, sees_every_seat, self.departed_clients.clone());
+        self.insert_client_state(stream, data)
+    }
+
+    /// Serves `seat`'s Xwayland on `stream`, marked as such, with the client scale `scale`: it
+    /// is told outputs and pointer in X11 pixels, `scale` per logical unit
+    /// ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+    /// Refused for a seat that does not exist.
+    pub(crate) fn insert_xwayland_client(
+        &mut self,
+        seat: SeatId,
+        stream: UnixStream,
+        scale: f64,
+    ) -> Result<(), Error> {
+        let mut data = ClientState::new(seat, false, self.departed_clients.clone());
+        data.xwayland = true;
+        // Before it can bind a global, so that it never sees an output unscaled.
+        data.compositor.set_client_scale(scale);
+        self.insert_client_state(stream, data)
+    }
+
+    /// Serves the client of `data`'s seat on `stream`, and records it on the seat.
+    fn insert_client_state(&mut self, stream: UnixStream, data: ClientState) -> Result<(), Error> {
+        let seat = data.seat;
         if self.seat(seat).is_none() {
             return Err(Error::Refused(format!("no seat {}", seat.0)));
         }
-        let data = Arc::new(ClientState::new(
-            seat,
-            sees_every_seat,
-            self.departed_clients.clone(),
-        ));
         let client = self
             .display_handle
-            .insert_client(stream, data)
+            .insert_client(stream, Arc::new(data))
             .map_err(|e| Error::EventLoop(e.to_string()))?;
         if let Some(seat) = self.seat_mut(seat) {
             seat.clients.push(client.id());

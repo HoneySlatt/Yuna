@@ -4,10 +4,13 @@
 //!
 //! Each program gets an environment of its own: the few variables of Yuna's own that a program
 //! needs to find itself, its libraries, its locale and its drivers ([`KEPT_VARIABLES`],
-//! [`KEPT_PREFIXES`]); `WAYLAND_DISPLAY`, the full path of its seat's socket; and an
-//! `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor their
-//! sound server there. Nothing else: no `DISPLAY`, no `DBUS_SESSION_BUS_ADDRESS`. The agent's
-//! own variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
+//! [`KEPT_PREFIXES`]); `WAYLAND_DISPLAY`, the full path of its seat's socket; `DISPLAY` and
+//! `XAUTHORITY`, its seat's X display and cookie, when the seat has one
+//! ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md));
+//! and an `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor
+//! their sound server there. Nothing else: not Yuna's own `DISPLAY`, no
+//! `DBUS_SESSION_BUS_ADDRESS`. The agent's own variables come next and win, but for `YUNA_SEAT`,
+//! its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
 //! through a pipe Yuna reads, to a log file the agent reads, bounded to [`LOG_LIMIT`].
 //!
 //! Each program leads a process group of its own, which `stop` signals. Yuna is its programs'
@@ -41,6 +44,7 @@ use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions};
 use yuna_layout::SeatId;
 
 use crate::state::State;
+use crate::xwayland::X11Display;
 
 /// The variables of Yuna's environment a program keeps.
 pub const KEPT_VARIABLES: &[&str] = &[
@@ -222,15 +226,17 @@ impl Programs {
         self.list.iter().filter(|p| p.seat == seat).collect()
     }
 
-    /// Starts a program on `seat`, whose clients connect through `socket`, its output read by a
-    /// source of `handle`'s loop into its log. Refused, with the reason, for an empty command, a
-    /// variable that cannot be one, more than [`MAX_RUNNING`] programs, all seats together, or a
-    /// program that cannot start.
+    /// Starts a program on `seat`, whose clients connect through `socket`, and its X11 clients
+    /// to `x11` when the seat has an X display, its output read by a source of `handle`'s loop
+    /// into its log. Refused, with the reason, for an empty command, a variable that cannot be
+    /// one, more than [`MAX_RUNNING`] programs, all seats together, or a program that cannot
+    /// start.
     pub fn start(
         &mut self,
         handle: &LoopHandle<'static, State>,
         seat: SeatId,
         socket: &Path,
+        x11: Option<&X11Display>,
         start: Start,
     ) -> Result<&Program, String> {
         let Some(program) = start.command.first() else {
@@ -265,7 +271,9 @@ impl Programs {
         self.next_id += 1;
         let runtime = self.folder.join("runtime").join(id.to_string());
         let log = self.folder.join("logs").join(format!("{id}.log"));
-        let (pid, log_count) = match self.launch(handle, seat, socket, &start, &runtime, &log) {
+        let environment =
+            program_environment(std::env::vars_os(), &runtime, socket, x11, seat, &start.env);
+        let (pid, log_count) = match self.launch(handle, environment, &start, &runtime, &log) {
             Ok(launched) => launched,
             Err(reason) => {
                 let _ = fs::remove_file(&log);
@@ -290,12 +298,12 @@ impl Programs {
             .ok_or_else(|| "the program was forgotten".to_owned())
     }
 
-    /// Makes a program's runtime folder and log, starts it, and reads its output into the log.
+    /// Makes a program's runtime folder and log, starts it with `environment`, and reads its
+    /// output into the log.
     fn launch(
         &self,
         handle: &LoopHandle<'static, State>,
-        seat: SeatId,
-        socket: &Path,
+        environment: BTreeMap<OsString, OsString>,
         start: &Start,
         runtime: &Path,
         log_path: &Path,
@@ -320,13 +328,7 @@ impl Programs {
         command
             .args(&start.command[1..])
             .env_clear()
-            .envs(program_environment(
-                std::env::vars_os(),
-                runtime,
-                socket,
-                seat,
-                &start.env,
-            ))
+            .envs(environment)
             .stdin(Stdio::null())
             .stdout(Stdio::from(output_write))
             .stderr(Stdio::from(errors_write))
@@ -559,12 +561,14 @@ impl Programs {
 }
 
 /// A program's environment: the variables of `inherited` that [`KEPT_VARIABLES`] and
-/// [`KEPT_PREFIXES`] name, then its own runtime folder and its seat's socket, then the agent's
-/// `added`, which win, then `YUNA_SEAT`, which names its seat for its closing.
+/// [`KEPT_PREFIXES`] name, then its own runtime folder, its seat's socket and its seat's X
+/// display, `x11`, when it has one, then the agent's `added`, which win, then `YUNA_SEAT`, which
+/// names its seat for its closing.
 pub fn program_environment(
     inherited: impl Iterator<Item = (OsString, OsString)>,
     runtime_dir: &Path,
     wayland_display: &Path,
+    x11: Option<&X11Display>,
     seat: SeatId,
     added: &BTreeMap<String, String>,
 ) -> BTreeMap<OsString, OsString> {
@@ -578,6 +582,10 @@ pub fn program_environment(
     environment.insert("XDG_RUNTIME_DIR".into(), runtime_dir.into());
     environment.insert("WAYLAND_DISPLAY".into(), wayland_display.into());
     environment.insert("XDG_SESSION_TYPE".into(), "wayland".into());
+    if let Some(x11) = x11 {
+        environment.insert("DISPLAY".into(), x11.name().into());
+        environment.insert("XAUTHORITY".into(), x11.xauthority.clone().into());
+    }
     for (name, value) in added {
         environment.insert(name.into(), value.into());
     }
@@ -659,8 +667,9 @@ fn watch_output(
 /// Marks every descriptor of the program above 2 close-on-exec, in the child just before it runs
 /// the program, so that it inherits none of Yuna's: llvmpipe opens some without
 /// `O_CLOEXEC`, `/dev/udmabuf` and the memory of its buffers among them. Marked, not closed:
-/// the pipe through which the standard library reports a failed `exec` must stay open.
-fn keep_descriptors_from_the_program(command: &mut Command) {
+/// the pipe through which the standard library reports a failed `exec` must stay open. Xwayland's
+/// start uses it too, then clears the flag of the descriptors it gives (`xwayland/server.rs`).
+pub(crate) fn keep_descriptors_from_the_program(command: &mut Command) {
     // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
     // calls are sound: it makes one system call, `close_range`, and allocates nothing, an errno
     // turning into an `io::Error` without a box.
@@ -789,6 +798,7 @@ mod tests {
             inherited,
             Path::new("/run/user/1000/yuna-mcp-7/runtime/1"),
             Path::new("/run/user/1000/yuna-mcp-7/seat-3"),
+            None,
             SeatId(3),
             &added,
         );
@@ -832,6 +842,7 @@ mod tests {
             inherited,
             Path::new("/r"),
             Path::new("/w"),
+            None,
             SeatId(2),
             &added,
         );
@@ -839,6 +850,47 @@ mod tests {
         assert_eq!(environment[OsStr::new("WAYLAND_DISPLAY")], "elsewhere");
         // Its seat's, whatever the agent says: it decides which seat's closing ends it.
         assert_eq!(environment[OsStr::new("YUNA_SEAT")], "2");
+    }
+
+    #[test]
+    fn a_program_gets_its_seats_x_display_and_cookie_not_yunas() {
+        let inherited = [
+            (OsString::from("DISPLAY"), OsString::from(":0")),
+            (
+                OsString::from("XAUTHORITY"),
+                OsString::from("/home/user/.Xauthority"),
+            ),
+        ]
+        .into_iter();
+        let x11 = X11Display {
+            number: 12,
+            xauthority: PathBuf::from("/run/user/1000/yuna-mcp-7/seat-2.x11/Xauthority"),
+            server: None,
+        };
+        let environment = program_environment(
+            inherited,
+            Path::new("/r"),
+            Path::new("/w"),
+            Some(&x11),
+            SeatId(2),
+            &BTreeMap::new(),
+        );
+        assert_eq!(environment[OsStr::new("DISPLAY")], ":12");
+        assert_eq!(
+            environment[OsStr::new("XAUTHORITY")],
+            "/run/user/1000/yuna-mcp-7/seat-2.x11/Xauthority"
+        );
+        // The agent's win, as for WAYLAND_DISPLAY.
+        let added = BTreeMap::from([("DISPLAY".to_owned(), ":5".to_owned())]);
+        let environment = program_environment(
+            std::iter::empty(),
+            Path::new("/r"),
+            Path::new("/w"),
+            Some(&x11),
+            SeatId(2),
+            &added,
+        );
+        assert_eq!(environment[OsStr::new("DISPLAY")], ":5");
     }
 
     #[test]
