@@ -208,6 +208,9 @@ milestone first needs it.
 - The RemoteDesktop and InputCapture portals, for remote control or a mouse shared between
   machines, once a concrete use asks for them, with consent each session, an indicator and a
   shortcut that stops them ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- A settings application, apart from Hollow, on uwui, opened from its control centre: it sets
+  Yuna through Yuna's commands or an include of its own, and is the first client of an
+  output-management protocol ([ADR-0064](adr/0064-what-the-best-desktops-taught-yuna.md)).
 - A command that sets one configuration key until the next reload, as `hyprctl keyword` does,
   beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`

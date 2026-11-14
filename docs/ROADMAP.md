@@ -212,6 +212,13 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   on demand for agents; VKMS studied first.
 - Hot corners; tabbed columns; focus following the mouse and floating windows' sizes remembered,
   as settings ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
+- What the best desktops taught
+  ([ADR-0064](adr/0064-what-the-best-desktops-taught-yuna.md)): focus marked, not stolen;
+  Super-drag; several fullscreen windows on a workspace; frozen applications shown; a primary output;
+  back-and-forth workspaces; the laptop's lid; the cursor hidden while typing; custom gestures,
+  shortcuts per application, keys passed to X11 applications; brightness and DDC/CI; a cast's
+  target changed live; the bell to the shell; custom output modes; no black flash at start;
+  Hollow's interface of commands and events.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
@@ -230,7 +237,8 @@ stages keep their numbers.
 - Tearing on request, direct scanout and overlay planes, game mode; games told apart in the
   fullscreen state; settings for what a game turns off ([ADR-0061](adr/0061-yunas-uses.md)).
 - gamescope nested in Yuna, tested; a smaller game scaled by the display hardware where it can;
-  virtual outputs for streaming; a capture that costs a game no frame.
+  virtual outputs for streaming; a capture that costs a game no frame; the Steam Deck's touch
+  and on-screen keyboard; a living-room session of one fullscreen application ([ADR-0064](adr/0064-what-the-best-desktops-taught-yuna.md)).
 
 **Exit.** The owner's games run with their VRR flicker measured below the bar's figure, and
 latency and frames at least as good as gamescope's.
@@ -241,7 +249,8 @@ latency and frames at least as good as gamescope's.
 
 - HDR output, SDR brightness, tone and gamut mapping, ICC profiles; a profile per display, from
   its EDID corrected by a guided adjustment or a probe; colour accuracy measured; HDR captures
-  kept HDR or converted to SDR ([ADR-0061](adr/0061-yunas-uses.md)).
+  kept HDR or converted to SDR ([ADR-0061](adr/0061-yunas-uses.md)); HDR always on or only for
+  fullscreen HDR content, a setting ([ADR-0064](adr/0064-what-the-best-desktops-taught-yuna.md)).
 - The night light, captures and screen sharing correct under HDR; films at an exact multiple of
   their rate, and told apart in the fullscreen state; no sleep while a video plays.
 - OLED care: luminance read from the panel, static elements protected from burn-in. Its means
@@ -259,7 +268,10 @@ latency and frames at least as good as gamescope's.
 - The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
   Alt-Tab with previews, the capture tool's polish, a colour picker; snap zones for floating
   windows; shapes that morph ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
-- Sandboxed applications kept from sensitive protocols; reduced transparency for blur and glass.
+- Sandboxed applications kept from sensitive protocols; capture and new keyboards asked, allowed
+  or refused per program; reduced transparency for blur and glass; a cross-fade on a change of
+  theme; corners and shadows for windows that draw their own frame; effects lighter on battery
+  ([ADR-0064](adr/0064-what-the-best-desktops-taught-yuna.md)).
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.
 

@@ -27,7 +27,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0016](0016-the-rust-toolchain.md) | The Rust toolchain: an exact stable version, in one file | Accepted; amended by 0058 |
 | [0017](0017-smithays-revision.md) | Smithay's revision: upstream, pinned, first at master of 2026-11-11 | Accepted; amended by 0021 |
 | [0018](0018-workspaces.md) | Workspaces: named, with dynamic ones as an option | Accepted |
-| [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted |
+| [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted; amended by 0064 |
 | [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted |
 | [0021](0021-smithays-fork.md) | Smithay's fork: a private repository, generic patches | Accepted; amends 0017; amended by 0036, 0042, 0045 |
 | [0022](0022-the-headless-backend-in-yuna.md) | The headless backend: Yuna's own code, drawn on llvmpipe by default | Accepted; amends 0011; amended by 0029 |
@@ -60,9 +60,10 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0049](0049-vrr-and-hdr-outputs-through-mcp.md) | VRR and HDR outputs through MCP, and surfaces' colours read | Accepted; amends 0033 |
 | [0050](0050-mpv-in-the-applications-tests.md) | mpv in the applications' tests | Accepted; amends 0025 |
 | [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046 |
-| [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004; amended by 0063 |
+| [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004; amended by 0063, 0064 |
 | [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046; amended by 0061 |
 | [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003, 0015 |
 | [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010, 0058 |
 | [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened |
 | [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041 |
+| [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057 |
