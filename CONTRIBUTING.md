@@ -75,8 +75,12 @@ Motion's cost is measured with `crates/yuna/examples/motion_time.rs`, as
 [ADR-0056](docs/adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) asks: it
 runs Yuna in its own process with six `vkcube`, and plays a round of scrolls, column moves,
 workspace switches and the special workspace's fade, against a still baseline of as many frames;
-it prints the frames missed in each, where they fall, the heaviest frame and the ADR's verdict.
-Its documentation gives its options, `--gpu` and `--reduced-motion` among them:
+it prints, for each, the frames a second against the output's rate, the frames drawn at once and
+missed, and where the misses fall; then the heaviest frame and the ADR's verdict. The verdict names
+the mode it ran at, and counts as the ADR's only at 3840x2160@240,1.5 on `--gpu`; anywhere else it
+is recorded without a pass mark. It gives none when the baseline ran below 95 % of the output's
+rate. Under `--reduced-motion` the round has no retarget: its load is jumps and fades. Its
+documentation gives its options, `--gpu` among them:
 
 ```sh
 nix develop -c cargo build --release -p yuna --example motion_time

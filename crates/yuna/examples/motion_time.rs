@@ -27,9 +27,18 @@
 //! ([ADR-0030](../../../docs/adr/0030-a-frames-gpu-time-from-the-kernel.md)). For motion, it
 //! also places each miss: in the first three frames after an operation (and of those, how many
 //! as a window entered the output); later, as a window entered; or elsewhere. It names the
-//! heaviest frame: its time, the operation before it and how many frames after it. Last comes
-//! ADR-0056's verdict: motion missed no more frames than the still baseline, over 10,000 frames
-//! or more each. On llvmpipe the verdict is recorded, without a pass mark.
+//! heaviest frame: its time, the operation before it and how many frames after it.
+//!
+//! Per phase it also prints the frames a second against the output's rate, and the frames drawn
+//! at once (the output idle, so aimed at the first boundary in reach, with no lead) with how many
+//! of them missed. In the baseline the clients set the pace: if they cannot keep the output's
+//! rate, most frames are drawn at once and miss for a reason that motion does not share.
+//!
+//! Last comes ADR-0056's verdict: motion missed no more frames than the still baseline, over
+//! 10,000 frames or more each. It names the mode it ran at, and is the ADR's only at the ADR's
+//! mode, 3840 × 2160 at 240 Hz and scale 1.5, on `--gpu`; anywhere else it is recorded without a
+//! pass mark. It gives no verdict when a phase has too few frames, or when the baseline ran below
+//! 95 % of the output's rate: it would not be the output redrawn whole at its rate.
 //!
 //! Build it for release, then run it in the development shell, alone among measurements:
 //!
@@ -48,15 +57,20 @@
 //! <icd.json>` gives `vkcube` that Vulkan driver rather than lavapipe; `--output
 //! WIDTHxHEIGHT@RATE,SCALE`, a fixed rate; `--frames <n>`, each phase's frames;
 //! `--reduced-motion`, animations under reduced motion, where nothing slides and fades are kept
-//! ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+//! ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). The round
+//! then has no retarget, since nothing is moving to turn back, and its load is layout jumps and
+//! the special workspace's fades; a fixed pause of 250 ms separates its steps, which would
+//! otherwise follow each other on every frame.
 //!
 //! Where it differs from `frame_time`, which measures the `yuna` program from outside: Yuna's
 //! main thread here also runs the script and writes the log, and its CPU time counts in Yuna's.
 //! The clients connect through `Compositor::connect_client`'s socket pairs, handed to `vkcube` as
-//! `WAYLAND_SOCKET`, so that Yuna makes no socket file. Mesa may keep a shader cache in the
-//! caller's home, which `agent-headless` makes a throwaway one. It stops what it started when it
-//! ends, and keeps its folder of logs when it fails; killed outright, it leaves its `vkcube`
-//! running.
+//! `WAYLAND_SOCKET`, so that Yuna makes no socket file. Yuna here sees the caller's whole
+//! environment. Mesa may keep a shader cache, in `XDG_CACHE_HOME` first: `agent-headless` makes
+//! that a throwaway folder but keeps `HOME`, so outside it the cache may land in the caller's
+//! own. It stops what it started when it ends, and keeps its folder of logs when it fails. If it
+//! is killed outright, a `vkcube` may be left running: each should exit when its connection to
+//! Yuna breaks, which was not checked.
 
 mod common;
 
@@ -79,7 +93,8 @@ use yuna::yuna_layout::{Direction, Layout, LayoutError, OutputId, WindowId};
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, OWNER_SEAT, OutputMode};
 
-/// The output's mode without `--output`: Yuna's default, an agent's output.
+/// The output's mode without `--output`: Yuna's default, an agent's output, and the mode
+/// ADR-0056 judges at.
 const DEFAULT_OUTPUT: &str = "3840x2160@240,1.5";
 /// Each phase's frames without `--frames`, and the fewest ADR-0056 judges on.
 const MIN_FRAMES: usize = 10_000;
@@ -93,6 +108,11 @@ const SPECIAL_WORKSPACE: &str = "special";
 const FIRST_FRAMES: usize = 3;
 /// How long after the operation before a retarget is given, its motion still running.
 const RETARGET_AFTER: Duration = Duration::from_millis(30);
+/// Under reduced motion, how long a step waits after the one before: with nothing moving, the
+/// steps would follow each other on every frame.
+const REDUCED_MOTION_PAUSE: Duration = Duration::from_millis(250);
+/// The least share of the output's rate the baseline must keep for a verdict.
+const BASELINE_MIN_SHARE: f64 = 0.95;
 /// The longest the loop waits for Yuna before it looks again at the clients and the script.
 const MAX_WAIT: Duration = Duration::from_millis(100);
 /// How often a phase checks that every `vkcube` still runs.
@@ -212,7 +232,7 @@ fn measure(run: &Run, options: &Options) -> Result<(), String> {
         options.frames,
         None,
     )?;
-    let mut script = Script::default();
+    let mut script = Script::new(options.reduced_motion);
     let motion = run_phase(
         &mut driver,
         &mut clients,
@@ -721,6 +741,8 @@ struct Script {
     /// The operations given so far; the next is `ROUND[given % ROUND.len()]`.
     given: usize,
     last: Option<Given>,
+    /// How long each step waits at least after the one before; none unless motion is reduced.
+    pause: Duration,
 }
 
 /// The operation given last.
@@ -730,11 +752,23 @@ struct Given {
     at: Duration,
     /// The frames drawn when it was given: the next one arranges it.
     frames_drawn: u64,
-    /// Before then, its motion runs: the end it last announced.
+    /// Before then, its motion runs, or the pause runs: the end it last announced.
     rest_not_before: Duration,
 }
 
 impl Script {
+    /// A round that, under `reduced_motion`, pauses [`REDUCED_MOTION_PAUSE`] between steps.
+    fn new(reduced_motion: bool) -> Script {
+        Script {
+            pause: if reduced_motion {
+                REDUCED_MOTION_PAUSE
+            } else {
+                Duration::ZERO
+            },
+            ..Script::default()
+        }
+    }
+
     /// The next operation, if it is due at `now` with `frames_drawn` frames drawn; it then counts
     /// as given. `motion_end` says when the output's motion ends, none at rest; it is asked only
     /// once the operation before was arranged and the end it announced has passed.
@@ -747,7 +781,11 @@ impl Script {
         let step = ROUND[self.given % ROUND.len()];
         let due = match (&mut self.last, step.start) {
             (None, _) => true,
-            (Some(last), Start::After(delay)) => now >= last.at + delay,
+            // A frame must have drawn the step before, or both changes land in one layout pass and
+            // cancel out.
+            (Some(last), Start::After(delay)) => {
+                now >= last.at + delay && frames_drawn > last.frames_drawn
+            }
             (Some(last), Start::AtRest) => {
                 if frames_drawn <= last.frames_drawn || now < last.rest_not_before {
                     false
@@ -766,7 +804,7 @@ impl Script {
         self.last = Some(Given {
             at: now,
             frames_drawn,
-            rest_not_before: now,
+            rest_not_before: now + self.pause,
         });
         Some(step.operation)
     }
@@ -777,7 +815,9 @@ impl Script {
         let step = ROUND[self.given % ROUND.len()];
         let until = match (&self.last, step.start) {
             (None, _) => return Duration::ZERO,
-            (Some(last), Start::After(delay)) => last.at + delay,
+            (Some(last), Start::After(delay)) if last.at + delay > now => last.at + delay,
+            // Past its delay, it waits for a frame, which wakes the loop.
+            (Some(_), Start::After(_)) => return MAX_WAIT,
             (Some(last), Start::AtRest) if last.rest_not_before > now => last.rest_not_before,
             (Some(_), Start::AtRest) => return MAX_WAIT,
         };
@@ -812,6 +852,8 @@ struct Frame {
     took_us: u64,
     /// Whether it was presented after the boundary it aimed at.
     missed: bool,
+    /// Whether it was drawn at once: the output idle, no lead.
+    at_once: bool,
     /// The operation given last in its phase, and this frame's number since: 1 for the first
     /// frame drawn after it, the one that arranged it.
     operation: Option<(String, usize)>,
@@ -866,6 +908,7 @@ fn read_phases(log: &str) -> Result<Phases, String> {
             phases.of(current).push(Frame {
                 took_us,
                 missed: presented > boundary,
+                at_once: line.contains("at_once=true"),
                 operation: operation.clone(),
                 entering: false,
             });
@@ -915,6 +958,9 @@ fn shown_windows(line: &str) -> Result<Vec<u64>, String> {
 struct Summary {
     frames: usize,
     missed: usize,
+    /// The frames drawn at once, and how many of them missed.
+    at_once: usize,
+    at_once_missed: usize,
     /// A frame's time in microseconds: the median, the 99th percentile and the longest; none
     /// without a frame.
     took_us: Option<(u64, u64, u64)>,
@@ -926,6 +972,11 @@ fn summarise(frames: &[Frame]) -> Summary {
     Summary {
         frames: frames.len(),
         missed: frames.iter().filter(|frame| frame.missed).count(),
+        at_once: frames.iter().filter(|frame| frame.at_once).count(),
+        at_once_missed: frames
+            .iter()
+            .filter(|frame| frame.at_once && frame.missed)
+            .count(),
         took_us: took
             .last()
             .map(|&longest| (percentile(&took, 50.0), percentile(&took, 99.0), longest)),
@@ -978,15 +1029,90 @@ enum Verdict {
     NotMet,
     /// A phase has fewer than [`MIN_FRAMES`] frames: too few to judge.
     TooFewFrames,
+    /// The baseline ran below [`BASELINE_MIN_SHARE`] of the output's rate: it was not the output
+    /// redrawn whole at its rate, which the comparison needs.
+    BaselineBelowRate,
 }
 
-fn verdict(baseline: &Summary, motion: &Summary) -> Verdict {
+/// The baseline's pace against the output's.
+#[derive(Debug, Clone, Copy)]
+struct Pace {
+    /// The baseline's frames drawn a second.
+    baseline_per_second: f64,
+    /// The output's rate, in hertz.
+    output_rate: f64,
+}
+
+fn frames_per_second(frames: usize, seconds: f64) -> f64 {
+    if seconds > 0.0 {
+        frames as f64 / seconds
+    } else {
+        0.0
+    }
+}
+
+fn verdict(baseline: &Summary, motion: &Summary, pace: Pace) -> Verdict {
     if baseline.frames < MIN_FRAMES || motion.frames < MIN_FRAMES {
         Verdict::TooFewFrames
+    } else if pace.baseline_per_second < pace.output_rate * BASELINE_MIN_SHARE {
+        Verdict::BaselineBelowRate
     } else if motion.missed <= baseline.missed {
         Verdict::Met
     } else {
         Verdict::NotMet
+    }
+}
+
+/// Whether a run at `mode`, on the GPU or not, is the one ADR-0056 judges.
+fn is_the_adrs_mode(gpu: bool, mode: &OutputMode) -> bool {
+    gpu && read_mode(DEFAULT_OUTPUT).is_ok_and(|adrs| adrs == *mode)
+}
+
+/// The verdict as the report prints it, with the mode it ran at, and "no pass mark" unless that
+/// is the mode ADR-0056 judges.
+fn verdict_line(
+    verdict: &Verdict,
+    gpu: bool,
+    output: &str,
+    mode: &OutputMode,
+    pace: Pace,
+) -> String {
+    let device = if gpu { "--gpu" } else { "llvmpipe" };
+    let standing = if is_the_adrs_mode(gpu, mode) {
+        "the ADR's mode".to_owned()
+    } else {
+        format!("recorded, no pass mark: the ADR judges only at {DEFAULT_OUTPUT} on --gpu")
+    };
+    let result = match verdict {
+        Verdict::Met => "met: motion missed no more frames than the still output".to_owned(),
+        Verdict::NotMet => "not met: motion missed more frames than the still output".to_owned(),
+        Verdict::TooFewFrames => format!("no verdict: a phase has fewer than {MIN_FRAMES} frames"),
+        Verdict::BaselineBelowRate => format!(
+            "no verdict: the still baseline drew {:.0} frames a second, below {:.0} % of the \
+             output's {:.0} Hz, so it was not the output redrawn whole at its rate",
+            pace.baseline_per_second,
+            BASELINE_MIN_SHARE * 100.0,
+            pace.output_rate,
+        ),
+    };
+    format!("ADR-0056's verdict, run at {output} on {device} ({standing}): {result}")
+}
+
+/// The heading of the motion phase's figures.
+fn motion_heading(operations: usize, reduced_motion: bool) -> String {
+    let rounds = operations / ROUND.len();
+    if reduced_motion {
+        format!(
+            "Motion under reduced motion: {operations} operations, {rounds} whole rounds of {}, \
+             {} ms apart; the round has no retarget, and its load is jumps and fades:",
+            ROUND.len(),
+            REDUCED_MOTION_PAUSE.as_millis(),
+        )
+    } else {
+        format!(
+            "Motion: {operations} operations, {rounds} whole rounds of {}, each with a retarget:",
+            ROUND.len(),
+        )
     }
 }
 
@@ -1017,18 +1143,17 @@ fn report(
         options.frames,
         WARM_UP.as_secs(),
     );
+    let output_rate = options.mode.rate();
     let still = summarise(&phases.baseline);
     println!("\nThe still baseline, no operation:");
-    print_phase(&still, baseline);
+    let baseline_per_second = print_phase(&still, baseline, output_rate);
 
     let moving = summarise(&phases.motion);
     println!(
-        "\nMotion: {} operations, {} whole rounds of {}, each with a retarget:",
-        motion.operations,
-        motion.operations / ROUND.len(),
-        ROUND.len(),
+        "\n{}",
+        motion_heading(motion.operations, options.reduced_motion)
     );
-    print_phase(&moving, motion);
+    print_phase(&moving, motion, output_rate);
     let places = place_misses(&phases.motion);
     println!(
         "  missed, by where they fall: {} in the first {FIRST_FRAMES} frames after an operation \
@@ -1052,19 +1177,19 @@ fn report(
         );
     }
 
-    let judged = match verdict(&still, &moving) {
-        Verdict::Met => "met: motion missed no more frames than the still output".to_owned(),
-        Verdict::NotMet => "not met: motion missed more frames than the still output".to_owned(),
-        Verdict::TooFewFrames => format!("no verdict: a phase has fewer than {MIN_FRAMES} frames"),
+    let pace = Pace {
+        baseline_per_second,
+        output_rate,
     };
     println!(
-        "\nADR-0056's verdict{}: motion missed {} of {} frames, the still baseline {} of {}; \
-         {judged}",
-        if options.gpu {
-            ""
-        } else {
-            ", recorded without a pass mark on llvmpipe"
-        },
+        "\n{}: motion missed {} of {} frames, the still baseline {} of {}",
+        verdict_line(
+            &verdict(&still, &moving, pace),
+            options.gpu,
+            &options.output,
+            &options.mode,
+            pace
+        ),
         moving.missed,
         moving.frames,
         still.missed,
@@ -1075,11 +1200,23 @@ fn report(
     }
 }
 
-/// Prints a phase's frames, missed frames and frame times, then what Yuna and its clients used.
-fn print_phase(summary: &Summary, measured: &Measured) {
+/// Prints a phase's frames and their pace against the output's rate, the frames drawn at once,
+/// the missed frames and frame times, then what Yuna and its clients used. Returns the frames a
+/// second.
+fn print_phase(summary: &Summary, measured: &Measured, output_rate: f64) -> f64 {
     let seconds = (measured.after.at - measured.before.at).as_secs_f64();
-    println!("  {} frames in about {seconds:.1} s", summary.frames);
+    let per_second = frames_per_second(summary.frames, seconds);
+    println!(
+        "  {} frames in about {seconds:.1} s: {per_second:.1} a second, {:.1} % of the output's \
+         {output_rate:.0} Hz",
+        summary.frames,
+        per_second * 100.0 / output_rate,
+    );
     if summary.frames > 0 {
+        println!(
+            "  drawn at once: {}, of which {} missed",
+            summary.at_once, summary.at_once_missed,
+        );
         println!(
             "  missed, presented after the boundary they aimed at: {} ({:.2} %)",
             summary.missed,
@@ -1095,6 +1232,7 @@ fn print_phase(summary: &Summary, measured: &Measured) {
     if measured.frames > 0 {
         print_usage(&measured.before, &measured.after, measured.frames);
     }
+    per_second
 }
 
 #[cfg(test)]
@@ -1116,6 +1254,7 @@ mod tests {
         Frame {
             took_us,
             missed,
+            at_once: false,
             operation: operation.map(|(name, number)| (name.to_owned(), number)),
             entering,
         }
@@ -1292,6 +1431,8 @@ mod tests {
             Summary {
                 frames: 100,
                 missed: 4,
+                at_once: 0,
+                at_once_missed: 0,
                 took_us: Some((50, 99, 100)),
             }
         );
@@ -1300,6 +1441,8 @@ mod tests {
             Summary {
                 frames: 0,
                 missed: 0,
+                at_once: 0,
+                at_once_missed: 0,
                 took_us: None,
             }
         );
@@ -1312,34 +1455,132 @@ mod tests {
         assert_eq!(heaviest(&[]), None);
     }
 
-    #[test]
-    fn the_verdict_asks_no_more_misses_over_enough_frames() {
-        let summary = |frames, missed| Summary {
+    fn summary(frames: usize, missed: usize) -> Summary {
+        Summary {
             frames,
             missed,
+            at_once: 0,
+            at_once_missed: 0,
             took_us: None,
-        };
+        }
+    }
+
+    /// A baseline that keeps the output's rate.
+    const AT_RATE: Pace = Pace {
+        baseline_per_second: 240.0,
+        output_rate: 240.0,
+    };
+
+    #[test]
+    fn the_verdict_asks_no_more_misses_over_enough_frames() {
         let enough = MIN_FRAMES;
         assert_eq!(
-            verdict(&summary(enough, 5), &summary(enough, 5)),
+            verdict(&summary(enough, 5), &summary(enough, 5), AT_RATE),
             Verdict::Met
         );
         assert_eq!(
-            verdict(&summary(enough, 5), &summary(enough, 4)),
+            verdict(&summary(enough, 5), &summary(enough, 4), AT_RATE),
             Verdict::Met
         );
         assert_eq!(
-            verdict(&summary(enough, 5), &summary(enough, 6)),
+            verdict(&summary(enough, 5), &summary(enough, 6), AT_RATE),
             Verdict::NotMet
         );
         assert_eq!(
-            verdict(&summary(enough, 5), &summary(enough - 1, 0)),
+            verdict(&summary(enough, 5), &summary(enough - 1, 0), AT_RATE),
             Verdict::TooFewFrames
         );
         assert_eq!(
-            verdict(&summary(enough - 1, 5), &summary(enough, 0)),
+            verdict(&summary(enough - 1, 5), &summary(enough, 0), AT_RATE),
             Verdict::TooFewFrames
         );
+    }
+
+    #[test]
+    fn a_baseline_below_ninety_five_percent_of_the_output_rate_gives_no_verdict() {
+        let enough = MIN_FRAMES;
+        let pace = |baseline_per_second| Pace {
+            baseline_per_second,
+            output_rate: 240.0,
+        };
+        // 95 % of 240 Hz is 228 frames a second.
+        assert_eq!(
+            verdict(&summary(enough, 0), &summary(enough, 0), pace(227.9)),
+            Verdict::BaselineBelowRate
+        );
+        assert_eq!(
+            verdict(&summary(enough, 0), &summary(enough, 0), pace(228.0)),
+            Verdict::Met
+        );
+        // Even where motion would be judged not met.
+        assert_eq!(
+            verdict(&summary(enough, 0), &summary(enough, 9), pace(60.0)),
+            Verdict::BaselineBelowRate
+        );
+        let line = verdict_line(
+            &Verdict::BaselineBelowRate,
+            true,
+            DEFAULT_OUTPUT,
+            &read_mode(DEFAULT_OUTPUT).unwrap(),
+            pace(60.0),
+        );
+        assert!(
+            line.contains("no verdict") && line.contains("60") && line.contains("240"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn the_verdict_names_its_mode_and_is_the_adrs_only_at_its_mode_on_the_gpu() {
+        let line = |verdict, gpu, output: &str| {
+            verdict_line(&verdict, gpu, output, &read_mode(output).unwrap(), AT_RATE)
+        };
+        let adr = line(Verdict::Met, true, "3840x2160@240,1.5");
+        assert!(
+            adr.contains("3840x2160@240,1.5") && adr.contains("--gpu"),
+            "{adr}"
+        );
+        assert!(!adr.contains("no pass mark"), "{adr}");
+        for other in [
+            line(Verdict::Met, true, "1920x1080@240,1"),
+            line(Verdict::Met, true, "3840x2160@120,1.5"),
+            line(Verdict::Met, true, "3840x2160@240,1"),
+            line(Verdict::Met, false, "3840x2160@240,1.5"),
+        ] {
+            assert!(other.contains("no pass mark"), "{other}");
+            assert!(other.contains("3840x2160@240,1.5"), "{other}");
+        }
+        let small = line(Verdict::NotMet, true, "1920x1080@240,1");
+        assert!(
+            small.contains("1920x1080@240,1") && small.contains("no pass mark"),
+            "{small}"
+        );
+    }
+
+    #[test]
+    fn frames_drawn_at_once_are_read_and_counted_with_their_misses() {
+        let log = "\
+            t  INFO motion_time: phase started phase=baseline\n\
+            t DEBUG yuna::frames: frame drawn output=1 took_us=1 lead_us=0 at_once=true boundary=5 presented=6\n\
+            t DEBUG motion_time: frame shown windows=1\n\
+            t DEBUG yuna::frames: frame drawn output=1 took_us=1 lead_us=0 at_once=true boundary=6 presented=6\n\
+            t DEBUG motion_time: frame shown windows=1\n\
+            t DEBUG yuna::frames: frame drawn output=1 took_us=1 lead_us=3000 at_once=false boundary=7 presented=8\n\
+            t DEBUG motion_time: frame shown windows=1\n\
+            t  INFO motion_time: phase ended\n";
+        let phases = read_phases(log).unwrap();
+        let at_once: Vec<bool> = phases.baseline.iter().map(|f| f.at_once).collect();
+        assert_eq!(at_once, [true, true, false]);
+        let summed = summarise(&phases.baseline);
+        assert_eq!((summed.frames, summed.missed), (3, 2));
+        assert_eq!((summed.at_once, summed.at_once_missed), (2, 1));
+    }
+
+    #[test]
+    fn frames_a_second_are_the_frames_over_the_seconds() {
+        assert_eq!(frames_per_second(2400, 10.0), 240.0);
+        assert_eq!(frames_per_second(0, 0.0), 0.0);
+        assert_eq!(frames_per_second(5, 0.0), 0.0);
     }
 
     const MS: Duration = Duration::from_millis(1);
@@ -1407,6 +1648,77 @@ mod tests {
             Some(Operation::FocusRight)
         );
         assert_eq!(script.given, ROUND.len() + 1);
+    }
+
+    #[test]
+    fn a_retarget_waits_for_a_frame_drawn_since_the_step_before() {
+        let mut script = Script::default();
+        let mut now = Duration::ZERO;
+        let mut frames = 0;
+        // Every motion ends at once: the steps before the retarget are given one a frame.
+        for _ in 0..ROUND.len() - 1 {
+            assert!(script.due(now, frames, || None).is_some());
+            now += MS;
+            frames += 1;
+        }
+        let given_at = now - MS;
+        let given_frames = frames - 1;
+        // The delay has passed, but no frame was drawn since the focus right: both changes would
+        // land in one layout pass and cancel out.
+        assert_eq!(
+            script.due(given_at + RETARGET_AFTER, given_frames, || None),
+            None
+        );
+        assert_eq!(
+            script.due(given_at + 2 * RETARGET_AFTER, given_frames, || None),
+            None
+        );
+        // The loop waits for the frame, which wakes it, rather than spinning.
+        assert_eq!(script.wait(given_at + RETARGET_AFTER), MAX_WAIT);
+        assert_eq!(
+            script.due(given_at + 2 * RETARGET_AFTER, given_frames + 1, || None),
+            Some(Operation::FocusLeft)
+        );
+    }
+
+    #[test]
+    fn under_reduced_motion_a_pause_separates_steps_that_move_nothing() {
+        let mut script = Script::new(true);
+        assert_eq!(
+            script.due(Duration::ZERO, 0, || unreachable!()),
+            Some(Operation::FocusRight)
+        );
+        // A frame drawn, nothing moving: the next step still waits for the pause, and does not
+        // ask for the motion's end before it.
+        assert_eq!(script.due(MS, 1, || unreachable!()), None);
+        // The wait is cut at MAX_WAIT; near the end of the pause it is the rest of it.
+        assert_eq!(script.wait(MS), MAX_WAIT);
+        assert_eq!(script.wait(REDUCED_MOTION_PAUSE - 50 * MS), 50 * MS);
+        assert_eq!(
+            script.due(REDUCED_MOTION_PAUSE - MS, 5, || unreachable!()),
+            None
+        );
+        assert_eq!(
+            script.due(REDUCED_MOTION_PAUSE, 6, || None),
+            Some(Operation::FocusRight)
+        );
+        // Without reduced motion there is no pause.
+        let mut script = Script::new(false);
+        assert!(script.due(Duration::ZERO, 0, || None).is_some());
+        assert!(script.due(MS, 1, || None).is_some());
+    }
+
+    #[test]
+    fn the_motion_heading_says_a_reduced_round_has_no_retarget() {
+        let normal = motion_heading(28, false);
+        assert!(normal.contains("28 operations") && normal.contains("2 whole rounds"));
+        assert!(normal.contains("retarget"), "{normal}");
+        let reduced = motion_heading(28, true);
+        assert!(reduced.contains("reduced motion"), "{reduced}");
+        assert!(reduced.contains("no retarget"), "{reduced}");
+        assert!(reduced.contains("jumps and fades"), "{reduced}");
+        assert!(reduced.contains("250 ms"), "{reduced}");
+        assert!(!reduced.contains("each with a retarget"), "{reduced}");
     }
 
     /// The layout `set_up` makes, on a 4K output at scale 1.5, without Yuna.
