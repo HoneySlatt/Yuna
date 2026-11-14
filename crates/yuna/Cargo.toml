@@ -36,3 +36,7 @@ test = true
 [[example]]
 name = "agent_time"
 test = true
+
+[[example]]
+name = "motion_time"
+test = true

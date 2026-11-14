@@ -862,6 +862,12 @@ own thread, both `took_us`.
 - `crates/yuna/examples/agent_time.rs`: what an agent's calls cost in `yuna mcp`: an MCP
   call's time at rest and under load, and a capture's, its copy on the main thread and its
   encoding read from the log, with the frames missed while captures run.
+- `crates/yuna/examples/motion_time.rs`: motion's budget
+  ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)): Yuna
+  in the example's own process on the real clock, `vkcube` covering the output, a still
+  baseline then a scripted round of scrolls, moves, switches and the special workspace's fade;
+  frames missed in each, where they fall, the heaviest frame, and the verdict.
+  `examples/common/` holds what it shares with `frame_time`.
 - `deny.toml`: the dependency policy.
 
 ## Where to start reading

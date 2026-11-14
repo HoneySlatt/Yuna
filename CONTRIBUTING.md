@@ -71,6 +71,22 @@ nix develop -c target/release/examples/frame_time
 It needs no screen of its own. On the owner's machine, agents run it inside `agent-headless`,
 one measure at a time.
 
+Motion's cost is measured with `crates/yuna/examples/motion_time.rs`, as
+[ADR-0056](docs/adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) asks: it
+runs Yuna in its own process with six `vkcube`, and plays a round of scrolls, column moves,
+workspace switches and the special workspace's fade, against a still baseline of as many frames;
+it prints the frames missed in each, where they fall, the heaviest frame and the ADR's verdict.
+Its documentation gives its options, `--gpu` and `--reduced-motion` among them:
+
+```sh
+nix develop -c cargo build --release -p yuna --example motion_time
+nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
+```
+
+It runs alone among measurements, as `frame_time` does; on the owner's machine, inside
+`agent-headless`, under the agents' lock of exclusive runs. Both examples share
+`crates/yuna/examples/common/`.
+
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which
