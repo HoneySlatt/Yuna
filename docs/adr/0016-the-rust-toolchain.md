@@ -1,6 +1,6 @@
 # 0016. The Rust toolchain: an exact stable version, in one file
 
-- Status: Accepted
+- Status: Accepted; amended by 0058
 - Date: 2026-11-11
 
 ## Context

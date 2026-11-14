@@ -14,6 +14,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - M1.1 to M1.6 are done (2026-11-11 to 14); a design study on 2026-11-13 decided to leave Smithay
   step by step ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
+- Design sessions on 2026-11-14 drew the line between Yuna and the shell, portals included
+  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)), and took from the owner's
+  other projects what Yuna lacked ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)):
+  M1.10 added; reduced motion joins M1.7.
 - [M1.7](#m17--animations) is under way: designed with the owner on 2026-11-14 (ADR-0052 to
   ADR-0056); its steps below.
 
@@ -30,7 +34,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | In progress |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
-| [M1.10](#m110--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
+| [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
+| [M1.11](#m111--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
 ## Stage 1 — The headless core
 
@@ -119,6 +124,9 @@ milestone first needs it.
   compositor: `--animations`, sampling and frames, the drawn list, what clients are told, the
   pointer, captures, popups, MCP's `windows`. E5: frame-by-frame tests and pacing under draw
   hooks. E6: the driver and the measures, the GPU's with the owner's consent.
+- **Reduced motion.** Honoured by each animation
+  ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)); how it lightens each
+  one is put to the owner.
 - **Where it stands.** E1, E2 and E3 are done and checked (`yuna-layout`'s ids, `yuna-motion`'s
   springs, curves and motion); E3's review and E4 run; E5 and E6 follow.
 - **Done when.** Each animation is checked frame by frame on the test clock against
@@ -150,7 +158,23 @@ milestone first needs it.
   written reason; the ROADMAP's budgets are set from them, in an ADR; the owner has chosen the
   renderer on the prototype's figures, in another.
 
-### M1.10 — The stage's audit
+### M1.10 — Yuna for the owner's other projects
+
+- **Goal.** The owner's other projects can add Yuna to their shells and measure and drive their
+  programs in it, as they do in a headless sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
+- **Delivers.** A Nix package of Yuna, built in CI; `zwp_virtual_keyboard_v1` and
+  `zwlr_virtual_pointer_v1` on agents' seats only, with a test that they never reach the owner's
+  seat; `docs/client-needs.md`, what each project needs of Yuna and Yuna's answer;
+  `docs/protocols.md`, every protocol with its state, stage and users, and a test that compares
+  it with the globals Yuna announces; `scripts/test-check.sh`, which proves each check fails when
+  it should.
+- **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna headless as they do
+  in sway, run by hand from this repository without changing theirs; the protocols' test and
+  `test-check.sh` run in `check.sh`.
+- **Measured.** A frame's presentation times in Yuna against headless sway's, for the same
+  program.
+
+### M1.11 — The stage's audit
 
 - **Goal.** Stage 1 examined whole before 0.1.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
@@ -162,9 +186,11 @@ milestone first needs it.
   compositors.
 - Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
   (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
-- Idle built into Yuna rather than swayidle (the owner's idea, 2026-11-12): its own timer, outputs
-  dimmed and turned off, sleep, games, films and `idle-inhibit` keeping it awake, the shell's lock
-  client started ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)); Stage 2's design.
+- The RemoteDesktop and InputCapture portals, for remote control or a mouse shared between
+  machines, once a concrete use asks for them, with consent each session, an indicator and a
+  shortcut that stops them ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- A command that sets one configuration key until the next reload, as `hyprctl keyword` does,
+  beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
 - From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be

@@ -3,7 +3,8 @@
 - Status: Accepted; amends [0023](0023-frames-presentation-and-the-clock.md) (a VRR output's
   refreshes), [0031](0031-frames-drawn-ahead-of-their-boundary.md) (no deadline at the floor);
   amended by [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) (the panel's rules, the
-  replay)
+  replay), [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) (`fifo-v1` and
+  `commit-timing-v1` at Stage 2)
 - Date: 2026-11-14
 
 ## Context

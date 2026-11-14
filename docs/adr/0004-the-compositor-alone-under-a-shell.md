@@ -1,6 +1,6 @@
 # 0004. The compositor alone, a shell on top
 
-- Status: Accepted
+- Status: Accepted; amended by 0057
 - Date: 2026-11-11
 
 ## Context

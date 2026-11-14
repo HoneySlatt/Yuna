@@ -1,6 +1,6 @@
 # 0010. Animations and effects
 
-- Status: Accepted
+- Status: Accepted; amended by 0058
 - Date: 2026-11-11
 
 ## Context

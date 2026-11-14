@@ -84,7 +84,8 @@ it is met.
   effects off.
 - Films at a constant rate, an exact multiple of their own.
 - A configuration error never stops Yuna.
-- Room kept for reduced motion; accessibility later.
+- Reduced motion and reduced transparency honoured by each animation and each effect; the rest of
+  accessibility later ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
 
 ## 4. Decisions
 
@@ -114,6 +115,8 @@ it is met.
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Motion | The layout jumps; a pure crate, `yuna-motion`, turns its jumps into springs that keep their velocity, sampled at each frame's presentation; off headless unless asked ([ADR-0052](adr/0052-motion-in-a-pure-crate.md) to [ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
+| The other projects | Every protocol listed and tested; hidden games paced; Yuna 0.1 the owner's projects' test compositor; GPU resets survived; Nix modules in Yuna; fuzzing and crash reports ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 
@@ -150,12 +153,18 @@ it is met.
 - The rivals measured at rest and in motion; the bar's figures set.
 - A throwaway prototype of Vulkan against GLES, measured on every tier
   ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)).
+- Yuna for the owner's other projects
+  ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): a Nix package, the
+  virtual keyboard and pointer on agents' seats, what each project needs in
+  `docs/client-needs.md`; every protocol in `docs/protocols.md`, kept true by a test;
+  `scripts/test-check.sh`.
 
 **Exit.** SlimeEngine's and Aerith's windowed examples, and uwui's once it has some
 ([ADR-0025](adr/0025-applications-in-ci.md)), run in Yuna headless in CI, driven by an agent
 through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
 and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
-verdict; the rivals' figures and Vulkan's against GLES are in `docs/measurements.md`.
+verdict; the rivals' figures and Vulkan's against GLES are in `docs/measurements.md`; the owner's
+other projects can add Yuna to their shells and drive programs in it as they drive them in sway.
 
 ### Stage 2 — The desktop → 0.2
 
@@ -168,9 +177,18 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5 and the right size on every output.
 - Amane on top through standard protocols.
+- What Yuna takes from the shell's tools ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)):
+  idle with dimming and the lock started; the wallpaper; the theme file and variants; the
+  fullscreen state for the shell; `yuna-portal` with screen sharing, screenshots, global shortcuts,
+  inhibition and the wallpaper; the share picker; captures and recording; a night light in SDR.
 - The touchpad's gestures; the configuration live; per-application rules, terminal swallowing;
   input methods (`input-method-v2`).
-- The crash restart and session restore.
+- The crash restart and session restore; a crash report kept on the machine; recovery from a GPU
+  reset without a restart ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
+- The protocols games and the owner's applications need, as `docs/protocols.md` sets them:
+  pointer constraints and relative pointer, `fifo-v1` and `commit-timing-v1`, a hidden game paced
+  at its configured rate.
+- The package's NixOS and home-manager modules; the clients' messages fuzzed weekly.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
@@ -190,7 +208,8 @@ input reaches the owner's seat.
 **Goal.** Games are better on Yuna than on any other compositor.
 
 - VRR in a high band with smoothed changes, its prototype measured with a light sensor.
-- Tearing on request, direct scanout and overlay planes, game mode, shortcuts inhibited.
+- Tearing on request, direct scanout and overlay planes, game mode, shortcuts inhibited; games
+  told apart in the fullscreen state.
 - FSR upscaling of games; virtual outputs for streaming.
 
 **Exit.** The owner's games run with their VRR flicker measured below the bar's figure, and
@@ -201,8 +220,8 @@ latency, frames and upscaling at least as good as gamescope's.
 **Goal.** HDR and colour as reliable as KWin's, or better.
 
 - HDR output, SDR brightness, tone and gamut mapping, ICC profiles.
-- A night light correct under HDR; films at an exact multiple of their rate; no sleep while a video
-  plays.
+- The night light, captures and screen sharing correct under HDR; films at an exact multiple of
+  their rate, and told apart in the fullscreen state; no sleep while a video plays.
 - OLED care: luminance read from the panel, static elements protected from burn-in.
 
 **Exit.** The owner's films and HDR games show correctly, measured against KWin on the same content.
@@ -211,16 +230,18 @@ latency, frames and upscaling at least as good as gamescope's.
 
 **Goal.** The most beautiful desktop, at the lowest cost.
 
-- Blur and glass, animated borders, the built-in effects, exotic open and close animations.
+- Blur and glass, over the wallpaper too, animated borders, the built-in effects, exotic open and
+  close animations; the wallpaper's animated transitions.
 - The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
-  Alt-Tab with previews, screenshots, GPU-encoded recording, a colour picker.
-- Consent before capture; sandboxed applications kept from sensitive protocols.
+  Alt-Tab with previews, the capture tool's polish, a colour picker.
+- Sandboxed applications kept from sensitive protocols; reduced transparency for blur and glass.
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.
 
 ### Later
 
-NVIDIA; the user's own shaders; accessibility and reduced motion; shortcut modes; then the audit
+NVIDIA; the user's own shaders; accessibility: Yuna's own interfaces read by a screen reader, a
+magnifier, high contrast, sticky and slow keys; shortcut modes; then the audit
 before 1.0.
 
 ## 6. Release map
