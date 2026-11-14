@@ -35,8 +35,8 @@ The owner chose, on 2026-11-14, KWin's list, without ICC:
   and BT.2100. Each comes with the stage that renders it, in an ADR.
 - Every event and value is sent only at the version the client bound. Every rule of the
   protocol is checked, read as KWin reads it: a 0 for `max_cll`, `max_fall` or a mastering
-  maximum means unset; invalid mastering primaries are dropped, not refused. Values are computed
-  in 64 bits, so that no client's number overflows.
+  maximum means unset; invalid mastering primaries are dropped, not refused. Sums are computed
+  in 64 bits, products of coordinates in 128, so that no client's number overflows.
 - The handler is Yuna's code on wayland-server's `Dispatch`, not Smithay's dispatch macros. A
   surface's description is double-buffered in Smithay's cached state until Yuna's own core
   holds surfaces.

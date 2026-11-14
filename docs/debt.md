@@ -113,6 +113,17 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
 
+## Colours
+
+- A client may make any number of `color-management-v1` feedback objects: each is a list entry
+  Yuna checks after every arrangement. The protocol has no graceful refusal, and wayland-server
+  bounds no count of objects; a cap per client would end the client
+  ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)).
+- An HDR output's captures show its clients' values unconverted: nothing is drawn in its
+  colours until Stage 5 ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+- `wp_presentation` is version 2 in wayland-protocols 0.32.13: the `variable_rate` flag of
+  version 3, which tells a client its output runs under VRR, cannot be sent yet.
+
 ## Text input
 
 - Smithay `8fd9fe0` sends `enter` to a text field made after its surface took the keyboard only

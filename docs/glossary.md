@@ -32,6 +32,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Dwindle**: a layout where each new window splits the space of the focused one in two.
 - **Dynamic workspaces**: an option of the layout: each output keeps one empty unnamed workspace
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).
+- **EDID**: what a monitor tells the computer of itself: its modes, its VRR range, its colours
+  and HDR luminances; the owner's monitor's give the HDR outputs' colours.
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
   follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
@@ -45,6 +47,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **HDR10**: high dynamic range output as monitors take it: the PQ curve, BT.2020 primaries, at
   least 10 bits per channel, and static metadata sent with the picture (`HDR_OUTPUT_METADATA`).
 - **Headless mode**: Yuna running without a physical screen, on virtual outputs.
+- **Image description**: in `color-management-v1`, what a surface's pixel values mean or what an
+  output expects: a transfer function, primaries, luminances and a target colour volume. Each
+  has an **identity**, a number no other ever has, so that a client tells a copy from a new one
+  ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)).
 - **Hidden window**: a window on a workspace not shown, or in a column scrolled out of view; it gets
   at most one frame callback a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Home output**: the output a workspace goes back to when that output returns after being
@@ -77,6 +83,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
+- **Preferred description**: the image description Yuna tells a surface to draw in, its
+  window's workspace's output's ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in

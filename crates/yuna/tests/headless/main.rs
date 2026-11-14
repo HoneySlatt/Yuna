@@ -11,6 +11,8 @@ mod activation;
 mod capture_client;
 mod captures;
 mod client;
+mod colour;
+mod colour_client;
 mod dialogs;
 mod dmabuf;
 mod input_client;

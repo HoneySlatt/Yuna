@@ -4,6 +4,7 @@
 //! `dmabuf.rs`, the preferred scale in `scale.rs`, captures in `capture.rs` and
 //! `screencopy.rs`; viewporter needs no handler.
 
+use crate::colour::ColourState;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
@@ -132,6 +133,8 @@ pub(crate) struct State {
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     /// The next agent's capture's ticket: tickets increase and are never reused.
     pub next_capture_ticket: u64,
+    /// `color-management-v1`'s identities and feedback objects (`colour/`).
+    pub colour: ColourState,
 }
 
 impl State {
@@ -201,6 +204,10 @@ impl State {
             pending_captures: Vec::new(),
             captured: Vec::new(),
             next_capture_ticket: 1,
+            colour: {
+                crate::colour::protocol::manager_global(dh);
+                ColourState::new()
+            },
         })
     }
 

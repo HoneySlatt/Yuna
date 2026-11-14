@@ -23,6 +23,7 @@ use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use crate::Error;
 use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
+use crate::colour::SurfaceColourDescription;
 use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
@@ -430,6 +431,8 @@ impl Compositor {
             self.display
                 .dispatch_clients(&mut self.state)
                 .map_err(|e| Error::EventLoop(e.to_string()))?;
+            // After the dispatch, never inside it (`colour/protocol.rs`).
+            self.state.send_pending_information();
         }
         let now = self.state.clock.now();
         while let Some((_, deadline)) = self.state.clock.take_due(now) {
@@ -600,6 +603,13 @@ impl Compositor {
     /// arranged.
     pub fn windows(&self) -> Vec<WindowDescription> {
         self.state.describe_windows()
+    }
+
+    /// The colours the surfaces of `window` declared through `color-management-v1`, at their
+    /// last commit: its own surface's, its subsurfaces' and its popups'; those that declared
+    /// none are left out, and an unknown window has none.
+    pub fn window_colours(&self, window: WindowId) -> Vec<SurfaceColourDescription> {
+        self.state.window_colours(window)
     }
 
     /// The layout model, to read. Windows' ids start at 1 and increase in the order they map.

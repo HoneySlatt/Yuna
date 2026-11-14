@@ -475,6 +475,28 @@ is disabled at once and destroyed 10 s later, at the end of a round, so that a c
 to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
+### Colours
+
+`colour/` holds `color-management-v1`, Yuna's first handler written on wayland-server rather
+than through Smithay ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)). Its global lists
+KWin's set at the version each client bound. `description.rs` holds the image descriptions and
+their checks, with no Wayland object; `protocol.rs` the dispatch of every object, each keeping
+its state in its own user data. A record of a description gets an identity never used again.
+
+- Each output announces one description for its life, made when it is created: the owner's
+  monitor's PQ volume for an HDR output, gamma 2.2 and sRGB otherwise
+  ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). A removed
+  output's colour objects fail at once, with `no_output`.
+- A surface's description is double-buffered in Smithay's cached state, applied at its commit
+  as subsurfaces' state is; `Compositor::window_colours` reads a window's tree.
+- A surface's preferred description is its window's workspace's output's, else its seat's
+  focused output's. After each arrangement, each feedback object whose answer changed is told
+  `preferred_changed`, once.
+- The information a client asks of a description is sent after the dispatch, not inside it:
+  its last event destroys its object, and wayland-backend 0.3.17 panics when a request's new
+  object is destroyed before the request returns.
+- Nothing is drawn differently: the colour pipeline is Stage 5's.
+
 ### Captures
 
 A capture shows an output's *newest* frame ([ADR-0034](adr/0034-captures.md),

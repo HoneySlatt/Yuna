@@ -106,6 +106,7 @@ pub struct Window {
 /// What a subsurface of a window received: its `wl_surface.enter` events, and each
 /// `wl_surface.preferred_buffer_scale`.
 pub struct Subsurface {
+    pub surface: wl_surface::WlSurface,
     pub enters: u32,
     pub preferred_buffer_scales: Vec<i32>,
 }
@@ -509,6 +510,7 @@ impl Client {
         surface.damage_buffer(0, 0, 50, 50);
         surface.commit();
         self.state.subsurfaces.push(Subsurface {
+            surface: surface.clone(),
             enters: 0,
             preferred_buffer_scales: Vec::new(),
         });

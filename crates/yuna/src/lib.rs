@@ -18,11 +18,13 @@
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
 //! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);
-//! the scale each surface is told (`scale.rs`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
+//! surfaces declare of their colours (`colour/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
 
 mod activation;
 mod capture;
 mod clock;
+pub mod colour;
 mod compositor;
 mod dialog;
 mod dmabuf;

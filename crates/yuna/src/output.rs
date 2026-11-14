@@ -3,6 +3,7 @@
 //! boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -19,6 +20,8 @@ use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
 use crate::Error;
 use crate::capture::Failure;
 use crate::clock::Deadline;
+use crate::colour::Record;
+use crate::colour::description::{Monitor, sdr_description};
 use crate::compositor::OutputDescription;
 use crate::frames::Drawings;
 use crate::state::State;
@@ -35,13 +38,15 @@ const MAX_SCALE: f64 = 8.0;
 /// rate in millihertz.
 const NANOS_PER_SECOND_IN_MILLIHERTZ: u128 = 1_000_000_000_000;
 
-/// A virtual output's size, refresh rate and scale, checked by [`OutputMode::new`].
+/// A virtual output's size, refresh rate and scale, checked by [`OutputMode::new`], and the
+/// monitor whose HDR colours it announces, if any ([`OutputMode::with_hdr`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputMode {
     width: u32,
     height: u32,
     refresh_millihertz: u32,
     scale: f64,
+    hdr: Option<Monitor>,
 }
 
 /// Why an output's mode was refused.
@@ -89,7 +94,22 @@ impl OutputMode {
             height,
             refresh_millihertz,
             scale,
+            hdr: None,
         })
+    }
+
+    /// The same mode, announcing `monitor`'s HDR colours
+    /// ([ADR-0047](../../../docs/adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+    pub fn with_hdr(self, monitor: Monitor) -> OutputMode {
+        OutputMode {
+            hdr: Some(monitor),
+            ..self
+        }
+    }
+
+    /// The monitor whose HDR colours it announces; none for an SDR output.
+    pub fn hdr(&self) -> Option<Monitor> {
+        self.hdr
     }
 
     /// Its width in physical pixels.
@@ -127,6 +147,7 @@ impl Default for OutputMode {
             height: 2160,
             refresh_millihertz: 240_000,
             scale: 1.5,
+            hdr: None,
         }
     }
 }
@@ -153,6 +174,8 @@ pub(crate) struct VirtualOutput {
     /// How many frames were drawn on it: a capture session's later frame waits for new content
     /// only while this is what it was at the session's last frame.
     pub drawn_frames: u64,
+    /// The colours it announces, for its whole life (`colour/`).
+    pub colour: Arc<Record>,
     /// Its refresh boundaries, from its creation.
     pub boundaries: Boundaries,
     /// The boundary its armed refresh aims at, and when that refresh is due.
@@ -242,6 +265,10 @@ impl State {
                 crate::seats::belongs_to(client, seat)
             });
         let damage = OutputDamageTracker::from_output(&output);
+        let colour = self.colour.record(
+            mode.hdr()
+                .map_or_else(sdr_description, |monitor| monitor.hdr_description()),
+        );
         let boundaries = Boundaries {
             created_at: self.clock.now(),
             refresh_millihertz: mode.refresh_millihertz(),
@@ -257,6 +284,7 @@ impl State {
             damage,
             drawn_once: false,
             drawn_frames: 0,
+            colour,
             boundaries,
             armed_boundary: 0,
             armed_at: Duration::ZERO,

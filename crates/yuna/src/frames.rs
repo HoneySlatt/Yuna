@@ -399,6 +399,8 @@ impl State {
         self.focus_keyboard();
         self.clear_urgency_of_focused();
         self.arm_hidden_frames();
+        // Windows may have moved to another output, with other colours.
+        self.update_preferred_descriptions();
     }
 
     /// Records the output a toplevel is shown on, and sends its surfaces `wl_surface.enter` and
