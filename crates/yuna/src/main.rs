@@ -14,13 +14,14 @@ use smithay::reexports::rustix;
 use tracing::level_filters::LevelFilter;
 use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
+use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OutputMode};
 
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
-Usage: yuna --headless [--gpu] [--output MODE]...
-       yuna mcp [--gpu] [--output MODE] [--manual-clock]
+Usage: yuna --headless [--gpu] [--animations | --reduced-motion] [--output MODE]...
+       yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
        yuna -h | --help
        yuna -V | --version
 
@@ -38,6 +39,11 @@ Options:
                      WAYLAND_DISPLAY=<socket> on standard output, logs to standard error,
                      and stops on SIGTERM or SIGINT.
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
+      --animations   Move windows, the view and workspaces on springs, and fade the special
+                     workspace, rather than show each change at once, as without it.
+      --reduced-motion
+                     Animations under reduced motion: nothing slides, each change shows at
+                     once, and the special workspace's fade is kept, shorter.
       --output MODE  Add a virtual output. MODE is WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]:
                      WIDTHxHEIGHT physical pixels, refreshed RATE times a second, at SCALE
                      physical pixels per logical unit; with vrr=MIN, under VRR from MIN to
@@ -76,6 +82,10 @@ struct Headless {
     outputs: Vec<OutputMode>,
     /// The manual clock, which `mcp` alone takes.
     manual_clock: bool,
+    /// Animations on; off without `--animations` (ADR-0055).
+    animations: bool,
+    /// Animations on under reduced motion (ADR-0059): `--reduced-motion`.
+    reduced_motion: bool,
 }
 
 /// Reads the arguments that follow the program's name. They are `OsString`s, so that an argument
@@ -97,12 +107,21 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
     let mut headless = mcp;
     let mut gpu = false;
     let mut manual_clock = false;
+    let mut animations = false;
+    let mut reduced_motion = false;
     let mut outputs = Vec::new();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
             Some("--headless") if !headless => headless = true,
             Some("--gpu") if !gpu => gpu = true,
+            Some("--animations") if !animations && !reduced_motion => animations = true,
+            Some("--reduced-motion") if !animations && !reduced_motion => reduced_motion = true,
+            Some("--animations" | "--reduced-motion") if animations != reduced_motion => {
+                return Request::Invalid(
+                    "--animations and --reduced-motion are one choice: give one, once".to_owned(),
+                );
+            }
             Some("--manual-clock") if mcp && !manual_clock => manual_clock = true,
             Some("--headless") if mcp => {
                 return Request::Invalid("mcp is headless already: drop --headless".to_owned());
@@ -110,7 +129,7 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
             Some("--manual-clock") if !mcp => {
                 return Request::Invalid("--manual-clock is mcp's".to_owned());
             }
-            Some(flag @ ("--headless" | "--gpu" | "--manual-clock")) => {
+            Some(flag @ ("--headless" | "--gpu" | "--animations" | "--manual-clock")) => {
                 return Request::Invalid(format!("{flag} is given twice"));
             }
             Some("--output") => match arguments.next().map(|mode| read_output(mode)) {
@@ -130,7 +149,9 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
         }
     }
     if !headless {
-        return Request::Invalid("--gpu and --output need --headless".to_owned());
+        return Request::Invalid(
+            "--gpu, --animations, --reduced-motion and --output need --headless".to_owned(),
+        );
     }
     if mcp && outputs.len() > 1 {
         return Request::Invalid(
@@ -145,6 +166,8 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
         gpu,
         outputs,
         manual_clock,
+        animations,
+        reduced_motion,
     };
     if mcp {
         Request::Mcp(headless)
@@ -262,6 +285,7 @@ fn run_headless(headless: Headless) -> ExitCode {
 fn start_compositor(headless: Headless) -> Result<Compositor, ExitCode> {
     let config = Config {
         device: device_of(&headless),
+        animations: animations_of(&headless),
         outputs: headless.outputs,
         clock: ClockMode::Real,
         listen: true,
@@ -275,6 +299,15 @@ fn device_of(headless: &Headless) -> Device {
         Device::Gpu
     } else {
         Device::Software
+    }
+}
+
+/// The default animations, off unless `--animations` or `--reduced-motion` turned them on.
+fn animations_of(headless: &Headless) -> Settings {
+    Settings {
+        off: !headless.animations && !headless.reduced_motion,
+        reduced_motion: headless.reduced_motion,
+        ..Settings::default()
     }
 }
 
@@ -333,6 +366,7 @@ fn run_mcp(headless: Headless) -> ExitCode {
         },
         listen: false,
         announce_owner_seat: false,
+        animations: animations_of(&headless),
     };
     let compositor = match start(config) {
         Ok(compositor) => compositor,
@@ -467,6 +501,8 @@ mod tests {
                 gpu: false,
                 outputs: vec![mode(3840, 2160, 240.0, 1.5)],
                 manual_clock: false,
+                animations: false,
+                reduced_motion: false,
             })
         );
     }
@@ -486,6 +522,8 @@ mod tests {
                 gpu: true,
                 outputs: vec![mode(1920, 1080, 60.0, 1.0), mode(2560, 1440, 144.0, 1.25)],
                 manual_clock: false,
+                animations: false,
+                reduced_motion: false,
             })
         );
     }
@@ -498,6 +536,8 @@ mod tests {
                 gpu: false,
                 outputs: vec![mode(3840, 2160, 240.0, 1.5)],
                 manual_clock: false,
+                animations: false,
+                reduced_motion: false,
             })
         );
         assert_eq!(
@@ -512,6 +552,8 @@ mod tests {
                 gpu: true,
                 outputs: vec![mode(1920, 1080, 60.0, 1.0)],
                 manual_clock: true,
+                animations: false,
+                reduced_motion: false,
             })
         );
         for bad in [
@@ -579,6 +621,8 @@ mod tests {
                     gpu: false,
                     outputs: vec![expected],
                     manual_clock: false,
+                    animations: false,
+                    reduced_motion: false,
                 }),
                 "{text}"
             );
@@ -589,6 +633,8 @@ mod tests {
                 gpu: false,
                 outputs: vec![vrr_hdr],
                 manual_clock: false,
+                animations: false,
+                reduced_motion: false,
             })
         );
     }
@@ -623,6 +669,68 @@ mod tests {
                     }
                     other => panic!("{bad} was accepted: {other:?}"),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn animations_are_off_unless_asked_in_both_modes() {
+        for (command, mcp) in [
+            (&["--headless", "--animations"][..], false),
+            (&["mcp", "--animations"], true),
+        ] {
+            let expected = Headless {
+                gpu: false,
+                outputs: vec![mode(3840, 2160, 240.0, 1.5)],
+                manual_clock: false,
+                animations: true,
+                reduced_motion: false,
+            };
+            let expected = if mcp {
+                Request::Mcp(expected)
+            } else {
+                Request::Headless(expected)
+            };
+            assert_eq!(request(command), expected, "{command:?}");
+        }
+        for bad in [
+            &["--headless", "--animations", "--animations"][..],
+            &["mcp", "--animations", "--animations"],
+            &["--animations"],
+        ] {
+            match request(bad) {
+                Request::Invalid(reason) => assert!(reason.contains("--animations"), "{reason}"),
+                other => panic!("{bad:?} was accepted: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_motion_turns_animations_on_reduced_and_excludes_animations() {
+        let Request::Headless(headless) = request(&["--headless", "--reduced-motion"]) else {
+            panic!("--headless --reduced-motion was refused");
+        };
+        assert!(headless.reduced_motion && !headless.animations);
+        let settings = animations_of(&headless);
+        assert!(!settings.off && settings.reduced_motion);
+        assert!(matches!(
+            request(&["mcp", "--reduced-motion"]),
+            Request::Mcp(Headless {
+                reduced_motion: true,
+                ..
+            })
+        ));
+        for bad in [
+            &["--headless", "--animations", "--reduced-motion"][..],
+            &["--headless", "--reduced-motion", "--animations"],
+            &["mcp", "--reduced-motion", "--reduced-motion"],
+            &["--reduced-motion"],
+        ] {
+            match request(bad) {
+                Request::Invalid(reason) => {
+                    assert!(reason.contains("--reduced-motion"), "{reason}")
+                }
+                other => panic!("{bad:?} was accepted: {other:?}"),
             }
         }
     }

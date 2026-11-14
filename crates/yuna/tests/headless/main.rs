@@ -18,6 +18,7 @@ mod dmabuf;
 mod input_client;
 mod mcp;
 mod misbehaving;
+mod motion;
 mod outputs;
 mod popups;
 mod random_requests;

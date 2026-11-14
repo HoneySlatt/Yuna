@@ -17,6 +17,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 yuna-layout = { path = "../yuna-layout" }
+yuna-motion = { path = "../yuna-motion" }
 
 [dev-dependencies]
 proptest.workspace = true

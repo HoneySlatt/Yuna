@@ -885,6 +885,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "yuna-layout",
+ "yuna-motion",
 ]
 
 [[package]]

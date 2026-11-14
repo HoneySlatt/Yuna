@@ -15,7 +15,7 @@
 //! `already_constructed`, which Smithay does not send; one on a surface its client destroyed is
 //! ignored. Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -33,8 +33,9 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelStateSet, ToplevelSurface,
     XdgShellHandler, XdgShellState, XdgShellSurfaceUserData, XdgToplevelSurfaceData,
 };
-use yuna_layout::geometry::Size;
+use yuna_layout::geometry::{Rect, Size};
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
+use yuna_motion::Change;
 
 use crate::activation::TokenOrigin;
 use crate::compositor::WindowDescription;
@@ -67,7 +68,8 @@ pub(crate) struct Toplevel {
     pub limits: (Size, Size),
     /// Its window geometry, from its last commit: where its window starts in its surface.
     pub geometry: Rectangle<i32, Logical>,
-    /// The output it is shown on, from the last arrangement; none when it is hidden.
+    /// The output that tells it it is visible (`frames.rs`), from the last arrangement or the end
+    /// of that output's motion; none when it is hidden.
     pub shown_on: Option<OutputId>,
     /// When its surfaces were last sent frame callbacks.
     pub last_frame_sent: Option<Duration>,
@@ -202,6 +204,14 @@ pub(crate) fn refuse_second_role(role: &impl Resource) {
     }
 }
 
+/// An output as [`State::describe_windows`] reads it: where its frame draws each window now, each
+/// window's place, and when its motion ends.
+struct OutputNow {
+    drawn: HashMap<WindowId, Rect>,
+    places: HashMap<WindowId, Rect>,
+    motion_ends: Option<Duration>,
+}
+
 fn has_buffer(surface: &WlSurface) -> bool {
     with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
 }
@@ -317,7 +327,7 @@ impl State {
         }
         let waiting_activation = toplevel.waiting_activation.take();
         tracing::debug!(window = window.0, "window opened");
-        self.mark_layout_changed();
+        self.mark_layout_changed(Change::Animated);
         if let Some(token) = waiting_activation {
             self.activate(window, token);
         }
@@ -387,7 +397,7 @@ impl State {
             }
         }
         if changed {
-            self.mark_layout_changed();
+            self.mark_layout_changed(Change::Animated);
         }
     }
 
@@ -425,7 +435,7 @@ impl State {
         }
         tracing::debug!(window = window.0, "window closed");
         self.surfaces_gone = true;
-        self.mark_layout_changed();
+        self.mark_layout_changed(Change::Animated);
     }
 
     /// The toplevel of `root` is gone, or its surface is: its window closes and Yuna forgets it.
@@ -478,8 +488,38 @@ impl State {
         }
     }
 
-    /// Every window the layout holds, in the order they opened.
+    /// Every window the layout holds, in the order they opened: where each is drawn now, and
+    /// its place.
     pub(crate) fn describe_windows(&self) -> Vec<WindowDescription> {
+        let now = self.clock.now();
+        // Each output's frame now and its places, read once for all its windows.
+        let outputs: HashMap<OutputId, OutputNow> = self
+            .outputs
+            .iter()
+            .map(|output| {
+                let drawn = self
+                    .motion
+                    .frame(output.id, now)
+                    .windows
+                    .iter()
+                    .map(|drawn| (drawn.window, drawn.rect))
+                    .collect();
+                let places = output
+                    .placed
+                    .iter()
+                    .map(|placed| (placed.window, placed.rect))
+                    .collect();
+                let motion_ends = self.motion.end(output.id, now);
+                (
+                    output.id,
+                    OutputNow {
+                        drawn,
+                        places,
+                        motion_ends,
+                    },
+                )
+            })
+            .collect();
         let mut windows: Vec<WindowDescription> = self
             .windows
             .iter()
@@ -501,14 +541,10 @@ impl State {
                     .client()
                     .and_then(|client| client.get_credentials(&self.display_handle).ok())
                     .map(|credentials| credentials.pid);
-                let rect = toplevel.shown_on.and_then(|output| {
-                    let output = &self.outputs[self.output_index(output)?];
-                    output
-                        .placed
-                        .iter()
-                        .find(|placed| placed.window == window)
-                        .map(|placed| placed.rect)
-                });
+                let on_output = toplevel.shown_on.and_then(|output| outputs.get(&output));
+                let rect = on_output.and_then(|output| output.drawn.get(&window).copied());
+                let place = on_output.and_then(|output| output.places.get(&window).copied());
+                let motion_ends = on_output.and_then(|output| output.motion_ends);
                 Some(WindowDescription {
                     id: window,
                     app_id,
@@ -518,6 +554,8 @@ impl State {
                     output: toplevel.shown_on,
                     workspace: info.workspace,
                     rect,
+                    place,
+                    motion_ends,
                     focused: self.layout.focused(info.seat) == Some(window),
                     floating: info.floating,
                     fullscreen: info.fullscreen,
@@ -584,7 +622,7 @@ impl State {
                 if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                     toplevel.configure_owed = true;
                 }
-                self.mark_layout_changed();
+                self.mark_layout_changed(Change::Animated);
             }
             Err(error) => {
                 tracing::debug!(%error, window = window.0, "a request is refused");

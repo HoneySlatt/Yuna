@@ -72,8 +72,11 @@ It needs no screen of its own. On the owner's machine, agents run it inside `age
 one measure at a time.
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
-input and output, with `--gpu`, one `--output` for each seat's first output, and
-`--manual-clock` ([ADR-0033](docs/adr/0033-the-mcp-server.md)). An agent's first call is `seat
+input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
+([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which
+`yuna --headless` takes too: both show each change at once without them
+([ADR-0055](docs/adr/0055-what-moves-first-and-animations-off-headless.md),
+[ADR-0059](docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). An agent's first call is `seat
 create`; every other tool but `clock` takes the seat's handle
 ([ADR-0037](docs/adr/0037-seats-tools-input-and-closing.md)). For Claude Code, for example:
 `claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes,

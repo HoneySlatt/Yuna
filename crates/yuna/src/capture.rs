@@ -668,8 +668,9 @@ impl State {
         }
     }
 
-    /// What an agent's capture of `target` reads on output `index`, as the output last arranged
-    /// it, and the window it shows.
+    /// What an agent's capture of `target` reads on output `index`, as its last frame drew it,
+    /// and the window it shows: a window where that frame drew it, moving or not
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     fn agent_area(
         &self,
         index: usize,
@@ -691,10 +692,10 @@ impl State {
                 area(output.id, &output.mode, rect, size).map(|area| (area, None))
             }
             CaptureTarget::Window(window) => {
-                let placed = output
-                    .placed
+                let drawn = output
+                    .drawn
                     .iter()
-                    .find(|placed| placed.window == window && placed.rect.overlaps(&output.rect))
+                    .find(|drawn| drawn.window == window && drawn.rect.overlaps(&output.rect))
                     .ok_or_else(|| {
                         format!(
                             "window {} left output {} before its frame: capture it again",
@@ -702,10 +703,10 @@ impl State {
                         )
                     })?;
                 let rect = Rect::new(
-                    placed.rect.x - output.rect.x,
-                    placed.rect.y - output.rect.y,
-                    placed.rect.w,
-                    placed.rect.h,
+                    drawn.rect.x - output.rect.x,
+                    drawn.rect.y - output.rect.y,
+                    drawn.rect.w,
+                    drawn.rect.h,
                 );
                 area(output.id, &output.mode, rect, size)
                     .map(|area| (area, Some(window)))

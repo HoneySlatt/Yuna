@@ -31,6 +31,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::{Logical, Point, Serial};
 use yuna_layout::SeatId;
+use yuna_motion::Change;
 
 use crate::Error;
 use crate::popups::ActivePopupGrab;
@@ -346,7 +347,8 @@ impl State {
         }
         removed.seat.remove_keyboard();
         removed.seat.remove_pointer();
-        self.mark_layout_changed();
+        // A seat removed takes its outputs away at once, as an output removed does.
+        self.mark_layout_changed(Change::Instant);
         tracing::info!(seat = id.0, "seat removed");
         Ok(())
     }

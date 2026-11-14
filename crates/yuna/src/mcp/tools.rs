@@ -20,6 +20,7 @@ use crate::colour::description::Chromaticities;
 use crate::compositor::{OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
 use crate::{CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion};
+use yuna_layout::geometry::Rect;
 use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
 
 /// The longest a call may wait: under the 60 s at which Codex gives up on a call by default
@@ -158,8 +159,11 @@ pub fn definitions() -> Value {
             "title": "Windows",
             "description": "List a seat's windows, in the order they opened: id, seat, \
                 application id (null when its client gave none), title, process id, output, \
-                workspace (null for an unnamed one), logical rectangle (null when hidden), \
-                focus, floating, fullscreen. With colour, each window also gives colours: one \
+                workspace (null for an unnamed one), rect: the logical rectangle it is drawn \
+                at now (null when hidden), place: its rectangle in the layout, where it rests \
+                once its motion ends (null when hidden), motion_ends_ns: when its output's \
+                motion ends, on the clock's scale (null at rest), focus, floating, fullscreen. \
+                Without --animations, rect is place and motion_ends_ns null. With colour, each window also gives colours: one \
                 entry for each of its surfaces that declared its colours through \
                 color-management-v1, its own, then its subsurfaces' and its popups': the \
                 surface's role, transfer function, primaries (a protocol name, else their \
@@ -694,9 +698,9 @@ pub fn window_json(
         "pid": window.pid,
         "output": window.output.map(|output| output.0),
         "workspace": window.workspace,
-        "rect": window.rect.map(|rect| json!({
-            "x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h,
-        })),
+        "rect": window.rect.map(rect_json),
+        "place": window.place.map(rect_json),
+        "motion_ends_ns": window.motion_ends.map(|at| at.as_nanos() as u64),
         "focused": window.focused,
         "floating": window.floating,
         "fullscreen": window.fullscreen,
@@ -705,6 +709,11 @@ pub fn window_json(
         described["colours"] = colours.iter().map(surface_colour_json).collect();
     }
     described
+}
+
+/// A rectangle in logical units.
+fn rect_json(rect: Rect) -> Value {
+    json!({ "x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h })
 }
 
 /// A surface's declared colours, in the protocol's names, its luminances in cd/m² and its
@@ -1148,6 +1157,8 @@ mod tests {
             output: None,
             workspace: None,
             rect: None,
+            place: None,
+            motion_ends: None,
             focused: false,
             floating: false,
             fullscreen: false,

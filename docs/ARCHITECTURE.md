@@ -32,10 +32,10 @@ One Cargo workspace; its crates live in `crates/`.
   its logs; `serde`, with its derive, and `serde_json` for MCP's messages
   ([ADR-0033](adr/0033-the-mcp-server.md)); `png` for a capture's image
   ([ADR-0034](adr/0034-captures.md)), which builds `miniz_oxide` twice, 0.8 for itself and 0.9
-  for `flate2`; `yuna-layout`. rustix, which Smithay re-exports, makes its system calls: pipes,
-  signals, `waitpid`, `prctl`. Its tests use `wayland-client` and `wayland-protocols`' client
-  side, staging protocols included, proptest, without its default features, and `png` to decode
-  captures.
+  for `flate2`; `yuna-layout` and `yuna-motion`. rustix, which Smithay re-exports, makes its
+  system calls: pipes, signals, `waitpid`, `prctl`. Its tests use `wayland-client` and
+  `wayland-protocols`' client side, staging protocols included, proptest, without its default
+  features, and `png` to decode captures.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
@@ -83,7 +83,10 @@ The flow of an operation:
 The compositor then reads `Layout::arrange(output)`: the windows that output shows, bottom to top,
 each with the size its client is asked, its rectangle in logical coordinates on the output's
 physical pixel grid, whether it is told it is fullscreen, and whether it has its seat's focus.
-Nothing in the model runs between operations. `Layout::arrange_workspace(output, workspace)`
+Nothing in the model runs between operations. The compositor hands the same layout to
+`yuna-motion`'s `Motion`, which turns the jump into motion: each frame draws the windows where the
+motion has them at the time the frame is shown, until they rest at their places
+([A frame](#a-frame), [ADR-0052](adr/0052-motion-in-a-pure-crate.md)). `Layout::arrange_workspace(output, workspace)`
 arranges any of an output's workspaces, named by its id, as that output would show it alone,
 changing nothing: what the owner's peek at a workspace not shown draws, in a thumbnail or an
 overview ([ADR-0015](adr/0015-agents-workspaces.md)). Nothing draws a peek before the desktop.
@@ -179,8 +182,9 @@ operation, and an example measures the model:
 - `dialog.rs`: `xdg-dialog-v1`: offered; the modal hint is read, and nothing uses it yet.
 - `selection.rs`: the clipboard (`wl_data_device`), the primary selection and
   `ext-data-control-v1`, on Smithay's handlers.
-- `frames.rs`: the frame loop: when an output refreshes, what is arranged, drawn, called back and
-  reported presented, and the hidden windows.
+- `frames.rs`: the frame loop: when an output refreshes, what is arranged, the motion each frame
+  samples, what is drawn, called back and reported presented, what clients are told, and the
+  hidden windows.
 - `capture.rs`: captures, in Yuna's terms: which frame, which pixels, and how an agent's image maps
   to logical coordinates ([below](#captures)).
 - `screencopy.rs`: `ext-image-copy-capture-v1` and its output sources, a thin layer over
@@ -220,10 +224,12 @@ counts its refreshes ([VRR outputs](#vrr-outputs)). The frame loop asks both kin
 questions, through `Timing` (`output.rs`).
 
 A commit, or a change of the layout, arms its output's refresh
-([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). When the output is idle, the
-boundary after its last refresh passed, the refresh is due at once and aims at the first boundary
-at or after it. Otherwise it is due at a boundary minus the output's lead, the first after its
-last refresh whose deadline is not past. The lead is the longest drawing of the last half second,
+([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)); while the output's motion runs,
+each refresh arms the next. When the output is idle, the boundary after its last refresh passed,
+the refresh is due at once and aims at the first boundary at or after it; its motion is sampled at
+the boundary its drawing can reach, the first at or after now plus the lead. Otherwise it is due
+at a boundary minus the output's lead, the first after its last refresh whose deadline is not
+past, and samples its motion at that boundary. The lead is the longest drawing of the last half second,
 timed from its deadline to its end, at least 2 ms, plus 1 ms, at most one period
 (`frames.rs`, `Drawings`). On the manual clock a drawing takes no time unless the draw hook
 passes some, so the lead is 3 ms.
@@ -370,30 +376,54 @@ DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
 
 At an output's refresh, due at once or a lead before the boundary it aims at:
 
-1. If the layout changed, it is arranged once, for every output. Each window is told its asked
-   size and its states: tiled, fullscreen, activated if it has its seat's focus, suspended if it
-   is shown on no output. A configure goes out only when its size or states changed, or when a
-   request of its client is owed one. Each seat's keyboard focus follows `Layout::focused` for
-   that seat, or the topmost popup of the seat's grab on that window: only here does it change
-   window. The seat's selections follow it; the focused window is no longer urgent. Each
-   agent's pointer is put on what is under it now, if that changed.
-2. The output is drawn if anything on it is damaged: each window it shows, bottom to top, its
-   surface tree with its window geometry at its rectangle's corner, cut to the rectangle, then
-   its popups just above it, over a plain background. Surfaces sit on whole pixels: where the
-   geometry's offset in its surface is not a whole number of pixels, it is rounded up, so that
-   the cut takes a sliver of content rather than show the window's margin. A surface drawn at
-   its output's physical size is drawn exactly ([Scale](#scale)). A popup's corner is rounded
-   to the nearest pixel, and a popup is cut to the output, not to its window: a menu may
-   overflow it. Yuna waits until the drawing is done.
-3. The surfaces shown there, windows' and their popups', get their frame callbacks. Their
-   presentation feedback is taken and held by the output until the boundary the frame is
-   presented at: the one it aimed at if its drawing ended by then, else the first after. It is
-   sent at that boundary, through the output's presentation deadline, armed only when a surface
-   asked feedback. `seq` is the boundary's number, the flags VSYNC, the refresh the output's
-   period. A refresh that drew nothing still counts as the output's last refresh, so that
-   callbacks asked without damage come once a period.
+1. If the layout changed, it is arranged once, for every output, and `Motion::update` turns what
+   moved into motion, at the refresh's time
+   ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)). A change is
+   animated, unless outputs or seats were added or removed since the last arrangement: then it
+   is instant, and every motion ends at once. With animations off, the default of both headless
+   modes, every change is instant ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
+   Each window is told its asked size and its states: tiled, fullscreen, activated if it has its
+   seat's focus, suspended if it is told it is hidden, as below. A configure goes out only when
+   its size or states changed, or when a request of its client is owed one. Each seat's keyboard
+   focus follows `Layout::focused` for that seat, or the topmost popup of the seat's grab on that
+   window: only here does it change window. The seat's selections follow it; the focused window
+   is no longer urgent. Each agent's pointer is put on what is under it now, if that changed,
+   unless windows move on its output.
+2. The motion gives the output's frame at the time it is shown if on time: the boundary the
+   refresh aims at, or, for a refresh due at once, the one its drawing can reach. Each window has
+   a rectangle and an alpha there; at rest, and with animations off, they are its place and 1.
+   The output is drawn if anything on it is damaged: each window the frame shows on it, bottom
+   to top, its surface tree with its window geometry at its rectangle's corner, cut to the
+   rectangle, at its alpha, then its popups just above it, at the same alpha, over a plain
+   background. Surfaces sit on whole pixels: where the geometry's offset in its surface is not a
+   whole number of pixels, it is rounded up, so that the cut takes a sliver of content rather
+   than show the window's margin. A surface drawn at its output's physical size is drawn exactly
+   ([Scale](#scale)). A popup's corner is rounded to the nearest pixel, and a popup is cut to the
+   output, not to its window: a menu may overflow it. Yuna waits until the drawing is done. The
+   output keeps the frame's list, which captures cut ([Captures](#captures)).
+3. The surfaces it shows, windows' and their popups', and those of the windows it tells they are
+   visible, get their frame callbacks. The presentation feedback of those it shows is taken and
+   held by the output until the boundary the frame is presented at: the one it aimed at if its
+   drawing ended by then, else the first after. It is sent at that boundary, through the output's
+   presentation deadline, armed only when a surface asked feedback. `seq` is the boundary's
+   number, the flags VSYNC, the refresh the output's period. A refresh that drew nothing still
+   counts as the output's last refresh, so that callbacks asked without damage come once a
+   period.
+4. While the output's motion is not over at the time sampled, the refresh arms the next one, as
+   for something new, whether it drew, found nothing changed or failed. The last frame shows the
+   arrangement exactly; then nothing is armed. At that refresh the windows are told once what the
+   motion's end says, and the pointer on that output is put on what is under it.
 
-A window shown on no output, on a workspace not shown or scrolled out of view, is hidden: its
+What is drawn follows the motion; what a client is told follows its place. A window is told it
+is visible, `enter` and full-rate callbacks, when its place comes onto an output, at an
+arrangement; while the output's motion runs it stays told so as long as it is drawn, and is told
+hidden only at the refresh where the motion ends, if its place is not on the output. A window
+that only passes through the view is drawn from its last buffer and called back, never told. So
+a window gets at most one such change per operation, never one a frame. A frame drawn at once
+that beats its lead is shown a boundary before the one it sampled; the next refresh then samples
+that boundary again and finds nothing changed.
+
+A window hidden, on a workspace not shown or scrolled out of view, is told `suspended`: its
 content updates are discarded, and its frame callbacks go out at most once a second, through the
 hidden windows' deadline, armed only while one of them waits; its popups' too. A window the
 layout refused is treated the same way.
@@ -491,10 +521,13 @@ server makes for the seat an agent names; the owner's seat takes none. Its event
 clock's time.
 
 1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
-   is found among the windows that output shows, as drawn, top to bottom, each window's popups
-   before it, a window cut to its rectangle: the surface whose input region holds the point. Smithay
-   sends `enter`, `leave` and `motion`. After each arrangement, a pointer is moved onto what is
-   under it then, when that changed.
+   is found among the windows that output draws at the event's time, where the motion has them,
+   top to bottom, each window's popups before it, a window cut to its rectangle: the surface whose
+   input region holds the point. Smithay sends `enter`, `leave` and `motion`. After each
+   arrangement, a pointer is moved onto what is under it then, when that changed; while windows
+   move on its output, its focus waits instead, and a button or a scroll first moves it onto what
+   is drawn under it, so that a click reaches what the screen shows; the refresh where the motion
+   ends moves it once ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 2. A button press focuses the window under it: its keyboard follows at the next refresh. The
    press's serial, recorded with that window, may start a popup grab, a drag or an activation
    token there. A wheel step scrolls 15 units, and 120 in `axis_value120`.
@@ -573,7 +606,8 @@ the frame its buffer holds. Nothing is drawn for a capture.
    so that clients asking frames again and again cost one copy a refresh at most; an agent's,
    one at a time for each seat, is copied at once instead.
 2. An agent's capture reads the physical pixels under its area: the whole output, a region in
-   whole logical units, or the rectangle its window was drawn at, cut to the output. A window
+   whole logical units, or the rectangle its window was drawn at in that frame, moving or not,
+   cut to the output. A window
    hidden when asked is refused; while an arrangement is pending, its capture waits for it, and
    takes the output it shows the window on, or fails if it hides it. An area that holds no whole
    pixel, an odd scale's last unit, is refused. Its *mapping* says where the image's top-left corner is in the
@@ -641,7 +675,9 @@ window or program unknown there:
   the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
   each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
-- `windows` lists a seat's windows, as `Compositor::windows` describes them. With `colour`,
+- `windows` lists a seat's windows, as `Compositor::windows` describes them: its `rect`, where
+  it is drawn at the call's time; its `place`, where it rests once its motion ends; and
+  `motion_ends_ns`, when its output's motion ends, null at rest. With `colour`,
   each comes with the descriptions its surfaces declared, as `Compositor::window_colours` gives
   them, luminances in cd/m² and chromaticities as numbers; without it the reply leaves them out,
   so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
@@ -689,6 +725,10 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 `XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM
 or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
 clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
+Both run with animations off, each change shown at once; `--animations` turns them on, with
+`yuna-motion`'s default springs and curve
+([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)). A flag given twice is a
+usage error.
 `--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
 RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
 `hdr` ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
@@ -728,7 +768,14 @@ own thread, both `took_us`.
   removed output, the bound on sessions, a client that leaves with a frame waiting. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
-  not read, a line too long, an input that closes.
+  not read, a line too long, an input that closes. `motion.rs` in it turns animations on: each
+  boundary of two retargeted scrolls checked against a `Motion` of the test's own, fed the same
+  layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
+  drawn at once sampled at the boundary its drawing reaches; a workspace switch that tells the
+  window left hidden once, after its last frame; five moves during a motion, at most one
+  configure for each window from each; a pointer and a click mid-scroll reaching the window drawn
+  under them; a window's capture where its frame drew it; the special workspace's fade read in
+  its pixels; animations off drawing one frame; and `windows` through MCP mid-motion and at rest.
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no

@@ -27,6 +27,7 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 use yuna_layout::{SeatId, WindowId};
+use yuna_motion::Change;
 
 use crate::input::window_of_surface;
 use crate::seats::{seat_of_surface, seat_of_wl_seat};
@@ -128,7 +129,7 @@ impl State {
         if seat.is_some_and(|seat| token.is_valid_at(self.clock.now(), seat)) {
             match self.layout.request_activation(window) {
                 Ok(true) => {
-                    self.mark_layout_changed();
+                    self.mark_layout_changed(Change::Animated);
                     return;
                 }
                 Ok(false) => {

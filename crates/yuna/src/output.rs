@@ -17,7 +17,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
 use smithay::wayland::presentation::Refresh;
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
+use yuna_layout::{OutputConfig, OutputId, Placed, SeatId, WindowId};
+use yuna_motion::{Change, Drawn};
 
 use crate::Error;
 use crate::capture::Failure;
@@ -221,6 +222,10 @@ pub(crate) struct VirtualOutput {
     /// The refresh its armed refresh aims at, and when that refresh is due.
     pub armed_refresh: RefreshAt,
     pub armed_at: Duration,
+    /// When the frame of its armed refresh is presented if on time, the time its motion is
+    /// sampled at: the boundary it aims at, or for a refresh armed at once, the one it can reach
+    /// after its drawing ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub armed_sample_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,
     /// Whether something new waits to be drawn: a commit with a buffer or damage, or a change of
@@ -239,8 +244,17 @@ pub(crate) struct VirtualOutput {
     pub held_feedback: Vec<(RefreshAt, OutputPresentationFeedback)>,
     /// Its recent drawings, from which its lead is predicted.
     pub drawings: Drawings,
-    /// The windows it shows, bottom to top, as the layout last arranged them.
+    /// The windows it shows, bottom to top, as the layout last arranged them: their places.
     pub placed: Vec<Placed>,
+    /// What its last frame drew, bottom to top, as the motion gave it: what a capture of that
+    /// frame cuts.
+    pub drawn: Vec<Drawn>,
+    /// The windows it tells they are visible, in increasing order: as the motion said at the
+    /// last arrangement, or at the refresh where its motion ended.
+    pub told: Vec<WindowId>,
+    /// Whether its motion ran at its last arrangement or refresh: the refresh that finds it
+    /// ended tells its windows once.
+    pub in_motion: bool,
 }
 
 impl State {
@@ -345,6 +359,7 @@ impl State {
             timing,
             armed_refresh: creation,
             armed_at: Duration::ZERO,
+            armed_sample_at: Duration::ZERO,
             armed_at_once: false,
             content_pending: false,
             armed_for_content: false,
@@ -353,6 +368,9 @@ impl State {
             held_feedback: Vec::new(),
             drawings: Drawings::default(),
             placed: Vec::new(),
+            drawn: Vec::new(),
+            told: Vec::new(),
+            in_motion: false,
         });
         tracing::info!(
             output = id.0,
@@ -362,7 +380,8 @@ impl State {
             scale = mode.scale(),
             "virtual output created"
         );
-        self.mark_layout_changed();
+        // Outputs added and removed show at once (ADR-0052).
+        self.mark_layout_changed(Change::Instant);
         Ok(id)
     }
 }
@@ -421,7 +440,7 @@ impl State {
             .disable_global::<State>(removed.global.clone());
         self.retired_globals.push((Instant::now(), removed.global));
         tracing::info!(output = id.0, "virtual output removed");
-        self.mark_layout_changed();
+        self.mark_layout_changed(Change::Instant);
     }
 
     /// Every output, in the order they were created.

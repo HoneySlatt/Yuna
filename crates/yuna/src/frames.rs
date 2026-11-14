@@ -1,34 +1,55 @@
 //! The frame loop ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
-//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
+//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)), and motion in it
+//! ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 //!
 //! A commit of a surface shown on an output, or a change of the layout, arms that output's next
-//! refresh; nothing is armed otherwise. The refresh is due at once when the output is idle: no
-//! frame waits for its refresh, and one could begin now: at a fixed rate, the boundary after its
-//! last refresh has passed; under VRR, the panel can start a refresh a vertical blank from now,
-//! and, with nothing new to draw, a shortest refresh after the last one
+//! refresh; so does a refresh while the output's motion runs; nothing is armed otherwise. The
+//! refresh is due at once when the output is idle: no frame waits for its refresh, and one could
+//! begin now: at a fixed rate, the boundary after its last refresh has passed; under VRR, the
+//! panel can start a refresh a vertical blank from now, and, with nothing new to draw, a shortest
+//! refresh after the last one
 //! ([ADR-0051](../../../docs/adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)).
 //! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
 //! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
-//! whose time minus the lead is not yet past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
-//! [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period; a drawing is timed from its
-//! deadline to its end.
+//! whose time minus the lead is not yet past. The lead is the longest drawing of the last
+//! [`DRAWING_WINDOW`], each at least [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period;
+//! a drawing is timed from its deadline to its end.
 //!
-//! At the refresh, in order: the layout is arranged once if it changed, and the configures that
-//! changed are sent; the output is drawn if anything on it is damaged; its shown surfaces get
-//! their frame callbacks. Their presentation feedback is taken then and held until the boundary
-//! the frame is presented at: the one it aimed at if its drawing ended by then, else the first
-//! after. It is sent at that boundary, through a deadline of its own. The captures that waited
-//! for the refresh are copied after its drawing (`capture.rs`).
+//! At the refresh, in order:
+//!
+//! 1. If the layout changed, it is arranged once, for every output, and handed to the motion
+//!    (`yuna_motion::Motion::update`), as an animated change or, after outputs or seats were added
+//!    or removed, an instant one; the windows are told their sizes and states.
+//! 2. The motion gives the output's frame at the time it is presented when on time, the boundary
+//!    the refresh aims at; for a refresh due at once, the boundary its drawing can reach, a lead
+//!    from now. Each window is drawn at its rectangle and alpha then; with animations off, or at
+//!    rest, that is the arrangement. The output is drawn if anything on it is damaged, and keeps
+//!    what it drew, which captures cut.
+//! 3. The windows it shows, and those it tells they are visible, get their frame callbacks. The
+//!    presentation feedback of those it shows is taken and held until the boundary the frame is
+//!    presented at: the one it aimed at if its drawing ended by then, else the first after. It is
+//!    sent at that boundary, through a deadline of its own. The captures that waited for the
+//!    refresh are copied after its drawing (`capture.rs`).
+//! 4. While the motion is not over at the boundary sampled, the next refresh is armed as for
+//!    something new, whether this one drew, found nothing changed or failed: the last frame is
+//!    the arrangement, and then nothing is armed.
+//!
+//! What a client is told follows its place, not its drawn rectangle: a window is told it is
+//! visible, `enter` and full-rate callbacks, when its place comes onto the output, at an
+//! arrangement; it stays told while the motion draws it, and is told it is hidden only at the
+//! refresh where its output's motion ends, if its place is then off the output. A window that
+//! only passes through the view is drawn and called back, never told. So each window gets at most
+//! one such change per operation, never one per frame.
 //!
 //! A window shown on no output is hidden: it is told `suspended`, its content updates are
 //! discarded, and its frame callbacks go out at most once a second, through one deadline armed
 //! only while such a window waits for one. A window the layout refused to open is treated the
 //! same way, so that its client never waits for ever.
 //!
-//! A window's popups go with it: drawn just above it, called back, reported presented or
-//! discarded, and entering or leaving outputs with its own surfaces.
+//! A window's popups go with it: drawn just above it, at its rectangle and alpha, called back,
+//! reported presented or discarded, and entering or leaving outputs with its own surfaces.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
@@ -45,6 +66,7 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::presentation::PresentationFeedbackCachedState;
 use yuna_layout::{OutputId, Placed, SeatId, WindowId};
+use yuna_motion::{Change, Drawn};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
@@ -73,9 +95,14 @@ pub const DRAWING_FLOOR: Duration = Duration::from_millis(2);
 pub const LEAD_MARGIN: Duration = Duration::from_millis(1);
 
 impl State {
-    /// Marks the layout changed: every output arranges it again at its next refresh.
-    pub(crate) fn mark_layout_changed(&mut self) {
+    /// Marks the layout changed: every output arranges it again at its next refresh. A change
+    /// that must show at once, [`Change::Instant`], ends every motion at that arrangement, however
+    /// many animated changes come with it.
+    pub(crate) fn mark_layout_changed(&mut self, change: Change) {
         self.layout_dirty = true;
+        if change == Change::Instant {
+            self.layout_change = Change::Instant;
+        }
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
             self.schedule_refresh_for_content(id);
@@ -111,18 +138,17 @@ impl State {
         // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
         // may start a refresh now: no frame waits for its own.
         let idle = output.timing.is_idle(now, output.last_refresh, paced);
+        let lead = output.drawings.lead(now, output.mode.period());
+        let ready = output
+            .timing
+            .reachable(now.saturating_add(lead), output.last_refresh, paced);
         let (at, aimed) = if idle {
             (
                 now,
                 output.timing.reachable(now, output.last_refresh, paced),
             )
         } else {
-            let lead = output.drawings.lead(now, output.mode.period());
-            let aimed =
-                output
-                    .timing
-                    .reachable(now.saturating_add(lead), output.last_refresh, paced);
-            (aimed.at.saturating_sub(lead), aimed)
+            (ready.at.saturating_sub(lead), ready)
         };
         if self.clock.is_armed(deadline) && output.armed_at <= at {
             // The refresh armed for nothing new comes first already: it draws the new content.
@@ -131,6 +157,9 @@ impl State {
         }
         output.armed_for_content = !paced;
         output.armed_refresh = aimed;
+        // Drawn at once, a frame is shown once its drawing ends: its motion is sampled at the
+        // refresh it can reach then, not the first after now (ADR-0054).
+        output.armed_sample_at = ready.at;
         output.armed_at = at;
         output.armed_at_once = idle;
         self.clock.arm(deadline, at);
@@ -182,21 +211,49 @@ impl State {
 
     /// An output's refresh. See the module's documentation.
     fn refresh(&mut self, output: OutputId) {
-        let output_id = output;
         if self.layout_dirty {
             self.arrange();
         }
         let Some(index) = self.output_index(output) else {
             return;
         };
+        let sample_at = self.outputs[index].armed_sample_at;
+        let frame = self.motion.frame(output, sample_at);
+        self.draw_and_present(index, frame.windows);
+        let Some(index) = self.output_index(output) else {
+            return;
+        };
+        if self.motion.end(output, sample_at).is_some() {
+            // The next boundary has a frame of its own, whether this one drew, found nothing
+            // changed or failed: a motion never stops short of its end.
+            self.outputs[index].in_motion = true;
+            self.schedule_refresh_for_content(output);
+        } else if std::mem::take(&mut self.outputs[index].in_motion) {
+            self.tell_motion_ended(output, sample_at);
+        }
+    }
+
+    /// Draws output `index`'s frame, `drawn` as the motion gives it, if anything on it is
+    /// damaged; calls back the surfaces it shows or tells they are visible; holds their
+    /// presentation feedback until the frame's boundary; and copies the captures that waited.
+    fn draw_and_present(&mut self, index: usize, drawn: Vec<Drawn>) {
+        let output_id = self.outputs[index].id;
         // What waited is drawn now, or found unchanged.
         let armed_for_content = std::mem::take(&mut self.outputs[index].armed_for_content);
         self.outputs[index].content_pending = false;
-        let shown = self.shown(index);
+        let output_rect = self.outputs[index].rect;
+        let shown: Vec<Drawn> = drawn
+            .iter()
+            .filter(|window| window.rect.overlaps(&output_rect))
+            .copied()
+            .collect();
         let drawing = self.draw(index, &shown);
+        if !matches!(drawing, Drawing::Failed) {
+            self.outputs[index].drawn = drawn;
+        }
         let now = self.clock.now();
-        for placed in &shown {
-            if let Some(root) = self.root_of(placed.window) {
+        for window in self.called_back(index, &shown) {
+            if let Some(root) = self.root_of(window) {
                 self.send_frames(&root, now);
             }
         }
@@ -233,8 +290,8 @@ impl State {
             Drawing::Unchanged => aimed,
             Drawing::Failed => {
                 output.last_refresh = later(output.last_refresh, aimed);
-                for placed in &shown {
-                    if let Some(root) = self.root_of(placed.window) {
+                for drawn in &shown {
+                    if let Some(root) = self.root_of(drawn.window) {
                         discard_presentation_feedback(&root);
                     }
                 }
@@ -249,8 +306,8 @@ impl State {
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
         let mut any = false;
-        for placed in &shown {
-            if let Some(root) = self.root_of(placed.window) {
+        for drawn in &shown {
+            if let Some(root) = self.root_of(drawn.window) {
                 for tree in window_surface_trees(&root) {
                     take_presentation_feedback_surface_tree(
                         &tree,
@@ -304,33 +361,37 @@ impl State {
     }
 
     /// Draws output `index`, which shows `shown`, if anything on it is damaged.
-    fn draw(&mut self, index: usize, shown: &[Placed]) -> Drawing {
+    fn draw(&mut self, index: usize, shown: &[Drawn]) -> Drawing {
         // From here, so that a frame's time includes the import of its clients' buffers, which
         // Smithay does while it builds their elements: a `wl_shm` buffer is copied then.
         let started = Instant::now();
         let output = &self.outputs[index];
         let mut elements = Vec::new();
-        // The layout gives windows bottom to top; the renderer takes them front to back.
-        for placed in shown.iter().rev() {
+        // The motion gives windows bottom to top; the renderer takes them front to back.
+        for drawn in shown.iter().rev() {
             let Some(toplevel) = self
                 .windows
-                .get(&placed.window)
+                .get(&drawn.window)
                 .and_then(|id| self.toplevels.get(id))
             else {
                 continue;
             };
-            // A window's popups are in front of it, behind the windows over it.
+            // Within 0 and 1 already; a renderer's alpha is an `f32`.
+            let alpha = drawn.alpha as f32;
+            // A window's popups are in front of it, behind the windows over it, and go with it.
             elements.extend(render::popup_elements(
                 &mut self.renderer,
                 toplevel.wl_surface(),
-                placed.rect,
+                drawn.rect,
+                alpha,
                 output,
             ));
             elements.extend(render::window_elements(
                 &mut self.renderer,
                 toplevel.wl_surface(),
                 toplevel.geometry,
-                placed.rect,
+                drawn.rect,
+                alpha,
                 output,
             ));
         }
@@ -352,15 +413,19 @@ impl State {
         }
     }
 
-    /// The windows output `index` shows, bottom to top, from its last arrangement: those on it,
-    /// not those scrolled out of view.
-    fn shown(&self, index: usize) -> Vec<Placed> {
-        let output = &self.outputs[index];
-        output
-            .placed
+    /// The windows output `index` calls back at its refresh, at full rate: those its frame
+    /// shows, bottom to top, then those it tells they are visible that the frame does not show
+    /// yet ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    fn called_back(&self, index: usize, shown: &[Drawn]) -> Vec<WindowId> {
+        let on_frame: HashSet<WindowId> = shown.iter().map(|drawn| drawn.window).collect();
+        let not_on_frame = self.outputs[index]
+            .told
             .iter()
-            .filter(|placed| placed.rect.overlaps(&output.rect))
-            .copied()
+            .filter(|window| !on_frame.contains(window));
+        shown
+            .iter()
+            .map(|drawn| drawn.window)
+            .chain(not_on_frame.copied())
             .collect()
     }
 
@@ -382,24 +447,64 @@ impl State {
         }
     }
 
-    /// Arranges every output, tells each window its size and states, and moves each between
-    /// shown and hidden.
+    /// Arranges every output, turns what moved into motion, tells each window its size and
+    /// states, and moves each between shown and hidden.
     pub(crate) fn arrange(&mut self) {
         self.layout_dirty = false;
-        let mut shown: HashMap<WindowId, (OutputId, Placed)> = HashMap::new();
-        let mut scrolled_out: HashMap<WindowId, Placed> = HashMap::new();
+        let change = std::mem::replace(&mut self.layout_change, Change::Animated);
+        let now = self.clock.now();
+        self.motion.update(&self.layout, now, change);
         for output in &mut self.outputs {
             output.placed = self.layout.arrange(output.id).unwrap_or_else(|error| {
                 tracing::warn!(%error, output = output.id.0, "the layout has no such output");
                 Vec::new()
             });
-            for placed in &output.placed {
-                if placed.rect.overlaps(&output.rect) {
-                    shown.insert(placed.window, (output.id, *placed));
-                } else {
-                    scrolled_out.insert(placed.window, *placed);
-                }
+            output.told = self.motion.told_visible(output.id, now);
+            output.in_motion = self.motion.end(output.id, now).is_some();
+        }
+        self.tell_windows();
+        self.focus_keyboard();
+        self.clear_urgency_of_focused();
+        self.arm_hidden_frames();
+        // Windows may have moved to another output, with other colours.
+        self.update_preferred_descriptions();
+    }
+
+    /// The refresh where `output`'s motion ended, its last frame sampled at `at`: the windows it
+    /// told while it moved are told what their places say now, once, and its seat's pointer, if
+    /// on it, is put on what is under it now that windows stopped
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    fn tell_motion_ended(&mut self, output: OutputId, at: Duration) {
+        let Some(index) = self.output_index(output) else {
+            return;
+        };
+        self.outputs[index].told = self.motion.told_visible(output, at);
+        self.tell_windows();
+        self.arm_hidden_frames();
+        self.update_preferred_descriptions();
+        let seat = self.outputs[index].seat;
+        if self.pointer_output(seat) == Some(output) {
+            self.refresh_pointer_focus(seat, at);
+        }
+    }
+
+    /// Tells each window its size and states, and moves each between shown and hidden, as each
+    /// output's `told` says: a window told it is visible there enters it and is told its place's
+    /// size and states; any other is hidden: told `suspended`, it leaves its output and its
+    /// content updates are discarded.
+    fn tell_windows(&mut self) {
+        let mut told: HashMap<WindowId, (OutputId, Option<Placed>)> = HashMap::new();
+        let mut placed_anywhere: HashMap<WindowId, Placed> = HashMap::new();
+        for output in &self.outputs {
+            let places: HashMap<WindowId, Placed> = output
+                .placed
+                .iter()
+                .map(|placed| (placed.window, *placed))
+                .collect();
+            for &window in &output.told {
+                told.insert(window, (output.id, places.get(&window).copied()));
             }
+            placed_anywhere.extend(places);
         }
         let mut windows: Vec<(WindowId, WlSurface)> = self
             .windows
@@ -409,36 +514,44 @@ impl State {
         // In the order they opened, so that a test reads configures in a stable order.
         windows.sort_by_key(|(window, _)| *window);
         for (window, root) in windows {
-            match shown.get(&window) {
+            match told.get(&window) {
                 Some(&(output, placed)) => {
                     // The output, and with it its scale, before the configure: the client then
                     // draws the buffer that acknowledges it at the right scale.
                     self.move_to_output(&root, Some(output));
-                    self.configure(
-                        &root,
-                        Some(placed.configure),
-                        placed.fullscreen,
-                        placed.activated,
-                        false,
-                    );
+                    match placed {
+                        Some(placed) => self.configure(
+                            &root,
+                            Some(placed.configure),
+                            placed.fullscreen,
+                            placed.activated,
+                            false,
+                        ),
+                        // Still drawn while it slides out of view, no longer arranged: visible
+                        // until the motion ends, at the size it has.
+                        None => {
+                            let fullscreen = self.is_told_fullscreen(window);
+                            self.configure(&root, None, fullscreen, false, false);
+                        }
+                    }
                 }
                 None => {
-                    let size = scrolled_out.get(&window).map(|placed| placed.configure);
-                    let fullscreen = self
-                        .layout
-                        .window(window)
-                        .is_some_and(|info| info.fullscreen || info.fake_fullscreen);
+                    let size = placed_anywhere.get(&window).map(|placed| placed.configure);
+                    let fullscreen = self.is_told_fullscreen(window);
                     self.configure(&root, size, fullscreen, false, true);
                     self.move_to_output(&root, None);
                     discard_presentation_feedback(&root);
                 }
             }
         }
-        self.focus_keyboard();
-        self.clear_urgency_of_focused();
-        self.arm_hidden_frames();
-        // Windows may have moved to another output, with other colours.
-        self.update_preferred_descriptions();
+    }
+
+    /// Whether `window`'s client is told it is fullscreen, as the layout has it: it is, or it is
+    /// fake fullscreen.
+    fn is_told_fullscreen(&self, window: WindowId) -> bool {
+        self.layout
+            .window(window)
+            .is_some_and(|info| info.fullscreen || info.fake_fullscreen)
     }
 
     /// Records the output a toplevel is shown on, and sends its surfaces `wl_surface.enter` and
@@ -478,16 +591,21 @@ impl State {
 
     /// At a refresh boundary, gives each seat's keyboard to the window the seat focuses, or to
     /// the topmost popup of a grab on it; and puts each seat's pointer on what is under it now
-    /// that windows moved. Only here does a keyboard change window: between boundaries,
-    /// `popups.rs` moves it within the window it is on, and a click moves the seat's focus.
+    /// that windows moved, unless they move on its output: then its focus waits for the next
+    /// pointer event or the motion's end (ADR-0054). Only here does a keyboard change window:
+    /// between boundaries, `popups.rs` moves it within the window it is on, and a click moves the
+    /// seat's focus.
     fn focus_keyboard(&mut self) {
+        let now = self.clock.now();
         for seat in self.seat_ids() {
             let window = self
                 .layout
                 .focused(seat)
                 .and_then(|window| self.root_of(window));
             self.give_keyboard_to(seat, window);
-            self.refresh_pointer_focus(seat);
+            if !self.pointer_in_motion(seat, now) {
+                self.refresh_pointer_focus(seat, now);
+            }
         }
     }
 

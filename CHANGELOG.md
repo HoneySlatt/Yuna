@@ -5,6 +5,17 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- Animations, off by default in `yuna --headless` and `yuna mcp`, where each change still shows
+  at once; `--animations` turns them on in both. The view slides along the strip of columns,
+  windows the layout moves slide to their new places, workspaces slide past each other when
+  switched, and the special workspace fades in and out; fullscreen stays instant. Each frame
+  shows the motion at the time it is presented, and the last shows the windows exactly at their
+  places; then Yuna draws nothing more. Clients are told they are shown or hidden from their
+  places, at most once per change, never at each frame. Clicks, the pointer and window captures
+  follow where windows are drawn; `yuna mcp`'s `windows` gives each window's drawn `rect`, its
+  `place`, and `motion_ends_ns`, when its output's motion ends. `--reduced-motion` turns them
+  on under reduced motion: nothing slides, and the special workspace's fade is kept, shorter.
+
 - A virtual output may run under VRR, as amdgpu drives the owner's monitor, checked against two
   traces of it: each frame shown a vertical blank after it is ready, within the range, and below
   it shown several times as the driver does; clients see it in their presentation times. It may also announce the HDR colours
