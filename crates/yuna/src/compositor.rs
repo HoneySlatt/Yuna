@@ -110,15 +110,16 @@ pub struct WindowDescription {
     pub output: Option<OutputId>,
     /// Its workspace's name; none for an unnamed workspace.
     pub workspace: Option<String>,
-    /// Where it is drawn now, in logical coordinates: its place moved by its motion; none when
-    /// it is hidden, or not drawn while it slides out of view.
+    /// Where it is drawn now, in logical coordinates: its place moved by its motion, read now,
+    /// or at the time its output's last frame sampled if that is later, as hit tests read it;
+    /// none when it is hidden, or not drawn while it slides out of view.
     pub rect: Option<Rect>,
     /// Its place in the layout, as last arranged: where it is drawn once its motion ends; none
     /// when it is hidden, or no longer arranged while it slides out of view
     /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     pub place: Option<Rect>,
-    /// When the motion of its output ends, on the clock's scale; none at rest and when it is
-    /// hidden.
+    /// When the motion of its output ends, on the clock's scale, read as `rect` is; none at
+    /// rest, from the refresh that drew the motion's end on, and when it is hidden.
     pub motion_ends: Option<Duration>,
     /// Whether its seat focuses it.
     pub focused: bool,

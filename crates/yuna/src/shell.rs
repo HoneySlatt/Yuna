@@ -492,14 +492,16 @@ impl State {
     /// its place.
     pub(crate) fn describe_windows(&self) -> Vec<WindowDescription> {
         let now = self.clock.now();
-        // Each output's frame now and its places, read once for all its windows.
+        // Each output's frame now, as hit tests read it, and its places, read once for all its
+        // windows.
         let outputs: HashMap<OutputId, OutputNow> = self
             .outputs
             .iter()
             .map(|output| {
+                let at = output.motion_read_at(now);
                 let drawn = self
                     .motion
-                    .frame(output.id, now)
+                    .frame(output.id, at)
                     .windows
                     .iter()
                     .map(|drawn| (drawn.window, drawn.rect))
@@ -509,7 +511,7 @@ impl State {
                     .iter()
                     .map(|placed| (placed.window, placed.rect))
                     .collect();
-                let motion_ends = self.motion.end(output.id, now);
+                let motion_ends = self.motion.end(output.id, at);
                 (
                     output.id,
                     OutputNow {

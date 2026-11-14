@@ -382,8 +382,8 @@ const SHORTEST: Duration = PERIOD;
 const BLANK: Duration = Duration::from_nanos(461_438);
 
 /// A VRR output of 48 to 240 Hz, as `vrr.rs` builds it, drawings taking no time. The scroll's
-/// first frame, drawn at once on the idle output, is shown a vertical blank later and samples a
-/// lead after that. From then on, while the motion runs, a refresh is due every shortest
+/// first frame, drawn at once on the idle output, is shown a vertical blank later and samples
+/// the motion there, its drawing predicted to take no time. From then on, while the motion runs, a refresh is due every shortest
 /// refresh, 1/240 s, a lead before its frame is shown, and samples the motion there; frames are
 /// shown every shortest refresh, with consecutive refresh numbers, whether they drew or found
 /// nothing changed in the motion's last sub-pixel steps. Each frame is the reference's where it
@@ -396,8 +396,10 @@ fn on_a_vrr_output_a_scroll_refreshes_at_the_shortest_refresh() {
     assert!(refreshes.len() > 60, "{} frames", refreshes.len());
     let first = &refreshes[0];
     assert_eq!((first.due, first.presented), (operation, operation + BLANK));
-    let sample = operation + LEAD + BLANK;
-    assert_eq!(first.drawn, scroll.reference.frame(OUTPUT, sample).windows);
+    assert_eq!(
+        first.drawn,
+        scroll.reference.frame(OUTPUT, first.presented).windows
+    );
     for (n, refresh) in refreshes.iter().enumerate().skip(1) {
         assert_eq!(refresh.presented, refresh.due + LEAD, "frame {n}");
         let expected = scroll.reference.frame(OUTPUT, refresh.presented).windows;
@@ -421,4 +423,68 @@ fn on_a_vrr_output_a_scroll_refreshes_at_the_shortest_refresh() {
         "no refresh found nothing changed"
     );
     ends_at_the_arrangement_and_rests(&mut scroll);
+}
+
+/// A VRR scroll with no carrier: nothing but the motion arms its refreshes. The first is drawn
+/// at once; from the third on, each is due one shortest refresh after the one before; from the
+/// second on, each draws the reference's frame a lead after it was due; some find nothing changed, in the motion's last sub-pixel steps; the motion
+/// ends at the arrangement, then nothing runs.
+#[test]
+fn on_a_vrr_output_a_motion_alone_arms_a_refresh_each_shortest_refresh() {
+    let mode = full_hd().with_vrr(48.0).expect("a VRR range");
+    let mut compositor = Compositor::new(Config {
+        outputs: vec![mode],
+        clock: ClockMode::Manual,
+        listen: false,
+        animations: animations(),
+        ..Config::default()
+    })
+    .expect("the compositor starts");
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    open_full_width_columns(&mut compositor, &mut client, &[RED, BLUE, RED]);
+    let mut reference = Motion::new(animations());
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+    operate_on_idle(&mut compositor, &mut client, &mut reference, start, |l| {
+        l.focus(OWNER_SEAT, Direction::Left).expect("left");
+    });
+    let mut dues: Vec<Duration> = Vec::new();
+    let mut unchanged = 0;
+    loop {
+        let due = compositor
+            .next_deadline()
+            .expect("a refresh while the motion runs");
+        let before = compositor.counters().frames_drawn;
+        advance_to(&mut compositor, &mut client, due);
+        if compositor.counters().frames_drawn == before {
+            unchanged += 1;
+        }
+        if dues.len() >= 2 {
+            let gap = due - dues[dues.len() - 1];
+            assert_eq!(gap, PERIOD, "refresh {} after the one before", dues.len());
+        }
+        if !dues.is_empty() {
+            assert_eq!(
+                compositor.drawn(OUTPUT),
+                reference.frame(OUTPUT, due + LEAD).windows.as_slice(),
+                "refresh {}",
+                dues.len()
+            );
+        }
+        dues.push(due);
+        if dues.len() > 1 && reference.end(OUTPUT, due + LEAD).is_none() {
+            break;
+        }
+        assert!(dues.len() < 1_000, "the motion never ends");
+    }
+    assert!(
+        unchanged > 0,
+        "no refresh of the motion's tail found nothing changed"
+    );
+    assert_eq!(
+        as_drawn(compositor.drawn(OUTPUT)),
+        arrangement(&compositor, OUTPUT)
+    );
+    client.roundtrip(&mut compositor);
+    assert_rests(&mut compositor);
 }

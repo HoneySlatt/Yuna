@@ -4,10 +4,11 @@
 //! Input reaches a seat only through these calls, which the MCP server makes for the seat an
 //! agent names; the owner's seat takes none. A pointer moves in logical units of one of its
 //! seat's outputs; what is under it is found among the windows that output draws at the event's
-//! time, where the motion draws them, top to bottom, each window's popups before it: the surface
-//! whose input region holds the point. While windows move under a still pointer, its focus waits:
-//! a button or a scroll first puts it on what is drawn under it then, and the refresh where the
-//! motion ends puts it there once ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+//! time, or at the time its last frame sampled if that is later (`frames.rs`), where the motion
+//! draws them, top to bottom, each window's popups before it: the surface whose input region
+//! holds the point. While windows move under a still pointer, its focus waits: a button or a
+//! scroll first puts it on what is drawn under it then, and the refresh where the motion ends
+//! puts it there once ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 //! A button press focuses the window under it, which takes the seat's keyboard at the next
 //! refresh (`frames.rs`), and its serial may start a popup grab or a drag on that window. Every
 //! focus of a seat is on its own clients' surfaces: no event of one seat reaches another's
@@ -20,7 +21,6 @@
 //! own for it, then the seat's back. Events carry Yuna's clock's time.
 
 use std::any::Any;
-use std::time::Duration;
 
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::desktop::PopupManager;
@@ -191,29 +191,39 @@ impl State {
     }
 
     /// The output `seat`'s pointer is on; none before it first moves.
-    pub(crate) fn pointer_output(&self, seat: SeatId) -> Option<OutputId> {
+    fn output_under_pointer(&self, seat: SeatId) -> Option<&VirtualOutput> {
         let data = self.seat(seat).filter(|data| data.pointer_moved)?;
         let location = data.pointer.as_ref()?.current_location();
-        self.output_at(seat, location).map(|output| output.id)
+        self.output_at(seat, location)
     }
 
-    /// Whether windows move at `at` on the output `seat`'s pointer is on: its focus then waits
-    /// for a pointer event or the motion's end, rather than follow every frame
-    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
-    pub(crate) fn pointer_in_motion(&self, seat: SeatId, at: Duration) -> bool {
-        self.pointer_output(seat)
-            .is_some_and(|output| self.motion.end(output, at).is_some())
+    /// The id of the output `seat`'s pointer is on; none before it first moves.
+    pub(crate) fn pointer_output(&self, seat: SeatId) -> Option<OutputId> {
+        self.output_under_pointer(seat).map(|output| output.id)
+    }
+
+    /// Whether windows move now, as hit tests read them, on the output `seat`'s pointer is on:
+    /// its focus then waits for a pointer event or the motion's end, rather than follow every
+    /// frame ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub(crate) fn pointer_in_motion(&self, seat: SeatId) -> bool {
+        let now = self.clock.now();
+        self.output_under_pointer(seat).is_some_and(|output| {
+            self.motion
+                .end(output.id, output.motion_read_at(now))
+                .is_some()
+        })
     }
 
     /// The surface under `location`, in logical coordinates, among the windows that the output of
-    /// `seat` holding it draws at `at`, with that surface's origin in the same coordinates.
+    /// `seat` holding it draws now, read at [`VirtualOutput::motion_read_at`], with that surface's
+    /// origin in the same coordinates.
     fn surface_under(
         &self,
         seat: SeatId,
         location: Point<f64, Logical>,
-        at: Duration,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         let output = self.output_at(seat, location)?;
+        let at = output.motion_read_at(self.clock.now());
         let hit = |surface: &WlSurface, origin: Point<f64, Logical>| {
             under_from_surface_tree(surface, location - origin, (0, 0), WindowSurfaceType::ALL)
                 .map(|(found, at)| (found, origin + at.to_f64()))
@@ -275,9 +285,9 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Puts `seat`'s pointer on what is under it as drawn at `at`, after windows moved: a motion
+    /// Puts `seat`'s pointer on what is under it as drawn now, after windows moved: a motion
     /// where it is, sent only when the surface under it or its place in it changed.
-    pub(crate) fn refresh_pointer_focus(&mut self, seat: SeatId, at: Duration) {
+    pub(crate) fn refresh_pointer_focus(&mut self, seat: SeatId) {
         let Some(pointer) = self.seat(seat).and_then(|data| data.pointer.clone()) else {
             return;
         };
@@ -285,7 +295,7 @@ impl State {
             return;
         }
         let location = pointer.current_location();
-        let under = self.surface_under(seat, location, at);
+        let under = self.surface_under(seat, location);
         let current = pointer.current_focus();
         let unchanged = match (&under, &current) {
             (Some((surface, origin)), Some(focus)) => {
@@ -349,7 +359,7 @@ impl State {
             )));
         }
         let location = Point::from((rect.x + x, rect.y + y));
-        let under = self.surface_under(seat, location, self.clock.now());
+        let under = self.surface_under(seat, location);
         self.move_pointer(seat, &pointer, location, under);
         Ok(self.describe_pointer(seat))
     }
@@ -404,9 +414,8 @@ impl State {
     /// focus on what is drawn under it now, so that the event reaches what the screen shows
     /// there. At rest its focus is current already.
     fn focus_what_is_drawn(&mut self, seat: SeatId) {
-        let now = self.clock.now();
-        if self.pointer_in_motion(seat, now) {
-            self.refresh_pointer_focus(seat, now);
+        if self.pointer_in_motion(seat) {
+            self.refresh_pointer_focus(seat);
         }
     }
 

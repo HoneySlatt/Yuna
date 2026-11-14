@@ -3,6 +3,7 @@
 //! at fixed boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)),
 //! or as a VRR panel (`vrr.rs`).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -223,9 +224,13 @@ pub(crate) struct VirtualOutput {
     pub armed_refresh: RefreshAt,
     pub armed_at: Duration,
     /// When the frame of its armed refresh is presented if on time, the time its motion is
-    /// sampled at: the boundary it aims at, or for a refresh armed at once, the one it can reach
-    /// after its drawing ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    /// sampled at: the boundary it aims at, or for a refresh armed at once, the one its drawing
+    /// reaches if it takes as long as the longest of the last
+    /// [`DRAWING_WINDOW`](crate::frames::DRAWING_WINDOW)
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     pub armed_sample_at: Duration,
+    /// The time its last refresh sampled its motion at; zero before its first.
+    pub sampled_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,
     /// Whether something new waits to be drawn: a commit with a buffer or damage, or a change of
@@ -255,6 +260,17 @@ pub(crate) struct VirtualOutput {
     /// Whether its motion ran at its last arrangement or refresh: the refresh that finds it
     /// ended tells its windows once.
     pub in_motion: bool,
+}
+
+impl VirtualOutput {
+    /// The time hit tests, the pointer's focus and MCP's `windows` read its motion at, at `now`:
+    /// `now`, or the time its last frame sampled if that is later, so that none reads a motion
+    /// that frame drew past. Once it drew a motion's end, they read the output at rest, as it
+    /// shows it, though the clock has not reached that end
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub fn motion_read_at(&self, now: Duration) -> Duration {
+        now.max(self.sampled_at)
+    }
 }
 
 impl State {
@@ -360,6 +376,7 @@ impl State {
             armed_refresh: creation,
             armed_at: Duration::ZERO,
             armed_sample_at: Duration::ZERO,
+            sampled_at: Duration::ZERO,
             armed_at_once: false,
             content_pending: false,
             armed_for_content: false,
@@ -380,8 +397,9 @@ impl State {
             scale = mode.scale(),
             "virtual output created"
         );
-        // Outputs added and removed show at once (ADR-0052).
-        self.mark_layout_changed(Change::Instant);
+        // A new output starts at rest (ADR-0052): nothing else need show at once, and every
+        // other output's motion goes on (ADR-0015).
+        self.mark_layout_changed(Change::Animated);
         Ok(id)
     }
 }
@@ -433,6 +451,7 @@ impl State {
         self.fail_captures(id, "its output was removed", Failure::OutputGone);
         self.stop_capture_sessions(id);
         let removed = self.outputs.remove(index);
+        let seat = removed.seat;
         for (_, mut feedback) in removed.held_feedback {
             feedback.discarded();
         }
@@ -440,7 +459,9 @@ impl State {
             .disable_global::<State>(removed.global.clone());
         self.retired_globals.push((Instant::now(), removed.global));
         tracing::info!(output = id.0, "virtual output removed");
-        self.mark_layout_changed(Change::Instant);
+        // Its seat's outputs, which take its workspaces, show the change at once (ADR-0052); the
+        // other seats' motions go on (ADR-0015).
+        self.mark_layout_changed(Change::InstantFor(BTreeSet::from([seat])));
     }
 
     /// Every output, in the order they were created.
@@ -514,8 +535,8 @@ impl Timing {
     /// The first refresh a frame ready at `ready` can show at, after the output's `last`: at a
     /// fixed rate, the first boundary at or after it; under VRR, the panel's answer. With
     /// `paced`, for a refresh with nothing new to draw, not before a shortest refresh after
-    /// `last` either: the panel never learns of a refresh that drew nothing, and callbacks asked
-    /// without damage must come once a shortest refresh, never in a loop.
+    /// `last` either: at rest the panel never learns of a refresh that drew nothing, and callbacks
+    /// asked without damage must come once a shortest refresh, never in a loop.
     pub fn reachable(&self, ready: Duration, last: RefreshAt, paced: bool) -> RefreshAt {
         match self {
             Timing::Fixed(boundaries) => {
@@ -553,7 +574,9 @@ impl Timing {
     }
 
     /// Where a frame whose drawing ended at `ready` is presented, never before the refresh it
-    /// aimed at: an earlier one is the frame before's. A VRR panel records it.
+    /// aimed at: an earlier one is the frame before's. A VRR panel records it. During a motion
+    /// on a VRR output, a refresh that drew nothing shows its frame again through it too
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     pub fn present(&mut self, ready: Duration, aimed: RefreshAt, last: RefreshAt) -> RefreshAt {
         let reached = self.reachable(ready, last, false);
         let presented = if reached.seq < aimed.seq {

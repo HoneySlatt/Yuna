@@ -88,8 +88,9 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
-    /// How the layout changed since it was last arranged: [`Change::Instant`] if any change
-    /// since must show at once, the strongest kept (`frames.rs`).
+    /// How the layout changed since it was last arranged: the changes made since, combined
+    /// ([`Change::and`]), instant on the outputs where one of them must show at once
+    /// (`frames.rs`).
     pub layout_change: Change,
     /// The motion of every output's arrangement: what each frame draws, and which windows are
     /// told they are visible (`frames.rs`).

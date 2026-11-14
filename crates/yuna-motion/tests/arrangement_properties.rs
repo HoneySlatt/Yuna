@@ -1,11 +1,11 @@
 //! Property tests of the motion of an arrangement: random sequences of layout operations over two
 //! seats and up to three outputs of different sizes and scales, each followed by an update,
-//! mostly animated; random clock steps of 0 to 50 ms between them; frames sampled at random
+//! mostly animated, else instant on every output or on one seat's; random clock steps of 0 to 50 ms between them; frames sampled at random
 //! times, some before the last update; random settings. After every step:
 //!
 //! - every drawn value is finite, every alpha within 0 and 1, and a frame draws a window once;
-//! - nothing jumps on screen at an operation: a window drawn just before an animated update and
-//!   just after it, on the same output, in the same container (its workspace and layer, or
+//! - nothing jumps on screen at an operation: a window drawn just before an update that animates
+//!   its output's seat and just after it, on the same output, in the same container (its workspace and layer, or
 //!   floating and tiled within one workspace, or pinned), its fullscreen unchanged and its
 //!   workspace's too, is drawn with its corner at the same place, to 1e-6; its size may jump
 //!   ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)). One exception: when a
@@ -14,6 +14,7 @@
 //!   at such an update, the main workspaces' windows are not checked, the special and pinned ones
 //!   are. A window that vanishes at an update is not checked: closing, or moving to a workspace
 //!   not shown, takes it away at once;
+//! - an update instant for an output's seat ends that output's motions;
 //! - at rest, from the end the motion gives on, the frame is exactly the layout's arrangement,
 //!   and the end is then `None`;
 //! - every window whose place overlaps its output is told it is visible.
@@ -21,7 +22,7 @@
 //! A failure shrinks to the shortest sequence that still fails; proptest keeps its seed in
 //! `arrangement_properties.proptest-regressions`, to be committed so that the case runs again.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use proptest::prelude::*;
@@ -236,7 +237,11 @@ fn settings() -> impl Strategy<Value = Settings> {
 }
 
 fn step() -> impl Strategy<Value = Step> {
-    let change = prop_oneof![9 => Just(Change::Animated), 1 => Just(Change::Instant)];
+    let change = prop_oneof![
+        9 => Just(Change::Animated),
+        1 => Just(Change::Instant),
+        1 => seat().prop_map(|seat| Change::InstantFor(BTreeSet::from([SeatId(seat)]))),
+    ];
     prop_oneof![
         12 => (op(), change).prop_map(|(op, change)| Step::Operate(op, change)),
         6 => (0..=50u64).prop_map(Step::Clock),
@@ -383,6 +388,20 @@ impl World {
 
     fn update(&mut self, change: Change) {
         self.motion.update(&self.layout, self.now, change);
+    }
+}
+
+/// Whether `change` turns what moved on `output` into motion: whether it is animated for the seat
+/// that holds `output`.
+fn animates(change: &Change, layout: &Layout, output: OutputId) -> bool {
+    match change {
+        Change::Animated => true,
+        Change::Instant => false,
+        Change::InstantFor(seats) => !seats.iter().any(|&seat| {
+            layout
+                .outputs(seat)
+                .is_ok_and(|outputs| outputs.contains(&output))
+        }),
     }
 }
 
@@ -628,10 +647,18 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
                     })
                     .collect();
                 world.apply(op);
-                world.update(*change);
+                world.update(change.clone());
                 let after = world.frames(world.now);
-                if *change == Change::Animated && !world.off {
+                for output in after.keys() {
+                    if !animates(change, &world.layout, *output) {
+                        prop_assert_eq!(world.motion.end(*output, world.now), None);
+                    }
+                }
+                if !world.off {
                     for (output, (frame, rect, scale)) in &after {
+                        if !animates(change, &world.layout, *output) {
+                            continue;
+                        }
                         if let Some((was, was_rect, was_scale)) = before.get(output)
                             && (was_rect, was_scale) == (rect, scale)
                         {

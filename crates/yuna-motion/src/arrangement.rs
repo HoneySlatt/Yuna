@@ -6,11 +6,11 @@ mod output;
 mod special;
 mod switch;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use yuna_layout::geometry::Rect;
-use yuna_layout::{Layout, OutputId, Placed, WindowId, WorkspaceId};
+use yuna_layout::{Layout, OutputId, Placed, SeatId, WindowId, WorkspaceId};
 
 use crate::{CurveParams, Easing, SpringParams};
 use output::OutputMotion;
@@ -56,15 +56,47 @@ impl Default for Settings {
     }
 }
 
-/// How the arrangement changed since the last update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How the arrangement changed since the last update. Several changes made before one update
+/// combine with [`Change::and`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Change {
     /// By an operation whose jumps are turned into motion: a focus, a move, a new or closed
-    /// window, a workspace switch.
+    /// window, a workspace switch, an output added, which starts at rest.
+    #[default]
     Animated,
-    /// By a change that must show at once: outputs and seats added or removed, a drag that
-    /// follows the pointer. Every motion of every output ends.
+    /// By a change that must show at once on every output: every motion of every output ends.
     Instant,
+    /// By a change that must show at once on these seats' outputs alone, such as an output or a
+    /// seat removed: their motions end, and the other seats' changes are animated, so that one
+    /// seat's change never cuts another seat's motion short
+    /// ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)).
+    InstantFor(BTreeSet<SeatId>),
+}
+
+impl Change {
+    /// `self` and `other`, made before the same update: instant wherever either is.
+    /// [`Change::Instant`] takes in any other; two [`Change::InstantFor`] give both sets of
+    /// seats.
+    #[must_use]
+    pub fn and(self, other: Change) -> Change {
+        match (self, other) {
+            (Change::Instant, _) | (_, Change::Instant) => Change::Instant,
+            (Change::Animated, change) | (change, Change::Animated) => change,
+            (Change::InstantFor(mut seats), Change::InstantFor(more)) => {
+                seats.extend(more);
+                Change::InstantFor(seats)
+            }
+        }
+    }
+
+    /// Whether it turns what moved on `seat`'s outputs into motion.
+    fn animates(&self, seat: SeatId) -> bool {
+        match self {
+            Change::Animated => true,
+            Change::Instant => false,
+            Change::InstantFor(seats) => !seats.contains(&seat),
+        }
+    }
 }
 
 /// The motion of every output's arrangement: what each output draws at any time, between the
@@ -106,16 +138,17 @@ impl Motion {
     }
 
     /// Reads every output of every seat from `layout` after a change at time `now`, and turns
-    /// what moved into motion, unless the change is [`Change::Instant`] or the settings are
-    /// [`off`](Settings::off). An output the layout no longer knows is forgotten.
+    /// what moved into motion, unless the change is instant for the output's seat
+    /// ([`Change::Instant`], [`Change::InstantFor`]) or the settings are [`off`](Settings::off):
+    /// then the output's motions end. An output the layout no longer knows is forgotten.
     ///
     /// An output whose rectangle or scale changed starts again at rest, as do new outputs: their
     /// workspaces moved or were snapped again ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
     /// A `now` earlier than an output's last update counts as that update's time.
     pub fn update(&mut self, layout: &Layout, now: Duration, change: Change) {
-        let animate = change == Change::Animated && !self.settings.off;
         let mut previous = std::mem::take(&mut self.outputs);
         for seat in layout.seats() {
+            let animate = !self.settings.off && change.animates(seat);
             for output in layout.outputs(seat).unwrap_or_default() {
                 let motion = OutputMotion::update(
                     previous.remove(&output),

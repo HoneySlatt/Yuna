@@ -18,13 +18,18 @@
 //! At the refresh, in order:
 //!
 //! 1. If the layout changed, it is arranged once, for every output, and handed to the motion
-//!    (`yuna_motion::Motion::update`), as an animated change or, after outputs or seats were added
-//!    or removed, an instant one; the windows are told their sizes and states.
-//! 2. The motion gives the output's frame at the time it is presented when on time, the boundary
-//!    the refresh aims at; for a refresh due at once, the boundary its drawing can reach, a lead
-//!    from now. Each window is drawn at its rectangle and alpha then; with animations off, or at
-//!    rest, that is the arrangement. The output is drawn if anything on it is damaged, and keeps
-//!    what it drew, which captures cut.
+//!    (`yuna_motion::Motion::update`), as an animated change or, after an output or a seat was
+//!    removed, one instant for that seat's outputs alone, so that one seat's outputs coming and
+//!    going never cut another seat's motion short
+//!    ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); an output added starts at rest.
+//!    The windows are told their sizes and states.
+//! 2. The motion gives the output's frame at the time it is presented when on time: the boundary
+//!    the refresh aims at; for a refresh due at once, the boundary its drawing reaches if it takes
+//!    as long as the output's longest drawing of the last [`DRAWING_WINDOW`], without the lead's
+//!    floor and margin: on the manual clock with no draw hook, the first boundary at or after
+//!    now. Each window is drawn at its rectangle and alpha then; with animations off, or at rest,
+//!    that is the arrangement. The output is drawn if anything on it is damaged, and keeps what it
+//!    drew, which captures cut.
 //! 3. The windows it shows, and those it tells they are visible, get their frame callbacks. The
 //!    presentation feedback of those it shows is taken and held until the boundary the frame is
 //!    presented at: the one it aimed at if its drawing ended by then, else the first after. It is
@@ -42,6 +47,12 @@
 //! refresh where its output's motion ends, if its place is then off the output. A window that
 //! only passes through the view is drawn and called back, never told. So each window gets at most
 //! one such change per operation, never one per frame.
+//!
+//! What follows what is drawn, hit tests, the pointer's focus and MCP's `windows`, reads an
+//! output's motion now, or at the time its last frame sampled if that is later
+//! (`VirtualOutput::motion_read_at`): never a motion that frame drew past. Once the refresh that
+//! sampled a motion's end has run, they read the output at rest, as that frame shows it, though
+//! the clock has not reached that end.
 //!
 //! A window shown on no output is hidden: it is told `suspended`, its content updates are
 //! discarded, and its frame callbacks go out at most once a second, through one deadline armed
@@ -97,14 +108,12 @@ pub const DRAWING_FLOOR: Duration = Duration::from_millis(2);
 pub const LEAD_MARGIN: Duration = Duration::from_millis(1);
 
 impl State {
-    /// Marks the layout changed: every output arranges it again at its next refresh. A change
-    /// that must show at once, [`Change::Instant`], ends every motion at that arrangement, however
-    /// many animated changes come with it.
+    /// Marks the layout changed: every output arranges it again at its next refresh. The changes
+    /// made until then combine ([`Change::and`]): one that must show at once on some outputs ends
+    /// their motions at that arrangement, however many animated changes come with it.
     pub(crate) fn mark_layout_changed(&mut self, change: Change) {
         self.layout_dirty = true;
-        if change == Change::Instant {
-            self.layout_change = Change::Instant;
-        }
+        self.layout_change = std::mem::take(&mut self.layout_change).and(change);
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
             self.schedule_refresh_for_content(id);
@@ -140,17 +149,27 @@ impl State {
         // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
         // may start a refresh now: no frame waits for its own.
         let idle = output.timing.is_idle(now, output.last_refresh, paced);
-        let lead = output.drawings.lead(now, output.mode.period());
-        let ready = output
-            .timing
-            .reachable(now.saturating_add(lead), output.last_refresh, paced);
-        let (at, aimed) = if idle {
+        let (at, aimed, sampled) = if idle {
+            // Drawn at once, a frame is shown at the first refresh after its drawing ends: its
+            // motion is sampled there, the drawing predicted to take as long as the output's
+            // longest recent one. Not the lead, whose floor and margin keep a deadline safe
+            // rather than predict: a frame shown before the refresh it sampled leaves that
+            // refresh nothing new to show (ADR-0054).
+            let drawing = output.drawings.longest(now);
             (
                 now,
                 output.timing.reachable(now, output.last_refresh, paced),
+                output
+                    .timing
+                    .reachable(now.saturating_add(drawing), output.last_refresh, paced),
             )
         } else {
-            (ready.at.saturating_sub(lead), ready)
+            let lead = output.drawings.lead(now, output.mode.period());
+            let ready =
+                output
+                    .timing
+                    .reachable(now.saturating_add(lead), output.last_refresh, paced);
+            (ready.at.saturating_sub(lead), ready, ready)
         };
         if self.clock.is_armed(deadline) && output.armed_at <= at {
             // The refresh armed for nothing new comes first already: it draws the new content.
@@ -159,9 +178,7 @@ impl State {
         }
         output.armed_for_content = !paced;
         output.armed_refresh = aimed;
-        // Drawn at once, a frame is shown once its drawing ends: its motion is sampled at the
-        // refresh it can reach then, not the first after now (ADR-0054).
-        output.armed_sample_at = ready.at;
+        output.armed_sample_at = sampled.at;
         output.armed_at = at;
         output.armed_at_once = idle;
         self.clock.arm(deadline, at);
@@ -220,6 +237,7 @@ impl State {
             return;
         };
         let sample_at = self.outputs[index].armed_sample_at;
+        self.outputs[index].sampled_at = sample_at;
         let frame = self.motion.frame(output, sample_at);
         self.draw_and_present(index, frame.windows);
         let Some(index) = self.output_index(output) else {
@@ -462,7 +480,7 @@ impl State {
     /// states, and moves each between shown and hidden.
     pub(crate) fn arrange(&mut self) {
         self.layout_dirty = false;
-        let change = std::mem::replace(&mut self.layout_change, Change::Animated);
+        let change = std::mem::take(&mut self.layout_change);
         let now = self.clock.now();
         self.motion.update(&self.layout, now, change);
         for output in &mut self.outputs {
@@ -483,7 +501,8 @@ impl State {
 
     /// The refresh where `output`'s motion ended, its last frame sampled at `at`: the windows it
     /// told while it moved are told what their places say now, once, and its seat's pointer, if
-    /// on it, is put on what is under it now that windows stopped
+    /// on it, is put on what is under it now that windows stopped, as hit tests read the output
+    /// from then on, at rest
     /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     fn tell_motion_ended(&mut self, output: OutputId, at: Duration) {
         let Some(index) = self.output_index(output) else {
@@ -495,7 +514,7 @@ impl State {
         self.update_preferred_descriptions();
         let seat = self.outputs[index].seat;
         if self.pointer_output(seat) == Some(output) {
-            self.refresh_pointer_focus(seat, at);
+            self.refresh_pointer_focus(seat);
         }
     }
 
@@ -607,15 +626,14 @@ impl State {
     /// between boundaries, `popups.rs` moves it within the window it is on, and a click moves the
     /// seat's focus.
     fn focus_keyboard(&mut self) {
-        let now = self.clock.now();
         for seat in self.seat_ids() {
             let window = self
                 .layout
                 .focused(seat)
                 .and_then(|window| self.root_of(window));
             self.give_keyboard_to(seat, window);
-            if !self.pointer_in_motion(seat, now) {
-                self.refresh_pointer_focus(seat, now);
+            if !self.pointer_in_motion(seat) {
+                self.refresh_pointer_focus(seat);
             }
         }
     }
@@ -706,15 +724,21 @@ impl Drawings {
     /// last [`DRAWING_WINDOW`], at least [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most
     /// `period`.
     pub(crate) fn lead(&mut self, now: Duration, period: Duration) -> Duration {
+        self.longest(now)
+            .max(DRAWING_FLOOR)
+            .saturating_add(LEAD_MARGIN)
+            .min(period)
+    }
+
+    /// The longest drawing of the last [`DRAWING_WINDOW`] at `now`, as it took; zero when there
+    /// was none.
+    pub(crate) fn longest(&mut self, now: Duration) -> Duration {
         self.forget_old(now);
-        let longest = self
-            .recent
+        self.recent
             .iter()
             .map(|&(_, took)| took)
             .max()
             .unwrap_or(Duration::ZERO)
-            .max(DRAWING_FLOOR);
-        longest.saturating_add(LEAD_MARGIN).min(period)
     }
 
     fn forget_old(&mut self, now: Duration) {
@@ -832,6 +856,21 @@ mod tests {
     fn with_no_drawing_the_lead_is_the_floor_and_the_margin() {
         let mut drawings = Drawings::default();
         assert_eq!(drawings.lead(Duration::ZERO, PERIOD_240_HZ), 3 * MS);
+        assert_eq!(drawings.longest(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn the_longest_recent_drawing_has_neither_floor_nor_margin() {
+        let mut drawings = Drawings::default();
+        let t = Duration::from_secs(100);
+        drawings.record(t, MS / 2);
+        drawings.record(t + 4 * MS, MS / 4);
+        assert_eq!(drawings.longest(t + 5 * MS), MS / 2);
+        assert_eq!(drawings.longest(t + DRAWING_WINDOW), MS / 4);
+        assert_eq!(
+            drawings.longest(t + 4 * MS + DRAWING_WINDOW),
+            Duration::ZERO
+        );
     }
 
     #[test]

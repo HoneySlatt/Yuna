@@ -288,8 +288,49 @@ fn each_boundary_draws_the_motion_sampled_there_until_the_arrangement() {
     assert_rests(&mut compositor);
 }
 
-/// A move on an idle output 2 ms after boundary k is drawn at once, aimed at boundary k + 1, but
-/// its drawing, 3 ms by the lead, would end after it: its motion is sampled at boundary k + 2.
+/// Moves the focus left 2 ms after a boundary k that comes after the output's last refresh, so
+/// that the output is idle, and has the second window ask presentation feedback in the round
+/// that reads the operation, so that the frame drawn at once tells where it was presented. The
+/// reference takes the layout at the operation, as Yuna arranges it then. Returns k.
+fn move_left_2_ms_after_a_boundary(
+    compositor: &mut Compositor,
+    client: &mut Client,
+    reference: &mut Motion,
+    start: Duration,
+) -> u64 {
+    let k = first_boundary_at_or_after(start, compositor.now()) + 1;
+    let operation = boundary(start, k) + Duration::from_millis(2);
+    advance_to(compositor, client, operation);
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    reference.update(compositor.layout(), operation, Change::Animated);
+    assert_eq!(compositor.next_deadline(), Some(operation));
+    // Read in the round that runs the refresh due at once: the frame takes its feedback.
+    client.request_feedback(1);
+    client.commit(1);
+    client.roundtrip(compositor);
+    k
+}
+
+/// The feedback the second window got last: presented at boundary `k`.
+#[track_caller]
+fn assert_presented_at(client: &Client, start: Duration, k: u64) {
+    assert_eq!(
+        client.window(1).feedback.last(),
+        Some(&Feedback::Presented {
+            time: boundary(start, k),
+            refresh: crate::PERIOD,
+            seq: k,
+            flags: crate::Kind::Vsync,
+        })
+    );
+}
+
+/// A move on an idle output 2 ms after boundary k is drawn at once. Its drawing is predicted to
+/// take as long as the output's longest of the last half second, without the lead's floor and
+/// margin: on the manual clock, with no draw hook, no time. So it samples boundary k + 1, where
+/// it is presented, and the next refresh, due a lead before boundary k + 2, samples k + 2.
 #[test]
 fn a_frame_drawn_at_once_samples_the_boundary_its_drawing_reaches() {
     let settings = animations();
@@ -300,20 +341,110 @@ fn a_frame_drawn_at_once_samples_the_boundary_its_drawing_reaches() {
     let mut reference = Motion::new(settings);
     reference.update(compositor.layout(), compositor.now(), Change::Instant);
 
+    let k = move_left_2_ms_after_a_boundary(&mut compositor, &mut client, &mut reference, start);
+    let reached = reference.frame(OUTPUT, boundary(start, k + 1)).windows;
+    assert_eq!(compositor.drawn(OUTPUT), reached.as_slice());
+    assert_ne!(
+        reached,
+        reference.frame(OUTPUT, boundary(start, k + 2)).windows
+    );
+    advance_to(&mut compositor, &mut client, boundary(start, k + 1));
+    assert_presented_at(&client, start, k + 1);
+    let next = boundary(start, k + 2) - LEAD;
+    assert_eq!(compositor.next_deadline(), Some(next));
+    advance_to(&mut compositor, &mut client, next);
+    assert_eq!(
+        compositor.drawn(OUTPUT),
+        reference.frame(OUTPUT, boundary(start, k + 2)).windows
+    );
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+}
+
+/// Every drawing takes 3 ms, by the draw hook, and one was drawn less than half a second ago. A
+/// move on the idle output 2 ms after boundary k is drawn at once, predicted to end 3 ms later,
+/// past boundary k + 1: it samples boundary k + 2, and its drawing, ending there indeed, is
+/// presented there. The next refresh, due the drawing and the margin before boundary k + 3,
+/// samples k + 3.
+#[test]
+fn a_frame_drawn_at_once_across_a_boundary_samples_the_next() {
+    const DRAWING: Duration = Duration::from_millis(3);
+    let settings = animations();
+    let mut compositor = compositor_with(settings);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN]);
+    compositor.set_draw_hook(|clock| clock.pass(DRAWING));
+    // A new buffer for the second window, its last configure acknowledged already: one drawing.
+    let drawn_before = compositor.counters().frames_drawn;
+    let configure = client
+        .window(1)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    client.attach(1, configure.width, configure.height, GREEN);
+    client.commit(1);
+    client.roundtrip(&mut compositor);
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    assert_eq!(compositor.counters().frames_drawn, drawn_before + 1);
+    let mut reference = Motion::new(settings);
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+
+    let k = move_left_2_ms_after_a_boundary(&mut compositor, &mut client, &mut reference, start);
+    assert!(
+        compositor.now() > boundary(start, k + 1),
+        "the drawing ends past k + 1"
+    );
+    let reached = reference.frame(OUTPUT, boundary(start, k + 2)).windows;
+    assert_eq!(compositor.drawn(OUTPUT), reached.as_slice());
+    assert_ne!(
+        reached,
+        reference.frame(OUTPUT, boundary(start, k + 1)).windows
+    );
+    advance_to(&mut compositor, &mut client, boundary(start, k + 2));
+    assert_presented_at(&client, start, k + 2);
+    // The drawing and the margin, 1 ms.
+    let next = boundary(start, k + 3) - (DRAWING + Duration::from_millis(1));
+    assert_eq!(compositor.next_deadline(), Some(next));
+    advance_to(&mut compositor, &mut client, next);
+    assert_eq!(
+        compositor.drawn(OUTPUT),
+        reference.frame(OUTPUT, boundary(start, k + 3)).windows
+    );
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+}
+
+/// A move on an idle output 2 ms after boundary k, on the manual clock where drawing takes no
+/// time: its frame, drawn at once, shows at boundary k + 1, and each boundary from k + 1 to
+/// k + 4 then shows a frame of its own, drawn before it: none holds a frame for two boundaries.
+#[test]
+fn an_at_once_frame_does_not_hold_the_next_boundary() {
+    let settings = animations();
+    let mut compositor = compositor_with(settings);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN]);
     let k = first_boundary_at_or_after(start, compositor.now()) + 1;
     let operation = boundary(start, k) + Duration::from_millis(2);
     advance_to(&mut compositor, &mut client, operation);
     compositor
         .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
         .expect("the focus moves left");
-    reference.update(compositor.layout(), operation, Change::Animated);
-    assert_eq!(compositor.next_deadline(), Some(operation));
-    advance_to(&mut compositor, &mut client, operation);
-    let reached = reference.frame(OUTPUT, boundary(start, k + 2)).windows;
-    assert_eq!(compositor.drawn(OUTPUT), reached.as_slice());
-    assert_ne!(
-        reached,
-        reference.frame(OUTPUT, boundary(start, k + 1)).windows
+    let mut drawn_before_each = Vec::new();
+    for j in 1..=4 {
+        let drawn = compositor.counters().frames_drawn;
+        while let Some(at) = compositor
+            .next_deadline()
+            .filter(|&at| at < boundary(start, k + j))
+        {
+            advance_to(&mut compositor, &mut client, at);
+        }
+        drawn_before_each.push((k + j, compositor.counters().frames_drawn - drawn));
+        advance_to(&mut compositor, &mut client, boundary(start, k + j));
+    }
+    assert!(
+        drawn_before_each.iter().all(|&(_, frames)| frames == 1),
+        "frames drawn before each boundary: {drawn_before_each:?}"
     );
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
 }
@@ -592,6 +723,53 @@ fn the_pointer_and_a_click_reach_the_window_drawn_under_them() {
     assert_eq!(moved, (x - drawn_now.x, y - drawn_now.y));
     assert_eq!(compositor.pointer(seat).window, Some(second));
     settle(&mut compositor, |compositor| input.roundtrip(compositor));
+}
+
+/// An agent's scroll run until nothing is armed: the last refresh drew the motion's end, ahead of
+/// the boundary it shows at, which the clock has not reached. From then on, what follows what is
+/// drawn reads the output at rest: `windows` gives each window its place as its rectangle and no
+/// end, and the pointer moved half a unit inside the second window's place, by its right edge,
+/// reaches that window.
+#[test]
+fn after_the_last_refresh_the_pointer_and_windows_see_the_rest() {
+    let (mut compositor, seat, output) = agent_compositor();
+    let mut input = InputClient::connect(&mut compositor, seat, "agent-2");
+    for colour in [RED, GREEN, BLUE] {
+        open(&mut compositor, &mut input.client, colour);
+    }
+    let mut reference = Motion::new(animations());
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+    compositor
+        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .expect("the first window is focused");
+    let arranged_at = compositor.next_deadline().expect("a refresh is armed");
+    reference.update(compositor.layout(), arranged_at, Change::Animated);
+    settle(&mut compositor, |compositor| input.roundtrip(compositor));
+    assert_eq!(compositor.next_deadline(), None);
+    assert!(
+        reference.end(output, compositor.now()).is_some(),
+        "the clock is past the motion's end: nothing to check"
+    );
+
+    let windows = compositor.windows();
+    assert_eq!(windows.len(), 3);
+    for window in &windows {
+        assert_eq!(window.rect, window.place, "window {}", window.id.0);
+        assert_eq!(window.motion_ends, None, "window {}", window.id.0);
+    }
+    let place = windows[1].place.expect("the second window is placed");
+    let origin = output_rect(&compositor, output);
+    compositor
+        .pointer_move(
+            seat,
+            Some(output),
+            place.right() - 0.5 - origin.x,
+            place.y + 100.0 - origin.y,
+        )
+        .expect("the pointer moves");
+    input.roundtrip(&mut compositor);
+    assert_eq!(compositor.pointer(seat).window, Some(WindowId(2)));
+    assert_rests(&mut compositor);
 }
 
 /// Mid-scroll, a capture of a window cuts its frame where that frame drew it, not at its place:
@@ -976,7 +1154,7 @@ fn shown_ids(drawn: &[Drawn], output: Rect) -> Vec<WindowId> {
 /// A window on each of two named workspaces, "one" (red) and "two" (blue), "two" shown; the
 /// switch to "one" is turned back to "two" ten boundaries in, while both slide. Every frame, the
 /// windows of both workspaces at their drawn rectangles, equals the reference's at the boundary
-/// it samples, the retarget sliding on from where the switch was with its velocity; the frames
+/// it samples, the retarget sliding on as the reference retargets it; the frames
 /// around the retarget show both workspaces; the last is the arrangement, "two" alone; then
 /// nothing runs.
 #[test]
@@ -1064,8 +1242,8 @@ fn special_workspace_hidden(settings: Settings) -> (Compositor, Client, Duration
     (compositor, client, start, window_id(special))
 }
 
-/// The special workspace shown fades in, and ten boundaries in, toggled out, fades out from the
-/// alpha it reached, at the pace its curve keeps for what is left. Every frame's windows and
+/// The special workspace shown fades in, and ten boundaries in, toggled out, fades out as the
+/// reference retargets its fade. Every frame's windows and
 /// alphas equal the reference's at the boundary it samples; mid-fade the special window's alpha
 /// is between 0 and 1, rising then falling; the last frame is the main workspace alone; then
 /// nothing runs.
@@ -1380,5 +1558,137 @@ fn a_window_closed_and_one_opened_mid_scroll_end_at_the_arrangement() {
         arrangement(&compositor, OUTPUT)
     );
     client.roundtrip(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// Runs the deadlines armed up to a period from now, `owner` and `agent` reading after each: at
+/// least one refresh of each output.
+fn run_a_period(compositor: &mut Compositor, owner: &mut Client, mut agent: Option<&mut Client>) {
+    let until = compositor.now() + crate::PERIOD;
+    while let Some(at) = compositor.next_deadline().filter(|&at| at <= until) {
+        advance_to(compositor, owner, at);
+        if let Some(agent) = agent.as_deref_mut() {
+            agent.roundtrip(compositor);
+        }
+    }
+}
+
+/// Whether `output`'s last frame is its arrangement: its motion shows its end.
+fn shows_the_arrangement(compositor: &Compositor, output: OutputId) -> bool {
+    as_drawn(compositor.drawn(output)) == arrangement(compositor, output)
+}
+
+/// The owner scrolls three full-width columns; six boundaries in, the focus moved left, an agent's
+/// new seat gets an output. The owner's scroll goes on: at its output's next refresh, its frame
+/// is not the arrangement yet, and its motion then runs to it. A new output starts at rest, and
+/// makes nothing else instant
+/// ([ADR-0015](../../../../docs/adr/0015-agents-workspaces.md),
+/// [ADR-0052](../../../../docs/adr/0052-motion-in-a-pure-crate.md)).
+#[test]
+fn an_agents_new_output_does_not_snap_the_owners_motion() {
+    let mut compositor = compositor_with(animations());
+    let mut client = Client::connect(&mut compositor);
+    open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN, BLUE]);
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    for _ in 0..6 {
+        let at = compositor.next_deadline().expect("the scroll runs");
+        advance_to(&mut compositor, &mut client, at);
+    }
+    let seat = compositor.add_seat().expect("a seat");
+    compositor.add_output(seat, full_hd()).expect("an output");
+    run_a_period(&mut compositor, &mut client, None);
+    assert!(
+        !shows_the_arrangement(&compositor, OUTPUT),
+        "the owner's scroll jumped to its end when an agent added an output"
+    );
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    assert!(shows_the_arrangement(&compositor, OUTPUT));
+    assert_rests(&mut compositor);
+}
+
+/// The owner scrolls, and so does an agent on the first of its two outputs; six boundaries in,
+/// the agent removes its second output. That is instant for the agent's seat alone: at the next
+/// refreshes, the agent's first output shows its arrangement, while the owner's scroll goes on,
+/// then runs to its end.
+#[test]
+fn an_agents_output_removed_ends_its_own_seats_motion_alone() {
+    let mut compositor = compositor_with(animations());
+    let mut owner = Client::connect(&mut compositor);
+    open_full_width_columns(&mut compositor, &mut owner, &[RED, GREEN, BLUE]);
+    let seat = compositor.add_seat().expect("a seat");
+    let first = compositor.add_output(seat, full_hd()).expect("an output");
+    let mut agent = Client::connect_to(&mut compositor, seat);
+    for colour in [RED, GREEN, BLUE] {
+        open(&mut compositor, &mut agent, colour);
+    }
+    let second = compositor.add_output(seat, full_hd()).expect("an output");
+    settle(&mut compositor, |compositor| {
+        owner.roundtrip(compositor);
+        agent.roundtrip(compositor);
+    });
+    // The owner's windows are 1 to 3, the agent's 4 to 6, its last focused.
+    compositor
+        .change_layout(|layout| {
+            layout.focus(OWNER_SEAT, Direction::Left)?;
+            layout.focus_window(WindowId(4))
+        })
+        .expect("both seats' focus moves");
+    for _ in 0..6 {
+        let at = compositor.next_deadline().expect("the scrolls run");
+        advance_to(&mut compositor, &mut owner, at);
+        agent.roundtrip(&mut compositor);
+    }
+    assert!(!shows_the_arrangement(&compositor, OUTPUT));
+    assert!(!shows_the_arrangement(&compositor, first));
+
+    compositor
+        .remove_output(second)
+        .expect("the agent's second output is removed");
+    run_a_period(&mut compositor, &mut owner, Some(&mut agent));
+    assert!(
+        shows_the_arrangement(&compositor, first),
+        "the agent's motion went on after its seat lost an output"
+    );
+    assert!(
+        !shows_the_arrangement(&compositor, OUTPUT),
+        "the owner's scroll jumped to its end when an agent removed an output"
+    );
+    settle(&mut compositor, |compositor| {
+        owner.roundtrip(compositor);
+        agent.roundtrip(compositor);
+    });
+    assert!(shows_the_arrangement(&compositor, OUTPUT));
+    assert_rests(&mut compositor);
+}
+
+/// The owner scrolls; six boundaries in, an agent's seat, with an output, is removed. The owner's
+/// scroll goes on, then runs to its end.
+#[test]
+fn an_agents_seat_removed_does_not_snap_the_owners_motion() {
+    let mut compositor = compositor_with(animations());
+    let mut client = Client::connect(&mut compositor);
+    open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN, BLUE]);
+    let seat = compositor.add_seat().expect("a seat");
+    compositor.add_output(seat, full_hd()).expect("an output");
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    for _ in 0..6 {
+        let at = compositor.next_deadline().expect("the scroll runs");
+        advance_to(&mut compositor, &mut client, at);
+    }
+    compositor
+        .remove_seat(seat)
+        .expect("the agent's seat is removed");
+    run_a_period(&mut compositor, &mut client, None);
+    assert!(
+        !shows_the_arrangement(&compositor, OUTPUT),
+        "the owner's scroll jumped to its end when an agent's seat was removed"
+    );
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    assert!(shows_the_arrangement(&compositor, OUTPUT));
     assert_rests(&mut compositor);
 }

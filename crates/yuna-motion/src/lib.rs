@@ -175,9 +175,13 @@
 //! ## Instant changes
 //!
 //! A change made [`Change::Instant`], or any change while [`Settings::off`] is set, ends every
-//! motion of every output: its next frame is the arrangement. So do outputs added, removed,
-//! moved or rescaled, for that output, and a window going fullscreen or leaving it, for its
-//! workspace's camera and offsets, pinned windows aside: a game wants its output at once.
+//! motion of every output: its next frame is the arrangement. A change made
+//! [`Change::InstantFor`] some seats ends the motions of their outputs alone, and is animated on
+//! the others': one seat's outputs coming and going never cut another seat's motion short.
+//! Changes made before one update combine ([`Change::and`]): instant wherever one of them is.
+//! Whatever the change, an output added, moved or rescaled starts at rest, and one removed is
+//! forgotten; a window going fullscreen or leaving it ends the motions of its workspace's camera
+//! and offsets, pinned windows aside: a game wants its output at once.
 //!
 //! Under [`Settings::reduced_motion`], nothing crosses the screen: the switch, cameras and
 //! offsets show their result at once, while the special workspace's fade stays, over half its

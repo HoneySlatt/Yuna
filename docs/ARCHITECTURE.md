@@ -384,9 +384,13 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
 1. If the layout changed, it is arranged once, for every output, and `Motion::update` turns what
    moved into motion, at the refresh's time
    ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)). A change is
-   animated, unless outputs or seats were added or removed since the last arrangement: then it
-   is instant, and every motion ends at once. With animations off, the default of both headless
-   modes, every change is instant ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
+   animated, unless an output or a seat was removed since the last arrangement: then it is
+   instant for that seat alone, its outputs' motions ending at once while the other seats' go
+   on, so that an agent's outputs coming and going never cut the owner's motion short
+   ([ADR-0015](adr/0015-agents-workspaces.md)). An output added starts at rest. Changes made
+   before one arrangement combine, instant wherever one of them is (`Change::and`). With
+   animations off, the default of both headless modes, every change is instant
+   ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
    Each window is told its asked size and its states: tiled, fullscreen, activated if it has its
    seat's focus, suspended if it is told it is hidden, as below. A configure goes out only when
    its size or states changed, or when a request of its client is owed one. Each seat's keyboard
@@ -395,8 +399,11 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    is no longer urgent. Each agent's pointer is put on what is under it now, if that changed,
    unless windows move on its output.
 2. The motion gives the output's frame at the time it is shown if on time: the boundary the
-   refresh aims at, or, for a refresh due at once, the one its drawing can reach. Each window has
-   a rectangle and an alpha there; at rest, and with animations off, they are its place and 1.
+   refresh aims at, or, for a refresh due at once, the one its drawing reaches if it takes as
+   long as the output's longest drawing of the last half second, without the lead's floor and
+   margin; on the manual clock with no draw hook, the first boundary at or after now. Each
+   window has a rectangle and an alpha there; at rest, and with animations off, they are its
+   place and 1.
    The output is drawn if anything on it is damaged: each window the frame shows on it, bottom
    to top, its surface tree with its window geometry at its rectangle's corner, cut to the
    rectangle, at its alpha, then its popups just above it, at the same alpha, over a plain
@@ -425,8 +432,14 @@ arrangement; while the output's motion runs it stays told so as long as it is dr
 hidden only at the refresh where the motion ends, if its place is not on the output. A window
 that only passes through the view is drawn from its last buffer and called back, never told. So
 a window gets at most one such change per operation, never one a frame. A frame drawn at once
-that beats its lead is shown a boundary before the one it sampled; the next refresh then samples
-that boundary again and finds nothing changed.
+is shown at the boundary it sampled when its drawing takes about as long as predicted; when the
+drawing ends after that boundary, the frame is shown a boundary later, and when it ends before
+the boundary before, a boundary sooner.
+
+What follows what is drawn, hit tests, the pointer's focus and MCP's `windows`, reads an
+output's motion at the clock's time, or at the time its last frame sampled if that is later:
+never a motion that frame drew past. Once the refresh that sampled a motion's end has run, they
+read the output at rest, as that frame shows it, though the clock has not reached the end.
 
 A window hidden, on a workspace not shown or scrolled out of view, is told `suspended`: its
 content updates are discarded, and its frame callbacks go out at most once a second, through the
@@ -526,7 +539,8 @@ server makes for the seat an agent names; the owner's seat takes none. Its event
 clock's time.
 
 1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
-   is found among the windows that output draws at the event's time, where the motion has them,
+   is found among the windows that output draws at the event's time, or at the time its last
+   frame sampled if that is later ([A frame](#a-frame)), where the motion has them,
    top to bottom, each window's popups before it, a window cut to its rectangle: the surface whose
    input region holds the point. Smithay sends `enter`, `leave` and `motion`. After each
    arrangement, a pointer is moved onto what is under it then, when that changed; while windows
@@ -559,8 +573,9 @@ Removing a seat (`Compositor::remove_seat`), in order: the keys and buttons it h
 released, its popup grab ends, and its focus leaves every surface; those events are sent; its
 socket is removed; its clients are ended and freed, their windows closed; then its outputs, its
 place in the layout, and its `wl_seat` global, disabled now and destroyed later, as a removed
-output's is. Smithay keeps a record of every seat it made: a removed one's stays, without its
-keyboard and pointer.
+output's is. A seat's outputs added or removed, or the seat removed, never end another seat's
+motion ([A frame](#a-frame)). Smithay keeps a record of every seat it made: a removed one's
+stays, without its keyboard and pointer.
 
 ### Outputs added and removed
 
@@ -681,8 +696,9 @@ window or program unknown there:
   each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
 - `windows` lists a seat's windows, as `Compositor::windows` describes them: its `rect`, where
-  it is drawn at the call's time; its `place`, where it rests once its motion ends; and
-  `motion_ends_ns`, when its output's motion ends, null at rest. With `colour`,
+  it is drawn at the call's time, read as hit tests read it ([A frame](#a-frame)); its `place`,
+  where it rests once its motion ends; and `motion_ends_ns`, when its output's motion ends, null
+  at rest, from the refresh that drew its end on. With `colour`,
   each comes with the descriptions its surfaces declared, as `Compositor::window_colours` gives
   them, luminances in cd/m² and chromaticities as numbers; without it the reply leaves them out,
   so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
@@ -778,11 +794,15 @@ own thread, both `took_us`.
   not read, a line too long, an input that closes. `motion.rs` in it turns animations on: each
   boundary of two retargeted scrolls checked against a `Motion` of the test's own, fed the same
   layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
-  drawn at once sampled at the boundary its drawing reaches; a workspace switch that tells the
-  window left hidden once, after its last frame; five moves during a motion, at most one
-  configure for each window from each; a pointer and a click mid-scroll reaching the window drawn
-  under them; a window's capture where its frame drew it; the special workspace's fade read in
-  its pixels; animations off drawing one frame; and `windows` through MCP mid-motion and at rest.
+  drawn at once sampled and shown at the next boundary, or, its drawing across that one, at the
+  one after, and no boundary showing one frame twice; a workspace switch that tells the window
+  left hidden once, after its last frame; five moves during a motion, at most one configure for
+  each window from each; a pointer and a click mid-scroll reaching the window drawn under them;
+  the pointer and `windows` at rest once the last refresh drew the motion's end; a window's
+  capture where its frame drew it; the special workspace's fade read in its pixels; animations
+  off drawing one frame; `windows` through MCP mid-motion and at rest; and an agent's output
+  added, its output removed and its seat removed mid-scroll, which leave the owner's motion
+  running.
   Its frame-by-frame stories (`step_frames`) check every refresh's time and frame against the
   reference: a switch turned back mid-way, the special workspace's fade toggled mid-way, reduced
   motion's scroll in one frame and fade over half its time, a window closed and one opened

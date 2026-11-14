@@ -5,6 +5,7 @@
 //! One output of 1920 × 1080 at scale 1, so that a physical pixel is a logical unit and a drawn
 //! corner is its value rounded, ties up. Times start at 10 s, away from the clock's origin.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use yuna_layout::geometry::{Point, Rect, Size};
@@ -832,6 +833,106 @@ fn an_instant_update_or_animations_off_ends_every_motion() {
     rig.wait(ms(20));
     rig.motion.set_settings(Settings::default());
     rig.assert_at_rest(rig.now);
+}
+
+/// An instant change for some seats, by their ids.
+fn instant_for(seats: &[u64]) -> Change {
+    Change::InstantFor(
+        seats
+            .iter()
+            .map(|&seat| SeatId(seat))
+            .collect::<BTreeSet<_>>(),
+    )
+}
+
+#[test]
+fn changes_made_before_one_update_are_instant_wherever_one_is() {
+    assert_eq!(Change::default(), Change::Animated);
+    assert_eq!(Change::Animated.and(Change::Animated), Change::Animated);
+    assert_eq!(Change::Animated.and(instant_for(&[2])), instant_for(&[2]));
+    assert_eq!(instant_for(&[2]).and(Change::Animated), instant_for(&[2]));
+    assert_eq!(
+        instant_for(&[2]).and(instant_for(&[3])),
+        instant_for(&[2, 3])
+    );
+    assert_eq!(
+        instant_for(&[2, 3]).and(instant_for(&[3])),
+        instant_for(&[2, 3])
+    );
+    for change in [Change::Animated, instant_for(&[2]), Change::Instant] {
+        assert_eq!(change.clone().and(Change::Instant), Change::Instant);
+        assert_eq!(Change::Instant.and(change), Change::Instant);
+    }
+}
+
+/// Three seats, each with an output of three columns, each scrolling from the third to the
+/// first. 20 ms in, an update instant for seats 2 and 3, two changes combined, ends their
+/// outputs' motions at once; seat 1's goes on exactly as an animated update leaves it. An instant
+/// change for a seat the layout no longer has, one removed, is animated everywhere.
+#[test]
+fn an_instant_change_for_some_seats_ends_their_outputs_motions_alone() {
+    let mut layout = Layout::new(Options::default()).unwrap();
+    for n in 1..=3u64 {
+        let seat = SeatId(n);
+        layout.add_seat(seat).unwrap();
+        let config = OutputConfig {
+            position: Point {
+                x: 1920.0 * (n - 1) as f64,
+                y: 0.0,
+            },
+            physical_width: 1920,
+            physical_height: 1080,
+            scale: 1.0,
+        };
+        layout.add_output(seat, OutputId(n), config).unwrap();
+        for window in 1..=3 {
+            let options = OpenOptions::default();
+            layout
+                .open_window(seat, w(10 * n + window), options)
+                .unwrap();
+        }
+    }
+    let mut motion = Motion::new(Settings::default());
+    let start = Duration::from_secs(10);
+    motion.update(&layout, start, Change::Instant);
+    for n in 1..=3 {
+        layout.focus_window(w(10 * n + 1)).unwrap();
+    }
+    motion.update(&layout, start + ms(5), Change::Animated);
+    let now = start + ms(25);
+    let mut animated = motion.clone();
+    animated.update(&layout, now, Change::Animated);
+    for n in 1..=3 {
+        assert!(animated.end(OutputId(n), now).is_some(), "seat {n} scrolls");
+    }
+
+    let mut instant = motion.clone();
+    instant.update(&layout, now, instant_for(&[2]).and(instant_for(&[3])));
+    assert!(instant.end(OutputId(1), now).is_some());
+    for at in samples(now, now + ms(400)) {
+        assert_eq!(
+            instant.frame(OutputId(1), at),
+            animated.frame(OutputId(1), at)
+        );
+    }
+    for n in 2..=3 {
+        assert_eq!(instant.end(OutputId(n), now), None, "seat {n}");
+        assert_eq!(
+            instant.frame(OutputId(n), now),
+            arrangement(&layout, OutputId(n)),
+            "seat {n}"
+        );
+    }
+
+    motion.update(&layout, now, instant_for(&[7]));
+    for n in 1..=3 {
+        for at in samples(now, now + ms(400)) {
+            assert_eq!(
+                motion.frame(OutputId(n), at),
+                animated.frame(OutputId(n), at)
+            );
+        }
+    }
 }
 
 // ----- 7. The end -----
