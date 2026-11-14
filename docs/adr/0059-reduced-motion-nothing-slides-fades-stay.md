@@ -21,8 +21,8 @@ The owner chose, on 2026-11-14:
 - **Fades stay**, over half their duration: the special workspace's fade moves nothing, and
   appearing at once is no gentler.
 - **It is a setting of its own**, beside `off`: `Settings::reduced_motion` in `yuna-motion`, and
-  `--reduced-motion` for `yuna --headless` and `yuna mcp`, with `--animations`. The desktop reads
-  the shell's or the session's setting at Stage 2.
+  `--reduced-motion` for `yuna --headless` and `yuna mcp`, in place of `--animations`. The
+  desktop reads the shell's or the session's setting at Stage 2.
 
 ## Alternatives considered
 

@@ -105,8 +105,8 @@ pub struct WindowDescription {
     pub pid: Option<i32>,
     /// The seat whose workspaces hold it: its client's.
     pub seat: SeatId,
-    /// The output it is shown on: the one that tells it it is visible, its place there or, while
-    /// it slides out of view, its drawn rectangle; none when it is hidden.
+    /// The output it is shown on, the one that tells it it is visible: where its place is, or,
+    /// while it slides out of view, where it is still drawn; none when it is hidden.
     pub output: Option<OutputId>,
     /// Its workspace's name; none for an unnamed workspace.
     pub workspace: Option<String>,

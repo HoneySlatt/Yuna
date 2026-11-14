@@ -117,9 +117,15 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
             Some("--gpu") if !gpu => gpu = true,
             Some("--animations") if !animations && !reduced_motion => animations = true,
             Some("--reduced-motion") if !animations && !reduced_motion => reduced_motion = true,
-            Some("--animations" | "--reduced-motion") if animations != reduced_motion => {
+            Some(flag @ "--animations") if animations => {
+                return Request::Invalid(format!("{flag} is given twice"));
+            }
+            Some(flag @ "--reduced-motion") if reduced_motion => {
+                return Request::Invalid(format!("{flag} is given twice"));
+            }
+            Some("--animations" | "--reduced-motion") => {
                 return Request::Invalid(
-                    "--animations and --reduced-motion are one choice: give one, once".to_owned(),
+                    "--animations and --reduced-motion are one choice: give one".to_owned(),
                 );
             }
             Some("--manual-clock") if mcp && !manual_clock => manual_clock = true,
@@ -129,7 +135,7 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
             Some("--manual-clock") if !mcp => {
                 return Request::Invalid("--manual-clock is mcp's".to_owned());
             }
-            Some(flag @ ("--headless" | "--gpu" | "--animations" | "--manual-clock")) => {
+            Some(flag @ ("--headless" | "--gpu" | "--manual-clock")) => {
                 return Request::Invalid(format!("{flag} is given twice"));
             }
             Some("--output") => match arguments.next().map(|mode| read_output(mode)) {

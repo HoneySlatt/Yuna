@@ -163,7 +163,7 @@ pub fn definitions() -> Value {
                 at now (null when hidden), place: its rectangle in the layout, where it rests \
                 once its motion ends (null when hidden), motion_ends_ns: when its output's \
                 motion ends, on the clock's scale (null at rest), focus, floating, fullscreen. \
-                Without --animations, rect is place and motion_ends_ns null. With colour, each window also gives colours: one \
+                With neither --animations nor --reduced-motion, rect is place and motion_ends_ns null. With colour, each window also gives colours: one \
                 entry for each of its surfaces that declared its colours through \
                 color-management-v1, its own, then its subsurfaces' and its popups': the \
                 surface's role, transfer function, primaries (a protocol name, else their \

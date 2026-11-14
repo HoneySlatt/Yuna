@@ -726,8 +726,10 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
 clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
 Both run with animations off, each change shown at once; `--animations` turns them on, with
-`yuna-motion`'s default springs and curve
-([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)). A flag given twice is a
+`yuna-motion`'s default springs and curve, and `--reduced-motion` turns them on under reduced
+motion, one or the other
+([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md),
+[ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)). A flag given twice is a
 usage error.
 `--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
 RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
