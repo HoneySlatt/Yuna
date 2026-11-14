@@ -449,6 +449,96 @@ fn an_at_once_frame_does_not_hold_the_next_boundary() {
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
 }
 
+/// A drawing of 20 ms, then `rest`, every other drawing taking no time; then a scroll on the idle
+/// output 1 ms after a boundary k, its first frame drawn at once. Returns the boundaries the
+/// scroll's first two frames sample, counted from k: for each, the first of k to k + 40 whose
+/// reference frame it draws. The scroll then ends at the arrangement, and nothing runs.
+fn first_two_samples_after_a_slow_drawing(rest: Duration) -> (Option<u64>, Option<u64>) {
+    let settings = animations();
+    let mut compositor = compositor_with(settings);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    open_full_width_columns(&mut compositor, &mut client, &[RED, BLUE]);
+    let mut slow = true;
+    compositor.set_draw_hook(move |clock| {
+        if slow {
+            slow = false;
+            clock.pass(Duration::from_millis(20));
+        }
+    });
+    // A new buffer for the second window, its last configure acknowledged already: one drawing.
+    let drawn_before = compositor.counters().frames_drawn;
+    let configure = client
+        .window(1)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    client.attach(1, configure.width, configure.height, RED);
+    client.commit(1);
+    client.roundtrip(&mut compositor);
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    assert_eq!(compositor.counters().frames_drawn, drawn_before + 1);
+
+    let rested = compositor.now() + rest;
+    advance_to(&mut compositor, &mut client, rested);
+    let mut reference = Motion::new(settings);
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+    let k = first_boundary_at_or_after(start, compositor.now()) + 1;
+    let operation = boundary(start, k) + Duration::from_millis(1);
+    advance_to(&mut compositor, &mut client, operation);
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    reference.update(compositor.layout(), operation, Change::Animated);
+    assert_eq!(compositor.next_deadline(), Some(operation), "due at once");
+    advance_to(&mut compositor, &mut client, operation);
+    let sampled = |compositor: &Compositor| {
+        let drawn = compositor.drawn(OUTPUT);
+        (k..=k + 40)
+            .find(|&j| reference.frame(OUTPUT, boundary(start, j)).windows == drawn)
+            .map(|j| j - k)
+    };
+    let first = sampled(&compositor);
+    let next = compositor.next_deadline().expect("the motion runs");
+    advance_to(&mut compositor, &mut client, next);
+    let second = sampled(&compositor);
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+    assert_eq!(
+        as_drawn(compositor.drawn(OUTPUT)),
+        arrangement(&compositor, OUTPUT)
+    );
+    assert_rests(&mut compositor);
+    (first, second)
+}
+
+/// Half a second after a drawing of 20 ms, which no longer counts in the lead, a scroll on the
+/// idle output 1 ms after boundary k is drawn at once. Its drawing is predicted to take as long as
+/// that last one, at most one period: its frame samples k + 2, which 1 ms and a period reach. Its
+/// drawing takes no time, so that frame shows from k + 1. The motion's next refresh samples a
+/// later boundary, k + 3, the one after: never one before the frame it follows.
+#[test]
+fn after_rest_the_frame_after_one_drawn_at_once_samples_a_later_boundary() {
+    let (first, second) = first_two_samples_after_a_slow_drawing(Duration::from_millis(600));
+    assert!(
+        first < second,
+        "the first frame samples k + {first:?}, the second k + {second:?}: no later boundary"
+    );
+    assert_eq!((first, second), (Some(2), Some(3)));
+}
+
+/// As above, the drawing of 20 ms only 100 ms before the scroll, so that it still counts in the
+/// lead, which is then one period: the first frame samples k + 2, and the next k + 3.
+#[test]
+fn soon_after_a_slow_drawing_the_frame_after_one_drawn_at_once_samples_a_later_boundary() {
+    let (first, second) = first_two_samples_after_a_slow_drawing(Duration::from_millis(100));
+    assert!(
+        first < second,
+        "the first frame samples k + {first:?}, the second k + {second:?}: no later boundary"
+    );
+    assert_eq!((first, second), (Some(2), Some(3)));
+}
+
 /// Two named workspaces, a window each; switching back from the second to the first slides both:
 /// mid-way both windows are drawn, at the end only the first. The window shown is told it is
 /// visible once, at the switch; the one left is told `suspended` once, at the refresh whose frame

@@ -22,13 +22,16 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
 
 - **Each frame samples every motion at the boundary it aims at**, the time it is presented when
   on time, so that steps are even whatever the moment drawing starts within the period. A frame
-  drawn at once on an idle output aims at the boundary it can reach after its expected drawing,
-  not the first one after now.
+  drawn at once on an idle output samples the boundary it can reach after its expected drawing,
+  at most one period as the lead is ([ADR-0031](0031-frames-drawn-ahead-of-their-boundary.md)),
+  not the first one after now. While a motion runs, each frame samples a later time than the
+  frame before: a frame drawn at once that shows sooner than expected is followed by one that
+  samples the boundary after the one it sampled, never an earlier one.
 - **A motion starts when Yuna applies the change**, at the refresh that arranges it, so that its
   first frame shows at most one period of motion.
-- **While a motion of an output is unfinished at the boundary after the next**, every refresh
-  that sampled it arms the next one, whether it drew or found nothing changed, and a refresh whose
-  drawing failed too. The last frame shows the target exactly; then nothing is armed.
+- **While a motion of an output is unfinished at the time a refresh sampled**, that refresh arms
+  the next one, whether it drew or found nothing changed, and a refresh whose drawing failed
+  too. The last frame shows the target exactly; then nothing is armed.
 - **On a VRR output, a motion's refresh that finds nothing changed shows its frame again**, so that
   the panel refreshes where the frame loop counts one and the motion keeps the shortest refresh
   to its end. At rest, such a refresh still flips nothing

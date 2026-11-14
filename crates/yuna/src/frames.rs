@@ -11,7 +11,8 @@
 //! ([ADR-0051](../../../docs/adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)).
 //! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
 //! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
-//! whose time minus the lead is not yet past. The lead is the longest drawing of the last
+//! whose time minus the lead is not yet past, and, while its motion runs, after the boundary its
+//! last frame sampled (step 2 below). The lead is the longest drawing of the last
 //! [`DRAWING_WINDOW`], each at least [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period;
 //! a drawing is timed from its deadline to its end.
 //!
@@ -25,11 +26,15 @@
 //!    The windows are told their sizes and states.
 //! 2. The motion gives the output's frame at the time it is presented when on time: the boundary
 //!    the refresh aims at; for a refresh due at once, the boundary its drawing reaches if it takes
-//!    as long as the output's longest drawing of the last [`DRAWING_WINDOW`], without the lead's
-//!    floor and margin: on the manual clock with no draw hook, the first boundary at or after
-//!    now. Each window is drawn at its rectangle and alpha then; with animations off, or at rest,
-//!    that is the arrangement. The output is drawn if anything on it is damaged, and keeps what it
-//!    drew, which captures cut.
+//!    as long as the output's longest drawing of the last [`DRAWING_WINDOW`], or after rest its
+//!    last one, at most one period, without the lead's floor and margin: on the manual clock with
+//!    no draw hook, the first boundary at or after now. While the output's motion runs, each
+//!    refresh samples a later time than the output's last frame did, at a fixed rate the
+//!    boundary after at least, so that the motion never steps back: a frame drawn at once whose
+//!    drawing ended sooner than predicted shows before the boundary it sampled, and at a fixed
+//!    rate that boundary shows it again. Each window is drawn at its rectangle and alpha then;
+//!    with animations off, or at rest, that is the arrangement. The output is drawn if anything on
+//!    it is damaged, and keeps what it drew, which captures cut.
 //! 3. The windows it shows, and those it tells they are visible, get their frame callbacks. The
 //!    presentation feedback of those it shows is taken and held until the boundary the frame is
 //!    presented at: the one it aimed at if its drawing ended by then, else the first after. It is
@@ -146,29 +151,36 @@ impl State {
         if self.clock.is_armed(deadline) && (!variable || paced || output.armed_for_content) {
             return;
         }
+        // While its motion runs, a frame is ready no sooner than just after the time its last
+        // frame sampled, so that it samples a later refresh and the motion never steps back:
+        // that frame, if drawn at once and faster than predicted, showed before the refresh it
+        // sampled (ADR-0054). At rest, the frame is the arrangement whatever the time it
+        // samples: a client's frames keep the soonest refresh they can reach.
+        let ready_after = if output.in_motion {
+            output.sampled_at.saturating_add(Duration::from_nanos(1))
+        } else {
+            Duration::ZERO
+        };
+        let period = output.mode.period();
         // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
         // may start a refresh now: no frame waits for its own.
         let idle = output.timing.is_idle(now, output.last_refresh, paced);
         let (at, aimed, sampled) = if idle {
             // Drawn at once, a frame is shown at the first refresh after its drawing ends: its
-            // motion is sampled there, the drawing predicted to take as long as the output's
-            // longest recent one, or after rest its last one. Not the lead, whose floor and margin keep a deadline safe
-            // rather than predict: a frame shown before the refresh it sampled leaves that
-            // refresh nothing new to show (ADR-0054).
-            let drawing = output.drawings.expected(now);
+            // motion is sampled there, its drawing predicted from the output's recent ones. Not
+            // the lead, whose floor and margin keep a deadline safe rather than predict: a frame
+            // shown before the refresh it sampled leaves that refresh nothing new to show.
+            let drawing = output.drawings.expected(now, period);
+            let ready = now.saturating_add(drawing).max(ready_after);
             (
                 now,
                 output.timing.reachable(now, output.last_refresh, paced),
-                output
-                    .timing
-                    .reachable(now.saturating_add(drawing), output.last_refresh, paced),
+                output.timing.reachable(ready, output.last_refresh, paced),
             )
         } else {
-            let lead = output.drawings.lead(now, output.mode.period());
-            let ready =
-                output
-                    .timing
-                    .reachable(now.saturating_add(lead), output.last_refresh, paced);
+            let lead = output.drawings.lead(now, period);
+            let ready = now.saturating_add(lead).max(ready_after);
+            let ready = output.timing.reachable(ready, output.last_refresh, paced);
             (ready.at.saturating_sub(lead), ready, ready)
         };
         if self.clock.is_armed(deadline) && output.armed_at <= at {
@@ -745,15 +757,18 @@ impl Drawings {
             .unwrap_or(Duration::ZERO)
     }
 
-    /// How long a drawing starting at `now` is expected to take: the longest of the last
-    /// [`DRAWING_WINDOW`], or after rest the last one, however old; zero before any drawing.
-    pub(crate) fn expected(&mut self, now: Duration) -> Duration {
+    /// How long a drawing starting at `now` is expected to take, on an output of refresh period
+    /// `period`: the longest of the last [`DRAWING_WINDOW`], or after rest the last one, however
+    /// old; zero before any drawing; at most `period`, as the lead is, so that one slow drawing
+    /// never has a frame drawn at once sample several refreshes ahead.
+    pub(crate) fn expected(&mut self, now: Duration, period: Duration) -> Duration {
         let longest = self.longest(now);
-        if self.recent.is_empty() {
+        let expected = if self.recent.is_empty() {
             self.last.unwrap_or(Duration::ZERO)
         } else {
             longest
-        }
+        };
+        expected.min(period)
     }
 
     fn forget_old(&mut self, now: Duration) {
@@ -891,12 +906,30 @@ mod tests {
     #[test]
     fn after_rest_a_drawing_is_expected_to_take_as_long_as_the_last() {
         let mut drawings = Drawings::default();
-        assert_eq!(drawings.expected(Duration::ZERO), Duration::ZERO);
+        assert_eq!(
+            drawings.expected(Duration::ZERO, PERIOD_240_HZ),
+            Duration::ZERO
+        );
         let t = Duration::from_secs(100);
         drawings.record(t, 3 * MS);
         drawings.record(t + 4 * MS, MS);
-        assert_eq!(drawings.expected(t + 5 * MS), 3 * MS);
-        assert_eq!(drawings.expected(t + 60 * DRAWING_WINDOW), MS);
+        assert_eq!(drawings.expected(t + 5 * MS, PERIOD_240_HZ), 3 * MS);
+        assert_eq!(
+            drawings.expected(t + 60 * DRAWING_WINDOW, PERIOD_240_HZ),
+            MS
+        );
+    }
+
+    #[test]
+    fn a_drawing_is_expected_to_take_at_most_one_period() {
+        let mut drawings = Drawings::default();
+        let t = Duration::from_secs(100);
+        drawings.record(t, 20 * MS);
+        assert_eq!(drawings.expected(t + MS, PERIOD_240_HZ), PERIOD_240_HZ);
+        assert_eq!(
+            drawings.expected(t + 60 * DRAWING_WINDOW, PERIOD_240_HZ),
+            PERIOD_240_HZ
+        );
     }
 
     #[test]

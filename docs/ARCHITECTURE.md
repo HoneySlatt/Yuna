@@ -227,12 +227,15 @@ A commit, or a change of the layout, arms its output's refresh
 ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)); while the output's motion runs,
 each refresh arms the next. When the output is idle, the boundary after its last refresh passed,
 the refresh is due at once and aims at the first boundary at or after it; its motion is sampled at
-the boundary its drawing can reach, the first at or after now plus the lead. Otherwise it is due
-at a boundary minus the output's lead, the first after its last refresh whose deadline is not
-past, and samples its motion at that boundary. The lead is the longest drawing of the last half second,
-timed from its deadline to its end, at least 2 ms, plus 1 ms, at most one period
-(`frames.rs`, `Drawings`). On the manual clock a drawing takes no time unless the draw hook
-passes some, so the lead is 3 ms.
+the boundary its drawing can reach, the first at or after now plus its expected drawing: the
+longest drawing of the last half second, or after rest the last one, at most one period, without
+the lead's floor and margin. Otherwise it is due at a boundary minus the output's lead, the first
+after its last refresh whose deadline is not past, and samples its motion at that boundary. While
+the output's motion runs, that boundary also comes after the one its last frame sampled
+([A frame](#a-frame)). The lead is the longest drawing of the last half second, timed from its
+deadline to its end, at least 2 ms, plus 1 ms, at most one period (`frames.rs`, `Drawings`). On
+the manual clock a drawing takes no time unless the draw hook passes some: the lead is 3 ms, and
+a drawing at once is expected to take none.
 
 ### A window's life
 
@@ -400,10 +403,14 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    unless windows move on its output.
 2. The motion gives the output's frame at the time it is shown if on time: the boundary the
    refresh aims at, or, for a refresh due at once, the one its drawing reaches if it takes as
-   long as the output's longest drawing of the last half second, or after rest its last one,
-   without the lead's floor and margin; on the manual clock with no draw hook, the first boundary at or after now. Each
-   window has a rectangle and an alpha there; at rest, and with animations off, they are its
-   place and 1.
+   long as the output's longest drawing of the last half second, or after rest its last one, at
+   most one period, without the lead's floor and margin; on the manual clock with no draw hook,
+   the first boundary at or after now. While the output's motion runs, each refresh samples a
+   later time than its last frame did, at a fixed rate the boundary after at least, so that the
+   motion never steps back. At rest this rule does not apply, so that a client's frames keep the
+   soonest boundary they can reach: the frame is the arrangement whatever the time. Each window
+   has a rectangle and an alpha there; at rest, and with animations off, they are its place and
+   1.
    The output is drawn if anything on it is damaged: each window the frame shows on it, bottom
    to top, its surface tree with its window geometry at its rectangle's corner, cut to the
    rectangle, at its alpha, then its popups just above it, at the same alpha, over a plain
@@ -434,7 +441,11 @@ that only passes through the view is drawn from its last buffer and called back,
 a window gets at most one such change per operation, never one a frame. A frame drawn at once
 is shown at the boundary it sampled when its drawing takes about as long as predicted; when the
 drawing ends after that boundary, the frame is shown a boundary later, and when it ends before
-the boundary before, a boundary sooner.
+the boundary before, a boundary sooner. Shown sooner, it stays on screen at the boundary it
+sampled, and the motion's next frame samples the boundary after: the motion holds one frame
+rather than step back. Under VRR, the next frame is shown a shortest refresh after the first
+and samples a later time than the first did; from the frame after it at the latest, each frame
+shows where it samples.
 
 What follows what is drawn, hit tests, the pointer's focus and MCP's `windows`, reads an
 output's motion at the clock's time, or at the time its last frame sampled if that is later:
@@ -795,8 +806,10 @@ own thread, both `took_us`.
   boundary of two retargeted scrolls checked against a `Motion` of the test's own, fed the same
   layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
   drawn at once sampled and shown at the next boundary, or, its drawing across that one, at the
-  one after, and no boundary showing one frame twice; a workspace switch that tells the window
-  left hidden once, after its last frame; five moves during a motion, at most one configure for
+  one after, and no boundary showing one frame twice; half a second or 100 ms after a drawing
+  of 20 ms, a frame drawn at once sampling at most one period ahead, and the next frame the
+  boundary after; a workspace switch that tells the window left hidden once, after its last
+  frame; five moves during a motion, at most one configure for
   each window from each; a pointer and a click mid-scroll reaching the window drawn under them;
   the pointer and `windows` at rest once the last refresh drew the motion's end; a window's
   capture where its frame drew it; the special workspace's fade read in its pixels; animations
@@ -810,8 +823,10 @@ own thread, both `took_us`.
   `motion_pacing.rs` in it times drawings with the draw hook, on a scroll under a floating
   window whose frame callbacks and feedback tell each refresh and where its frame was shown:
   drawings of 70 % of a period missing nothing, one of 1.5 periods missing one boundary, every
-  drawing 1.2 periods shown every other boundary, each ending on time; and a scroll on a VRR
-  output refreshing at the shortest refresh.
+  drawing 1.2 periods shown every other boundary, each ending on time; drawings of 20, 0, 3, 0
+  and 9 ms in turn, each frame sampling a later boundary than the one before; and on a VRR
+  output, a scroll refreshing at the shortest refresh, and, after a drawing of 5 ms, the frame
+  after one drawn at once sampling a later time, the frames after it on time.
 - `misbehaving.rs` in it: clients that ignore their configures, commit 1 × 1 or 8,192 × 8,192
   pixels, send absurd limits and geometry, break the protocol, shrink a buffer's pool under Yuna
   (SIGBUS, which Smithay turns into a protocol error; the client is freed in that round, with no

@@ -226,10 +226,12 @@ pub(crate) struct VirtualOutput {
     /// When the frame of its armed refresh is presented if on time, the time its motion is
     /// sampled at: the boundary it aims at, or for a refresh armed at once, the one its drawing
     /// reaches if it takes as long as the longest of the last
-    /// [`DRAWING_WINDOW`](crate::frames::DRAWING_WINDOW)
+    /// [`DRAWING_WINDOW`](crate::frames::DRAWING_WINDOW), or after rest the last one, at most one
+    /// period. While its motion runs, it is later than `sampled_at`
     /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     pub armed_sample_at: Duration,
-    /// The time its last refresh sampled its motion at; zero before its first.
+    /// The time its last frame sampled its motion at, the frame its buffer holds: that of its
+    /// last refresh whose drawing did not fail; zero before its first.
     pub sampled_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,

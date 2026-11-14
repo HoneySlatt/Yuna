@@ -374,6 +374,112 @@ fn drawings_of_a_period_and_a_fifth_show_every_other_boundary_and_end_on_time() 
     ends_at_the_arrangement_and_rests(&mut scroll);
 }
 
+/// The carrier's new buffer, at the size it has: one drawing, which the draw hook times.
+fn draw_the_carrier_again(compositor: &mut Compositor, client: &mut Client) {
+    let drawn_before = compositor.counters().frames_drawn;
+    // The size it opened at, which it floats at: floating, it is asked 0 × 0, its own choice.
+    let configure = client
+        .window(CARRIER)
+        .configures
+        .first()
+        .expect("a configure")
+        .clone();
+    client.attach(CARRIER, configure.width, configure.height, GREEN);
+    client.commit(CARRIER);
+    client.roundtrip(compositor);
+    settle(compositor, |compositor| client.roundtrip(compositor));
+    assert_eq!(compositor.counters().frames_drawn, drawn_before + 1);
+}
+
+/// Drawings that take 20, 0, 3, 0 and 9 ms, in turn, the first before the scroll: the carrier's
+/// new buffer. The scroll's first frame, drawn at once on the idle output 0.1 ms after boundary k,
+/// is predicted to take as long as that drawing of 20 ms, at most one period: it samples k + 2,
+/// which 0.1 ms and a period reach. Its own drawing takes no time, so it shows from k + 1. Every
+/// later refresh samples the boundary it aims at, the first after it was due. Each frame samples a
+/// later boundary than the frame before, and shows at a later one; none but the first shows before
+/// the boundary it sampled, and some show after it, their drawing long. Each frame is the
+/// reference's at the boundary it sampled; the last is the arrangement; then nothing runs.
+#[test]
+fn drawings_that_vary_sample_a_later_boundary_at_each_frame() {
+    const DRAWINGS_MS: [u64; 5] = [20, 0, 3, 0, 9];
+    let (mut compositor, mut client, start) = columns_under_the_carrier(full_hd());
+    let mut drawings = 0;
+    compositor.set_draw_hook(move |clock| {
+        clock.pass(Duration::from_millis(
+            DRAWINGS_MS[drawings % DRAWINGS_MS.len()],
+        ));
+        drawings += 1;
+    });
+    draw_the_carrier_again(&mut compositor, &mut client);
+    let mut reference = Motion::new(animations());
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+    let operation = operate_on_idle(
+        &mut compositor,
+        &mut client,
+        &mut reference,
+        start,
+        |layout| {
+            layout
+                .focus(OWNER_SEAT, Direction::Left)
+                .expect("the focus moves left");
+        },
+    );
+    let refreshes = record(&mut compositor, &mut client, |due| {
+        reference.end(OUTPUT, boundary_after(start, due)).is_none()
+    });
+    client.roundtrip(&mut compositor);
+    let mut scroll = Scroll {
+        compositor,
+        start,
+        reference,
+        refreshes,
+    };
+
+    let refreshes = &scroll.refreshes;
+    assert!(refreshes.len() > 20, "{} frames", refreshes.len());
+    assert_eq!(refreshes[0].due, operation);
+    let k = scroll.aimed(operation) - 1;
+    let first = (k + 1..=k + 40).find(|&j| scroll.reference_at(j) == refreshes[0].drawn);
+    let samples: Vec<u64> = first
+        .into_iter()
+        .chain(
+            refreshes[1..]
+                .iter()
+                .map(|refresh| scroll.aimed(refresh.due)),
+        )
+        .collect();
+    assert_eq!(samples.len(), refreshes.len(), "the first frame's sample");
+    assert!(
+        samples.windows(2).all(|pair| pair[1] > pair[0]),
+        "a frame samples a boundary no later than the frame before: {samples:?}"
+    );
+    assert_eq!(samples[0], k + 2);
+    assert_eq!(refreshes[0].seq, k + 1);
+    for (n, (refresh, &sample)) in refreshes.iter().zip(&samples).enumerate() {
+        assert_eq!(refresh.drawn, scroll.reference_at(sample), "frame {n}");
+        assert_eq!(refresh.presented, boundary(scroll.start, refresh.seq));
+        if n > 0 {
+            assert!(
+                refresh.seq >= sample,
+                "frame {n}, sampled at {sample}, shown at {}",
+                refresh.seq
+            );
+        }
+    }
+    assert!(
+        refreshes.windows(2).all(|pair| pair[1].seq > pair[0].seq),
+        "two frames shown at one boundary"
+    );
+    assert!(
+        refreshes
+            .iter()
+            .zip(&samples)
+            .any(|(refresh, &sample)| refresh.seq > sample),
+        "no drawing made its frame late"
+    );
+    ends_at_the_arrangement_and_rests(&mut scroll);
+}
+
 /// 1/240 s, a VRR output's shortest refresh, to the nanosecond below.
 const SHORTEST: Duration = PERIOD;
 
@@ -487,4 +593,85 @@ fn on_a_vrr_output_a_motion_alone_arms_a_refresh_each_shortest_refresh() {
     );
     client.roundtrip(&mut compositor);
     assert_rests(&mut compositor);
+}
+
+/// On a VRR output of 48 to 240 Hz, a drawing of 5 ms, longer than a shortest refresh, then none.
+/// A scroll 8 ms after that drawing showed, on the idle output, is drawn at once: predicted to take
+/// as long as that drawing, at most a shortest refresh, its frame samples the motion a shortest
+/// refresh and a vertical blank after the operation, though, its drawing taking no time, it shows a
+/// blank after the operation. Every later refresh is due a lead before the refresh it samples, and
+/// the lead is a shortest refresh, the drawing of 5 ms counting for half a second. The second
+/// frame samples a later time than the first, and shows a shortest refresh after it, where the
+/// first sampled; from the third on, each frame shows where it samples, a shortest refresh after
+/// the one before. Each frame is the reference's where it sampled; the last is the arrangement;
+/// then nothing runs.
+#[test]
+fn on_a_vrr_output_the_frame_after_one_drawn_at_once_samples_a_later_time() {
+    let mode = full_hd().with_vrr(48.0).expect("a VRR range");
+    let (mut compositor, mut client, start) = columns_under_the_carrier(mode);
+    let mut slow = true;
+    compositor.set_draw_hook(move |clock| {
+        if slow {
+            slow = false;
+            clock.pass(Duration::from_millis(5));
+        }
+    });
+    client.request_feedback(CARRIER);
+    draw_the_carrier_again(&mut compositor, &mut client);
+    let Some(&Feedback::Presented { time: shown, .. }) = client.window(CARRIER).feedback.last()
+    else {
+        panic!("the carrier's frame was not presented");
+    };
+    let mut reference = Motion::new(animations());
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+    // The panel can start a refresh a blank after the operation, and refreshes by itself 1/48 s
+    // after the last, past the first frame's sample.
+    let operation = shown + Duration::from_millis(8);
+    advance_to(&mut compositor, &mut client, operation);
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    reference.update(compositor.layout(), operation, Change::Animated);
+    assert_eq!(compositor.next_deadline(), Some(operation), "due at once");
+    let sample = |refresh: &Refresh| refresh.due + SHORTEST;
+    let refreshes = record(&mut compositor, &mut client, |due| {
+        reference.end(OUTPUT, due + SHORTEST).is_none()
+    });
+    client.roundtrip(&mut compositor);
+    let mut scroll = Scroll {
+        compositor,
+        start,
+        reference,
+        refreshes,
+    };
+
+    let refreshes = &scroll.refreshes;
+    assert!(refreshes.len() > 20, "{} frames", refreshes.len());
+    let first = &refreshes[0];
+    let first_sample = operation + SHORTEST + BLANK;
+    assert_eq!((first.due, first.presented), (operation, operation + BLANK));
+    assert_eq!(
+        first.drawn,
+        scroll.reference.frame(OUTPUT, first_sample).windows
+    );
+    let second = &refreshes[1];
+    assert!(sample(second) > first_sample, "{:?}", sample(second));
+    assert_eq!(second.presented, first.presented + SHORTEST);
+    assert_eq!(second.presented, first_sample);
+    for (n, refresh) in refreshes.iter().enumerate().skip(1) {
+        let expected = scroll.reference.frame(OUTPUT, sample(refresh)).windows;
+        assert_eq!(refresh.drawn, expected, "frame {n}");
+        if n > 1 {
+            assert_eq!(refresh.presented, sample(refresh), "frame {n}");
+            let before = &refreshes[n - 1];
+            assert_eq!(refresh.presented - before.presented, SHORTEST, "frame {n}");
+        }
+    }
+    assert!(
+        refreshes
+            .windows(2)
+            .skip(1)
+            .all(|pair| sample(&pair[1]) > sample(&pair[0]))
+    );
+    ends_at_the_arrangement_and_rests(&mut scroll);
 }
