@@ -658,8 +658,10 @@ impl Server {
     }
 
     /// An output mode from a call's values, each defaulting to the seats' default output's, its
-    /// VRR range's least rate and its HDR monitor included (ADR-0048). `hdr: true` announces
-    /// the PG32UCDM's colours, the one monitor Yuna knows; `false` none.
+    /// HDR monitor included (ADR-0048). Its VRR range's least rate is the default only when the
+    /// call gives no rate either: a range belongs with its rate, and a call that names its own
+    /// rate asked for no VRR. `hdr: true` announces the PG32UCDM's colours, the one monitor Yuna
+    /// knows; `false` none.
     fn mode_of(
         &self,
         width: Option<u32>,
@@ -679,7 +681,11 @@ impl Server {
             scale.unwrap_or(default.scale()),
         )
         .map_err(refused)?;
-        if let Some(min) = vrr_min.or(default.vrr_min_millihertz().map(hertz)) {
+        let default_vrr = rate
+            .is_none()
+            .then(|| default.vrr_min_millihertz().map(hertz))
+            .flatten();
+        if let Some(min) = vrr_min.or(default_vrr) {
             mode = mode.with_vrr(min).map_err(refused)?;
         }
         let monitor = match hdr {

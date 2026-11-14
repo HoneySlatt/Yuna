@@ -38,10 +38,11 @@ pub fn definitions() -> Value {
     // `seat create`'s output and `outputs create`'s take the same two (ADR-0048).
     let vrr_min = json!({ "type": "number", "minimum": 1, "maximum": 500,
         "description": "create: run under VRR, from this many refreshes a second up to \
-            rate, which must be at least twice it; a fixed rate by default" });
+            rate, which must be at least twice it; by default a fixed rate, or the server's \
+            default output's range when rate is left out too" });
     let hdr = json!({ "type": "boolean",
         "description": "create: true announces the HDR colours of the owner's monitor, a \
-            PG32UCDM; SDR by default" });
+            PG32UCDM; false, SDR; by default as the server's default output" });
     json!([
         {
             "name": "seat",
@@ -162,8 +163,8 @@ pub fn definitions() -> Value {
                 entry for each of its surfaces that declared its colours through \
                 color-management-v1, its own, then its subsurfaces' and its popups': the \
                 surface's role, transfer function, primaries (a protocol name, else their \
-                chromaticities), luminances in cd/m², target primaries and luminance, max_cll, \
-                max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches \
+                chromaticities), luminances in cd/m², target primaries and luminance, \
+                max_cll, max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches \
                 the filters, when none does yet.",
             "inputSchema": {
                 "type": "object",

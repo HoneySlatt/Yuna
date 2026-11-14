@@ -406,12 +406,15 @@ fn the_seats_default_output_gives_its_vrr_range_and_hdr_monitor() {
     let output = &own["structuredContent"]["output"];
     assert_eq!(output["vrr"], json!({"min": 60.0, "max": 240.0}), "{own}");
     assert_eq!(output["hdr"], Value::Null);
-    // The default range's least rate holds at another rate: 48 Hz is more than half of 60.
+    // A call that names its own rate gets no default range: a fixed 60 Hz, though 48 Hz is
+    // more than half of 60.
     let slow = mcp.call(
         "outputs",
         json!({"action": "create", "seat": seat, "rate": 60}),
     );
-    assert_eq!(slow["isError"], json!(true), "{slow}");
+    let output = &slow["structuredContent"]["output"];
+    assert_eq!(output["vrr"], Value::Null, "{slow}");
+    assert_eq!(output["refresh_mhz"], json!(60_000));
 }
 
 /// `windows` waits for a window that matches, and is answered as soon as one maps; a waiting

@@ -112,8 +112,8 @@ impl OutputMode {
         let rate = f64::from(self.refresh_millihertz) / 1_000.0;
         if !(MIN_RATE..=rate / 2.0).contains(&min_rate) {
             return Err(InvalidOutput(format!(
-                "a VRR range of {min_rate} to {rate} Hz is not at least twice as wide as its \
-                 least rate, from {MIN_RATE} Hz"
+                "a VRR range of {min_rate} to {rate} Hz is refused: its least rate must be \
+                 at least {MIN_RATE} Hz and at most half its rate"
             )));
         }
         Ok(OutputMode {

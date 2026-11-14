@@ -599,8 +599,8 @@ window or program unknown there:
   unless the rate is at least twice it ([VRR outputs](#vrr-outputs)), and an HDR one, which
   announces the colours of the owner's monitor, a PG32UCDM, with `hdr` ([Colours](#colours),
   [ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
-  `--output`'s, these two included: `hdr: false` makes an SDR output, but no value turns
-  `--output`'s VRR range off. An output is told with its VRR range in Hz and its monitor's name,
+  `--output`'s, `hdr` included, which `hdr: false` turns off; `--output`'s VRR range only when
+  the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
   each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
 - `windows` lists a seat's windows, as `Compositor::windows` describes them. With `colour`,
