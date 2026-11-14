@@ -9,14 +9,13 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 ## Current
 
-- The design session ran on 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
+- Design session 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
   [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar.
-- M1.1 to M1.5 are done (2026-11-11 to 13), with ADR-0016 to ADR-0038 and ADR-0043.
-- A design study on 2026-11-13: Yuna leaves Smithay step by step, keeps wayland-rs, and decides
-  Vulkan on a prototype's figures ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
+- M1.1 to M1.6 are done (2026-11-11 to 14); a design study on 2026-11-13 decided to leave Smithay
+  step by step ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
-- [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0045 to ADR-0051. Next:
-  M1.7, on the owner's go.
+- [M1.7](#m17--animations) is under way: designed with the owner on 2026-11-14 (ADR-0052 to
+  ADR-0056); its steps below.
 
 ## Status
 
@@ -28,7 +27,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
-| [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
+| [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | In progress |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
 | [M1.10](#m110--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
@@ -47,9 +46,8 @@ milestone first needs it.
   revision chosen and pinned.
 - **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
 - **Measured.** The check's time, warm and cold; CI's job time.
-- **Result.** Done on 2026-11-11. The check takes 1.2 s warm and about 13 s cold locally, CI's job
-  82 s without a cache ([measurements](measurements.md)). The `yuna` crate depends on Smithay
-  without using it until M1.4 (ADR-0017).
+- **Result.** Done on 2026-11-11: 1.2 s warm, about 13 s cold, CI's job 82 s uncached
+  ([measurements](measurements.md)).
 
 ### M1.2 — The layout model
 
@@ -64,77 +62,67 @@ milestone first needs it.
   their runs in CI.
 - **Measured.** An operation's time on a workspace of 100 windows.
 - **Result.** Done on 2026-11-11: 97 scenarios, the two Umbriel cases among them; property tests
-  over 1,536 random sequences per run; two rounds of closing review; an operation and `arrange` on
-  100 windows under 25 µs at the 99th percentile ([measurements](measurements.md)).
+  over 1,536 random sequences per run; an operation on 100 windows under 25 µs at the 99th
+  percentile ([measurements](measurements.md)).
 
 ### M1.3 — HDR through Smithay, a prototype
 
 - **Goal.** Know whether Smithay's DRM backend, with Yuna's patches, can drive the owner's monitor
   in HDR ([ADR-0011](adr/0011-built-on-smithay.md)).
-- **Result.** Done on 2026-11-12, by the owner from a text console: Smithay, with Yuna's one
-  patch, drives the monitor in HDR at 3840 × 2160 and 240 Hz; ADR-0011 holds. The monitor
-  compresses highlights above its peak; a change of `Colorspace` is a modeset. Details in
-  [measurements](measurements.md) and [patches](smithay-patches.md); the program is deleted.
+- **Result.** Done on 2026-11-12 by the owner: Smithay, with one patch, drives the monitor in HDR
+  at 3840 × 2160 and 240 Hz; ADR-0011 holds ([measurements](measurements.md),
+  [patches](smithay-patches.md)).
 
 ### M1.4 — The headless compositor
 
 - **Goal.** A Wayland application runs in Yuna without a screen.
-- **Design.** Decided with the owner on 2026-11-12:
-  [ADR-0022](adr/0022-the-headless-backend-in-yuna.md) to
-  [ADR-0026](adr/0026-real-clients-in-the-layout.md).
-- **Result.** Done on 2026-11-12, its closing review's findings fixed or decided: `yuna
-  --headless`, virtual outputs, frames and clock, the shell and the protocols of B1 and B2;
-  Alacritty, `gtk4-demo`, `qml` and `vkcube` in CI and SlimeEngine's `window` weekly, Yuna at
-  rest after each (ADR-0025, ADR-0029); misbehaving clients and random requests in tests. A 4K
-  frame with two `vkcube`: 0.2 ms on the GPU, 7 ms on llvmpipe
-  ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md), [measurements](measurements.md)).
-  What fell short is in [debt](debt.md).
+- **Result.** Done on 2026-11-12 (ADR-0022 to ADR-0030): `yuna --headless`, virtual outputs,
+  frames and clock, the shell and the protocols of B1 and B2; Alacritty, `gtk4-demo`, `qml`,
+  `vkcube` in CI, SlimeEngine's `window` weekly, Yuna at rest after each; misbehaving clients and
+  random requests in tests ([measurements](measurements.md), [debt](debt.md)).
 
 ### M1.5 — Agents' control
 
 - **Goal.** An agent drives an application through Yuna's MCP server, on a seat of its own
   ([ADR-0015](adr/0015-agents-workspaces.md)).
-- **Result.** Done on 2026-11-13, decided with the owner in ADR-0031 to ADR-0035, ADR-0037,
-  ADR-0038 and ADR-0043. Frames drawn ahead of their boundary; `yuna mcp` with its tools:
-  outputs, workspaces, programs, windows, captures, pointer and keyboard on the agent's own
-  seat and socket, the clock, text input; the owner's peek. An agent, through MCP alone, opens
-  SlimeEngine's `editor`, types, clicks and checks by capture; `vkcube` paused and `editor` rest
-  with their windows open, `window` cannot by its design. A call takes about 60 µs; a 4K capture
-  holds the main thread 4 ms on the GPU, 47 ms on llvmpipe ([measurements](measurements.md),
-  [debt](debt.md#captures)). The closing review's findings are fixed or written as debt.
+- **Result.** Done on 2026-11-13 (ADR-0031 to ADR-0035, ADR-0037, ADR-0038, ADR-0043): frames
+  drawn ahead of their boundary; `yuna mcp` and its tools; an agent, through MCP alone, opens
+  SlimeEngine's `editor`, types, clicks and checks by capture. A call takes about 60 µs
+  ([measurements](measurements.md), [debt](debt.md#captures)).
 
 ### M1.6 — Emulated VRR and HDR
 
 - **Goal.** Virtual outputs behave as the owner's monitor does for VRR and HDR.
-- **Design.** Decided with the owner on 2026-11-14: the fork over HTTPS, a branch per base
-  ([ADR-0045](adr/0045-the-fork-over-https-a-branch-per-base.md)); amdgpu's VRR emulated, checked
-  against a trace of the monitor ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md));
-  `color-management-v1` with KWin's list ([ADR-0047](adr/0047-color-management-v1-kwins-list.md));
-  HDR outputs announce PQ, drawn at Stage 5 ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md));
-  `vrr_min`, `hdr` and `colour` through MCP ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md));
-  mpv in CI ([ADR-0050](adr/0050-mpv-in-the-applications-tests.md)).
-- **Steps.** D1: main on the fork, seats and outputs filtered per client, saturating
-  positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
-  versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
-  `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
-- **Result.** Done on 2026-11-14. Main is on the fork; `color-management-v1` is Yuna's own
-  handler; VRR outputs emulate amdgpu as two traces of the owner's monitor showed
-  ([ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)); mpv in CI reads
-  Yuna's colours and declares its own. A frame's start is the monitor's within 500 µs for 91 %
-  of steady frames, 82 % of probes; what is left is [debt](debt.md#vrr). The closing review
-  found two blocking defects and the last check one; all are fixed with their tests. CI's job
-  takes 3 min 39 s ([measurements](measurements.md)).
+- **Result.** Done on 2026-11-14 (ADR-0045 to ADR-0051): main on the fork;
+  `color-management-v1`, Yuna's own handler; VRR outputs emulate amdgpu as two traces of the
+  owner's monitor showed; mpv in CI. A frame's start is the monitor's within 500 µs for 91 % of
+  steady frames ([measurements](measurements.md), [debt](debt.md#vrr)).
 
 ### M1.7 — Animations
 
 - **Goal.** Motion on springs and curves, interrupted without a jump
   ([ADR-0010](adr/0010-animations-and-effects.md)).
-- **Delivers.** Springs and curves, configurable; a running animation retargeted keeping its
-  velocity; the layout's moves animated, the scrolling view as one camera the model gives out
-  ([ADR-0020](adr/0020-the-layout-models-shape.md)); every animation stepped by the test clock.
-- **Done when.** Snapshot tests check each animation frame by frame; scrolling and workspace
-  switches hold 240 Hz headless without a missed frame.
-- **Measured.** A frame's time during the heaviest animation.
+- **Design.** Decided with the owner on 2026-11-14: a pure crate, `yuna-motion`, turns the
+  layout's jumps into offsets, one camera per scrolling workspace, workspace ids
+  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)); springs in closed form keeping their
+  velocity, ended within half a pixel; Bézier curves
+  ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)); sampled at each
+  frame's presentation, drawn apart from what clients are told
+  ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)); motion, the
+  special workspace's fade, a vertical switch over two workspaces, fullscreen instant, off
+  headless unless `--animations` ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md));
+  the budget on the GPU against a still baseline
+  ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)).
+- **Steps.** E1: workspace ids, each placed window's workspace and layer, each shown workspace's
+  camera. E2: `yuna-motion`'s springs and curves, checked against a numerical integration. E1
+  and E2 run in parallel. E3: the motion of an arrangement, under random sequences. E4: the
+  compositor: `--animations`, sampling and frames, the drawn list, what clients are told, the
+  pointer, captures, popups, MCP's `windows`. E5: frame-by-frame tests and pacing under draw
+  hooks. E6: the driver and the measures, the GPU's with the owner's consent.
+- **Done when.** Each animation is checked frame by frame on the test clock against
+  `yuna-motion`'s reference; scrolls and switches on the GPU at 4K and 240 Hz miss no more
+  frames than a still baseline over 10,000 frames.
+- **Measured.** A frame's time during the heaviest frame of the scripted sequence.
 
 ### M1.8 — XWayland
 

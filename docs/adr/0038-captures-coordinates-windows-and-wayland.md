@@ -1,6 +1,6 @@
 # 0038. Captures: from a pixel to a click, a window's capture, and who captures through Wayland
 
-- Status: Accepted
+- Status: Accepted; amended by [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) (captures and clicks during motion)
 - Date: 2026-11-13
 
 ## Context

@@ -28,10 +28,10 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0017](0017-smithays-revision.md) | Smithay's revision: upstream, pinned, first at master of 2026-11-11 | Accepted; amended by 0021 |
 | [0018](0018-workspaces.md) | Workspaces: named, with dynamic ones as an option | Accepted |
 | [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted |
-| [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted |
+| [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted; amended by 0052 |
 | [0021](0021-smithays-fork.md) | Smithay's fork: a private repository, generic patches | Accepted; amends 0017; amended by 0036, 0042, 0045 |
 | [0022](0022-the-headless-backend-in-yuna.md) | The headless backend: Yuna's own code, drawn on llvmpipe by default | Accepted; amends 0011; amended by 0029 |
-| [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted; amended by 0031, 0046 |
+| [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted; amended by 0031, 0046, 0054 |
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029, 0050 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
@@ -41,12 +41,12 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023; amended by 0046 |
 | [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; amends the ROADMAP |
-| [0033](0033-the-mcp-server.md) | The MCP server: a private Yuna on stdio, its own MCP layer | Accepted; amended by 0049 |
+| [0033](0033-the-mcp-server.md) | The MCP server: a private Yuna on stdio, its own MCP layer | Accepted; amended by 0049, 0054, 0055 |
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
 | [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted; amended by 0042 |
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009, 0021 |
 | [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
-| [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted |
+| [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
 | [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Accepted; amends 0012 |
@@ -60,3 +60,8 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0049](0049-vrr-and-hdr-outputs-through-mcp.md) | VRR and HDR outputs through MCP, and surfaces' colours read | Accepted; amends 0033 |
 | [0050](0050-mpv-in-the-applications-tests.md) | mpv in the applications' tests | Accepted; amends 0025 |
 | [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046 |
+| [0052](0052-motion-in-a-pure-crate.md) | Motion in a pure crate, the layout's jumps turned into offsets | Accepted; amends 0020 |
+| [0053](0053-springs-in-closed-form-keeping-their-velocity.md) | Springs in closed form, keeping their velocity; curves | Accepted |
+| [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) | Motion sampled at its presentation; what is drawn apart from what a client is told | Accepted; amends 0023, 0033, 0038 |
+| [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033 |
+| [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) | Motion's budget judged on the GPU, against a still baseline | Accepted |
