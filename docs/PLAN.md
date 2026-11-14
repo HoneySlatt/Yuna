@@ -127,8 +127,8 @@ milestone first needs it.
 - **Reduced motion.** Honoured by each animation
   ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): nothing slides,
   fades stay, over half their duration ([ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
-- **Where it stands.** E1, E2 and E3 are done and checked (`yuna-layout`'s ids, `yuna-motion`'s
-  springs, curves and motion); E3's review and E4 run; E5 and E6 follow.
+- **Where it stands.** E1 to E4 are done (`yuna-layout`'s ids, `yuna-motion`, the compositor,
+  `--animations`, `--reduced-motion`); E4's review, E5 and E6 run.
 - **Done when.** Each animation is checked frame by frame on the test clock against
   `yuna-motion`'s reference; scrolls and switches on the GPU at 4K and 240 Hz miss no more
   frames than a still baseline over 10,000 frames.
