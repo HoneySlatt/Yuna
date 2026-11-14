@@ -34,16 +34,19 @@ The owner chose, on 2026-11-14, KWin's list, without ICC:
 - Not listed: `srgb`, `extended_target_volume`, `set_tf_power`, ICC profiles, Windows' scRGB
   and BT.2100. Each comes with the stage that renders it, in an ADR.
 - Every event and value is sent only at the version the client bound. Every rule of the
-  protocol is checked, read as KWin reads it: a 0 for `max_cll`, `max_fall` or a mastering
+  protocol is checked but the one below, read as KWin reads it: a 0 for `max_cll`, `max_fall` or a mastering
   maximum means unset; invalid mastering primaries are dropped, not refused. Sums are computed
   in 64 bits, products of coordinates in 128, so that no client's number overflows.
 - The handler is Yuna's code on wayland-server's `Dispatch`, not Smithay's dispatch macros. A
   surface's description is double-buffered in Smithay's cached state until Yuna's own core
   holds surfaces.
-- Each description lives in its protocol object; Yuna keeps no registry of them. A client's
-  descriptions cost it its own objects, which wayland-server bounds; no cap of
-  [ADR-0028](0028-bounds-on-what-one-client-may-ask.md) applies, since a refusal ends Mesa's
-  clients.
+- Version 1's further checks of `max_cll` and `max_fall` against the target range are not made:
+  version 2 drops them, and Mesa, which binds version 1, sends HDR metadata it does not check
+  against them (`wsi_common_wayland.c`, read 2026-11-14); a refusal there would end the game.
+- Each description lives in its protocol object; Yuna keeps no registry of them, and no cap of
+  [ADR-0028](0028-bounds-on-what-one-client-may-ask.md) applies: the protocol's only refusal
+  ends Mesa's clients. wayland-server bounds no count of objects; a client's descriptions cost
+  it its own objects, and its feedback objects cost Yuna a map entry each.
 
 ## Alternatives considered
 

@@ -204,6 +204,22 @@ fn a_surfaces_description_is_recorded_at_its_commit_and_unset_with_its_object() 
     assert_rests(&mut compositor);
 }
 
+/// A subsurface prefers its window's description: the HDR output's, where the window is.
+#[test]
+fn a_subsurface_prefers_its_windows_description() {
+    let mut compositor = compositor();
+    let mut colour = ColourClient::connect(&mut compositor, OWNER_SEAT, 3);
+    let hdr = colour.output_description(0);
+    let window = mapped_window(&mut compositor, &mut colour);
+    let subsurface = colour.client.add_subsurface(window);
+    let surface = colour.client.subsurface(subsurface).surface.clone();
+    let feedback = colour.feedback(&surface);
+    let preferred = colour.preferred(feedback);
+    colour.roundtrip(&mut compositor);
+    assert!(colour.events(hdr).ready.is_some());
+    assert_eq!(colour.events(preferred).ready, colour.events(hdr).ready);
+}
+
 #[test]
 fn a_subsurfaces_description_is_read_with_its_window() {
     let mut compositor = compositor();
@@ -346,7 +362,7 @@ fn zeros_mean_unset_and_a_clients_own_description_gives_no_information() {
 #[test]
 fn every_protocol_error_ends_its_client_alone() {
     type Step = fn(&mut ColourClient, &mut Compositor);
-    let cases: [(&str, u32, &str, Step); 12] = [
+    let cases: [(&str, u32, &str, Step); 16] = [
         (
             "wp_color_manager_v1",
             1,
@@ -425,6 +441,52 @@ fn every_protocol_error_ends_its_client_alone() {
             "a maximum at the minimum",
             |colour, _| {
                 colour.params().set_luminances(800_000, 80, 100);
+            },
+        ),
+        ("wp_color_manager_v1", 0, "Windows' scRGB", |colour, _| {
+            let qh = colour_queue(colour);
+            colour
+                .state
+                .manager
+                .as_ref()
+                .expect("manager")
+                .create_windows_scrgb(&qh, ());
+        }),
+        (
+            "wp_image_description_creator_params_v1",
+            5,
+            "a mastering maximum at its minimum",
+            |colour, _| {
+                colour.params().set_mastering_luminance(10_000, 1);
+            },
+        ),
+        (
+            "wp_image_description_v1",
+            0,
+            "the information of a failed description",
+            |colour, compositor| {
+                let params = colour.params();
+                params.set_tf_named(TransferFunction::Gamma22);
+                params.set_primaries(
+                    100_000, 100_000, 200_000, 200_000, 300_000, 300_000, 312_700, 329_000,
+                );
+                let description = colour.create(params);
+                colour.roundtrip(compositor);
+                colour.information(description);
+            },
+        ),
+        (
+            "wp_color_management_surface_feedback_v1",
+            0,
+            "the preferred description of a gone surface",
+            |colour, compositor| {
+                let window = mapped_window(compositor, colour);
+                let surface = colour.client.window(window).surface.clone();
+                let feedback = colour.feedback(&surface);
+                colour.client.close(window);
+                colour.client.destroy_surface(window);
+                colour.roundtrip(compositor);
+                colour.preferred(feedback);
             },
         ),
         (
@@ -755,4 +817,36 @@ fn random_colour_requests_keep_yuna_up() {
             Ok(())
         })
         .expect("Yuna stays up");
+}
+
+/// A client's feedback objects cost Yuna a constant time each, made, destroyed or dropped with
+/// the client: 20,000 of them, then a disconnection, take far less than the quadratic cost a
+/// list scanned at each destruction gave (4 s in a debug build, measured by M1.6's review).
+#[test]
+fn many_feedback_objects_cost_linear_time() {
+    let mut compositor = compositor();
+    let mut colour = ColourClient::connect(&mut compositor, OWNER_SEAT, 3);
+    let window = mapped_window(&mut compositor, &mut colour);
+    let surface = colour.client.window(window).surface.clone();
+    // In batches, so that the socket's buffers never fill.
+    for _ in 0..40 {
+        for _ in 0..500 {
+            colour.feedback(&surface);
+        }
+        colour.roundtrip(&mut compositor);
+    }
+    let began = std::time::Instant::now();
+    drop(colour);
+    for _ in 0..4 {
+        compositor
+            .dispatch(Some(Duration::ZERO))
+            .expect("dispatched");
+    }
+    let after = ColourClient::connect(&mut compositor, OWNER_SEAT, 3);
+    assert!(after.state.listed.done);
+    assert!(
+        began.elapsed() < Duration::from_millis(1_500),
+        "{:?}",
+        began.elapsed()
+    );
 }

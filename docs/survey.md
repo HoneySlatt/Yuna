@@ -64,6 +64,8 @@ that rests on it is reopened in an ADR.
   takes a colour surface for sRGB swapchains only when `srgb` is listed, and turns a refused
   description into a lost surface when `extended_target_volume` is listed. GTK 4 binds version 1
   and drops colour management without `srgb`; Chromium needs `parametric`.
+- In `color-management-v1` version 1, `max_cll` and `max_fall` outside the target range are a
+  protocol error; version 2 drops the rule. Mesa binds version 1.
 - `wp_presentation` version 3 (wayland-protocols 1.50) adds the flags `fixed_rate` and
   `variable_rate`; KWin, Mutter and wlroots send version 2, where a VRR output's refresh is its
   fastest rate or 0. No other protocol tells a client that VRR is on.

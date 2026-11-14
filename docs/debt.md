@@ -115,8 +115,8 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 ## Colours
 
-- A client may make any number of `color-management-v1` feedback objects: each is a list entry
-  Yuna checks after every arrangement. The protocol has no graceful refusal, and wayland-server
+- A client may make any number of `color-management-v1` feedback objects: each is a map entry,
+  made and dropped in constant time, which Yuna checks after every arrangement. The protocol has no graceful refusal, and wayland-server
   bounds no count of objects; a cap per client would end the client
   ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)).
 - An HDR output's captures show its clients' values unconverted: nothing is drawn in its
@@ -135,6 +135,10 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   changes it: at 25 fps, 4 refreshes a frame for about half the steady frames, where the
   emulation shows 3. BTR's history follows the flips' commit times, which the trace and the
   emulation do not see the same way.
+- The trace's rates are steady: it shows neither whether a frame early in BTR's inserted
+  refreshes waits for their end, nor BTR's hysteresis across a change of rate, which the
+  emulation takes from `freesync.c` unchecked. A trace with early frames and steps of rate,
+  24 → 60 → 24 fps, would check them.
 - Both come from one trace, recorded while other builds loaded the machine; a quieter trace, or
   the driver's commit path read, would tell more ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
 
