@@ -36,7 +36,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
-| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
+| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Planned |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
 | [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
@@ -159,15 +159,15 @@ milestone first needs it.
 
 ### M1.9 — The rivals measured
 
-- **Goal.** The bar's budgets set from facts, and Vulkan decided on them.
+- **Goal.** The bar's budgets set from facts.
 - **Delivers.** niri, Hyprland, KWin, dwl, mango and Umbriel measured at rest and in motion: wake-ups,
   CPU and GPU time, memory, power, frames during scrolling and animations; headless where they allow
   it, on the owner's desktop by hand otherwise, after the owner's consent. A throwaway Vulkan
-  prototype measured against GLES on every tier, the laptop included
-  ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)).
+  prototype measured on every tier, the laptop's driver checked
+  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
 - **Done when.** Each has its figures in `docs/measurements.md`, with versions and dates, or a
-  written reason; the ROADMAP's budgets are set from them, in an ADR; the owner has chosen the
-  renderer on the prototype's figures, in another.
+  written reason; the ROADMAP's budgets are set from them, in an ADR; the prototype's figures set the
+  frame's budgets.
 
 ### M1.10 — Yuna for the owner's other projects
 

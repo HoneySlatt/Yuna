@@ -1,6 +1,6 @@
 # 0057. What Yuna does itself, and what it leaves to the shell
 
-- Status: Accepted; amends 0004
+- Status: Accepted; amends 0004; amended by 0063
 - Date: 2026-11-14
 
 ## Context

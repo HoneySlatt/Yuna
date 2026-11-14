@@ -1,6 +1,7 @@
 # 0012. OpenGL first, the pipeline independent of the renderer
 
-- Status: Accepted; amended by [0041](0041-vulkan-decided-on-a-measure.md) (how Vulkan is decided)
+- Status: Accepted; amended by [0041](0041-vulkan-decided-on-a-measure.md) (how Vulkan is decided),
+  [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) (Vulkan alone)
 - Date: 2026-11-11
 
 ## Context

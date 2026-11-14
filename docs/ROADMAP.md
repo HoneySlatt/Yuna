@@ -123,7 +123,7 @@ it is met.
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
 | Base | Smithay, left step by step, gone by the end of Stage 2 ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
-| Renderer | OpenGL first; Vulkan decided on a prototype's figures ([ADR-0012](adr/0012-opengl-first.md), [ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)) |
+| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate, each in its own headless Yuna ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
@@ -134,7 +134,7 @@ it is met.
 | Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | The other projects | Every protocol listed and tested; hidden games paced; Yuna 0.1 the owner's projects' test compositor; GPU resets survived; Nix modules in Yuna; fuzzing and crash reports ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
-| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 
@@ -145,10 +145,8 @@ it is met.
 | The KDL reader | the milestone that reads the configuration |
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
-| Vulkan alone, Vulkan with a GLES fallback, or GLES | M1.9, on the prototype's figures ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)) |
 | Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | Yuna's X11 window manager or Smithay's | M1.8's design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
-| The owner's own shell on uwui | after uwui's first stage ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)) |
 | Public release | the owner's go |
 
 ## 5. Stages
@@ -169,8 +167,8 @@ it is met.
 - Animations on springs and curves, checked frame by frame on the test clock.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
-- A throwaway prototype of Vulkan against GLES, measured on every tier
-  ([ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)).
+- A throwaway Vulkan prototype, measured on every tier, the laptop's driver checked, to set the
+  frame's budgets ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
 - Yuna for the owner's other projects
   ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): a Nix package, the
   virtual keyboard and pointer on agents' seats, what each project needs in
@@ -181,7 +179,7 @@ it is met.
 ([ADR-0025](adr/0025-applications-in-ci.md)), run in Yuna headless in CI, driven by an agent
 through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
 and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
-verdict; the rivals' figures and Vulkan's against GLES are in `docs/measurements.md`; the owner's
+verdict; the rivals' figures and the Vulkan prototype's are in `docs/measurements.md`; the owner's
 other projects can add Yuna to their shells and drive programs in it as they drive them in sway.
 
 ### Stage 2 — The desktop → 0.2
@@ -190,7 +188,8 @@ other projects can add Yuna to their shells and drive programs in it as they dri
 own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 - First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
-  on wayland-rs; WLCS run against it.
+  its Vulkan renderer hosting uwui, on wayland-rs; WLCS run against it
+  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5 and the right size on every output.
