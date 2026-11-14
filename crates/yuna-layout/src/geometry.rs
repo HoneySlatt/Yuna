@@ -125,7 +125,7 @@ pub const EPSILON: f64 = 1e-6;
 ///
 /// Always finite and positive; [`Scale::new`] refuses anything else.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Scale(f64);
+pub struct Scale(f64);
 
 impl Scale {
     /// The smallest scale accepted. Below it, a 4K output would be more than 16,000 logical units

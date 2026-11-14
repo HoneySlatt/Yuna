@@ -1,9 +1,11 @@
 //! Yuna's motion: values that move over time, on springs for positions and on curves for fades,
-//! each computed in closed form from its start alone, at any time. It holds no Wayland or Smithay
-//! object and reads no clock: time is a [`Duration`] since any origin (Yuna's clock gives one),
-//! and a value is an `f64` in any unit, logical units or an alpha.
+//! each computed in closed form from its start alone, at any time; and the motion of the
+//! layout's arrangements built on them, [`Motion`]. It holds no Wayland or Smithay object and
+//! reads no clock: time is a [`Duration`] since any origin (Yuna's clock gives one), and a value
+//! is an `f64` in any unit, logical units or an alpha.
 //! [ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md) makes this crate the home of
-//! Yuna's motion; today it holds its two pieces, [`Spring`] and [`Curve`].
+//! Yuna's motion. Its pieces: [`Spring`] and [`Curve`], then [`Motion`], which the [last
+//! section](#the-motion-of-an-arrangement) explains.
 //!
 //! # Springs
 //!
@@ -85,8 +87,128 @@
 //! Parameters out of their range are refused with [`InvalidParams`]. Values that are not finite
 //! give a motion at its target at once. Nothing here panics or returns NaN.
 //!
+//! # The motion of an arrangement
+//!
+//! The layout model ([`yuna_layout`]) jumps: an operation moves it to its new state at once, and
+//! [`Layout::arrange`] gives each output's windows at their new places. [`Motion`] turns those
+//! jumps into motion ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)). The caller
+//! gives it the layout after each change ([`Motion::update`]), and at each frame asks what an
+//! output draws at the time that frame is presented ([`Motion::frame`],
+//! [ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)),
+//! until the output's motions end ([`Motion::end`]): then the frame is exactly the arrangement,
+//! and nothing more is drawn. What moves, and on which spring or curve, is
+//! [ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)'s, set by
+//! [`Settings`].
+//!
+//! ## A jump becomes an offset
+//!
+//! At each update, a window drawn before and after gets an offset: where it was drawn at the
+//! update's time minus where its new place, and its camera, draw it. The offset decays to 0 on
+//! the windows' spring, from the velocity the window had, so that nothing jumps on screen at an
+//! operation and a motion interrupted goes on without a break. A window keeps its motion while
+//! it stays in its container: its workspace and its layer ([`Layer`]); going from floating to
+//! tiled or back within its workspace keeps it too, through screen positions; a pinned window
+//! stays pinned whatever workspace a switch gives it. A window that changes workspace, output or
+//! layer otherwise, or goes fullscreen or leaves it, is drawn at its new place at once, and so
+//! is a new window; a window gone is dropped. Only positions move: a window is drawn at the size
+//! of its place, which jumps.
+//!
+//! ## The camera and its anchor
+//!
+//! A scrolling workspace's strip is seen through a camera, the strip position shown at the
+//! working area's left edge, which moves on its own spring toward the layout's view
+//! ([`WorkspaceView`]): focusing another column moves the camera alone. A strip window is drawn
+//! at its place plus its offset plus the camera's lag, the view's place minus the camera.
+//!
+//! An operation may also move the strip under the view: a column left of the focused one that
+//! widens or closes shifts every column on its right, and the view by as much, so that they stay
+//! on screen. The camera is first moved by the same shift, keeping its velocity, so that it
+//! keeps looking at the same columns; then it moves toward the new view. The shift is read from
+//! an anchor, a column there before and after: the focused column after the change, if it was
+//! there before; else the one focused before, if it is there after; else there is no anchor, and
+//! no shift. A focused column is the column of the strip's window that has the seat's focus,
+//! kept while the focus is elsewhere. Whatever the camera does not take up, the offsets do: the
+//! split between them decides how things move, never whether they jump.
+//!
+//! ## Rounded once
+//!
+//! A drawn rectangle is the place moved by every motion, its corner rounded once to the output's
+//! physical grid, half a pixel going up, as the layout rounds its places. Still columns thus move
+//! as one rigid strip, and a window moving over a moving camera errs by half a pixel at most. An
+//! axis that does not move is exactly the place's. Every spring ends within half a physical
+//! pixel of the output, so that the last steps move one pixel at most.
+//!
+//! ## The workspace switch
+//!
+//! When an output's main workspace changes, by its id, and the one left is still on the output,
+//! the output slides along [ADR-0018](../../../docs/adr/0018-workspaces.md)'s vertical stack: up
+//! is the previous workspace, down the next. The switch keeps a stack of its own, the
+//! workspaces it involves in the output's order, a height apart: the one left and the one shown,
+//! not those between, so that a far switch shows only those two. Retargeted mid-way, it inserts
+//! the newly shown workspace into its stack and slides on from where it is, keeping its
+//! velocity; the workspace on screen nearest the view keeps its place. A workspace gone from the
+//! output leaves the stack, the position re-expressed so that the nearest of those left keeps
+//! its place, and both on screen when the one gone was not between them. A workspace removed
+//! elsewhere changes no id, and starts no switch. While a switch is drawn, a frame lists
+//! the windows of its workspaces that show on the output; it is drawn until its slide ends and
+//! the windows of the workspaces sliding out stop moving. Pinned windows stay above it, unmoved.
+//!
+//! ## The special workspace's fade
+//!
+//! A special workspace shown fades in, from alpha 0 to 1, on [`Settings::special_fade`], and
+//! fades out when hidden, its windows drawn where they last were, until it ends or they close
+//! or are shown elsewhere. A toggle mid-fade turns the curve from where it is. It is drawn above
+//! the main workspace and below the pinned windows.
+//!
+//! ## Drawn and told
+//!
+//! What is drawn follows the motion; what a client is told follows its place
+//! ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+//! [`Motion::told_visible`] gives the windows whose place overlaps the output, and while its
+//! motions run, every window told since they began that it still draws: a window is told it is
+//! visible once per operation, and hidden only once the motion has ended. A window that only
+//! passes through the view, its place never on the output, is drawn but never told.
+//!
+//! ## Instant changes
+//!
+//! A change made [`Change::Instant`], or any change while [`Settings::off`] is set, ends every
+//! motion of every output: its next frame is the arrangement. So do outputs added, removed,
+//! moved or rescaled, for that output, and a window going fullscreen or leaving it, for its
+//! workspace's camera and offsets, pinned windows aside: a game wants its output at once.
+//!
+//! ## Cost
+//!
+//! [`Motion::update`] is linear in the windows of the workspaces each output draws: it arranges
+//! them once, and finds each window's motion by hashing. While a special workspace fades out, it
+//! also asks the layout where each of that workspace's windows is ([`Layout::window`]), so that
+//! a window closed or shown elsewhere is no longer drawn; each answer costs a search of the
+//! seat's workspaces. [`Motion::frame`] is linear in the output's drawn windows and allocates
+//! nothing but the list it returns.
+//!
+//! ## Limits
+//!
+//! - The layout gives out neither its seats nor its outputs' scales, so [`Motion::update`] takes
+//!   the outputs to follow with their scales, and rounds as the layout's own `Scale::snap`
+//!   does, which it does not export either.
+//! - A workspace sliding out of a switch, or fading out, keeps its camera as it was: the layout
+//!   gives no view for a workspace it does not show. If the layout moves that view meanwhile,
+//!   the windows whose places change reach them on their offsets.
+//! - A workspace that leaves the output while it fills the view, an empty one that the layout
+//!   removes or one that goes to another output, closes up the switch's stack: the workspace
+//!   beside it comes into view at once.
+//! - A switch slides by the output's height, so a window taller than its place, whose client
+//!   committed more than it was asked, shows that much past its workspace's edge until the
+//!   switch ends.
+//! - Windows do not fade in when they open nor out when they close: that comes with the effects
+//!   ([ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
+//!
 //! [`Duration`]: std::time::Duration
+//! [`Layout::arrange`]: yuna_layout::Layout::arrange
+//! [`Layout::window`]: yuna_layout::Layout::window
+//! [`Layer`]: yuna_layout::Layer
+//! [`WorkspaceView`]: yuna_layout::WorkspaceView
 
+mod arrangement;
 mod curve;
 mod oscillator;
 mod spring;
@@ -94,6 +216,7 @@ mod spring;
 use std::fmt;
 use std::time::Duration;
 
+pub use arrangement::{Change, Drawn, Frame, Motion, Settings};
 pub use curve::{Curve, CurveParams, Easing};
 pub use spring::{Spring, SpringParams};
 

@@ -86,6 +86,12 @@ pub struct CurveParams {
 }
 
 impl CurveParams {
+    /// Parameters known to be in their range, for the crate's defaults, which a test checks
+    /// against [`CurveParams::new`]: a constant cannot call it.
+    pub(crate) const fn known_valid(easing: Easing, duration: Duration) -> CurveParams {
+        CurveParams { easing, duration }
+    }
+
     /// A curve's parameters. Refused (Err) unless the duration is 1 ms..=10 s, a Bézier's x1 and
     /// x2 are in 0..=1, and its y1 and y2 within ±1,000,000.
     pub fn new(easing: Easing, duration: Duration) -> Result<CurveParams, InvalidParams> {

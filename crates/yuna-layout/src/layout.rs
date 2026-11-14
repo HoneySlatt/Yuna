@@ -1508,6 +1508,17 @@ impl Layout {
         Ok(self.seats[si].outputs.iter().map(|o| o.id).collect())
     }
 
+    /// Every seat, in the order they were added.
+    pub fn seats(&self) -> Vec<SeatId> {
+        self.seats.iter().map(|s| s.id).collect()
+    }
+
+    /// The output's scale: physical pixels per logical unit.
+    pub fn output_scale(&self, output: OutputId) -> Result<Scale, LayoutError> {
+        let (si, oi) = self.output_index(output)?;
+        Ok(self.seats[si].outputs[oi].scale)
+    }
+
     /// The output's rectangle, in logical coordinates.
     pub fn output_rect(&self, output: OutputId) -> Result<Rect, LayoutError> {
         let (si, oi) = self.output_index(output)?;

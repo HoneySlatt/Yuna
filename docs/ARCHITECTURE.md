@@ -17,10 +17,12 @@ One Cargo workspace; its crates live in `crates/`.
   object, so that every behaviour is a test without a compositor
   ([ADR-0005](adr/0005-the-layouts.md), [ADR-0020](adr/0020-the-layout-models-shape.md)). The
   compositor puts it behind the protocols.
-- **`yuna-motion`** (`crates/yuna-motion`): motion. Today its springs and curves, functions of
-  time alone, exact at their end ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md));
-  M1.7 adds the motion of an arrangement, which turns the layout's jumps into what each frame
-  draws ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)). It holds no Wayland or Smithay object.
+- **`yuna-motion`** (`crates/yuna-motion`): motion. Its springs and curves are functions of
+  time alone, exact at their end ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
+  Its `Motion` reads the layout after each change and turns its jumps into what each frame
+  draws, and which windows are told they are visible
+  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md), [ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md));
+  its crate documentation explains how. It holds no Wayland or Smithay object.
 
 ## Dependencies
 
@@ -35,7 +37,7 @@ One Cargo workspace; its crates live in `crates/`.
   side, staging protocols included, proptest, without its default features, and `png` to decode
   captures.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
-- `yuna-motion` → nothing yet. Its tests use proptest, without its default features.
+- `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers.
 

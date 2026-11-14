@@ -525,3 +525,44 @@ fn a_moving_spring_reads_its_start_before_it_starts() {
     }
     assert!(spring.value(START + Duration::from_millis(5)) > 10.0);
 }
+
+/// A shifted spring is the same motion moved: its value at every time, its target and its start
+/// moved by the shift, its velocity and its end unchanged; retargeted, it goes on as the
+/// original retargeted to the shifted place.
+#[test]
+fn a_shifted_spring_is_the_same_motion_moved() {
+    let params = SpringParams::new(0.7, 600.0).unwrap();
+    let spring = Spring::new(params, 0.0, 1000.0, 250.0, START, TOLERANCE);
+    let shifted = spring.shifted(-300.0);
+    assert_eq!(shifted.target(), 700.0);
+    assert_eq!(shifted.end(), spring.end());
+    assert_eq!(shifted.value(START), -300.0);
+    let mut at = START;
+    while at <= spring.end() + STEP {
+        assert!((shifted.value(at) - (spring.value(at) - 300.0)).abs() < 1e-9);
+        assert_eq!(shifted.velocity(at), spring.velocity(at));
+        at += STEP * 10;
+    }
+    let mid = START + Duration::from_millis(40);
+    let moved_on = shifted.retarget(mid, 0.0);
+    assert!((moved_on.value(mid) - (spring.value(mid) - 300.0)).abs() < 1e-9);
+    assert_eq!(moved_on.velocity(mid), spring.velocity(mid));
+    assert_eq!(spring.shifted(0.0), spring);
+}
+
+/// A shift that is not finite, or that overflows, gives a spring at rest at its own target.
+#[test]
+fn a_shift_out_of_range_gives_a_spring_at_rest() {
+    let params = SpringParams::new(1.0, 800.0).unwrap();
+    let spring = Spring::new(params, 0.0, 1000.0, 0.0, START, TOLERANCE);
+    for by in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let shifted = spring.shifted(by);
+        assert!(shifted.is_done(START), "{by}");
+        assert_eq!(shifted.value(START), 1000.0, "{by}");
+        assert_eq!(shifted.target(), 1000.0, "{by}");
+    }
+    let far = Spring::new(params, 1e308, 1.5e308, 0.0, START, TOLERANCE);
+    let overflowed = far.shifted(1e308);
+    assert!(overflowed.is_done(START));
+    assert_eq!(overflowed.value(START), 1.5e308);
+}

@@ -25,6 +25,15 @@ pub struct SpringParams {
 }
 
 impl SpringParams {
+    /// Parameters known to be in their range, for the crate's defaults, which a test checks
+    /// against [`SpringParams::new`]: a constant cannot call it.
+    pub(crate) const fn known_valid(damping_ratio: f64, stiffness: f64) -> SpringParams {
+        SpringParams {
+            damping_ratio,
+            stiffness,
+        }
+    }
+
     /// A spring's parameters. Refused (Err) unless finite, `damping_ratio` in 0.05..=20 and
     /// `stiffness` in 1..=100 000.
     pub fn new(damping_ratio: f64, stiffness: f64) -> Result<SpringParams, InvalidParams> {
@@ -185,6 +194,32 @@ impl Spring {
             at,
             self.tolerance,
         )
+    }
+
+    /// The same motion moved by `by`: its start, its value at every time and its target are
+    /// `by` farther, its velocity and its end are unchanged. What re-expressing a position in
+    /// another frame needs, when the frame's origin moves by `by` and nothing on screen may.
+    ///
+    /// If `by` is not finite, or the moved values overflow, the spring is at rest at its own
+    /// target at once instead: never NaN out.
+    pub fn shifted(&self, by: f64) -> Spring {
+        let (from, target) = (self.from + by, self.target + by);
+        if from.is_finite() && target.is_finite() {
+            Spring {
+                from,
+                target,
+                ..*self
+            }
+        } else {
+            Spring::new(
+                self.params,
+                self.target,
+                self.target,
+                0.0,
+                self.start,
+                self.tolerance,
+            )
+        }
     }
 }
 
