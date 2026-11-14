@@ -18,6 +18,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)), and took from the owner's
   other projects what Yuna lacked ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)):
   M1.10 added; reduced motion joins M1.7.
+- The owner put development first on 2026-11-14: agents never hold back for a game, a measure
+  reports what disturbs it, and Stage 3 is removed
+  ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
 - [M1.7](#m17--animations) is under way: designed with the owner on 2026-11-14 (ADR-0052 to
   ADR-0056); its steps below.
 
@@ -191,6 +194,8 @@ milestone first needs it.
   shortcut that stops them ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - A command that sets one configuration key until the next reload, as `hyprctl keyword` does,
   beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- A window where the owner watches an agent's headless Yuna, fed by its captures
+  ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
 - From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be

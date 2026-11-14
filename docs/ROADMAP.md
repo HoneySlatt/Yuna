@@ -14,7 +14,7 @@ Yuna is a Wayland compositor in Rust, for Linux, in two modes ([ADR-0001](adr/00
 - **the desktop**, its owner's daily compositor: scrolling columns as good as niri's, dwindle,
   floating windows and special workspaces; animations more beautiful than Hyprland's; reliable HDR
   and colour; VRR without flicker on an OLED; games and films served first; less power than any
-  rival; agents working on hidden workspaces of the owner's GPU, never touching the owner's input.
+  rival; agents working in headless Yunas on the owner's GPU, never touching the owner's input.
 
 It is made for its owner first, a heavy gamer and a cinephile. It is public, under
 GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)).
@@ -24,8 +24,9 @@ GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](ad
 1. **Polish before breadth.** A behaviour lands when it is as good as the best rival's, or waits.
 2. **Every behaviour is a test first**, run headless in CI, before it is code on the desktop.
 3. **Nothing runs, polls or draws at rest.**
-4. **Games and films first**: no effect, animation or agent may cost a game a frame or a film its
-   cadence.
+4. **Games and films first**: no effect or animation may cost a game a frame or a film its
+   cadence. Agents' work never holds back for a game: the owner's activity sets the priority
+   ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
 5. **The owner's session is sacred**: an agent never reaches the owner's seat, and a crash costs at
    most a second.
 6. **Measured, not claimed**: every budget has its measure, kept in `docs/measurements.md`.
@@ -107,7 +108,7 @@ it is met.
 | Renderer | OpenGL first; Vulkan decided on a prototype's figures ([ADR-0012](adr/0012-opengl-first.md), [ADR-0041](adr/0041-vulkan-decided-on-a-measure.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
-| Agents | Their own outputs and seats, at full rate ([ADR-0015](adr/0015-agents-workspaces.md)) |
+| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
 | Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md`; main on it from M1.6 ([ADR-0021](adr/0021-smithays-fork.md), [ADR-0042](adr/0042-main-on-smithays-fork.md)) |
@@ -193,17 +194,13 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
 
-### Stage 3 — Agents on the desktop → 0.3
+### Stage 3 — Removed
 
-**Goal.** Agents work on hidden outputs of the owner's GPU, never reaching the owner's seat.
+Agents work in their own headless Yunas on the owner's GPU, from Stage 1 on; none enters the
+owner's desktop ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)). The later
+stages keep their numbers.
 
-- Agents' outputs and seats on the desktop, at full rate, peeked at from the overview.
-- The global rules for agents changed, on the owner's go.
-
-**Exit.** An agent tests a program on the owner's desktop at 240 Hz, and a test proves none of its
-input reaches the owner's seat.
-
-### Stage 4 — Games → 0.4
+### Stage 4 — Games → 0.3
 
 **Goal.** Games are better on Yuna than on any other compositor.
 
@@ -215,7 +212,7 @@ input reaches the owner's seat.
 **Exit.** The owner's games run with their VRR flicker measured below the bar's figure, and
 latency, frames and upscaling at least as good as gamescope's.
 
-### Stage 5 — The image → 0.5
+### Stage 5 — The image → 0.4
 
 **Goal.** HDR and colour as reliable as KWin's, or better.
 
@@ -226,7 +223,7 @@ latency, frames and upscaling at least as good as gamescope's.
 
 **Exit.** The owner's films and HDR games show correctly, measured against KWin on the same content.
 
-### Stage 6 — Effects and polish → 0.6
+### Stage 6 — Effects and polish → 0.5
 
 **Goal.** The most beautiful desktop, at the lowest cost.
 
@@ -250,10 +247,9 @@ before 1.0.
 |---|---|
 | 0.1 | 1, the headless core |
 | 0.2 | 2, the desktop |
-| 0.3 | 3, agents on the desktop |
-| 0.4 | 4, games |
-| 0.5 | 5, the image |
-| 0.6 | 6, effects and polish |
+| 0.3 | 4, games |
+| 0.4 | 5, the image |
+| 0.5 | 6, effects and polish |
 | 1.0 | after the later work and its audit |
 
 Releases: a version, a CHANGELOG and a tag, after the owner's go.

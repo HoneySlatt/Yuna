@@ -1,6 +1,6 @@
 # 0015. Agents' workspaces
 
-- Status: Accepted
+- Status: Accepted; amended by 0060
 - Date: 2026-11-11
 
 ## Context

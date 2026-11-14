@@ -1,6 +1,6 @@
 # 0003. A parallel project, uwui first on any conflict
 
-- Status: Accepted
+- Status: Accepted; amended by 0060
 - Date: 2026-11-11
 
 ## Context

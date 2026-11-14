@@ -47,5 +47,6 @@ The owner chose, on 2026-11-14:
 ## Consequences
 
 - The existing stories run with animations off and are unchanged; M1.7's own tests turn them on.
-- At Stage 3, agents' outputs draw on the owner's GPU: animations become a setting per seat, so
-  that an agent's motion never costs the owner's game a frame.
+- Agents always run in a headless Yuna of their own
+  ([ADR-0060](0060-development-first-agents-in-their-own-yuna.md)): its animations are that
+  Yuna's, off unless the agent asks.
