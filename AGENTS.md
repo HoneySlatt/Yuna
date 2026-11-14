@@ -46,10 +46,12 @@ Never here:
 - Never run Yuna on the owner's display, nor take the owner's DRM devices or input: agents run it
   headless only. What needs the owner's monitor (M1.3, the desktop's stages) is run by the owner, by
   hand, from steps written in the milestone.
-- Never measure on the owner's desktop without the owner's consent; timed measures run one at a
-  time across the owner's projects ([ADR-0003](docs/adr/0003-a-parallel-project-uwui-first.md)).
-- `--gpu` opens the GPU's render node, never a display device; an agent runs it only for a
-  measure the owner consented to, one at a time, never beside a game, and never in tests.
+- Never hold back for a game: the owner's activity sets the priority. A timed measure checks,
+  before and while it runs, the load other programs put on the GPU and the processor; a run a
+  game, a build or another session disturbs is marked so and reported to the owner, who decides
+  ([ADR-0060](docs/adr/0060-development-first-agents-in-their-own-yuna.md)).
+- `--gpu` opens the GPU's render node, never a display device; an agent runs it freely, never in
+  tests.
 
 ## Definition of done
 
@@ -83,7 +85,8 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - Smithay is pinned to one revision. A patch to it lives in Yuna's fork, listed with its reason in
   `docs/smithay-patches.md`; Yuna never contributes upstream
   ([ADR-0011](docs/adr/0011-built-on-smithay.md)).
-- Games and films come first: nothing may cost a game a frame or a film its cadence.
+- In Yuna, games and films come first: no effect or animation may cost a game a frame or a film
+  its cadence.
 - At rest, nothing runs, polls or draws.
 
 ## Code rules

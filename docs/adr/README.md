@@ -11,7 +11,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 |---|---|---|
 | [0001](0001-what-yuna-is.md) | What Yuna is: one compositor, two modes | Accepted |
 | [0002](0002-the-headless-mode-first.md) | The headless mode first, then the desktop | Accepted |
-| [0003](0003-a-parallel-project-uwui-first.md) | A parallel project, uwui first on any conflict | Accepted |
+| [0003](0003-a-parallel-project-uwui-first.md) | A parallel project, uwui first on any conflict | Accepted; amended by 0060 |
 | [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted; amended by 0057 |
 | [0005](0005-the-layouts.md) | The layouts: scrolling columns, dwindle, floating, special workspaces | Accepted |
 | [0006](0006-machines-and-gpus.md) | Machines and GPUs | Accepted |
@@ -23,7 +23,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0012](0012-opengl-first.md) | OpenGL first, the pipeline independent of the renderer | Accepted; amended by 0041 |
 | [0013](0013-our-own-code-niri-and-jay-as-references.md) | Our own code; niri and jay as references | Accepted; amended by 0039 |
 | [0014](0014-vrr-without-flicker.md) | VRR without flicker | Accepted |
-| [0015](0015-agents-workspaces.md) | Agents' workspaces | Accepted |
+| [0015](0015-agents-workspaces.md) | Agents' workspaces | Accepted; amended by 0060 |
 | [0016](0016-the-rust-toolchain.md) | The Rust toolchain: an exact stable version, in one file | Accepted; amended by 0058 |
 | [0017](0017-smithays-revision.md) | Smithay's revision: upstream, pinned, first at master of 2026-11-11 | Accepted; amended by 0021 |
 | [0018](0018-workspaces.md) | Workspaces: named, with dynamic ones as an option | Accepted |
@@ -62,3 +62,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) | Emulated VRR, as the monitor's traces showed | Accepted; amends 0046 |
 | [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004 |
 | [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046 |
+| [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003, 0015 |
