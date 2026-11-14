@@ -25,14 +25,10 @@ use yuna_layout::geometry::Rect;
 use crate::Error;
 use crate::output::{VirtualOutput, to_i32};
 
-#[expect(
-    dead_code,
-    reason = "M1.8's X11 window manager draws its windows with it; until it is written, only \
-              the module's tests do, and its surface's reading has no caller yet"
-)]
-pub(crate) mod x11_surface;
+mod x11_surface;
 
 use x11_surface::X11SurfaceElement;
+pub(crate) use x11_surface::{x11_surface_origin, x11_surface_size, x11_window_element};
 
 /// The EGL device the renderer draws on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

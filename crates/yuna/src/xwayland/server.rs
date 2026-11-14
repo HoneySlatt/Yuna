@@ -35,7 +35,7 @@ use smithay::reexports::rustix::process::{
 };
 
 use super::display::Display;
-use crate::mcp::keep_descriptors_from_the_program;
+use crate::process::keep_descriptors_from_the_program;
 
 /// The variables of Yuna's environment Xwayland does not get: those that name a display, which
 /// Xwayland is, or a Wayland connection, which it gets through `WAYLAND_SOCKET`.

@@ -21,13 +21,21 @@
 //! - **Paused**: after starts that fail in a row, the display waits before it is watched again
 //!   ([`pause_after`]); programs that connect meanwhile wait in the backlog.
 //!
+//! While it serves, its manager posts what X11 windows do, and Yuna's state makes windows of the
+//! layout of them (`windows.rs`), each paired with its Wayland surface through xwayland-shell-v1
+//! (`shell.rs`); what the state decides goes back to the manager as commands, at the round's
+//! end ([`Xwayland::send_commands`]).
+//!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
 //! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
 //! after Xwayland exits, Yuna holds two sockets per seat and nothing else: no process, no timer.
 
 mod display;
 mod manager;
+mod properties;
 mod server;
+mod shell;
+mod windows;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -51,8 +59,10 @@ use crate::render::Device;
 use crate::state::State;
 use display::Display;
 pub use display::MAX_DISPLAYS;
-use manager::{Command, Commands, ManagerEvent, Stop};
+use manager::{Commands, ManagerEvent, Stop};
 use server::End;
+pub(crate) use shell::{SURFACE_ROLE, shell_global};
+pub(crate) use windows::{X11Toplevel, X11Windows};
 
 /// How long Xwayland waits, by default, once its last X11 client has left, before it ends:
 /// `-terminate`'s delay, as KWin has it. A program started again within it finds Xwayland
@@ -369,10 +379,12 @@ impl Xwayland {
             match note {
                 Note::Connection(seat) => self.start(seat, state, handle),
                 Note::Displayed { server, number } => self.displayed(server, number, handle),
-                Note::Manager { server, event } => self.manager_event(server, event, handle),
+                Note::Manager { server, event } => {
+                    self.manager_event(server, event, state, handle);
+                }
                 Note::ManagerGone { server } => self.manager_gone(server, handle),
                 Note::Overdue { server } => self.overdue(server, handle),
-                Note::Exited { server, end } => self.exited(server, end, handle),
+                Note::Exited { server, end } => self.exited(server, end, state, handle),
                 Note::PauseEnded(seat) => self.watch(seat, handle),
             }
         }
@@ -437,8 +449,9 @@ impl Xwayland {
             "Xwayland started"
         );
         xserver.arm_overdue(id, START_TIMEOUT, handle);
+        state.x11_server_started(id, seat, scale);
         let connected = state
-            .insert_xwayland_client(seat, spawned.wayland, scale)
+            .insert_xwayland_client(seat, spawned.wayland, scale, id)
             .map_err(|error| error.to_string())
             .and_then(|()| watch_displayfd(spawned.displayfd, id, handle));
         if let Err(reason) = connected {
@@ -485,7 +498,15 @@ impl Xwayland {
         }
     }
 
-    fn manager_event(&mut self, id: u64, event: ManagerEvent, handle: &LoopHandle<'static, State>) {
+    /// What manager `id` posted: its start and its end are this module's; what its windows do
+    /// goes to the state (`windows.rs`).
+    fn manager_event(
+        &mut self,
+        id: u64,
+        event: ManagerEvent,
+        state: &mut State,
+        handle: &LoopHandle<'static, State>,
+    ) {
         let Some(xserver) = self.servers.get_mut(&id) else {
             return;
         };
@@ -501,12 +522,6 @@ impl Xwayland {
                     "Xwayland ready"
                 );
             }
-            // Until Yuna places X11 windows: mapped as the program asks.
-            ManagerEvent::MapRequest(window) => {
-                if let Some(manager) = &xserver.manager {
-                    manager.send(Command::Map(window));
-                }
-            }
             ManagerEvent::Stopped(stop) => {
                 xserver.manager_stopped = true;
                 match stop {
@@ -521,6 +536,22 @@ impl Xwayland {
                         xserver.end(handle);
                     }
                 }
+            }
+            event => state.x11_event(id, event),
+        }
+    }
+
+    /// Passes the commands the state left for the managers to each, in order: at the round's
+    /// end, so that the state never holds a manager, whose life is its Xwayland's. A command for
+    /// an Xwayland whose manager is gone is dropped.
+    pub(crate) fn send_commands(&mut self, state: &mut State) {
+        for (id, command) in state.x11.take_outbox() {
+            if let Some(manager) = self
+                .servers
+                .get(&id)
+                .and_then(|xserver| xserver.manager.as_ref())
+            {
+                manager.send(command);
             }
         }
     }
@@ -562,11 +593,18 @@ impl Xwayland {
 
     /// Xwayland `id` has ended and been reaped: its seat's display is watched again, or pauses
     /// after starts that failed in a row.
-    fn exited(&mut self, id: u64, end: End, handle: &LoopHandle<'static, State>) {
+    fn exited(
+        &mut self,
+        id: u64,
+        end: End,
+        state: &mut State,
+        handle: &LoopHandle<'static, State>,
+    ) {
         let Some(mut xserver) = self.servers.remove(&id) else {
             return;
         };
         xserver.release(handle);
+        state.x11_server_gone(id);
         // `-terminate` exits with 0; another process may have reaped it, in `yuna mcp`, and then
         // its end is known only to be after its start.
         let failed = !xserver.ready || !matches!(end, End::Exited(0) | End::Unknown);

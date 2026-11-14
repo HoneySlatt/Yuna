@@ -10,8 +10,16 @@ What changed for users, newest first. Yuna has no release yet: everything below 
   own cookie; Xwayland stops 10 s after its last X11 program leaves, and a crash of it leaves
   Yuna running. `yuna --headless` prints `DISPLAY=:<n>` and `XAUTHORITY=<file>` after
   `WAYLAND_DISPLAY`; `yuna mcp`'s programs get their seat's. X11 programs read `Xft.dpi` and
-  XSETTINGS of the seat's largest output scale. Their windows are not shown yet. On llvmpipe,
-  the default, Xwayland draws on the CPU and offers no GLX.
+  XSETTINGS of the seat's largest output scale. On llvmpipe, the default, Xwayland draws on the
+  CPU and offers no GLX.
+- X11 programs' windows open in the layout as Wayland programs' do: tiled, focused, typed into
+  and clicked, made fullscreen or full width when they ask, hidden and told so, closed through
+  `WM_DELETE_WINDOW` or by ending their program, sliding with the motion. They are drawn sharp
+  at the seat's largest scale and the right size on every output, averaged where an output's
+  scale is smaller. A fullscreen game that sets an output's mode through RandR keeps it, drawn
+  pixel for pixel. `yuna mcp`'s `windows` gives each window's `shell`, `xdg` or `x11`, and an
+  X11 window's class as its application id. Their menus and tooltips are not shown yet, and Java
+  programs need `_JAVA_AWT_WM_NONREPARENTING=1`.
 
 - Animations, off by default in `yuna --headless` and `yuna mcp`, where each change still shows
   at once; `--animations` turns them on in both. The view slides along the strip of columns,

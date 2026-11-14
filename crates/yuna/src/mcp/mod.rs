@@ -63,7 +63,6 @@ use tools::{
 };
 
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
-pub(crate) use programs::keep_descriptors_from_the_program;
 pub use programs::{
     END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
     SEAT_VARIABLE,

@@ -198,8 +198,10 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   grabs and clients, their creation and their removal ([below](#seats-and-input)).
 - `input.rs`: pointer and keyboard input on an agent's seat, what is under the pointer, text
   typed through a keymap, and drag and drop.
-- `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout. It maps each toplevel to a
-  `WindowId`, passes on what its client asks, and caps the windows of each client.
+- `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout, and the record of windows
+  both shells share, `Toplevel`: an `xdg_toplevel`, or an X11 window paired with its Wayland
+  surface. It maps each to a `WindowId`, passes on what its client asks, tells it what each
+  arrangement says, and caps the windows of each client.
 - `popups.rs`: popups (`xdg_popup`), through Smithay's `PopupManager`: their placement, their
   configures, their keyboard grabs, their dismissal.
 - `activation.rs`: `xdg-activation-v1`: tokens, activation through the layout, urgent windows.
@@ -228,8 +230,12 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - `xwayland/`: each seat's X display, its Xwayland and its X11 window manager,
   [below](#xwayland): `display.rs`, the display's number, sockets, lock and cookie; `server.rs`,
-  Xwayland's process; `manager.rs`, the manager's thread; `mod.rs`, each display's phases on
+  Xwayland's process; `manager.rs`, the manager's thread; `properties.rs`, the X11 properties it
+  reads, decoded and bounded; `shell.rs`, `xwayland-shell-v1`; `windows.rs`, X11 windows on
+  Yuna's side ([An X11 window's life](#an-x11-windows-life)); `mod.rs`, each display's phases on
   Yuna's loop.
+- `process.rs`: what every program Yuna starts shares, MCP's and Xwayland: the descriptors it
+  does not inherit.
 - `mcp/`: the MCP server, [below](#the-mcp-server).
 - `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, SIGTERM, and
   SIGCHLD for `yuna mcp`.
@@ -295,6 +301,78 @@ a drawing at once is expected to take none.
 6. A commit without a buffer, the toplevel's destruction, or its surface's, closes it in the
    layout and dismisses its popups. A client that leaves, or that the display ends, has its
    toplevels destroyed by the display, the same way, by the end of the round.
+
+`Compositor::close_window` asks a window's client to close it: `xdg_toplevel.close`, or for an
+X11 window `WM_DELETE_WINDOW`, else the end of its X11 client.
+
+### An X11 window's life
+
+An X11 window joins the same record and the same layout (`xwayland/windows.rs`,
+[ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). Its manager's thread
+(`xwayland/manager.rs`) follows each child of the root, reads the properties Yuna needs when it
+appears and when one changes, and posts what it learns as events to Yuna's loop; Yuna's decisions
+go back as commands, passed to the manager at the round's end (`Compositor::flush`):
+
+| The manager posts | Yuna sends back |
+|---|---|
+| `Created`: the window, its X11 client, override-redirect or not, its process from XRes, its properties | |
+| `Properties`: all of them again, when one changed | |
+| `MapRequest` | `Configure` to the size it opens at, then `Map` |
+| `Mapped`, `Unmapped`, `Destroyed` | |
+| `ConfigureRequest`, with what it asks | `Configure`: granted before it opens, its place after |
+| `SurfaceSerial`, from Xwayland's `WL_SURFACE_SERIAL` | |
+| `StateRequest`: fullscreen or maximised, added, removed or toggled | `State`: `_NET_WM_STATE` |
+| `ActivateRequest`, from `_NET_ACTIVE_WINDOW` | `Focus`, as the seat's keyboard moves |
+| | `Close`, `Restack` |
+
+What ICCCM and EWMH settle alone, the manager does itself: `WM_STATE`, `_NET_FRAME_EXTENTS` of
+0, the root's `_NET_CLIENT_LIST`, `_NET_CLIENT_LIST_STACKING` and `_NET_ACTIVE_WINDOW`, the
+synthetic `ConfigureNotify` after each configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7:
+`SetInputFocus` for a window that takes input, `WM_TAKE_FOCUS` for one that lists it), and
+`WM_DELETE_WINDOW` or `KillClient`. Each property read is bounded, 64 KiB of text, 64 atoms of a
+list; a malformed value is ignored, logged once per window. Titles are read in UTF-8, in Latin-1
+for `STRING`, and `COMPOUND_TEXT` as Latin-1. The manager never reparents: Yuna draws no frames
+([ADR-0024](adr/0024-no-title-bars.md); Java's AWT then needs `_JAVA_AWT_WM_NONREPARENTING=1`,
+[debt](debt.md#xwayland)).
+
+1. The window is created: Yuna records it, its X11 client, the bits of its id that name the
+   client, and its properties.
+2. It asks to be mapped. A managed window, neither override-redirect nor a dock or a desktop, is
+   configured to the size `Layout::size_on_open` foretells, from its size hints, its
+   `WM_TRANSIENT_FOR` and its `_NET_WM_STATE`, at its seat's active output; then mapped. A dock
+   or a desktop is mapped as it asks and never shown.
+3. Xwayland makes its Wayland surface, gives it the role (`xwayland-shell-v1`, a global Xwayland's
+   client alone sees, `xwayland/shell.rs`) and a serial, applied at the surface's commit, and
+   sends the same serial to the manager. The window and its surface are paired in either order:
+   a managed window gets its `Toplevel`. Xwayland itself posting a second role is the only error
+   Yuna posts it: what one X11 client does never ends the connection every X11 program of the
+   seat goes through ([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+4. Mapped, paired and with a buffer, it opens in the layout as an `xdg_toplevel` does at its
+   first buffer: its limits are its size hints less its frame extents (`_GTK_FRAME_EXTENTS`),
+   divided by XWayland's scale S and rounded outward; its parent, the window its
+   `WM_TRANSIENT_FOR` names if that one is open; its size, its surface's less its frame extents,
+   over S. The caps count the X11 client behind it, never Xwayland, one Wayland client for every
+   X11 program of its seat
+   ([ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)). Later commits pass its size and
+   limits on as an xdg window's do.
+5. At each arrangement it is told its place (`tell_x11`): an X11 rectangle, the place's corner
+   times S and its size round(S × L) for the logical size L asked, widened by its frame extents,
+   relative to the root's origin, Yuna's logical origin; with its `_NET_WM_STATE`, fullscreen,
+   maximised when full width, hidden when it is. A fullscreen window is at its output's corner;
+   on an output whose mode its client emulates, it gets the rectangle Xwayland gives that mode in
+   `_XWAYLAND_RANDR_EMU_MONITOR_RECTS`, so that Xwayland scales its surface to the output
+   through a viewport ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
+   A hidden window keeps its X11 place. Only a change is sent. A window's own
+   `ConfigureRequest` is answered with its place, but a fullscreen window shown on an output
+   asking its emulated mode's rectangle there, which is granted. The windows are then stacked:
+   those no output shows at the bottom, the tiled ones shown by id, those over them last, for
+   Xwayland finds the window under the pointer through X11's stacking.
+6. The seat's keyboard on its surface gives it the X input focus, and `_NET_ACTIVE_WINDOW`;
+   leaving the seat's X11 windows gives it to none. A client's `_NET_ACTIVE_WINDOW` is an
+   activation without a token: the window takes the focus when its client has it, else is
+   marked urgent.
+7. Unmapped, it leaves the layout; destroyed, Yuna forgets it. Xwayland destroys its surface when
+   it is unmapped, which closes it too. Override-redirect windows are paired, never shown yet.
 
 ### Popups
 
@@ -425,9 +503,11 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    instant ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
    Each window is told its asked size and its states: tiled, fullscreen, activated if it has its
    seat's focus, suspended if it is told it is hidden, as below. A configure goes out only when
-   its size or states changed, or when a request of its client is owed one. Each seat's keyboard
-   focus follows `Layout::focused` for that seat, or the topmost popup of the seat's grab on that
-   window: only here does it change window. The seat's selections follow it; the focused window
+   its size or states changed, or when a request of its client is owed one. An X11 window is
+   told its X11 rectangle and its `_NET_WM_STATE` the same way
+   ([An X11 window's life](#an-x11-windows-life)). Each seat's keyboard focus follows
+   `Layout::focused` for that seat, or the topmost popup of the seat's grab on that window: only
+   here does it change window. The seat's selections follow it; the focused window
    is no longer urgent. Each agent's pointer is put on what is under it now, if that changed,
    unless windows move on its output.
 2. The motion gives the output's frame at the time it is shown if on time: the boundary the
@@ -443,8 +523,9 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    The output is drawn if anything on it is damaged: each window the frame shows on it, bottom
    to top, its surface tree with its window geometry at its rectangle's corner, cut to the
    rectangle, at its alpha, then its popups just above it, at the same alpha, over a plain
-   background. Surfaces sit on whole pixels: where the geometry's offset in its surface is not a
-   whole number of pixels, it is rounded up, so that the cut takes a sliver of content rather
+   background; an X11 window, its surface through Yuna's own element ([Scale](#scale)).
+   Surfaces sit on whole pixels: where the geometry's offset in its surface is not a whole
+   number of pixels, it is rounded up, so that the cut takes a sliver of content rather
    than show the window's margin. A surface drawn at its output's physical size is drawn exactly
    ([Scale](#scale)). A popup's corner is rounded to the nearest pixel, and a popup is cut to the
    output, not to its window: a menu may overflow it. Yuna waits until the drawing is done. The
@@ -506,18 +587,22 @@ logical size. One buffer pixel then covers one physical pixel: on whole pixels, 
 the layout put on the physical grid, the window is drawn exactly, with no blending at any edge.
 A client that draws at an integer buffer scale is scaled when drawn ([debt](debt.md)).
 
-X11 windows, from M1.8, are drawn by an element of Yuna's own (`render/x11_surface.rs`,
-[ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)); until M1.8's window
-manager calls it, only its tests do. Rootless Xwayland draws each window at XWayland's scale S,
-the largest of its seat's outputs when it started, into a buffer of scale 1: a buffer pixel is an
-X11 pixel. On an output of scale s, the buffer takes s / S physical pixels per X11 pixel, its
-size rounded once at its far edges, its window geometry's corner at the window's rectangle's,
+X11 windows are drawn by an element of Yuna's own (`render/x11_surface.rs`,
+[ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). Rootless Xwayland
+draws each window at XWayland's scale S, the largest of its seat's outputs when it started, into
+a buffer of scale 1: a buffer pixel is an X11 pixel. On an output of scale s, the buffer takes
+s / S physical pixels per X11 pixel, its window geometry's corner, past its frame extents, at the
+window's rectangle's, its far edges the geometry's size × s / S from that corner, rounded once,
 cut to the rectangle. At s = S it is copied texel for texel. Below S each pixel is the average of
 the X11 pixels it covers, weighted by how much of each, in a texture shader of Yuna's, the *area
 filter*: the average the captures' encoder takes ([Captures](#captures)). Above S, on an output
-added since Xwayland started, the renderer's bilinear filter scales it up. Smithay's surface
-element is not used for them: it rounds a client-scaled surface to whole logical units, so that
-one X11 width in three would be drawn a pixel off at S = 1.5.
+added since Xwayland started, the renderer's bilinear filter scales it up. A surface with a
+viewport, which Xwayland sets while a fullscreen client emulates a mode, is as large as its
+viewport's destination and shows its source: a game at the output's own mode is copied pixel for
+pixel. Smithay's surface element is not used for them: it rounds a client-scaled surface to whole
+logical units, so that one X11 width in three would be drawn a pixel off at S = 1.5. The pointer
+on an X11 window is measured from where this element draws its surface, so that Smithay, which
+multiplies it by S for Xwayland, lands it on the X11 pixel drawn under it, at S and below.
 
 ### Buffers
 
@@ -618,6 +703,9 @@ clock's time.
    refused.
 5. A client's cursor, asked through `wl_pointer.set_cursor` or `cursor-shape` with its last
    `enter` serial, is recorded on the seat; Yuna does not draw cursors yet.
+6. X11 windows take the same input through their seat's Xwayland: the keyboard on an X11
+   window's surface also gives it the X input focus, which its manager sets
+   ([An X11 window's life](#an-x11-windows-life)).
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
 (`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0007](adr/0007-surviving-a-crash.md)).
@@ -650,8 +738,8 @@ started by the seat's first X11 connection, ended when idle, each behind a cooki
 ([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)). It is on in
 `yuna --headless` and `yuna mcp`, off in tests unless one asks (`Config::xwayland`). Xwayland is
 looked for on `PATH` once, when the compositor starts; without it, no seat gets a display, which
-is logged once. X11 windows are not managed yet: each window that asks to be mapped is mapped,
-and Yuna does not draw it.
+is logged once. Its windows are windows of Yuna's layout
+([An X11 window's life](#an-x11-windows-life)).
 
 A seat gets its display with its Wayland socket: the owner's when the compositor listens, an
 agent's in `Compositor::listen_for_seat` (`xwayland/display.rs`).
@@ -687,11 +775,12 @@ waits:
    through `-wm` and takes charge, in this order (`xwayland/manager.rs`): XFixes'
    disconnection mode, without which `-terminate` never fires while the manager is connected;
    `RESOURCE_MANAGER`, `Xft.dpi` at 96 × S; XSETTINGS, `Xft/DPI` with it; Composite's manual
-   redirection and SubstructureRedirect on the root; `_NET_SUPPORTED` and
-   `_NET_SUPPORTING_WM_CHECK`; `WM_S0` last. Xwayland accepts its clients only once a client
+   redirection and SubstructureRedirect on the root; `_NET_SUPPORTED`,
+   `_NET_SUPPORTING_WM_CHECK` and the root's empty lists of windows; `WM_S0` last. Xwayland accepts its clients only once a client
    owns `WM_S0`, so the first one finds every setting in place. The thread then reads X11's
    events; what Yuna decides on comes to its loop through a calloop channel, and Yuna's commands
-   go back through a channel the thread reads when its wake-up socket says so. A start that has
+   go back, at the end of the round that made them, through a channel the thread reads when its
+   wake-up socket says so. A start that has
    not reached `WM_S0` within 30 s (`START_TIMEOUT`) is ended.
 3. **Paused.** Only after starts that fail in a row: below.
 
@@ -822,7 +911,8 @@ window or program unknown there:
   the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
   each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
-- `windows` lists a seat's windows, as `Compositor::windows` describes them: its `rect`, where
+- `windows` lists a seat's windows, as `Compositor::windows` describes them, each with its
+  `shell`, `xdg` or `x11`: its `rect`, where
   it is drawn at the call's time, read as hit tests read it ([A frame](#a-frame)); its `place`,
   where it rests once its motion ends; and `motion_ends_ns`, when its output's motion ends, null
   at rest, from the refresh that drew its end on. With `colour`,
@@ -925,7 +1015,15 @@ own thread, both `took_us`.
   or with another seat's, refused; Xwayland ended when idle, the manager connected, and again
   on the next connection; a crash, and a second one in a row paused; a number whose abstract
   name is taken skipped; no display when XWayland is off or Xwayland is missing; no GPU driver
-  on llvmpipe; and Yuna at rest before and after. `mcp.rs` in it drives the MCP
+  on llvmpipe; and Yuna at rest before and after. `x11_windows.rs` in it opens X11 windows,
+  with `x11_client.rs`'s x11rb client, which reads `Xft.dpi`, draws with `PutImage` and sets a
+  mode through RandR: a window tiled and focused at the tile × S, its own configure answered with
+  its place; sharp at 1.5, area-filtered at 1 within a level of `axis_taps`' reference, and moved
+  between them at one logical size; typing and clicks on the X11 pixel drawn, at 1.5 and at 1;
+  each frame of a slide against `yuna-motion`'s reference, each window configured once, and Yuna
+  at rest; `WM_DELETE_WINDOW`, or the client ended; fullscreen asked; hidden and told so where it
+  is; a game's emulated mode drawn pixel for pixel; the cap counting X11 clients, not Xwayland;
+  two seats' X11 windows apart. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
   not read, a line too long, an input that closes. `motion.rs` in it turns animations on: each

@@ -253,8 +253,10 @@ fn logical_units(mode: &OutputMode) -> (u32, u32) {
 /// weights: pixel `i` covers the logical units [`origin` + i, `origin` + i + 1), that is the
 /// physical span [(`origin` + i) × `scale`, …) from the output's edge, `read_start` of which
 /// were not read. Weights are each pixel's share of the span, cut to the `read_length` pixels
-/// read, and add up to 1.
-pub(crate) fn axis_taps(
+/// read, and add up to 1. Public for tests, which take it as the reference of the area filter's
+/// averages (`render/x11_surface.rs`).
+#[doc(hidden)]
+pub fn axis_taps(
     origin: f64,
     count: u32,
     scale: f64,

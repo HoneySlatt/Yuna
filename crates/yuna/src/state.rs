@@ -149,6 +149,8 @@ pub(crate) struct State {
     /// What XWayland's sources noted in this round, for the compositor to act on after it
     /// (`xwayland/`).
     pub xwayland_notes: Vec<crate::xwayland::Note>,
+    /// Every Xwayland's X11 windows, and the commands for their managers (`xwayland/windows.rs`).
+    pub x11: crate::xwayland::X11Windows,
 }
 
 impl State {
@@ -227,6 +229,11 @@ impl State {
                 ColourState::new()
             },
             xwayland_notes: Vec::new(),
+            x11: {
+                // Seen by each seat's Xwayland alone (`xwayland/shell.rs`).
+                crate::xwayland::shell_global(dh);
+                crate::xwayland::X11Windows::default()
+            },
         })
     }
 
@@ -263,9 +270,10 @@ pub(crate) struct ClientState {
     /// tests of what a client holding another seat's globals would get
     /// (`Compositor::connect_client_seeing_every_seat`).
     pub sees_every_seat: bool,
-    /// Whether it is its seat's Xwayland: one Wayland client for all of the seat's X11 programs
+    /// The Xwayland it is, by its id, if it is its seat's Xwayland: one Wayland client for all
+    /// of the seat's X11 programs
     /// ([ADR-0067](../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
-    pub xwayland: bool,
+    pub xwayland: Option<u64>,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -282,7 +290,7 @@ impl ClientState {
             compositor: CompositorClientState::default(),
             seat,
             sees_every_seat,
-            xwayland: false,
+            xwayland: None,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
@@ -297,7 +305,7 @@ impl ClientData for ClientState {
     /// display calls this under its own lock, so it only records the client: a call back into
     /// the display would wait for ever.
     fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
-        tracing::debug!(?reason, xwayland = self.xwayland, "a client left");
+        tracing::debug!(?reason, xwayland = self.xwayland.is_some(), "a client left");
         self.departed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -344,6 +352,11 @@ impl CompositorHandler for State {
         on_commit_buffer_handler::<State>(surface);
         let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);
+        // Its serial first: it may pair the surface with its X11 window, which then takes this
+        // very commit as a window's.
+        if get_role(&root) == Some(crate::xwayland::SURFACE_ROLE) {
+            self.xwayland_surface_committed(&root);
+        }
         if self.toplevels.contains_key(&root.id()) {
             self.toplevel_committed(&root, surface);
         } else if get_role(&root) == Some(XDG_POPUP_ROLE) {
@@ -358,6 +371,9 @@ impl CompositorHandler for State {
             self.toplevel_gone(surface);
         } else if get_role(surface) == Some(XDG_POPUP_ROLE) {
             self.popup_gone(surface);
+        }
+        if get_role(surface) == Some(crate::xwayland::SURFACE_ROLE) {
+            self.xwayland_surface_destroyed(surface);
         }
     }
 }

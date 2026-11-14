@@ -38,6 +38,7 @@ mod input;
 pub mod mcp;
 mod output;
 mod popups;
+mod process;
 mod render;
 mod scale;
 mod screencopy;
@@ -52,12 +53,14 @@ mod xwayland;
 use std::fmt;
 
 pub use activation::TOKEN_LIFETIME;
+#[doc(hidden)]
+pub use capture::axis_taps;
 pub use capture::{
     CaptureMapping, CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame, LogicalRegion,
 };
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
-    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription,
+    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
 };
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{

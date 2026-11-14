@@ -283,3 +283,33 @@ with games' VRR:
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
   node (checked on 2026-11-14 with the cards hidden, `glxinfo` on the GPU).
+- Override-redirect windows, menus and tooltips, are recorded and paired with their surfaces, never
+  shown yet: M1.8's next step. Until then an X11 program's menus open unseen.
+- No reparenting (`xwayland/manager.rs`): Yuna draws no frames, so a window stays a child of the
+  root. Java's AWT waits for a reparenting manager unless it runs with
+  `_JAVA_AWT_WM_NONREPARENTING=1`; its windows otherwise stay blank.
+- An X11 window's size hints give its limits alone: its increments and base size (a terminal's
+  cells) and its aspect are read and not followed, as tiling managers do; its window type gives
+  only whether it is managed: a dialog, a splash or a utility window opens tiled unless it names
+  a parent through `WM_TRANSIENT_FOR`.
+- `_NET_WM_SYNC_REQUEST` is not done yet: a resized X11 window's new buffer is drawn when it comes,
+  not held until it matches its size. No `_NET_WM_PING` is sent, so a frozen X11 program is not
+  noticed. `_NET_WM_MOVERESIZE` is taken and does nothing: Yuna has no interactive move. A request
+  to iconify or hide (`WM_CHANGE_STATE`, `_NET_WM_STATE_HIDDEN`) does nothing: Yuna minimises
+  nothing.
+- An X11 client's `_NET_ACTIVE_WINDOW` is taken as xdg-activation without a token: the window
+  takes the focus only when its client has it already; a pager's request (source 2) is no better.
+- An X11 window's place is cut to X11's 16-bit coordinates: with outputs past 32,767 X11 pixels
+  from the root's origin, many outputs side by side at a large scale, a window there is told a
+  place its pointer and Xwayland's emulated modes miss. An output whose logical position is not a
+  whole unit is told to Xwayland rounded, so that its windows' X11 places may be a pixel off its
+  own.
+- Commands to a manager go at the end of the round that made them; the X11 focus and a window's
+  place reach Xwayland on its manager's connection, the keyboard's `enter` on its Wayland one, in
+  no set order between them.
+- The area filter reads each texel 1/1024 past its centre, which holds for buffers up to about
+  8,000 texels a side (`area_filter.frag`): past it, a sampler's rounding may take a texel's
+  neighbour, a slight blur of one X11 window wider than 8,000 pixels below XWayland's scale.
+- The X11 element declares no opaque region: the damage tracker draws what lies under an opaque
+  X11 window too, the background and the windows below it, where a Wayland surface's opaque
+  region would let it skip them; a whole frame costs up to that overdraw more on each output.

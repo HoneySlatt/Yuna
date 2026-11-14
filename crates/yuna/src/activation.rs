@@ -163,7 +163,8 @@ impl State {
         }
     }
 
-    fn mark_urgent(&mut self, window: WindowId) {
+    /// Marks `window` urgent, unless it has its seat's focus.
+    pub(crate) fn mark_urgent(&mut self, window: WindowId) {
         // A window that has its seat's focus already needs no one's attention.
         let seat = self.layout.window(window).map(|info| info.seat);
         if seat.is_some_and(|seat| self.layout.focused(seat) == Some(window)) {

@@ -93,6 +93,7 @@ use crate::output::{RefreshAt, Timing, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
+use crate::shell::Told;
 use crate::state::State;
 
 /// The later of two refreshes, by number.
@@ -424,6 +425,18 @@ impl State {
             };
             // Within 0 and 1 already; a renderer's alpha is an `f32`.
             let alpha = drawn.alpha as f32;
+            if let Some(x11) = toplevel.x11() {
+                elements.extend(render::x11_window_element(
+                    &mut self.renderer,
+                    &x11.surface,
+                    self.x11.geometry_offset(x11),
+                    drawn.rect,
+                    x11.scale,
+                    alpha,
+                    output,
+                ));
+                continue;
+            }
             // A window's popups are in front of it, behind the windows over it, and go with it.
             elements.extend(render::popup_elements(
                 &mut self.renderer,
@@ -566,31 +579,44 @@ impl State {
                     // The output, and with it its scale, before the configure: the client then
                     // draws the buffer that acknowledges it at the right scale.
                     self.move_to_output(&root, Some(output));
-                    match placed {
-                        Some(placed) => self.configure(
-                            &root,
-                            Some(placed.configure),
-                            placed.fullscreen,
-                            placed.activated,
-                            false,
-                        ),
+                    let told = match placed {
+                        Some(placed) => Told {
+                            size: Some(placed.configure),
+                            corner: Some((placed.rect.x, placed.rect.y)),
+                            fullscreen: placed.fullscreen,
+                            activated: placed.activated,
+                            hidden: false,
+                        },
                         // Still drawn while it slides out of view, no longer arranged: visible
-                        // until the motion ends, at the size it has.
-                        None => {
-                            let fullscreen = self.is_told_fullscreen(window);
-                            self.configure(&root, None, fullscreen, false, false);
-                        }
-                    }
+                        // until the motion ends, at the size and place it has.
+                        None => Told {
+                            size: None,
+                            corner: None,
+                            fullscreen: self.is_told_fullscreen(window),
+                            activated: false,
+                            hidden: false,
+                        },
+                    };
+                    self.tell(&root, told);
                 }
                 None => {
-                    let size = placed_anywhere.get(&window).map(|placed| placed.configure);
-                    let fullscreen = self.is_told_fullscreen(window);
-                    self.configure(&root, size, fullscreen, false, true);
+                    // Hidden where it is: an X11 window keeps its place in X11, and a hidden
+                    // fullscreen game its emulated mode's (ADR-0069).
+                    let told = Told {
+                        size: placed_anywhere.get(&window).map(|placed| placed.configure),
+                        corner: None,
+                        fullscreen: self.is_told_fullscreen(window),
+                        activated: false,
+                        hidden: true,
+                    };
+                    self.tell(&root, told);
                     self.move_to_output(&root, None);
                     discard_presentation_feedback(&root);
                 }
             }
         }
+        // Xwayland finds the window under the pointer through X11's stacking.
+        self.restack_x11_windows();
     }
 
     /// Whether `window`'s client is told it is fullscreen, as the layout has it: it is, or it is
@@ -668,7 +694,9 @@ impl State {
         };
         if keyboard.current_focus() != focus {
             self.give_selections_to(seat, focus.as_ref());
-            keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(self, focus.clone(), SERIAL_COUNTER.next_serial());
+            // X11 has its own input focus, which its manager sets.
+            self.focus_x11(seat, focus.as_ref());
         }
     }
 

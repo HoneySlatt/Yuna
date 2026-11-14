@@ -88,7 +88,8 @@ pub struct Counters {
     pub frames_drawn: u64,
     /// `wl_callback.done` events sent for frame callbacks.
     pub frame_callbacks: u64,
-    /// `xdg_toplevel` and `xdg_popup` configures sent.
+    /// `xdg_toplevel` and `xdg_popup` configures sent, and X11 windows' configures and states
+    /// set.
     pub configures: u64,
     /// `wl_surface.commit` requests received.
     pub commits: u64,
@@ -98,16 +99,40 @@ pub struct Counters {
     pub wakeups: u64,
 }
 
+/// The shell behind a window: what its client speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowShell {
+    /// A Wayland client's `xdg_toplevel`.
+    Xdg,
+    /// An X11 program's window, through its seat's Xwayland.
+    X11,
+}
+
+impl WindowShell {
+    /// Its name, as MCP gives it: `xdg` or `x11`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowShell::Xdg => "xdg",
+            WindowShell::X11 => "x11",
+        }
+    }
+}
+
 /// A window, as [`Compositor::windows`] describes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowDescription {
     /// Its id in the layout.
     pub id: WindowId,
-    /// The application id its client set (`xdg_toplevel.set_app_id`), if any.
+    /// The shell behind it.
+    pub shell: WindowShell,
+    /// The application id its client set (`xdg_toplevel.set_app_id`), or an X11 window's
+    /// `WM_CLASS` class, if any.
     pub app_id: Option<String>,
-    /// Its title (`xdg_toplevel.set_title`), if any.
+    /// Its title (`xdg_toplevel.set_title`, an X11 window's `_NET_WM_NAME` or `WM_NAME`), if any.
     pub title: Option<String>,
-    /// The process id of its client, as the kernel gives it for the client's socket.
+    /// The process id of its client, as the kernel gives it for the client's socket; for an X11
+    /// window, as X11 records its client's connection (XRes), else as the window says
+    /// (`_NET_WM_PID`), never Xwayland's.
     pub pid: Option<i32>,
     /// The seat whose workspaces hold it: its client's.
     pub seat: SeatId,
@@ -674,6 +699,14 @@ impl Compositor {
         self.state.describe_windows()
     }
 
+    /// Asks `window`'s client to close it, as a key binding would: an `xdg_toplevel` is sent
+    /// `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else its X11 client is ended
+    /// (`KillClient`). The window stays until its client closes it. Refused for a window the
+    /// layout does not hold.
+    pub fn close_window(&mut self, window: WindowId) -> Result<(), Error> {
+        self.state.close_window(window)
+    }
+
     /// The colours the surfaces of `window` declared through `color-management-v1`, at their
     /// last commit: its own surface's, its subsurfaces' and its popups'; those that declared
     /// none are left out, and an unknown window has none.
@@ -840,6 +873,9 @@ impl Compositor {
     /// others go on.
     pub(crate) fn flush(&mut self) {
         self.free_departed_clients();
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.send_commands(&mut self.state);
+        }
         // Smithay's popup trees and grabs forget their destroyed popups.
         self.state.popups.cleanup();
         // Each output forgets the surfaces destroyed since, which it keeps to send `enter` once.

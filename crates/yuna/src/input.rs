@@ -45,6 +45,7 @@ use yuna_motion::Change;
 use crate::Error;
 use crate::output::VirtualOutput;
 use crate::popups::popup_toplevel;
+use crate::render;
 use crate::seats::{seat_id, seat_of_surface};
 use crate::state::{OWNER_SEAT, State, tree_root};
 
@@ -257,12 +258,23 @@ impl State {
                 && location.x < rect.right()
                 && location.y >= rect.y
                 && location.y < rect.bottom();
-            if inside
-                && let Some(found) = hit(
-                    toplevel.wl_surface(),
-                    corner - toplevel.geometry.loc.to_f64(),
-                )
-            {
+            if !inside {
+                continue;
+            }
+            // Where the surface is drawn: for an X11 window, by Yuna's own element, so that the
+            // X11 pixel the pointer lands on, its position times XWayland's scale, is the one
+            // drawn under it (`render/x11_surface.rs`).
+            let origin = match toplevel.x11() {
+                Some(x11) => render::x11_surface_origin(
+                    &x11.surface,
+                    self.x11.geometry_offset(x11),
+                    rect,
+                    x11.scale,
+                    output,
+                ),
+                None => Some(corner - toplevel.geometry.loc.to_f64()),
+            };
+            if let Some(found) = origin.and_then(|origin| hit(toplevel.wl_surface(), origin)) {
                 return Some(found);
             }
         }

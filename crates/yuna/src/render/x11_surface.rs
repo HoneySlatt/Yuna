@@ -1,11 +1,11 @@
 //! X11 windows' surfaces, drawn by an element of Yuna's own
 //! ([ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
-//! M1.8's X11 window manager is to draw its windows with it; until it does, only the tests below
-//! call it.
+//! The frame loop draws every X11 window with it (`frames.rs`), and the pointer hit-tests where
+//! it draws them (`input.rs`, [`x11_surface_origin`]).
 //!
-//! Rootless Xwayland draws each window into a buffer of scale 1, with no viewport, at XWayland's
-//! scale S: the largest scale among its seat's outputs when it started. A buffer pixel is an X11
-//! pixel. On an output of scale s, an X11 pixel covers s / S physical pixels:
+//! Rootless Xwayland draws each window into a buffer of scale 1 at XWayland's scale S: the
+//! largest scale among its seat's outputs when it started. A buffer pixel is an X11 pixel. On an
+//! output of scale s, an X11 pixel covers s / S physical pixels:
 //!
 //! - at s = S, the buffer is copied texel for texel;
 //! - below S, each pixel is the average of the X11 pixels it covers, weighted by how much of
@@ -13,6 +13,12 @@
 //!   (`capture.rs`);
 //! - above S, on an output added since Xwayland started, the renderer's bilinear filter scales
 //!   the buffer up: the right size, softer.
+//!
+//! A surface with a `wp_viewport`, which Xwayland sets while a fullscreen client emulates a mode
+//! ([ADR-0069](../../../../docs/adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)),
+//! is as large, in X11 pixels, as its viewport's destination, and shows its viewport's source:
+//! its texels then cover the destination × s / S physical pixels, copied where that is one pixel
+//! a texel, as for a game that set the output's own mode.
 //!
 //! Smithay's surface element is not used: it rounds a client-scaled surface's size to whole
 //! logical units before scaling it, so that at S = 1.5 one width in three is drawn a pixel off,
@@ -31,8 +37,9 @@ use smithay::backend::renderer::utils::{
 use smithay::backend::renderer::{Renderer, Texture};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::user_data::UserDataMap;
-use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
-use smithay::wayland::compositor::with_states;
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::wayland::compositor::{SurfaceData, with_states};
+use smithay::wayland::viewporter::ViewportCachedState;
 use yuna_layout::geometry::Rect;
 
 use super::{WindowElement, window_pixels};
@@ -45,25 +52,26 @@ const AREA_FILTER: &str = include_str!("area_filter.frag");
 const SAME_SCALE: f64 = 1e-9;
 
 /// An X11 window's element on `output`, if any of it shows there: its surface's buffer, in X11
-/// pixels, with the window geometry's corner, `geometry_offset` X11 pixels into the buffer, at
+/// pixels, with the window geometry's corner, `geometry_offset` X11 pixels into the surface, at
 /// `rect`'s corner, cut to `rect`, at opacity `alpha`, from 0 to 1. `x11_scale` is XWayland's
 /// scale, S.
 ///
-/// The buffer takes s / S physical pixels per X11 pixel on an output of scale s, its geometry kept
-/// in X11 pixels: its physical size is its size × s / S, each side rounded once, at its far edge.
-/// Its geometry's corner is `rect`'s, rounded to the output's pixels; where its offset in the
-/// buffer is not a whole number of pixels, the offset is rounded up, as a Wayland window's is
-/// (`window_elements`). At s = S it is copied texel for texel, with no blend at its edges; below
+/// The surface takes s / S physical pixels per X11 pixel on an output of scale s, its geometry
+/// kept in X11 pixels. Its geometry's corner is `rect`'s, rounded to the output's pixels; where
+/// its offset in the surface is not a whole number of pixels, the offset is rounded up, as a
+/// Wayland window's is (`window_elements`). Its far edges lie the geometry's own size × s / S
+/// from that corner, rounded once, so that a window keeps the width its rectangle gives it
+/// whatever its offset. At s = S it is copied texel for texel, with no blend at its edges; below
 /// S it is drawn through the area filter, exact down to s / S = 1/4, below which each pixel
-/// averages the middle 4 × 4 texels of its footprint; above S, with the renderer's bilinear
-/// filter.
+/// averages the middle 4 × 4 texels of its footprint, and for buffers up to about 8,000 texels a
+/// side, past which its sampling nudge (`area_filter.frag`) may read a texel's neighbour in its
+/// place; above S, with the renderer's bilinear filter. A surface with a viewport is as large as
+/// its viewport's destination and shows its viewport's source (see the module's documentation).
 ///
 /// None when the surface has no buffer, its buffer could not be imported (Smithay logs why), or
-/// nothing of it shows. Only the surface itself is drawn, with its buffer scale, transform and
-/// viewport ignored: Xwayland's rootless surfaces have no subsurface, and none of these but a
-/// viewport, set while a fullscreen client emulates a mode
-/// ([ADR-0069](../../../../docs/adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)),
-/// which this element does not follow yet.
+/// nothing of it shows. Only the surface itself is drawn, with its buffer scale and transform
+/// ignored: Xwayland's rootless surfaces have no subsurface, a buffer scale of 1 and no
+/// transform. It declares no opaque region ([debt](../../../../docs/debt.md#xwayland)).
 pub(crate) fn x11_window_element(
     renderer: &mut GlesRenderer,
     surface: &WlSurface,
@@ -73,17 +81,62 @@ pub(crate) fn x11_window_element(
     alpha: f32,
     output: &VirtualOutput,
 ) -> Option<WindowElement> {
-    let texture = surface_texture(renderer, surface)?;
-    X11SurfaceElement::new(
-        renderer,
-        texture,
-        geometry_offset,
-        rect,
-        x11_scale,
-        alpha,
-        output,
+    let (texture, view) = surface_texture(renderer, surface, x11_scale)?;
+    let element = match view {
+        None => X11SurfaceElement::new(
+            renderer,
+            texture,
+            geometry_offset,
+            rect,
+            x11_scale,
+            alpha,
+            output,
+        )?,
+        Some(view) => {
+            let placement = place(view.size, geometry_offset, rect, x11_scale, output)?;
+            let filter = view_filter(renderer, placement, view);
+            X11SurfaceElement::assemble(texture, view.source, placement, alpha, filter)
+        }
+    };
+    Some(WindowElement::X11(element))
+}
+
+/// Where the surface of an X11 window drawn as [`x11_window_element`] says has its top-left
+/// corner, in logical coordinates: the origin the pointer's position in it is measured from, so
+/// that, converted by XWayland's scale as Smithay converts it for Xwayland, a point lands on the
+/// X11 pixel drawn under it. None when the surface has no buffer or shows nothing at `rect`.
+pub(crate) fn x11_surface_origin(
+    surface: &WlSurface,
+    geometry_offset: Point<i32, Buffer>,
+    rect: Rect,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Option<Point<f64, Logical>> {
+    let size = x11_surface_size(surface, x11_scale)?;
+    let placement = place(size, geometry_offset, rect, x11_scale, output)?;
+    let scale = output.mode.scale();
+    Some(
+        (
+            output.rect.x + f64::from(placement.buffer.loc.x) / scale,
+            output.rect.y + f64::from(placement.buffer.loc.y) / scale,
+        )
+            .into(),
     )
-    .map(WindowElement::X11)
+}
+
+/// The size of an X11 window's surface in X11 pixels, at XWayland's scale `x11_scale`: its
+/// buffer's, or its viewport's destination's. None when it has no buffer.
+pub(crate) fn x11_surface_size(surface: &WlSurface, x11_scale: f64) -> Option<Size<i32, Buffer>> {
+    with_states(surface, |states| {
+        let buffer = states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()?
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .buffer_size()?;
+        let buffer = Size::<i32, Buffer>::from((buffer.w, buffer.h));
+        Some(viewed(states, buffer, x11_scale).map_or(buffer, |view| view.size))
+    })
 }
 
 /// What the renderer holds of a surface's buffer.
@@ -97,9 +150,23 @@ struct SurfaceTexture {
     damage: DamageSnapshot<i32, Buffer>,
 }
 
-/// `surface`'s buffer, imported into `renderer` if it was not yet. None when it has no buffer or
-/// its import failed, which Smithay logs.
-fn surface_texture(renderer: &mut GlesRenderer, surface: &WlSurface) -> Option<SurfaceTexture> {
+/// What a surface with a viewport shows, and how large it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct View {
+    /// The part of the buffer shown, in texels: the viewport's source, cut to the buffer.
+    source: Rectangle<f64, Buffer>,
+    /// The surface's size in X11 pixels: the viewport's destination, or the source's size.
+    size: Size<i32, Buffer>,
+}
+
+/// `surface`'s buffer, imported into `renderer` if it was not yet, and its viewport's view, if it
+/// has one, at XWayland's scale `x11_scale`. None when it has no buffer or its import failed,
+/// which Smithay logs.
+fn surface_texture(
+    renderer: &mut GlesRenderer,
+    surface: &WlSurface,
+    x11_scale: f64,
+) -> Option<(SurfaceTexture, Option<View>)> {
     with_states(surface, |states| {
         import_surface(renderer, states).ok()?;
         let data = states
@@ -108,12 +175,52 @@ fn surface_texture(renderer: &mut GlesRenderer, surface: &WlSurface) -> Option<S
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let texture = data.texture::<GlesTexture>(renderer.context_id())?.clone();
-        Some(SurfaceTexture {
-            id: Id::from_wayland_resource(surface),
-            texture,
-            damage: data.damage(),
-        })
+        let damage = data.damage();
+        drop(data);
+        let view = viewed(states, texture.size(), x11_scale);
+        Some((
+            SurfaceTexture {
+                id: Id::from_wayland_resource(surface),
+                texture,
+                damage,
+            },
+            view,
+        ))
     })
+}
+
+/// The view of a surface whose buffer is `buffer` texels, if it has a viewport. Smithay keeps
+/// the destination in logical units, the X11 pixels Xwayland gave divided by XWayland's scale
+/// `x11_scale` and rounded: they are multiplied back, rounded to whole X11 pixels. A source
+/// outside the buffer, which Smithay refuses with a protocol error, is cut to it.
+fn viewed(states: &SurfaceData, buffer: Size<i32, Buffer>, x11_scale: f64) -> Option<View> {
+    let (source, destination) = {
+        let mut cached = states.cached_state.get::<ViewportCachedState>();
+        let viewport = cached.current();
+        (viewport.src, viewport.dst)
+    };
+    if source.is_none() && destination.is_none() {
+        return None;
+    }
+    let whole = Rectangle::<f64, Buffer>::from_size(buffer.to_f64());
+    let source = source
+        .map(|src| {
+            Rectangle::<f64, Buffer>::new(
+                (src.loc.x, src.loc.y).into(),
+                (src.size.w, src.size.h).into(),
+            )
+        })
+        .and_then(|src| src.intersection(whole))
+        .unwrap_or(whole);
+    let size = match destination {
+        Some(destination) => (
+            (f64::from(destination.w) * x11_scale).round() as i32,
+            (f64::from(destination.h) * x11_scale).round() as i32,
+        )
+            .into(),
+        None => (source.size.w.round() as i32, source.size.h.round() as i32).into(),
+    };
+    Some(View { source, size })
 }
 
 /// An X11 window's surface placed on one output: see [`x11_window_element`].
@@ -122,15 +229,17 @@ pub(crate) struct X11SurfaceElement {
     id: Id,
     texture: GlesTexture,
     damage: DamageSnapshot<i32, Buffer>,
+    /// The part of the texture shown, in texels: all of it, or a viewport's source.
+    source: Rectangle<f64, Buffer>,
     placement: Placement,
     alpha: f32,
     filter: Filter,
 }
 
-/// Where an X11 buffer is drawn on an output, in its physical pixels.
+/// Where an X11 surface is drawn on an output, in its physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Placement {
-    /// The whole buffer, at s / S physical pixels per X11 pixel.
+    /// The whole surface, at s / S physical pixels per X11 pixel.
     buffer: Rectangle<i32, Physical>,
     /// What is drawn of it: its part inside its window's rectangle. Never empty.
     shown: Rectangle<i32, Physical>,
@@ -139,19 +248,19 @@ struct Placement {
 /// How an X11 buffer's texels become an output's pixels.
 #[derive(Debug, Clone)]
 enum Filter {
-    /// At XWayland's scale: each pixel's centre falls on its texel's, through the renderer's own
+    /// One pixel a texel: each pixel's centre falls on its texel's, through the renderer's own
     /// shader.
     Copy,
-    /// Below it: the area filter's program.
+    /// Fewer pixels than texels: the area filter's program.
     Area(GlesTexProgram),
-    /// Above it, or below it when the area filter did not compile: the renderer's own shader and
-    /// its bilinear filter.
+    /// More pixels than texels, or fewer when the area filter did not compile: the renderer's
+    /// own shader and its bilinear filter.
     Bilinear,
 }
 
 impl X11SurfaceElement {
-    /// The element of `surface` placed on `output`, as [`x11_window_element`] says; none when
-    /// nothing of it shows.
+    /// The element of `surface`, its whole buffer at its own size, placed on `output`, as
+    /// [`x11_window_element`] says; none when nothing of it shows.
     fn new(
         renderer: &mut GlesRenderer,
         surface: SurfaceTexture,
@@ -161,27 +270,54 @@ impl X11SurfaceElement {
         alpha: f32,
         output: &VirtualOutput,
     ) -> Option<X11SurfaceElement> {
-        let placement = place(
-            surface.texture.size(),
-            geometry_offset,
-            rect,
-            x11_scale,
-            output,
-        )?;
-        Some(X11SurfaceElement {
+        let size = surface.texture.size();
+        let placement = place(size, geometry_offset, rect, x11_scale, output)?;
+        let filter = filter(renderer, output.mode.scale(), x11_scale);
+        let source = Rectangle::from_size(size.to_f64());
+        Some(X11SurfaceElement::assemble(
+            surface, source, placement, alpha, filter,
+        ))
+    }
+
+    /// The element of `surface` showing `source` of its texture at `placement`.
+    fn assemble(
+        surface: SurfaceTexture,
+        source: Rectangle<f64, Buffer>,
+        placement: Placement,
+        alpha: f32,
+        filter: Filter,
+    ) -> X11SurfaceElement {
+        X11SurfaceElement {
             id: surface.id,
             texture: surface.texture,
             damage: surface.damage,
+            source,
             placement,
             alpha,
-            filter: filter(renderer, output.mode.scale(), x11_scale),
-        })
+            filter,
+        }
     }
 }
 
-/// Where a buffer of `buffer_size` X11 pixels is drawn on `output`, as [`x11_window_element`]
-/// says. None when nothing of it shows: an empty buffer, an empty rectangle, a buffer whose size
-/// rounds to no pixel, or one wholly outside its rectangle.
+/// The filter of a surface seen through its viewport's `view`, drawn at `placement`: it follows
+/// how many pixels each texel covers on each axis. One on both, it is copied; fewer on both, the
+/// area filter; else, a mode stretched to another aspect among them, the bilinear one.
+fn view_filter(renderer: &mut GlesRenderer, placement: Placement, view: View) -> Filter {
+    let pixels = placement.buffer.size.to_f64();
+    match (
+        filter(renderer, pixels.w, view.source.size.w),
+        filter(renderer, pixels.h, view.source.size.h),
+    ) {
+        (Filter::Copy, Filter::Copy) => Filter::Copy,
+        (Filter::Area(program), Filter::Area(_)) => Filter::Area(program),
+        _ => Filter::Bilinear,
+    }
+}
+
+/// Where a surface of `buffer_size` X11 pixels is drawn on `output`, as [`x11_window_element`]
+/// says. None when nothing of it shows: an empty surface, an empty rectangle, a surface whose
+/// size rounds to no pixel, one whose geometry's offset lies past its far edge, or one wholly
+/// outside its rectangle.
 fn place(
     buffer_size: Size<i32, Buffer>,
     geometry_offset: Point<i32, Buffer>,
@@ -205,11 +341,17 @@ fn place(
         in_pixels(geometry_offset.y).ceil() as i32,
     )
         .into();
+    // From the geometry's corner to the far edge: the X11 pixels past the offset, rounded once.
+    let past_corner =
+        |side: i32, offset: i32| in_pixels(side.saturating_sub(offset)).round() as i32;
     let size: Size<i32, Physical> = (
-        in_pixels(buffer_size.w).round() as i32,
-        in_pixels(buffer_size.h).round() as i32,
+        offset.x + past_corner(buffer_size.w, geometry_offset.x),
+        offset.y + past_corner(buffer_size.h, geometry_offset.y),
     )
         .into();
+    if size.w <= 0 || size.h <= 0 {
+        return None;
+    }
     let buffer = Rectangle::new(window.loc - offset, size);
     let shown = buffer.intersection(window)?;
     Some(Placement { buffer, shown })
@@ -220,7 +362,9 @@ fn same_scale(scale: f64, x11_scale: f64) -> bool {
     (scale - x11_scale).abs() < SAME_SCALE
 }
 
-/// The filter for a buffer drawn at XWayland's scale `x11_scale` on an output of scale `scale`.
+/// The filter for a buffer drawn at XWayland's scale `x11_scale` on an output of scale `scale`:
+/// `scale` physical pixels for `x11_scale` texels. A viewport's ratio on one axis, `pixels` for
+/// `texels`, is passed the same way.
 fn filter(renderer: &mut GlesRenderer, scale: f64, x11_scale: f64) -> Filter {
     if same_scale(scale, x11_scale) {
         Filter::Copy
@@ -278,18 +422,18 @@ impl Element for X11SurfaceElement {
         self.damage.current_commit()
     }
 
-    /// The part of the buffer shown, in X11 pixels: `shown` mapped back into the buffer.
+    /// The part of the texture shown, in texels: `shown` mapped back into the source.
     fn src(&self) -> Rectangle<f64, Buffer> {
         let Placement { buffer, shown } = self.placement;
-        let size = self.texture.size();
+        let source = self.source;
         let to_texels_x =
-            |pixels: i32| f64::from(pixels) * f64::from(size.w) / f64::from(buffer.size.w);
+            |pixels: i32| f64::from(pixels) * source.size.w / f64::from(buffer.size.w);
         let to_texels_y =
-            |pixels: i32| f64::from(pixels) * f64::from(size.h) / f64::from(buffer.size.h);
+            |pixels: i32| f64::from(pixels) * source.size.h / f64::from(buffer.size.h);
         Rectangle::new(
             (
-                to_texels_x(shown.loc.x - buffer.loc.x),
-                to_texels_y(shown.loc.y - buffer.loc.y),
+                source.loc.x + to_texels_x(shown.loc.x - buffer.loc.x),
+                source.loc.y + to_texels_y(shown.loc.y - buffer.loc.y),
             )
                 .into(),
             (to_texels_x(shown.size.w), to_texels_y(shown.size.h)).into(),
@@ -309,8 +453,8 @@ impl Element for X11SurfaceElement {
         _scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        let size = self.texture.size();
         let Placement { buffer, shown } = self.placement;
+        let source = self.source;
         // How far past a pixel's footprint its drawing reads, in texels. The bilinear filter
         // reads up to a texel past it. The area filter reads each texel just past its centre,
         // where a sampler finer than 1/256 of a texel takes 1/1024 of the next one: enough to
@@ -320,12 +464,15 @@ impl Element for X11SurfaceElement {
             Filter::Area(_) | Filter::Bilinear => 1.0,
             Filter::Copy => 0.0,
         };
-        let to_pixels_x = |texels: f64| texels * f64::from(buffer.size.w) / f64::from(size.w);
-        let to_pixels_y = |texels: f64| texels * f64::from(buffer.size.h) / f64::from(size.h);
+        let to_pixels_x =
+            |texels: f64| (texels - source.loc.x) * f64::from(buffer.size.w) / source.size.w;
+        let to_pixels_y =
+            |texels: f64| (texels - source.loc.y) * f64::from(buffer.size.h) / source.size.h;
         let shown_in_buffer = Rectangle::new(shown.loc - buffer.loc, shown.size);
+        let whole = Rectangle::from_size(self.texture.size());
         self.damage
             .damage_since(commit)
-            .unwrap_or_else(|| DamageSet::from_slice(&[Rectangle::from_size(size)]))
+            .unwrap_or_else(|| DamageSet::from_slice(&[whole]))
             .iter()
             .filter_map(|damaged| {
                 let (x, y) = (f64::from(damaged.loc.x), f64::from(damaged.loc.y));
@@ -818,6 +965,104 @@ mod tests {
         let empty = Image::new(0, 0, |_, _| WHITE);
         let texture = scene.texture(&empty, Fourcc::Xrgb8888);
         assert!(scene.element(texture, rect, 1.5, 1.0, 0).is_none());
+    }
+
+    #[test]
+    fn x11_element_far_edge_is_its_geometrys_size_scaled_from_its_corner() {
+        // The geometry starts o = 1 X11 pixel into a buffer w wide, at s / S = 2/3: its far edge
+        // lies round((w − o) × 2/3) pixels from the geometry's corner, the window's own width
+        // rounded once, whatever the offset's rounding before the corner.
+        let scene = Scene::new(&[(1024, 64, 1.0)]);
+        let output = &scene.state.outputs[0];
+        let rect = Rect::new(10.0, 10.0, 900.0, 40.0);
+        let corner = window_pixels(rect, output).loc.x;
+        for (width, far_edge) in [(1001, 667), (2, 1)] {
+            let placement =
+                place((width, 30).into(), (1, 0).into(), rect, 1.5, output).expect("a placement");
+            let buffer = placement.buffer;
+            assert_eq!(
+                buffer.loc.x + buffer.size.w - corner,
+                far_edge,
+                "{width} X11 pixels, 1 before the corner"
+            );
+        }
+    }
+
+    /// Draws `image` on output `output` of `scene` as a surface whose viewport shows `source` of
+    /// it at `size` X11 pixels, over the whole output, at XWayland's scale `x11_scale`; returns
+    /// its placement and filter.
+    fn draw_viewed(
+        scene: &mut Scene,
+        image: &Image,
+        source: Rectangle<f64, Buffer>,
+        size: (i32, i32),
+        x11_scale: f64,
+    ) -> (Placement, Filter) {
+        let texture = scene.texture(image, Fourcc::Xrgb8888);
+        let rect = scene.state.outputs[0].rect;
+        let view = View {
+            source,
+            size: size.into(),
+        };
+        let placement = place(
+            view.size,
+            Point::default(),
+            rect,
+            x11_scale,
+            &scene.state.outputs[0],
+        )
+        .expect("a placement");
+        let filter = view_filter(&mut scene.state.renderer, placement, view);
+        let surface = SurfaceTexture {
+            id: Id::new(),
+            texture,
+            damage: DamageSnapshot::empty(),
+        };
+        let element =
+            X11SurfaceElement::assemble(surface, view.source, placement, 1.0, filter.clone());
+        scene.draw_one(0, element);
+        (placement, filter)
+    }
+
+    #[test]
+    fn x11_element_through_a_viewport_is_its_destination_times_s_over_s() {
+        // A game's emulated mode (ADR-0069): 1920 × 1080 X11 pixels whose viewport's
+        // destination is the output at 1 as X11 sees it at S = 1.5, 2880 × 1620: drawn at
+        // 2880 × 1620 × 1 / 1.5, the output's 1920 × 1080 pixels, texel for texel.
+        let image = Image::new(1920, 1080, noise);
+        let mut scene = Scene::new(&[(1920, 1080, 1.0)]);
+        let whole = Rectangle::from_size((1920.0, 1080.0).into());
+        let (placement, filter) = draw_viewed(&mut scene, &image, whole, (2880, 1620), 1.5);
+        assert_eq!(placement.buffer, Rectangle::from_size((1920, 1080).into()));
+        assert!(matches!(filter, Filter::Copy));
+        let drawn = scene.read(0, placement.buffer);
+        for (i, pixel) in drawn.iter().enumerate() {
+            let (x, y) = ((i % 1920) as i32, (i / 1920) as i32);
+            assert_eq!(*pixel, image.at(x, y), "at {x}, {y}");
+        }
+
+        // A viewport's source, part of the buffer, is what shows: 640 × 360 texels from
+        // (100, 50), over 960 × 540 X11 pixels, 640 × 360 pixels at 1.
+        let source = Rectangle::new((100.0, 50.0).into(), (640.0, 360.0).into());
+        let (placement, filter) = draw_viewed(&mut scene, &image, source, (960, 540), 1.5);
+        assert_eq!(placement.buffer, Rectangle::from_size((640, 360).into()));
+        assert!(matches!(filter, Filter::Copy));
+        let drawn = scene.read(0, placement.buffer);
+        for (i, pixel) in drawn.iter().enumerate() {
+            let (x, y) = ((i % 640) as i32, (i / 640) as i32);
+            assert_eq!(*pixel, image.at(x + 100, y + 50), "at {x}, {y}");
+        }
+
+        // A 4:3 mode stretched over the output, 1440 texels across 1920 pixels and 1080 down
+        // 1080: more pixels than texels on one axis, so the bilinear filter; a plain colour
+        // stays itself.
+        let plain = Image::new(1440, 1080, |_, _| [90, 180, 30, 255]);
+        let whole = Rectangle::from_size((1440.0, 1080.0).into());
+        let (placement, filter) = draw_viewed(&mut scene, &plain, whole, (2880, 1620), 1.5);
+        assert_eq!(placement.buffer, Rectangle::from_size((1920, 1080).into()));
+        assert!(matches!(filter, Filter::Bilinear));
+        let drawn = scene.read(0, Rectangle::new((900, 500).into(), (20, 20).into()));
+        assert!(drawn.iter().all(|pixel| *pixel == [90, 180, 30, 255]));
     }
 
     #[test]

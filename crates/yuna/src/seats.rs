@@ -247,8 +247,8 @@ impl State {
         self.insert_client_state(stream, data)
     }
 
-    /// Serves `seat`'s Xwayland on `stream`, marked as such, with the client scale `scale`: it
-    /// is told outputs and pointer in X11 pixels, `scale` per logical unit
+    /// Serves `seat`'s Xwayland `server` on `stream`, marked as such, with the client scale
+    /// `scale`: it is told outputs and pointer in X11 pixels, `scale` per logical unit
     /// ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
     /// Refused for a seat that does not exist.
     pub(crate) fn insert_xwayland_client(
@@ -256,9 +256,10 @@ impl State {
         seat: SeatId,
         stream: UnixStream,
         scale: f64,
+        server: u64,
     ) -> Result<(), Error> {
         let mut data = ClientState::new(seat, false, self.departed_clients.clone());
-        data.xwayland = true;
+        data.xwayland = Some(server);
         // Before it can bind a global, so that it never sees an output unscaled.
         data.compositor.set_client_scale(scale);
         self.insert_client_state(stream, data)
