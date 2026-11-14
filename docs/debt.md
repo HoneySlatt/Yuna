@@ -236,3 +236,13 @@ with games' VRR:
   before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
   as an empty slot until the switch ends would let it slide.
 - A second special workspace shown while the first fades out replaces it at once.
+- On a VRR output, a motion that starts after a pause shows its second frame about 12 ms after
+  its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
+  shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):
+  it matters for motion on agents' VRR outputs only.
+
+## The examples
+
+- `agent_time.rs` keeps its own copies of what `examples/common/` now shares with `frame_time`
+  and `motion_time` (its run folder, the vkcube environment, `percentile`); `motion_time` reads
+  an output's mode with its own parser beside the program's private one.

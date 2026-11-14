@@ -22,8 +22,8 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
   on time, so that steps are even whatever the moment drawing starts within the period. A frame
   drawn at once on an idle output aims at the boundary it can reach after its expected drawing,
   not the first one after now.
-- **A motion starts at its operation's time**, or one shortest refresh before its first sample if
-  that is later, so that a busy output's first frame does not open with the largest step.
+- **A motion starts when Yuna applies the change**, at the refresh that arranges it, so that its
+  first frame shows at most one period of motion.
 - **While a motion of an output is unfinished at the boundary after the next**, every refresh
   that sampled it arms the next one, whether it drew or found nothing changed, and a refresh whose
   drawing failed too. The last frame shows the target exactly; then nothing is armed.
