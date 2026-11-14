@@ -404,3 +404,22 @@ What clients bind, read in their sources on 2026-11-14:
   idle inhibit.
 - **OBS** captures through the ScreenCast portal and PipeWire, not a Wayland protocol.
 - Steam's client and Discord's own code were not read.
+
+## A capture against a game, on the GPU
+
+Read on 2026-11-14 in each project's source on its default branch:
+
+- **KWin, Mutter, Hyprland and niri** draw in a high-priority GPU context (KWin realtime on NVIDIA),
+  and copy a capture in that same context. When the consumer has no free PipeWire buffer, the
+  frame of the capture is skipped; the game is never slowed by it. None has a setting for it;
+  the portals of Hyprland and wlroots only cap a capture's rate (`max_fps`).
+- **gamescope** asks a realtime Vulkan queue, given only with `CAP_SYS_NICE`; it blits a capture in
+  its own paint loop.
+- **OBS on Windows** gives itself a higher GPU priority than the game (realtime, or high with
+  hardware scheduling), to stop its output lagging under fullscreen games. **OBS on Linux** turned
+  the same down (pull request 6690, closed unmerged): OBS "is intended to be secondary" to the
+  game.
+- ShadowPlay, ReLive, Windows' Game Bar and macOS's ScreenCaptureKit document nothing on it.
+
+A stream's heavy work is OBS's own (scenes, encoding); a compositor's share is a copy. The usual
+remedy for a smooth stream is a cap on the game's frame rate, which leaves the GPU room.

@@ -60,7 +60,7 @@ The owner chose, on 2026-11-14:
 ## Consequences
 
 - A frame's drawn list is plain data: Yuna's own scene (Stage 2) and Vulkan
-  ([ADR-0041](0041-vulkan-decided-on-a-measure.md)) replace what draws it, not the motion.
+  ([ADR-0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) replace what draws it, not the motion.
 - A width change shows, while positions slide, columns that overlap or a window's old buffer by
   the background, until its client commits; the drawing order says which is above.
 - Stage 2's gestures hold the camera's value under the finger and hand their velocity to the

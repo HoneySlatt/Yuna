@@ -1,6 +1,6 @@
 # 0005. The layouts: scrolling columns, dwindle, floating, special workspaces
 
-- Status: Accepted
+- Status: Accepted; amended by 0062
 - Date: 2026-11-11
 
 ## Context

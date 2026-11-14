@@ -1,6 +1,6 @@
 # 0007. Surviving a crash
 
-- Status: Accepted; amended by 0058
+- Status: Accepted; amended by 0058, 0061
 - Date: 2026-11-11
 
 ## Context

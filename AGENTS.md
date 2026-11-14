@@ -72,7 +72,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - The layout model holds no Wayland or Smithay object; it is tested alone
   ([ADR-0005](docs/adr/0005-the-layouts.md)).
 - The colour and HDR pipeline, the layout and the animations do not depend on the renderer; only
-  the final drawing is OpenGL ([ADR-0012](docs/adr/0012-opengl-first.md)).
+  the final drawing is Vulkan ([ADR-0063](docs/adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
 - Everything runs headless; the DRM backend is one backend among others.
 - An agent's seat never reaches the owner's seat ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
 - One client's error never takes Yuna down; a configuration error never stops it

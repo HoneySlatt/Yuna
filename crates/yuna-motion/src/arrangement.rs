@@ -23,8 +23,9 @@ use output::OutputMotion;
 /// workspace switch, and the special workspace's fade along [`Easing::EaseOutCubic`] over 200 ms.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
-    /// Every change instant: no motion starts, as with [`Change::Instant`]. For game mode and
-    /// agents, and the headless modes' default.
+    /// Every change instant: no motion starts, as with [`Change::Instant`]. The headless modes'
+    /// default, and what a game's settings may choose
+    /// ([ADR-0061](../../../docs/adr/0061-yunas-uses.md)).
     pub off: bool,
     /// Reduced motion: nothing crosses the screen, the camera, windows and the workspace switch
     /// showing their result at once; fades stay, over half their duration

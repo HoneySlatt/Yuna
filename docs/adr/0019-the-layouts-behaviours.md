@@ -1,6 +1,6 @@
 # 0019. The layouts' behaviours: niri and Hyprland as references
 
-- Status: Accepted
+- Status: Accepted; amended by 0064 (several fullscreen windows on a workspace)
 - Date: 2026-11-11
 
 ## Context

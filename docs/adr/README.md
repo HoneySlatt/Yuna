@@ -12,22 +12,22 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0001](0001-what-yuna-is.md) | What Yuna is: one compositor, two modes | Accepted |
 | [0002](0002-the-headless-mode-first.md) | The headless mode first, then the desktop | Accepted |
 | [0003](0003-a-parallel-project-uwui-first.md) | A parallel project, uwui first on any conflict | Accepted; amended by 0060 |
-| [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted; amended by 0057 |
-| [0005](0005-the-layouts.md) | The layouts: scrolling columns, dwindle, floating, special workspaces | Accepted |
+| [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted; amended by 0057, 0063 |
+| [0005](0005-the-layouts.md) | The layouts: scrolling columns, dwindle, floating, special workspaces | Accepted; amended by 0062 |
 | [0006](0006-machines-and-gpus.md) | Machines and GPUs | Accepted |
-| [0007](0007-surviving-a-crash.md) | Surviving a crash | Accepted; amended by 0058 |
+| [0007](0007-surviving-a-crash.md) | Surviving a crash | Accepted; amended by 0058, 0061 |
 | [0008](0008-configuration-in-kdl.md) | Configuration in KDL | Accepted |
 | [0009](0009-gpl-private-until-ready.md) | GPL-3.0-or-later, private until ready; the logo apart | Accepted; amended by 0036 |
-| [0010](0010-animations-and-effects.md) | Animations and effects | Accepted; amended by 0058 |
+| [0010](0010-animations-and-effects.md) | Animations and effects | Accepted; amended by 0058, 0061, 0062 |
 | [0011](0011-built-on-smithay.md) | Built on Smithay, its patches kept in Yuna | Accepted; amended by 0022, 0039 |
-| [0012](0012-opengl-first.md) | OpenGL first, the pipeline independent of the renderer | Accepted; amended by 0041 |
+| [0012](0012-opengl-first.md) | OpenGL first, the pipeline independent of the renderer | Accepted; amended by 0041, 0063 |
 | [0013](0013-our-own-code-niri-and-jay-as-references.md) | Our own code; niri and jay as references | Accepted; amended by 0039 |
 | [0014](0014-vrr-without-flicker.md) | VRR without flicker | Accepted |
 | [0015](0015-agents-workspaces.md) | Agents' workspaces | Accepted; amended by 0060 |
 | [0016](0016-the-rust-toolchain.md) | The Rust toolchain: an exact stable version, in one file | Accepted; amended by 0058 |
 | [0017](0017-smithays-revision.md) | Smithay's revision: upstream, pinned, first at master of 2026-11-11 | Accepted; amended by 0021 |
 | [0018](0018-workspaces.md) | Workspaces: named, with dynamic ones as an option | Accepted |
-| [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted |
+| [0019](0019-the-layouts-behaviours.md) | The layouts' behaviours: niri and Hyprland as references | Accepted; amended by 0064 |
 | [0020](0020-the-layout-models-shape.md) | The layout model's shape | Accepted; amended by 0052 |
 | [0021](0021-smithays-fork.md) | Smithay's fork: a private repository, generic patches | Accepted; amends 0017; amended by 0036, 0042, 0045 |
 | [0022](0022-the-headless-backend-in-yuna.md) | The headless backend: Yuna's own code, drawn on llvmpipe by default | Accepted; amends 0011; amended by 0029 |
@@ -49,7 +49,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
 | [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
-| [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Accepted; amends 0012 |
+| [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Superseded by 0063 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035; supersedes 0027; amended by 0045 |
 | [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |
 | [0044](0044-xwayland-across-outputs-of-different-scales.md) | XWayland across outputs of different scales | Accepted |
@@ -65,7 +65,11 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) | Motion sampled at its presentation; what is drawn apart from what a client is told | Accepted; amends 0023, 0033, 0038, 0051 |
 | [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033; amended by 0059 |
 | [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) | Motion's budget judged on the GPU, against a still baseline | Accepted |
-| [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004 |
-| [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046 |
+| [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004; amended by 0063, 0064 |
+| [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046; amended by 0061 |
 | [0059](0059-reduced-motion-nothing-slides-fades-stay.md) | Reduced motion: nothing slides, fades stay | Accepted; amends 0055 |
 | [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003, 0015 |
+| [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010, 0058 |
+| [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened |
+| [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041 |
+| [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057 |
