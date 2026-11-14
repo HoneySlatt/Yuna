@@ -48,7 +48,7 @@ use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
-use crate::output::{RefreshAt, VirtualOutput};
+use crate::output::{RefreshAt, Timing, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
@@ -102,8 +102,10 @@ impl State {
             return;
         };
         let output = &mut self.outputs[index];
-        let paced = !output.content_pending;
-        if self.clock.is_armed(deadline) && (paced || output.armed_for_content) {
+        let paced = !output.content_pending || output.content_misses >= 2;
+        // At a fixed rate nothing is paced: a refresh armed stands, as before VRR.
+        let variable = matches!(output.timing, Timing::Variable(_));
+        if self.clock.is_armed(deadline) && (!variable || paced || output.armed_for_content) {
             return;
         }
         // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
@@ -188,8 +190,8 @@ impl State {
             return;
         };
         // What waited is drawn now, or found unchanged.
+        let armed_for_content = std::mem::take(&mut self.outputs[index].armed_for_content);
         self.outputs[index].content_pending = false;
-        self.outputs[index].armed_for_content = false;
         let shown = self.shown(index);
         let drawing = self.draw(index, &shown);
         let now = self.clock.now();
@@ -199,6 +201,12 @@ impl State {
             }
         }
         let drew = matches!(drawing, Drawing::Drawn { .. });
+        let misses = &mut self.outputs[index].content_misses;
+        *misses = match (drew, armed_for_content) {
+            (true, _) => 0,
+            (false, true) => misses.saturating_add(1),
+            (false, false) => *misses,
+        };
         let output = &mut self.outputs[index];
         let aimed = output.armed_refresh;
         let presented = match drawing {

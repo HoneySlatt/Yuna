@@ -290,3 +290,128 @@ fn a_frame_after_a_refresh_that_drew_nothing_is_not_held_back() {
     run_armed_deadlines(&mut compositor);
     assert_rests(&mut compositor);
 }
+
+/// Answers to `count` callbacks asked without a new buffer, one after the other, each asked once
+/// the last is answered: when each came.
+fn answers_to_empty_callbacks(
+    compositor: &mut Compositor,
+    client: &mut Client,
+    window: usize,
+    count: usize,
+) -> Vec<Duration> {
+    let mut answered_at = Vec::new();
+    for _ in 0..count {
+        let answered = client.window(window).frames.len();
+        client.request_frame(window);
+        client.commit(window);
+        client.roundtrip(compositor);
+        if client.window(window).frames.len() == answered {
+            let due = compositor.next_deadline().expect("a refresh armed");
+            compositor
+                .advance(due - compositor.now())
+                .expect("the clock moves");
+            client.roundtrip(compositor);
+        }
+        assert_eq!(client.window(window).frames.len(), answered + 1);
+        answered_at.push(compositor.now());
+    }
+    answered_at
+}
+
+/// Damage without a new buffer draws nothing new, and Smithay keeps it until a buffer comes:
+/// callbacks asked after it are still paced, never answered in a loop (found by M1.6's last
+/// check).
+#[test]
+fn damage_without_a_buffer_leaves_callbacks_paced() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    client.damage(window, 10, 10);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    let answered_at = answers_to_empty_callbacks(&mut compositor, &mut client, window, 20);
+    assert!(
+        answered_at[19] - answered_at[0] >= SHORTEST * 18,
+        "{answered_at:?}"
+    );
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A buffer committed while a paced refresh waits, armed for a callback asked without one, arms
+/// it again sooner: the frame is shown a vertical blank after it is ready.
+#[test]
+fn a_frame_arms_a_paced_refresh_again_sooner() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    answers_to_empty_callbacks(&mut compositor, &mut client, window, 1);
+    // A second callback without a buffer: paced, armed for later.
+    client.request_frame(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    let paced = compositor.next_deadline().expect("a paced refresh");
+    assert!(paced > compositor.now());
+
+    let ready = compositor.now();
+    client.attach(window, 400, 300, BLUE);
+    client.request_feedback(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    let shown = presented(&client.window(window).feedback);
+    assert_eq!(shown.last().map(|(time, _)| *time), Some(ready + BLANK));
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}
+
+/// A client whose new buffers all fall outside the output draws nothing new: from the second
+/// such refresh, its callbacks are paced, never answered in a loop.
+#[test]
+fn buffers_outside_the_output_never_make_callbacks_loop() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    let far = client.add_subsurface_at(window, (100_000, 100_000));
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    let surface = client.subsurface(far).surface.clone();
+    let mut answered_at = Vec::new();
+    for _ in 0..20 {
+        let answered = client.window(window).frames.len();
+        client.attach_black(&surface, 50, 50);
+        surface.commit();
+        client.request_frame(window);
+        client.commit(window);
+        client.roundtrip(&mut compositor);
+        if client.window(window).frames.len() == answered {
+            let due = compositor.next_deadline().expect("a refresh armed");
+            compositor
+                .advance(due - compositor.now())
+                .expect("the clock moves");
+            client.roundtrip(&mut compositor);
+        }
+        assert_eq!(client.window(window).frames.len(), answered + 1);
+        answered_at.push(compositor.now());
+    }
+    assert!(
+        answered_at[19] - answered_at[2] >= SHORTEST * 16,
+        "{answered_at:?}"
+    );
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}

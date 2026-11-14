@@ -228,6 +228,10 @@ pub(crate) struct VirtualOutput {
     pub content_pending: bool,
     /// Whether the armed refresh was armed for something new, unpaced.
     pub armed_for_content: bool,
+    /// How many refreshes in a row were armed for something new and drew nothing, its buffers
+    /// all outside the output: from two, refreshes are paced again, so that a client that
+    /// keeps doing so never loops.
+    pub content_misses: u32,
     /// The latest refresh a refresh of it aimed at or was presented at; refresh 0, its
     /// creation, at first.
     pub last_refresh: RefreshAt,
@@ -344,6 +348,7 @@ impl State {
             armed_at_once: false,
             content_pending: false,
             armed_for_content: false,
+            content_misses: 0,
             last_refresh: creation,
             held_feedback: Vec::new(),
             drawings: Drawings::default(),

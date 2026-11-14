@@ -3,8 +3,8 @@
 //!
 //! A refresh lasts at least the range's shortest period, 1/max, and at most its longest, 1/min.
 //! A frame ready sooner than the shortest period after the refresh in progress began waits for
-//! it; one ready later starts a refresh at once. With no new frame, the panel refreshes by itself
-//! at the longest period.
+//! it; one ready later starts a refresh a vertical blank later. With no new frame, the panel
+//! refreshes by itself at the longest period.
 //!
 //! Below the range, amdgpu inserts refreshes (*BTR*, below-the-range): from the time between the
 //! last two frames it picks a number `n` of refreshes near the range's middle, so that a frame is
@@ -492,7 +492,8 @@ mod tests {
     /// the panel's own refresh, the monitor holds a frame 7 to 12 ms more, and BTR's count may
     /// differ after a perturbation ([debt](../../../docs/debt.md#vrr)). The thresholds are a
     /// little under this replay's figures (91 and 82 %, 96 and 94 %): they guard the emulation
-    /// against regressions, and the model before the traces fails them.
+    /// against regressions. The model before the traces fails the times (63 % for the steady
+    /// rates), not the refresh numbers, which BTR's count alone decides.
     #[test]
     fn the_emulation_replays_the_owners_monitor() {
         let tolerance = Duration::from_micros(500);

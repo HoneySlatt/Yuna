@@ -26,8 +26,8 @@ use smithay::utils::ClockSource;
 use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, get_parent,
-    get_role, with_states,
+    CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
+    get_parent, get_role, with_surface_tree_downward,
 };
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
@@ -134,7 +134,7 @@ pub(crate) struct State {
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     /// The next agent's capture's ticket: tickets increase and are never reused.
     pub next_capture_ticket: u64,
-    /// Whether the commit being handled brought a buffer or damage: something new to draw.
+    /// Whether the commit being handled attached or removed a buffer: something new to draw.
     pub committed_content: bool,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
@@ -303,12 +303,25 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
-        // Read before the buffer handler takes them: a buffer or damage is something new to draw.
-        self.committed_content = with_states(surface, |states| {
-            let mut attributes = states.cached_state.get::<SurfaceAttributes>();
-            let current = attributes.current();
-            current.buffer.is_some() || !current.damage.is_empty()
-        });
+        // Read before the buffer handler takes them: a buffer attached or removed anywhere in the
+        // tree this commit applies is something new to draw. Damage alone is not: Smithay keeps
+        // it until a buffer comes, and draws nothing new for it.
+        let mut content = false;
+        with_surface_tree_downward(
+            surface,
+            (),
+            |_, _, _| TraversalAction::DoChildren(()),
+            |_, states, _| {
+                content |= states
+                    .cached_state
+                    .get::<SurfaceAttributes>()
+                    .current()
+                    .buffer
+                    .is_some();
+            },
+            |_, _, _| true,
+        );
+        self.committed_content = content;
         on_commit_buffer_handler::<State>(surface);
         let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);
