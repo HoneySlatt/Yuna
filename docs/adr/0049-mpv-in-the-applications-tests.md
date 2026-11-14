@@ -20,8 +20,9 @@ The owner chose, on 2026-11-14:
   ([ADR-0025](0025-applications-in-ci.md)), in Vulkan on lavapipe, with no configuration and no
   sound, on a picture it makes itself (`av://lavfi:testsrc2`), so that no file is fetched.
 - Two cases prove it read Yuna's description: an SDR video on an HDR output, and a PQ video on
-  an SDR output; mpv's surface declares luminances equal to the output's target. Yuna rests after
-  mpv quits.
+  an SDR output. mpv's surface then declares what it derived from the output's description:
+  the HDR output's monitor volume as its target, or the SDR output's gamma 2.2 and minimum
+  luminance, scaled to its own reference white of 203 cd/m². Yuna rests after mpv quits.
 - Aerith's own surface is tested when its relay passes colours on, in the weekly job.
 
 ## Alternatives considered
