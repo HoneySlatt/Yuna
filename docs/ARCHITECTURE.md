@@ -384,16 +384,17 @@ DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
 
 At an output's refresh, due at once or a lead before the boundary it aims at:
 
-1. If the layout changed, it is arranged once, for every output, and `Motion::update` turns what
+1. If the layout changed, every output is arranged twice: by `Motion::update`, which turns what
    moved into motion, at the refresh's time
-   ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)). A change is
-   animated, unless an output or a seat was removed since the last arrangement: then it is
-   instant for that seat alone, its outputs' motions ending at once while the other seats' go
-   on, so that an agent's outputs coming and going never cut the owner's motion short
-   ([ADR-0015](adr/0015-agents-workspaces.md)). An output added starts at rest. Changes made
-   before one arrangement combine, instant wherever one of them is (`Change::and`). With
-   animations off, the default of both headless modes, every change is instant
-   ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
+   ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)), then by the
+   compositor, which keeps the places for what follows them: configures, popups and MCP's
+   `windows`. A change is animated, unless an output or a seat was removed since the last
+   arrangement: then it is instant for that seat alone, its outputs' motions ending at once while
+   the other seats' go on, so that an agent's outputs coming and going never cut the owner's
+   motion short ([ADR-0015](adr/0015-agents-workspaces.md)). An output added starts at rest.
+   Changes made before one arrangement combine, instant wherever one of them is
+   (`Change::and`). With animations off, the default of both headless modes, every change is
+   instant ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md)).
    Each window is told its asked size and its states: tiled, fullscreen, activated if it has its
    seat's focus, suspended if it is told it is hidden, as below. A configure goes out only when
    its size or states changed, or when a request of its client is owed one. Each seat's keyboard
@@ -850,15 +851,18 @@ own thread, both `took_us`.
   windows with its newest token, a grabbing menu on that surface, a selection. After each step
   Yuna must dispatch, the layout keep its invariants and agree with the shell, and the popups and
   the keyboard be sound; after the sequence, the sentinel, focused by a key binding, gets its
-  frame callbacks as in `misbehaving.rs`, and Yuna rests once every client has gone. Two tests share
-  the cases, so that they run at once on several cores: 80 cases start from a busy state, three
-  clients with a window, a dialog and a menu each; 80 from the sentinel alone.
-  `sequences_found_before` replays the sequences found failing, written out, since a seed in
-  `random_requests.proptest-regressions` replays its case only while the generator stays the
-  same. Each test prints how often the requests that need the keyboard took effect, as the
-  compositor's state and the clients' own events show it; those rates and the tests' times are
-  in [`measurements.md`](measurements.md). `PROPTEST_CASES=<n>` runs `n` cases in each test
-  ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
+  frame callbacks as in `misbehaving.rs`, and Yuna rests once every client has gone. The cases
+  run with animations off, as both headless modes default to, and on, at their defaults
+  ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)): then
+  every deadline runs until Yuna rests once the sentinel is focused, and again once every client
+  has gone. Four tests share the cases, so that they run at once on several cores: 80 cases start
+  from a busy state, three clients with a window, a dialog and a menu each, and 80 from the
+  sentinel alone, each with animations off and on. `sequences_found_before` replays the sequences
+  found failing, written out, both ways, since a seed in `random_requests.proptest-regressions`
+  replays its case only while the generator stays the same. Each test prints how often the
+  requests that need the keyboard took effect, as the compositor's state and the clients' own
+  events show it; those rates and the tests' times are in [`measurements.md`](measurements.md).
+  `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
@@ -917,6 +921,9 @@ own thread, both `took_us`.
   baseline then a scripted round of scrolls, moves, switches and the special workspace's fade;
   frames missed in each, where they fall, the heaviest frame, and the verdict.
   `examples/common/` holds what it shares with `frame_time`.
+- `crates/yuna-motion/examples/motion_timing.rs`: what motion costs at an operation and at a frame:
+  `Motion::update` after a focus move and after a column opened left of the focus, and
+  `Motion::frame` while a motion runs, on strips of 100 and 1,000 windows.
 - `deny.toml`: the dependency policy.
 
 ## Where to start reading

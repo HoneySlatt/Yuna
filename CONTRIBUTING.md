@@ -138,7 +138,8 @@ to the shortest sequence that still fails, and keep its seed in a `.proptest-reg
 beside the test. Commit that file with the fix: the case then runs at every check. A seed
 replays its case only while the test's generator stays the same; when you change the random
 requests' generator, write each sequence found into `sequences_found_before` in that file, and
-drop the seeds. The random requests run, in two tests, as many cases as fit about 10 s of the
+drop the seeds. The random requests run, in four tests, two of them with animations on, as many
+cases as fit about 10 s of the
 check ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests)); `PROPTEST_CASES` runs that many in
 each, for a search before a release or after a change to the protocols' handling. With
 `--nocapture`, each test prints how often the requests that need the keyboard's focus took

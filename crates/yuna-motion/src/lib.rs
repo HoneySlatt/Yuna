@@ -161,7 +161,9 @@
 //! A special workspace shown fades in, from alpha 0 to 1, on [`Settings::special_fade`], and
 //! fades out when hidden, its windows drawn where they last were, until it ends or they close
 //! or are shown elsewhere. A toggle mid-fade turns the curve from where it is. It is drawn above
-//! the main workspace and below the pinned windows.
+//! the main workspace and below the pinned windows. One special workspace fades at a time: one
+//! shown in place of another replaces it at once, and fades in from 0
+//! ([debt](../../../docs/debt.md#motion)).
 //!
 //! ## Drawn and told
 //!
@@ -189,12 +191,17 @@
 //!
 //! ## Cost
 //!
-//! [`Motion::update`] is linear in the windows of the workspaces each output draws: it arranges
-//! them once, and finds each window's motion by hashing. While a special workspace fades out, it
-//! also asks the layout where each of that workspace's windows is ([`Layout::window`]), so that
-//! a window closed or shown elsewhere is no longer drawn; each answer costs a search of the
-//! seat's workspaces. [`Motion::frame`] is linear in the output's drawn windows and allocates
-//! nothing but the list it returns.
+//! [`Motion::update`] is linear in the windows of the workspaces each output draws, but for
+//! sorting the ids of those it tells visible: it arranges them once, finds each window's motion
+//! by hashing, and indexes the left edge of each strip's columns once, before and after, to find
+//! the camera's anchor. A caller that needs the arrangement too arranges each output a second
+//! time. When an output's shown workspace changes, or while a switch is drawn, the update also
+//! lists the output's workspaces in order ([`Layout::workspaces`]), which reads every window of
+//! each. While a special workspace fades out, it also asks the layout where each of that
+//! workspace's windows is ([`Layout::window`]), so that a window closed or shown elsewhere is no
+//! longer drawn; each answer costs a search of the seat's workspaces. [`Motion::frame`] is linear
+//! in the output's drawn windows and allocates nothing but the list it returns. The crate's
+//! `examples/motion_timing.rs` times both on strips of 100 and 1,000 windows.
 //!
 //! ## Limits
 //!
@@ -213,6 +220,7 @@
 //! [`Duration`]: std::time::Duration
 //! [`Layout::arrange`]: yuna_layout::Layout::arrange
 //! [`Layout::window`]: yuna_layout::Layout::window
+//! [`Layout::workspaces`]: yuna_layout::Layout::workspaces
 //! [`Layer`]: yuna_layout::Layer
 //! [`WorkspaceView`]: yuna_layout::WorkspaceView
 

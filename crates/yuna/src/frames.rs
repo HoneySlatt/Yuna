@@ -18,8 +18,9 @@
 //!
 //! At the refresh, in order:
 //!
-//! 1. If the layout changed, it is arranged once, for every output, and handed to the motion
-//!    (`yuna_motion::Motion::update`), as an animated change or, after an output or a seat was
+//! 1. If the layout changed, it is arranged for every output, and handed to the motion
+//!    (`yuna_motion::Motion::update`, which arranges each output again for itself), as an
+//!    animated change or, after an output or a seat was
 //!    removed, one instant for that seat's outputs alone, so that one seat's outputs coming and
 //!    going never cut another seat's motion short
 //!    ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); an output added starts at rest.

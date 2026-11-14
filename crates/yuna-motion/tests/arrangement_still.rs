@@ -1,7 +1,7 @@
 //! What an operation leaves in place on screen does not move, whatever the springs of the camera
 //! and of the windows; and a few extreme cases: times at the end of `Duration`, a switch with the
-//! special workspace toggled, a jump across a hundred columns
-//! ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
+//! special workspace toggled, a jump across a hundred columns, and the compositor's cap of 10,000
+//! windows on one strip ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
 
 use std::time::Duration;
 
@@ -294,6 +294,91 @@ fn a_hundred_columns() {
         at += ms(4);
     }
     assert!(told_max <= 4, "fly-bys told: {told_max}");
+}
+
+/// A strip of `windows` windows, at rest: window 1 at its left end, then the others, the newest
+/// first; the focus on window 1. Each window opens beside window 1 and the focus goes back to it,
+/// so that each opening costs the same however long the strip: the layout places the focused
+/// column from the widths of those on its left.
+fn long_strip(windows: u64) -> Rig {
+    let mut rig = Rig::new(Options::default(), Settings::default());
+    rig.open(1);
+    for n in 2..=windows {
+        rig.open(n);
+        rig.op(|l| l.focus(SEAT, Direction::Left));
+    }
+    rig.instant();
+    rig
+}
+
+/// The compositor's cap on windows, 10,000 (`yuna::MAX_WINDOWS`), on one strip: a column left of
+/// the focused one widens, which moves the strip under the view, then the focus jumps to the
+/// other end. Each update finds the camera's anchor among every column through an index of
+/// their left edges, so that it stays linear in the windows. Not timed, so that a slow runner
+/// cannot fail it: the test's own time shows it.
+#[test]
+fn ten_thousand_columns() {
+    const WINDOWS: u64 = 10_000;
+    let mut rig = long_strip(WINDOWS);
+    // The newest window, second on the strip, takes the focus; window 1 is on its left.
+    rig.op(|l| l.focus(SEAT, Direction::Right));
+    rig.instant();
+    let focused = rig.placed(WINDOWS).expect("the focused window is shown");
+    rig.now += ms(5);
+    let view_before = rig
+        .layout
+        .shown_workspaces(OUTPUT)
+        .expect("a known output")
+        .main
+        .view_x;
+    rig.op(|l| l.change_width(w(1), 0.2));
+    rig.animated();
+    let view_after = rig
+        .layout
+        .shown_workspaces(OUTPUT)
+        .expect("a known output")
+        .main
+        .view_x;
+    assert_ne!(view_before, view_after, "the strip moved under the view");
+    let end = rig
+        .motion
+        .end(OUTPUT, rig.now)
+        .expect("the widened column moves");
+    let mut at = rig.now;
+    while at <= end {
+        assert_eq!(
+            rig.rect(WINDOWS, at),
+            Some(focused),
+            "the focused column, the anchor, stays where it is on screen at {at:?}"
+        );
+        at += ms(16);
+    }
+
+    // Window 2, the oldest but one, is at the strip's right end.
+    rig.now = end;
+    rig.op(|l| l.focus_window(w(2)));
+    rig.animated();
+    let end = rig
+        .motion
+        .end(OUTPUT, rig.now)
+        .expect("the camera crosses the strip");
+    let mid = rig.frame(rig.now + (end - rig.now) / 2);
+    assert_eq!(mid.windows.len(), WINDOWS as usize);
+    assert!(mid.windows.iter().all(|d| d.rect.x.is_finite()));
+    let at_rest: Vec<(WindowId, Rect)> = rig
+        .frame(end)
+        .windows
+        .into_iter()
+        .map(|d| (d.window, d.rect))
+        .collect();
+    let arranged: Vec<(WindowId, Rect)> = rig
+        .layout
+        .arrange(OUTPUT)
+        .expect("a known output")
+        .into_iter()
+        .map(|p| (p.window, p.rect))
+        .collect();
+    assert_eq!(at_rest, arranged);
 }
 
 /// Reduced motion: nothing crosses the screen, the camera and the switch show their result at

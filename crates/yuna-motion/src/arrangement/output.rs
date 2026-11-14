@@ -155,18 +155,12 @@ impl OutputMotion {
         let scale = layout.output_scale(output).ok()?;
         let arranged = layout.arrange(output).ok()?;
         let shown = layout.shown_workspaces(output).ok()?;
-        let order: Vec<WorkspaceId> = layout
-            .workspaces(output)
-            .ok()?
-            .into_iter()
-            .map(|workspace| workspace.id)
-            .collect();
         let now = previous.as_ref().map_or(now, |p| now.max(p.updated));
         let mut next = OutputMotion::at_rest(rect, scale, now, arranged, &shown);
         if let Some(previous) = previous {
             next.remember_focus(&previous);
             if animate && previous.rect == rect && previous.scale == scale {
-                next.follow(&previous, layout, output, &order, &shown, settings);
+                next.follow(&previous, layout, output, &shown, settings);
             }
         }
         Some(next)
@@ -238,7 +232,6 @@ impl OutputMotion {
         previous: &OutputMotion,
         layout: &Layout,
         output: OutputId,
-        order: &[WorkspaceId],
         shown: &ShownWorkspaces,
         settings: &Settings,
     ) {
@@ -262,6 +255,7 @@ impl OutputMotion {
             params: settings.workspace_switch,
         };
         let drawn = previous.switch_at(now);
+        let order = || workspace_order(layout, output);
         self.switch = Switch::follow(drawn, previous.main, self.main, order, now, slide);
         if let Some(switch) = &self.switch {
             for &workspace in switch.stack() {
@@ -785,6 +779,15 @@ fn fullscreen_changed<'a>(
         .collect()
 }
 
+/// The workspaces of `output`, in order; none for an output the layout does not know. It costs a
+/// list of every window of each, which [`Layout::workspaces`] gives with them.
+fn workspace_order(layout: &Layout, output: OutputId) -> Vec<WorkspaceId> {
+    layout
+        .workspaces(output)
+        .map(|workspaces| workspaces.into_iter().map(|w| w.id).collect())
+        .unwrap_or_default()
+}
+
 /// The column of `workspace` that holds the seat's focus, if a window of its strip does.
 fn focused_column(arranged: &[Placed], workspace: WorkspaceId) -> Option<ColumnId> {
     arranged
@@ -798,12 +801,15 @@ fn focused_column(arranged: &[Placed], workspace: WorkspaceId) -> Option<ColumnI
 /// ([ADR-0052](../../../../docs/adr/0052-motion-in-a-pure-crate.md)).
 ///
 /// The anchor is a column that the update left in place on screen: the focused one after the
-/// update, `focus`, or before it, or else the one nearest the focused one. Shifting by its move
-/// keeps the camera still, so that what the operation left in place does not move, whatever the
-/// springs of the camera and of the windows. When no column stayed in place (the view moved to
-/// another column), the anchor is the focused column after the update if it was there before,
-/// else the focused column before if it is there after; with neither, the shift is 0. A column's
-/// position on the strip is its left edge plus the view: `rect.x + view_x`.
+/// update, `focus`, or before it, or else the one nearest the focused one, the oldest of those
+/// as near (column ids grow as columns are made); with no focused column, the oldest. Shifting
+/// by its move keeps the camera still, so that what the operation left in place does not move,
+/// whatever the springs of the camera and of the windows. When no column stayed in place (the
+/// view moved to another column), the anchor is the focused column after the update if it was
+/// there before, else the focused column before if it is there after; with neither, the shift is
+/// 0. A column's position on the strip is its left edge plus the view: `rect.x + view_x`.
+///
+/// Linear in `before` and `after`: each column's left edge is indexed once on each side.
 fn anchor_shift(
     before: &[&Placed],
     after: &[Placed],
@@ -812,46 +818,44 @@ fn anchor_shift(
     view_x: f64,
     focus: Option<ColumnId>,
 ) -> f64 {
-    let before_x = |column| column_left(before.iter().copied(), workspace, column);
-    let after_x = |column| column_left(after.iter(), workspace, column);
-    let shift = |column| Some((after_x(column)? + view_x) - (before_x(column)? + old.view_x));
-    let in_place = |column: &ColumnId| match (before_x(*column), after_x(*column)) {
+    let before_x = column_lefts(before.iter().copied(), workspace);
+    let after_x = column_lefts(after.iter(), workspace);
+    let shift =
+        |column| Some((after_x.get(&column)? + view_x) - (before_x.get(&column)? + old.view_x));
+    let in_place = |column: &ColumnId| match (before_x.get(column), after_x.get(column)) {
         (Some(before), Some(after)) => (after - before).abs() < EPSILON,
         _ => false,
     };
     let preferred = [focus, old.focused_column].into_iter().flatten();
-    let focus_x = focus.and_then(after_x);
-    let mut columns: Vec<ColumnId> = after
+    let focus_x = focus.and_then(|column| after_x.get(&column).copied());
+    let distance = |x: f64| focus_x.map_or(0.0, |focus_x| (x - focus_x).abs());
+    let nearest = after_x
         .iter()
-        .filter(|placed| placed.workspace == workspace)
-        .filter_map(|placed| placed.column)
-        .collect();
-    columns.sort_unstable();
-    columns.dedup();
-    let nearest = focus_x.and_then(|focus_x| {
-        columns.iter().copied().filter(in_place).min_by(|a, b| {
-            let distance = |column| after_x(column).map_or(f64::INFINITY, |x| (x - focus_x).abs());
-            distance(*a).total_cmp(&distance(*b))
-        })
-    });
+        .filter(|(column, _)| in_place(column))
+        .min_by(|(a, a_x), (b, b_x)| distance(**a_x).total_cmp(&distance(**b_x)).then(a.cmp(b)))
+        .map(|(&column, _)| column);
     preferred
         .clone()
         .filter(in_place)
         .chain(nearest)
-        .chain(columns.iter().copied().filter(in_place))
         .find_map(shift)
         .or_else(|| preferred.into_iter().find_map(shift))
         .unwrap_or(0.0)
 }
 
-/// The left edge of `column` of `workspace` among `places`, if it is there.
-fn column_left<'a>(
+/// The left edge of each column of `workspace` among `places`: its leftmost window's.
+fn column_lefts<'a>(
     places: impl Iterator<Item = &'a Placed>,
     workspace: WorkspaceId,
-    column: ColumnId,
-) -> Option<f64> {
-    places
-        .filter(|placed| placed.workspace == workspace && placed.column == Some(column))
-        .map(|placed| placed.rect.x)
-        .reduce(f64::min)
+) -> HashMap<ColumnId, f64> {
+    let mut lefts = HashMap::new();
+    for placed in places.filter(|placed| placed.workspace == workspace) {
+        if let Some(column) = placed.column {
+            lefts
+                .entry(column)
+                .and_modify(|left: &mut f64| *left = left.min(placed.rect.x))
+                .or_insert(placed.rect.x);
+        }
+    }
+    lefts
 }

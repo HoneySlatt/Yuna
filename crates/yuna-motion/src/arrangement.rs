@@ -109,10 +109,7 @@ impl Change {
 /// time is a [`Duration`] from the caller's origin, and a time earlier than the last update's
 /// counts as that update's.
 ///
-/// Its cost: [`Motion::update`] is linear in the windows of the workspaces each output draws,
-/// plus, while a special workspace fades out, a [`Layout::window`] for each of its windows;
-/// [`Motion::frame`] is linear in the output's drawn windows and allocates only the list it
-/// returns.
+/// Its cost is in the [crate's documentation](crate#cost).
 #[derive(Debug, Clone)]
 pub struct Motion {
     settings: Settings,

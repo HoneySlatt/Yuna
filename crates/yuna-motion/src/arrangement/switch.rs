@@ -38,29 +38,34 @@ pub(super) struct Slide {
 
 impl Switch {
     /// The switch after an update that found `shown` on the output, which showed `was_shown`
-    /// before; `order` is the output's workspaces, in order, and `drawn` the switch the output
-    /// drew at `now`, if it drew one. `None` when there is no switch to draw.
+    /// before; `order` gives the output's workspaces, in order, and `drawn` is the switch the
+    /// output drew at `now`, if it drew one. `None` when there is no switch to draw.
     ///
     /// A new switch starts when the shown workspace changed and the one left is still on the
     /// output. A switch drawn takes the newly shown workspace into its stack, drops the
     /// workspaces gone from the output, and slides on toward the shown one from where it is,
-    /// keeping its velocity. A switch with nowhere to go ends.
+    /// keeping its velocity. A switch with nowhere to go ends. `order` is called only when the
+    /// shown workspace changed or a switch is drawn: reading it lists every workspace's windows.
     pub fn follow(
         drawn: Option<&Switch>,
         was_shown: WorkspaceId,
         shown: WorkspaceId,
-        order: &[WorkspaceId],
+        order: impl FnOnce() -> Vec<WorkspaceId>,
         now: Duration,
         slide: Slide,
     ) -> Option<Switch> {
+        if drawn.is_none() && was_shown == shown {
+            return None;
+        }
+        let order = order();
         match drawn {
             Some(switch) => {
                 let mut involved = switch.stack.clone();
                 involved.push(shown);
-                switch.restacked(in_order(order, &involved), shown, now)
+                switch.restacked(in_order(&order, &involved), shown, now)
             }
-            None if was_shown != shown && order.contains(&was_shown) => {
-                let stack = in_order(order, &[was_shown, shown]);
+            None if order.contains(&was_shown) => {
+                let stack = in_order(&order, &[was_shown, shown]);
                 let place = |workspace| index_of(&stack, workspace).map(|i| i * slide.height);
                 let position = Spring::new(
                     slide.params,
