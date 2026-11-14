@@ -109,7 +109,7 @@ impl OutputMode {
     /// Refused unless its rate is at least twice `min_rate`: a narrower range takes a path of
     /// amdgpu's that Yuna does not emulate.
     pub fn with_vrr(self, min_rate: f64) -> Result<OutputMode, InvalidOutput> {
-        let rate = f64::from(self.refresh_millihertz) / 1_000.0;
+        let rate = self.rate();
         if !(MIN_RATE..=rate / 2.0).contains(&min_rate) {
             return Err(InvalidOutput(format!(
                 "a VRR range of {min_rate} to {rate} Hz is refused: its least rate must be \
@@ -154,6 +154,16 @@ impl OutputMode {
     /// Its refresh rate in millihertz, as Wayland gives it.
     pub fn refresh_millihertz(&self) -> u32 {
         self.refresh_millihertz
+    }
+
+    /// Its refresh rate in Hz.
+    pub fn rate(&self) -> f64 {
+        hertz(self.refresh_millihertz)
+    }
+
+    /// The least rate of its VRR range, in Hz; none at a fixed rate.
+    pub fn vrr_min(&self) -> Option<f64> {
+        self.vrr_min_millihertz.map(hertz)
     }
 
     /// Its scale: physical pixels per logical unit.
@@ -441,6 +451,11 @@ pub const MAX_OUTPUTS: usize = 16;
 /// would be for binding a global that no longer exists.
 pub const RETIRED_GLOBAL_LIFETIME: Duration = Duration::from_secs(10);
 
+/// A rate in Hz, from millihertz.
+fn hertz(millihertz: u32) -> f64 {
+    f64::from(millihertz) / 1_000.0
+}
+
 /// A side or a rate as Smithay takes it, as an `i32`: sides are checked against the renderer's
 /// limit, and rates against 1,000 Hz, far below `i32::MAX`, before they get here.
 pub(crate) fn to_i32(value: u32) -> i32 {
@@ -477,8 +492,15 @@ impl Timing {
                 }
             }
             Timing::Variable(panel) => {
-                let (seq, at) = panel.first_reachable(ready);
-                RefreshAt { seq, at }
+                // A refresh that drew nothing showed no new frame, and the panel never learnt
+                // of it; it still counts as a refresh of the shortest length, so that callbacks
+                // asked without damage come once a shortest refresh, never in a loop.
+                let after_last = last.at.saturating_add(panel.shortest());
+                let (seq, at) = panel.first_reachable(ready.max(after_last));
+                RefreshAt {
+                    seq: seq.max(last.seq + 1),
+                    at,
+                }
             }
         }
     }
@@ -487,7 +509,7 @@ impl Timing {
     pub fn is_idle(&self, now: Duration, last: RefreshAt) -> bool {
         match self {
             Timing::Fixed(boundaries) => now >= boundaries.at(last.seq + 1),
-            Timing::Variable(panel) => panel.first_reachable(now).1 == now,
+            Timing::Variable(_) => self.reachable(now, last).at == now,
         }
     }
 

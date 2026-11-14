@@ -3,10 +3,13 @@
 //!
 //! A commit of a surface shown on an output, or a change of the layout, arms that output's next
 //! refresh; nothing is armed otherwise. The refresh is due at once when the output is idle: no
-//! frame waits for its boundary, and the boundary after its last refresh has passed. Otherwise
-//! it is due at a boundary minus the output's *lead*, so that its drawing ends before the
-//! boundary: the first boundary after its last refresh whose time minus the lead is not yet
-//! past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
+//! frame waits for its refresh, and one could begin now: at a fixed rate, the boundary after its
+//! last refresh has passed; under VRR, the panel can start a refresh now, a shortest refresh
+//! after the last one, drawn or not
+//! ([ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+//! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
+//! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
+//! whose time minus the lead is not yet past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
 //! [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period; a drawing is timed from its
 //! deadline to its end.
 //!

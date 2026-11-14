@@ -672,19 +672,15 @@ impl Server {
         hdr: Option<bool>,
     ) -> Result<OutputMode, ToolResult> {
         let default = self.seat_output;
-        let hertz = |millihertz: u32| f64::from(millihertz) / 1_000.0;
         let refused = |reason: InvalidOutput| ToolResult::failed(reason.to_string());
         let mut mode = OutputMode::new(
             width.unwrap_or(default.width()),
             height.unwrap_or(default.height()),
-            rate.unwrap_or(hertz(default.refresh_millihertz())),
+            rate.unwrap_or(default.rate()),
             scale.unwrap_or(default.scale()),
         )
         .map_err(refused)?;
-        let default_vrr = rate
-            .is_none()
-            .then(|| default.vrr_min_millihertz().map(hertz))
-            .flatten();
+        let default_vrr = rate.is_none().then(|| default.vrr_min()).flatten();
         if let Some(min) = vrr_min.or(default_vrr) {
             mode = mode.with_vrr(min).map_err(refused)?;
         }

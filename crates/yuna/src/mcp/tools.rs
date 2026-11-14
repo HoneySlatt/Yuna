@@ -661,7 +661,6 @@ impl ToolResult {
 /// colours it announces, each null when it has none.
 pub fn output_json(output: &OutputDescription) -> Value {
     let mode = &output.mode;
-    let hertz = |millihertz: u32| f64::from(millihertz) / 1_000.0;
     json!({
         "id": output.id.0,
         "seat": output.seat.0,
@@ -670,8 +669,8 @@ pub fn output_json(output: &OutputDescription) -> Value {
         "height": mode.height(),
         "refresh_mhz": mode.refresh_millihertz(),
         "scale": mode.scale(),
-        "vrr": mode.vrr_min_millihertz().map(|min| json!({
-            "min": hertz(min), "max": hertz(mode.refresh_millihertz()),
+        "vrr": mode.vrr_min().map(|min| json!({
+            "min": min, "max": mode.rate(),
         })),
         "hdr": mode.hdr().map(|monitor| monitor.name),
         "logical": {

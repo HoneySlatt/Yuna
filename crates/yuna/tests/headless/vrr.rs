@@ -210,3 +210,46 @@ fn a_range_narrower_than_twice_its_least_rate_is_refused() {
     assert!(mode.with_vrr(0.5).is_err(), "below 1 Hz");
     assert!(mode.with_vrr(f64::NAN).is_err());
 }
+
+/// Callbacks asked without damage are answered at most once a shortest refresh, as at a fixed
+/// rate once a period (ADR-0031), never in a loop: a refresh that draws nothing still counts as
+/// one, though the panel shows no new frame. Yuna then rests.
+#[test]
+fn callbacks_asked_without_damage_come_at_most_once_a_shortest_refresh() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    let drawn = compositor.counters().frames_drawn;
+    let mut answered_at = Vec::new();
+    for _ in 0..20 {
+        let answered = client.window(window).frames.len();
+        client.request_frame(window);
+        client.commit(window);
+        client.roundtrip(&mut compositor);
+        if client.window(window).frames.len() == answered {
+            let due = compositor.next_deadline().expect("a refresh armed");
+            compositor
+                .advance(due - compositor.now())
+                .expect("the clock moves");
+            client.roundtrip(&mut compositor);
+        }
+        assert_eq!(client.window(window).frames.len(), answered + 1);
+        answered_at.push(compositor.now());
+    }
+    for pair in answered_at.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= SHORTEST - Duration::from_millis(3),
+            "{answered_at:?}"
+        );
+    }
+    assert!(
+        answered_at[19] - answered_at[0] >= SHORTEST * 18,
+        "{answered_at:?}"
+    );
+    assert_eq!(compositor.counters().frames_drawn, drawn);
+    run_armed_deadlines(&mut compositor);
+    assert_rests(&mut compositor);
+}
