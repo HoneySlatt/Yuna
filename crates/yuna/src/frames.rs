@@ -152,10 +152,10 @@ impl State {
         let (at, aimed, sampled) = if idle {
             // Drawn at once, a frame is shown at the first refresh after its drawing ends: its
             // motion is sampled there, the drawing predicted to take as long as the output's
-            // longest recent one. Not the lead, whose floor and margin keep a deadline safe
+            // longest recent one, or after rest its last one. Not the lead, whose floor and margin keep a deadline safe
             // rather than predict: a frame shown before the refresh it sampled leaves that
             // refresh nothing new to show (ADR-0054).
-            let drawing = output.drawings.longest(now);
+            let drawing = output.drawings.expected(now);
             (
                 now,
                 output.timing.reachable(now, output.last_refresh, paced),
@@ -237,9 +237,8 @@ impl State {
             return;
         };
         let sample_at = self.outputs[index].armed_sample_at;
-        self.outputs[index].sampled_at = sample_at;
         let frame = self.motion.frame(output, sample_at);
-        self.draw_and_present(index, frame.windows);
+        self.draw_and_present(index, frame.windows, sample_at);
         let Some(index) = self.output_index(output) else {
             return;
         };
@@ -256,7 +255,7 @@ impl State {
     /// Draws output `index`'s frame, `drawn` as the motion gives it, if anything on it is
     /// damaged; calls back the surfaces it shows or tells they are visible; holds their
     /// presentation feedback until the frame's boundary; and copies the captures that waited.
-    fn draw_and_present(&mut self, index: usize, drawn: Vec<Drawn>) {
+    fn draw_and_present(&mut self, index: usize, drawn: Vec<Drawn>, sample_at: Duration) {
         let output_id = self.outputs[index].id;
         // What waited is drawn now, or found unchanged.
         let armed_for_content = std::mem::take(&mut self.outputs[index].armed_for_content);
@@ -268,8 +267,10 @@ impl State {
             .copied()
             .collect();
         let drawing = self.draw(index, &shown);
+        // Readers follow what the buffer holds: a failed drawing leaves the frame before.
         if !matches!(drawing, Drawing::Failed) {
             self.outputs[index].drawn = drawn;
+            self.outputs[index].sampled_at = sample_at;
         }
         let now = self.clock.now();
         for window in self.called_back(index, &shown) {
@@ -711,6 +712,8 @@ pub(crate) struct Drawings {
     /// When each drawing ended and how long it took from its deadline, oldest first, none
     /// ended [`DRAWING_WINDOW`] or longer ago: at most one a boundary, so a scan stays short.
     recent: VecDeque<(Duration, Duration)>,
+    /// How long the last drawing took, however long ago it ended.
+    last: Option<Duration>,
 }
 
 impl Drawings {
@@ -718,6 +721,7 @@ impl Drawings {
     pub(crate) fn record(&mut self, ended: Duration, took: Duration) {
         self.forget_old(ended);
         self.recent.push_back((ended, took));
+        self.last = Some(took);
     }
 
     /// The lead at `now` of an output of refresh period `period`: the longest drawing of the
@@ -739,6 +743,17 @@ impl Drawings {
             .map(|&(_, took)| took)
             .max()
             .unwrap_or(Duration::ZERO)
+    }
+
+    /// How long a drawing starting at `now` is expected to take: the longest of the last
+    /// [`DRAWING_WINDOW`], or after rest the last one, however old; zero before any drawing.
+    pub(crate) fn expected(&mut self, now: Duration) -> Duration {
+        let longest = self.longest(now);
+        if self.recent.is_empty() {
+            self.last.unwrap_or(Duration::ZERO)
+        } else {
+            longest
+        }
     }
 
     fn forget_old(&mut self, now: Duration) {
@@ -871,6 +886,17 @@ mod tests {
             drawings.longest(t + 4 * MS + DRAWING_WINDOW),
             Duration::ZERO
         );
+    }
+
+    #[test]
+    fn after_rest_a_drawing_is_expected_to_take_as_long_as_the_last() {
+        let mut drawings = Drawings::default();
+        assert_eq!(drawings.expected(Duration::ZERO), Duration::ZERO);
+        let t = Duration::from_secs(100);
+        drawings.record(t, 3 * MS);
+        drawings.record(t + 4 * MS, MS);
+        assert_eq!(drawings.expected(t + 5 * MS), 3 * MS);
+        assert_eq!(drawings.expected(t + 60 * DRAWING_WINDOW), MS);
     }
 
     #[test]

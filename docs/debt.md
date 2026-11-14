@@ -236,6 +236,9 @@ with games' VRR:
   before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
   as an empty slot until the switch ends would let it slide.
 - A second special workspace shown while the first fades out replaces it at once.
+- If the refresh that samples a motion's end fails to draw, clients are told the motion ended
+  and nothing more is armed: the output keeps a frame of the motion until its next damage. A
+  failed drawing cannot be caused headless; none was seen.
 - On a VRR output, a motion that starts after a pause shows its second frame about 12 ms after
   its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
   shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):

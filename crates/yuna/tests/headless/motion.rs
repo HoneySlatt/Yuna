@@ -1692,3 +1692,71 @@ fn an_agents_seat_removed_does_not_snap_the_owners_motion() {
     assert!(shows_the_arrangement(&compositor, OUTPUT));
     assert_rests(&mut compositor);
 }
+
+/// The sequence number of the last frame window 1's feedback says it was presented at.
+fn presented_seq(client: &Client) -> Option<u64> {
+    match client.window(1).feedback.last() {
+        Some(Feedback::Presented { seq, .. }) => Some(*seq),
+        _ => None,
+    }
+}
+
+/// As `a_frame_drawn_at_once_across_a_boundary_samples_the_next`, but the move comes after more
+/// than half a second of rest, so the output has no recent drawing: the common case of a frame
+/// drawn at once, the first operation after a pause. Every drawing takes 3 ms. Its drawing is
+/// expected
+/// to take as long as the last one, however old: it samples the boundary it is presented at.
+#[test]
+fn after_rest_a_frame_drawn_at_once_across_a_boundary_samples_where_it_shows() {
+    const DRAWING: Duration = Duration::from_millis(3);
+    let settings = animations();
+    let mut compositor = compositor_with(settings);
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    compositor.set_draw_hook(|clock| clock.pass(DRAWING));
+    open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN]);
+    // Half a second and more of rest: the output's drawings are forgotten.
+    let rest = compositor.now() + Duration::from_millis(600);
+    advance_to(&mut compositor, &mut client, rest);
+    let mut reference = Motion::new(settings);
+    reference.update(compositor.layout(), compositor.now(), Change::Instant);
+
+    let k = first_boundary_at_or_after(start, compositor.now()) + 1;
+    let operation = boundary(start, k) + Duration::from_millis(2);
+    advance_to(&mut compositor, &mut client, operation);
+    compositor
+        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .expect("the focus moves left");
+    reference.update(compositor.layout(), operation, Change::Animated);
+    assert_eq!(compositor.next_deadline(), Some(operation));
+    client.request_feedback(1);
+    client.commit(1);
+    client.roundtrip(&mut compositor);
+    assert!(
+        compositor.now() > boundary(start, k + 1),
+        "the drawing ends past k + 1"
+    );
+    let drawn = compositor.drawn(OUTPUT).to_vec();
+    let sampled = (k + 1..=k + 3)
+        .find(|&j| reference.frame(OUTPUT, boundary(start, j)).windows == drawn)
+        .map(|j| j - k);
+    advance_to(&mut compositor, &mut client, boundary(start, k + 2));
+    let shown = presented_seq(&client).map(|seq| seq - k);
+    // The next refresh.
+    let next = compositor.next_deadline().expect("the motion runs");
+    advance_to(&mut compositor, &mut client, next);
+    let drawn = compositor.drawn(OUTPUT).to_vec();
+    let next_sampled = (k + 1..=k + 4)
+        .find(|&j| reference.frame(OUTPUT, boundary(start, j)).windows == drawn)
+        .map(|j| j - k);
+    assert_eq!(
+        sampled, shown,
+        "the frame drawn at once samples the boundary it is presented at"
+    );
+    assert_eq!(
+        next_sampled,
+        shown.map(|j| j + 1),
+        "the next refresh samples the boundary after it"
+    );
+    settle(&mut compositor, |compositor| client.roundtrip(compositor));
+}

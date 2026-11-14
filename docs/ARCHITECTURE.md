@@ -400,8 +400,8 @@ At an output's refresh, due at once or a lead before the boundary it aims at:
    unless windows move on its output.
 2. The motion gives the output's frame at the time it is shown if on time: the boundary the
    refresh aims at, or, for a refresh due at once, the one its drawing reaches if it takes as
-   long as the output's longest drawing of the last half second, without the lead's floor and
-   margin; on the manual clock with no draw hook, the first boundary at or after now. Each
+   long as the output's longest drawing of the last half second, or after rest its last one,
+   without the lead's floor and margin; on the manual clock with no draw hook, the first boundary at or after now. Each
    window has a rectangle and an alpha there; at rest, and with animations off, they are its
    place and 1.
    The output is drawn if anything on it is damaged: each window the frame shows on it, bottom

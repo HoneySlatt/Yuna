@@ -1,13 +1,15 @@
 //! Property tests of the motion of an arrangement: random sequences of layout operations over two
 //! seats and up to three outputs of different sizes and scales, each followed by an update,
-//! mostly animated, else instant on every output or on one seat's; random clock steps of 0 to 50 ms between them; frames sampled at random
-//! times, some before the last update; random settings. After every step:
+//! mostly animated, else instant on every output or on one seat's; random clock steps of 0 to
+//! 50 ms between them; frames sampled at random times, some before the last update; random
+//! settings. After every step:
 //!
 //! - every drawn value is finite, every alpha within 0 and 1, and a frame draws a window once;
 //! - nothing jumps on screen at an operation: a window drawn just before an update that animates
-//!   its output's seat and just after it, on the same output, in the same container (its workspace and layer, or
-//!   floating and tiled within one workspace, or pinned), its fullscreen unchanged and its
-//!   workspace's too, is drawn with its corner at the same place, to 1e-6; its size may jump
+//!   its output's seat and just after it, on the same output, in the same container (its
+//!   workspace and layer, or floating and tiled within one workspace, or pinned), its fullscreen
+//!   unchanged and its workspace's too, is drawn with its corner at the same place, to 1e-6; its
+//!   size may jump
 //!   ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)). One exception: when a
 //!   workspace leaves the output during a switch (one starting or one drawn), the switch's stack
 //!   closes up, and if it filled the view, the workspaces beside it cannot all keep their places;

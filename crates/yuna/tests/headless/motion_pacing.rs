@@ -381,13 +381,13 @@ const SHORTEST: Duration = PERIOD;
 /// 269 of 2,429 lines of the shortest refresh.
 const BLANK: Duration = Duration::from_nanos(461_438);
 
-/// A VRR output of 48 to 240 Hz, as `vrr.rs` builds it, drawings taking no time. The scroll's
-/// first frame, drawn at once on the idle output, is shown a vertical blank later and samples
-/// the motion there, its drawing predicted to take no time. From then on, while the motion runs, a refresh is due every shortest
-/// refresh, 1/240 s, a lead before its frame is shown, and samples the motion there; frames are
-/// shown every shortest refresh, with consecutive refresh numbers, whether they drew or found
-/// nothing changed in the motion's last sub-pixel steps. Each frame is the reference's where it
-/// sampled; the last is the arrangement; then nothing runs.
+/// A VRR output of 48 to 240 Hz, as `vrr.rs` builds it, drawings taking no time. The scroll's first
+/// frame, drawn at once on the idle output, is shown a vertical blank later and samples the motion
+/// there, its drawing predicted to take no time. From then on, while the motion runs, a refresh is
+/// due every shortest refresh, 1/240 s, a lead before its frame is shown, and samples the motion
+/// there; frames are shown every shortest refresh, with consecutive refresh numbers, whether they
+/// drew or found nothing changed in the motion's last sub-pixel steps. Each frame is the
+/// reference's where it sampled; the last is the arrangement; then nothing runs.
 #[test]
 fn on_a_vrr_output_a_scroll_refreshes_at_the_shortest_refresh() {
     let mode = full_hd().with_vrr(48.0).expect("a VRR range");
@@ -425,10 +425,10 @@ fn on_a_vrr_output_a_scroll_refreshes_at_the_shortest_refresh() {
     ends_at_the_arrangement_and_rests(&mut scroll);
 }
 
-/// A VRR scroll with no carrier: nothing but the motion arms its refreshes. The first is drawn
-/// at once; from the third on, each is due one shortest refresh after the one before; from the
-/// second on, each draws the reference's frame a lead after it was due; some find nothing changed, in the motion's last sub-pixel steps; the motion
-/// ends at the arrangement, then nothing runs.
+/// A VRR scroll with no carrier: nothing but the motion arms its refreshes. The first is drawn at
+/// once; from the third on, each is due one shortest refresh after the one before; from the second
+/// on, each draws the reference's frame a lead after it was due; some find nothing changed, in the
+/// motion's last sub-pixel steps; the motion ends at the arrangement, then nothing runs.
 #[test]
 fn on_a_vrr_output_a_motion_alone_arms_a_refresh_each_shortest_refresh() {
     let mode = full_hd().with_vrr(48.0).expect("a VRR range");
