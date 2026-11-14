@@ -18,7 +18,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is in progress: its design was decided on 2026-11-14 (ADR-0066 to
-  ADR-0069); building next.
+  ADR-0069). Built: the X11 surface element and its area filter; one Xwayland per seat, on
+  demand, behind a cookie, with the manager's start. Next: managed windows in the layout, then
+  override-redirect windows, the applications' tests (Qt on xcb, Wine) and the measures.
 
 ## Status
 
