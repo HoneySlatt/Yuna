@@ -153,7 +153,10 @@ otherwise.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
-([ADR-0036](docs/adr/0036-yuna-is-public.md)).
+([ADR-0036](docs/adr/0036-yuna-is-public.md)). A change of Markdown files alone skips it:
+[`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`, their
+links and the length of those read at every session, with lychee and git alone, in a minute or
+two. `scripts/check.sh docs` runs the same locally.
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
 changes the drawing path or what the agent's story uses; it builds the examples and cooks their
