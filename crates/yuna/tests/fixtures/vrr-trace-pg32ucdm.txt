@@ -1,5 +1,5 @@
 # The owner's monitor under VRR: an ASUS PG32UCDM, 48 to 240 Hz, on amdgpu, Linux 7.3.1, mode 3840x2160 at 240.016 Hz,
-# recorded on 2026-11-14 by the throwaway program vrr-trace (trace format 2), from a text console (ADR-0045).
+# recorded on 2026-11-14 by the throwaway program vrr-trace (trace format 2), from a text console (ADR-0046).
 # Reduced to what the replay reads: for each rate, a line `phase <millihertz>`, then one line per frame flipped:
 # its submission (the middle of its commit ioctl) and its flip event, in nanoseconds since the rate began, and its
 # refresh's sequence number, counted from the rate's first flip. The flip event's time is the kernel's, in whole microseconds.

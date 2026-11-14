@@ -1,4 +1,4 @@
-# 0044. The fork over HTTPS, a branch per base
+# 0045. The fork over HTTPS, a branch per base
 
 - Status: Accepted; amends [0021](0021-smithays-fork.md) (how main reaches the fork, how the fork
   moves to a new base)

@@ -1,7 +1,7 @@
 # 0023. Frames, presentation times and the clock
 
 - Status: Accepted; amended by [0031](0031-frames-drawn-ahead-of-their-boundary.md) (when a frame
-  is drawn, when its feedback is sent), [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)
+  is drawn, when its feedback is sent), [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)
   (a VRR output's refreshes)
 - Date: 2026-11-12
 

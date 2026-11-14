@@ -259,7 +259,7 @@ fn outputs_are_created_listed_and_removed() {
 /// A seat's output may run under VRR and announce the owner's monitor's HDR colours, which
 /// `outputs list` tells; a range less than twice as wide as its least rate is refused. `windows`
 /// gives the colours a window's surfaces declared only when asked, when it answers at once and
-/// when it answers a waiting call (ADR-0048).
+/// when it answers a waiting call (ADR-0049).
 #[test]
 fn vrr_and_hdr_outputs_are_listed_and_declared_colours_given_when_asked() {
     let mut mcp = Mcp::new(ClockMode::Manual);

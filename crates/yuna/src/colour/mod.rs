@@ -1,6 +1,6 @@
 //! Colours: what each output announces and each surface declares through `color-management-v1`
-//! ([ADR-0046](../../../../docs/adr/0046-color-management-v1-kwins-list.md),
-//! [ADR-0047](../../../../docs/adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+//! ([ADR-0047](../../../../docs/adr/0047-color-management-v1-kwins-list.md),
+//! [ADR-0048](../../../../docs/adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 //!
 //! An output announces one description for its life: the monitor's PQ volume when it is HDR,
 //! gamma 2.2 and sRGB otherwise. A surface's preferred description is its window's workspace's

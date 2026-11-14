@@ -50,7 +50,7 @@
         # What the applications' tests give each application, so that it draws the same on every
         # machine, on the CPU (crates/yuna/tests/applications.rs, ADR-0025). Its PATH, of the
         # store alone: a terminal, GTK 4's demo (in GTK's development output), Qt's QML runner,
-        # Vulkan's cube, mpv, whose surface declares its colours (ADR-0049), and `sleep` for the
+        # Vulkan's cube, mpv, whose surface declares its colours (ADR-0050), and `sleep` for the
         # terminal. Kept off the shell's own PATH, so that GTK's development files never reach
         # the shell's builds.
         YUNA_APPLICATIONS_PATH = pkgs.lib.makeBinPath [

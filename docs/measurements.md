@@ -38,8 +38,8 @@ every presentation 10 ms after the last and one refresh later; at 300 fps, none 
 1/240 s, the frames that could not be shown discarded; at 24 fps, 41.667 ms apart within 1 µs,
 three refreshes later each, as amdgpu's BTR inserts them; at 23.976 fps, at most 2 of 41
 intervals a whole number of 1/240 s periods, against all of them on a fixed 240 Hz output.
-Checked against the owner's monitor ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
-[ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)): the owner ran the throwaway
+Checked against the owner's monitor ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)): the owner ran the throwaway
 `vrr-trace` twice from a text console on 2026-11-14, Linux 7.3.1, mode 3840 × 2160 at 240.016 Hz,
 VRR on: steady rates from 23.976 to 300 fps while other builds loaded the machine, then probes
 on a quiet machine, frames late and early by 0.5 to 16 ms, gaps and changes of rate. Reduced, they

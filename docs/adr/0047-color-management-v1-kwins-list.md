@@ -1,4 +1,4 @@
-# 0046. `color-management-v1`: Yuna's own handler, KWin's list
+# 0047. `color-management-v1`: Yuna's own handler, KWin's list
 
 - Status: Accepted
 - Date: 2026-11-14

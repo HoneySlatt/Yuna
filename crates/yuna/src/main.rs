@@ -154,7 +154,7 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
 }
 
 /// Reads `WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]`, the two items in any order, each once, and
-/// checks it as an output's mode (ADR-0048).
+/// checks it as an output's mode (ADR-0049).
 fn read_output(text: &OsStr) -> Result<OutputMode, String> {
     let bad = || {
         format!(

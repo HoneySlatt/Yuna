@@ -11,7 +11,7 @@
 //!   the frame, its clients' buffers imported, to when the drawing is done, on `CLOCK_MONOTONIC`.
 //!   It decides when the frame is presented;
 //! - the time between two frames' presentations (`presented_at_us`), against the output's
-//!   shortest refresh, 1/rate: under VRR, none may come sooner (ADR-0045);
+//!   shortest refresh, 1/rate: under VRR, none may come sooner (ADR-0046);
 //! - how many frames were drawn at once, the output idle, how many were presented after the
 //!   boundary they aimed at, and their lead, from the same lines (ADR-0031);
 //! - the CPU time of each of Yuna's threads, from `/proc/<pid>/task/<tid>/schedstat`: on

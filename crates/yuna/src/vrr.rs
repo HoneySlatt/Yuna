@@ -1,5 +1,5 @@
 //! A VRR panel, emulated as amdgpu drives a DisplayPort Adaptive-Sync monitor
-//! ([ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+//! ([ADR-0046](../../../docs/adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
 //!
 //! A refresh lasts at least the range's shortest period, 1/max, and at most its longest, 1/min.
 //! A frame ready sooner than the shortest period after the refresh in progress began waits for
@@ -11,7 +11,7 @@
 //! shown `n` times; the owner's monitor showed the first `n − 1` with a fixed length, and the last
 //! variable again. A frame ready during a fixed one waits for its end. A frame shows a vertical
 //! blank after it is ready at the soonest
-//! ([ADR-0050](../../../docs/adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)). [`Btr`] is `apply_below_the_range` of Linux's
+//! ([ADR-0051](../../../docs/adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)). [`Btr`] is `apply_below_the_range` of Linux's
 //! `drivers/gpu/drm/amd/display/modules/freesync/freesync.c` (master `97d73c82`, the same as
 //! 6.17), with its integer arithmetic in microseconds; the panel's lengths are kept in
 //! nanoseconds.
@@ -406,7 +406,7 @@ mod tests {
         );
     }
 
-    /// The owner's monitor's traces (ADR-0045): the first, of steady rates, recorded while
+    /// The owner's monitor's traces (ADR-0046): the first, of steady rates, recorded while
     /// other builds loaded the machine; the second, of probes, on a quiet one.
     const TRACES: [&str; 2] = [
         include_str!("../tests/fixtures/vrr-trace-pg32ucdm.txt"),
@@ -484,7 +484,7 @@ mod tests {
         )
     }
 
-    /// ADR-0045's check: the owner's monitor's two traces, replayed, every frame. A frame's
+    /// ADR-0046's check: the owner's monitor's two traces, replayed, every frame. A frame's
     /// start is the monitor's within 500 µs, the spread of the kernel's commit path the traces
     /// show (0.5 to 0.95 ms from a flip's submission to its showing when nothing holds it):
     /// for 90 % of the steady rates' frames, 80 % of the probes' (late and early frames, gaps,

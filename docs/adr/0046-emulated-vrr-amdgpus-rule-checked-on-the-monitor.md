@@ -1,8 +1,8 @@
-# 0045. Emulated VRR: amdgpu's rule, checked against the owner's monitor
+# 0046. Emulated VRR: amdgpu's rule, checked against the owner's monitor
 
 - Status: Accepted; amends [0023](0023-frames-presentation-and-the-clock.md) (a VRR output's
   refreshes), [0031](0031-frames-drawn-ahead-of-their-boundary.md) (no deadline at the floor);
-  amended by [0050](0050-emulated-vrr-as-the-monitors-traces-showed.md) (the panel's rules, the
+  amended by [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) (the panel's rules, the
   replay)
 - Date: 2026-11-14
 

@@ -12,7 +12,7 @@ publish = false
 
 [workspace.dependencies]
 # Yuna's fork of Smithay, pinned to one commit: upstream's revision and Yuna's patches
-# (docs/smithay-patches.md, ADR-0042, ADR-0044). Raised at each stage's end (ADR-0017). Each
+# (docs/smithay-patches.md, ADR-0042, ADR-0045). Raised at each stage's end (ADR-0017). Each
 # crate turns on the features it uses.
 smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "e229954ae0d592c6ecfa3bd4932c16371310cf0a", default-features = false }
 # Property tests of the layout model (M1.2), in tests only. Without its default features: no

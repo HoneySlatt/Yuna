@@ -17,7 +17,7 @@
 //! PQ one on an SDR output, until it has gone quiet. The test reads the colours mpv's surface
 //! declared through `color-management-v1`: values that hold only if mpv read the description Yuna
 //! prefers for it. mpv then quits by its `q` key, and Yuna must rest
-//! ([ADR-0049](../../../docs/adr/0049-mpv-in-the-applications-tests.md)).
+//! ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
 //!
 //! SlimeEngine's examples run in ignored tests, which its weekly job runs: `window` draws its
 //! frames and leaves, `editor` rests with its window open, and an agent types and clicks in
@@ -202,7 +202,7 @@ fn pause_vkcube_and_rest() -> Result<String, String> {
 /// to 1015 cd/m², which only that description gave it. Its own luminances are PQ's, with
 /// libplacebo's reference white of 203 cd/m²; it leaves `max_fall` unset, as it reads a
 /// display's as a full frame's maximum, not an average
-/// ([ADR-0049](../../../docs/adr/0049-mpv-in-the-applications-tests.md)).
+/// ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
 #[test]
 fn mpv_aims_an_sdr_picture_at_the_hdr_outputs_monitor() {
     let declared = json!([{
@@ -232,7 +232,7 @@ fn mpv_aims_an_sdr_picture_at_the_hdr_outputs_monitor() {
 /// picture and declares gamma 2.2 over sRGB, not the picture's PQ. It scales the luminances so
 /// that the reference white is libplacebo's 203 cd/m² and keeps the output's minimum: 0.2 to
 /// 203, no headroom above white, as the output announced. Gamma 2.2 carries no HDR metadata
-/// ([ADR-0049](../../../docs/adr/0049-mpv-in-the-applications-tests.md)).
+/// ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
 #[test]
 fn mpv_tone_maps_a_pq_picture_to_the_sdr_outputs_description() {
     let declared = json!([{

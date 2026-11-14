@@ -310,8 +310,8 @@ yet.
 
 ### VRR outputs
 
-An output created with a VRR range ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
-[ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)) emulates amdgpu driving a
+An output created with a VRR range ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)) emulates amdgpu driving a
 DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
 
 - A frame shows a vertical blank after it is ready at the soonest: 269 of 2,429 lines of the
@@ -512,14 +512,14 @@ only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each abou
 ### Colours
 
 `colour/` holds `color-management-v1`, Yuna's first handler written on wayland-server rather
-than through Smithay ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)). Its global lists
+than through Smithay ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)). Its global lists
 KWin's set at the version each client bound. `description.rs` holds the image descriptions and
 their checks, with no Wayland object; `protocol.rs` the dispatch of every object, each keeping
 its state in its own user data. A record of a description gets an identity never used again.
 
 - Each output announces one description for its life, made when it is created: the owner's
   monitor's PQ volume for an HDR output, gamma 2.2 and sRGB otherwise
-  ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). A removed
+  ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). A removed
   output's colour objects fail at once, with `no_output`.
 - A surface's description is double-buffered in Smithay's cached state, applied at its commit
   as subsurfaces' state is; `Compositor::window_colours` reads a window's tree.
@@ -609,7 +609,7 @@ window or program unknown there:
   `outputs` create an output under VRR with `vrr_min`, over `vrr_min` to its rate, refused
   unless the rate is at least twice it ([VRR outputs](#vrr-outputs)), and an HDR one, which
   announces the colours of the owner's monitor, a PG32UCDM, with `hdr` ([Colours](#colours),
-  [ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
+  [ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
   `--output`'s, `hdr` included, which `hdr: false` turns off; `--output`'s VRR range only when
   the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
   each null when it has none.
@@ -664,7 +664,7 @@ or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, 
 clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
 `--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
 RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
-`hdr` ([ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
+`hdr` ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
 order, each once. With `mcp`, it is each new seat's output. A mode refused, an item unknown,
 repeated or malformed, is a usage error: the program prints why and its help, and exits with 2.
 The signal handler writes to a pipe the event loop watches, so that the loop returns and the
@@ -759,7 +759,7 @@ own thread, both `took_us`.
   starts dies with the test's thread. The test takes about 15 s. Through `yuna mcp`, as an agent
   drives it, `vkcube` paused by its space key rests with its window open. Two tests run mpv
   there, in Vulkan on lavapipe, on a picture it makes itself: an SDR one on an HDR output and a
-  PQ one on an SDR output ([ADR-0049](adr/0049-mpv-in-the-applications-tests.md)). Once mpv
+  PQ one on an SDR output ([ADR-0050](adr/0050-mpv-in-the-applications-tests.md)). Once mpv
   and Yuna have gone quiet, each reads through `windows` the colours its surface declared, and
   requires values that only the description Yuna prefers for it gives: the HDR output's
   monitor volume as mpv's target, or the SDR output's gamma 2.2 and minimum luminance for a PQ

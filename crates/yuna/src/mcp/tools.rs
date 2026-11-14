@@ -35,7 +35,7 @@ const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
 /// Every tool's definition, for `tools/list`, always in this order.
 pub fn definitions() -> Value {
     let seat = json!({ "type": "integer", "minimum": 2, "description": SEAT_PROPERTY });
-    // `seat create`'s output and `outputs create`'s take the same two (ADR-0048).
+    // `seat create`'s output and `outputs create`'s take the same two (ADR-0049).
     let vrr_min = json!({ "type": "number", "minimum": 1, "maximum": 500,
         "description": "create: run under VRR, from this many refreshes a second up to \
             rate, which must be at least twice it; by default a fixed rate, or the server's \
@@ -708,7 +708,7 @@ pub fn window_json(
 }
 
 /// A surface's declared colours, in the protocol's names, its luminances in cd/m² and its
-/// chromaticities as numbers (ADR-0048).
+/// chromaticities as numbers (ADR-0049).
 fn surface_colour_json(surface: &SurfaceColourDescription) -> Value {
     let description = &surface.description;
     let (target_min, target_max) = description.target_luminance;
@@ -728,7 +728,7 @@ fn surface_colour_json(surface: &SurfaceColourDescription) -> Value {
         "target_luminance": { "min": candelas_of_min(target_min), "max": target_max },
         "max_cll": description.max_cll,
         "max_fall": description.max_fall,
-        // The one intent Yuna lists (ADR-0046): every description is set with it.
+        // The one intent Yuna lists (ADR-0047): every description is set with it.
         "intent": "perceptual",
     })
 }

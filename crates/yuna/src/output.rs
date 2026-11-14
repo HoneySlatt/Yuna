@@ -105,7 +105,7 @@ impl OutputMode {
     }
 
     /// The same mode under VRR, over `min_rate` to its rate, in Hz
-    /// ([ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+    /// ([ADR-0046](../../../docs/adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
     /// Refused unless its rate is at least twice `min_rate`: a narrower range takes a path of
     /// amdgpu's that Yuna does not emulate.
     pub fn with_vrr(self, min_rate: f64) -> Result<OutputMode, InvalidOutput> {
@@ -128,7 +128,7 @@ impl OutputMode {
     }
 
     /// The same mode, announcing `monitor`'s HDR colours
-    /// ([ADR-0047](../../../docs/adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+    /// ([ADR-0048](../../../docs/adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
     pub fn with_hdr(self, monitor: Monitor) -> OutputMode {
         OutputMode {
             hdr: Some(monitor),
@@ -484,7 +484,7 @@ pub(crate) struct RefreshAt {
 
 /// When an output refreshes: at boundaries a fixed period apart, or as a VRR panel does
 /// ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
-/// [ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+/// [ADR-0046](../../../docs/adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
 #[derive(Debug)]
 pub(crate) enum Timing {
     Fixed(Boundaries),

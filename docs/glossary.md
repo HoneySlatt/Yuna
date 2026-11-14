@@ -11,7 +11,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
-  ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+  ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
 - **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
   logical point of its top-left corner, and the logical units one pixel covers.
 - **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
@@ -53,7 +53,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Image description**: in `color-management-v1`, what a surface's pixel values mean or what an
   output expects: a transfer function, primaries, luminances and a target colour volume. Each
   has an **identity**, a number no other ever has, so that a client tells a copy from a new one
-  ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)).
+  ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)).
 - **Hidden window**: a window on a workspace not shown, or in a column scrolled out of view; it gets
   at most one frame callback a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
 - **Home output**: the output a workspace goes back to when that output returns after being
@@ -87,7 +87,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
 - **Preferred description**: the image description Yuna tells a surface to draw in, its
-  window's workspace's output's ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+  window's workspace's output's ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in

@@ -1,4 +1,4 @@
-//! Emulated VRR ([ADR-0045](../../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)):
+//! Emulated VRR ([ADR-0046](../../../../docs/adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)):
 //! a client drawing at a steady rate on a VRR output of 48 to 240 Hz, the owner's monitor's
 //! range, gets the presentation times amdgpu would give it, and Yuna wakes for nothing at rest.
 //!

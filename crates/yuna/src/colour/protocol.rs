@@ -1,6 +1,6 @@
 //! `color-management-v1` on wayland-server: Yuna's own handler, not Smithay's
 //! ([ADR-0039](../../../../docs/adr/0039-leaving-smithay-step-by-step.md),
-//! [ADR-0046](../../../../docs/adr/0046-color-management-v1-kwins-list.md)).
+//! [ADR-0047](../../../../docs/adr/0047-color-management-v1-kwins-list.md)).
 //!
 //! Each object's state lives in its own user data; Yuna keeps no registry of descriptions, so
 //! that a client's descriptions cost it only its own objects. Every event goes out only at the

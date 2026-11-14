@@ -1,6 +1,6 @@
 # 0033. The MCP server: a private Yuna on stdio, its own MCP layer
 
-- Status: Accepted; amended by [0048](0048-vrr-and-hdr-outputs-through-mcp.md) (VRR and HDR
+- Status: Accepted; amended by [0049](0049-vrr-and-hdr-outputs-through-mcp.md) (VRR and HDR
   outputs, surfaces' colours)
 - Date: 2026-11-13
 

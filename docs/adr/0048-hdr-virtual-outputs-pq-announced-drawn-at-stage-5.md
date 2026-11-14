@@ -1,4 +1,4 @@
-# 0047. HDR virtual outputs: PQ announced, drawn at Stage 5
+# 0048. HDR virtual outputs: PQ announced, drawn at Stage 5
 
 - Status: Accepted
 - Date: 2026-11-14

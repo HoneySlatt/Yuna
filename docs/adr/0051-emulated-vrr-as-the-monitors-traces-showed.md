@@ -1,19 +1,19 @@
-# 0050. Emulated VRR, as the monitor's traces showed
+# 0051. Emulated VRR, as the monitor's traces showed
 
-- Status: Accepted; amends [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)
+- Status: Accepted; amends [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)
   (the panel's rules, what the replay checks)
 - Date: 2026-11-14
 
 ## Context
 
-[ADR-0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) emulates amdgpu's VRR from
+[ADR-0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) emulates amdgpu's VRR from
 a reading of `freesync.c`, to be checked against a trace of the owner's monitor. The owner
 recorded two, from a text console, Linux 7.3.1: one of steady rates, while other builds loaded
 the machine; one of probes on a quiet machine, frames late and early by 0.5 to 16 ms, gaps and
 changes of rate ([measurements](../measurements.md)).
 
 - Under BTR, only the first `n − 1` of the `n` refreshes amdgpu inserts have their fixed
-  length; the last is variable again. A frame late within it is shown at once, as ADR-0045
+  length; the last is variable again. A frame late within it is shown at once, as ADR-0046
   says. The first trace's late frames, held about as long again as they were late, came from
   the loaded machine: the quiet trace does not show it.
 - A flip shows a vertical blank after it is submitted at the soonest, 0.5 ms; one that comes

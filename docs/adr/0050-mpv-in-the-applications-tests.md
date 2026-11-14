@@ -1,4 +1,4 @@
-# 0049. mpv in the applications' tests
+# 0050. mpv in the applications' tests
 
 - Status: Accepted; amends [0025](0025-applications-in-ci.md) (one more application in CI)
 - Date: 2026-11-14

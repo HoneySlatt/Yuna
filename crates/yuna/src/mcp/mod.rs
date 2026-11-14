@@ -658,7 +658,7 @@ impl Server {
     }
 
     /// An output mode from a call's values, each defaulting to the seats' default output's, its
-    /// HDR monitor included (ADR-0048). Its VRR range's least rate is the default only when the
+    /// HDR monitor included (ADR-0049). Its VRR range's least rate is the default only when the
     /// call gives no rate either: a range belongs with its rate, and a call that names its own
     /// rate asked for no VRR. `hdr: true` announces the PG32UCDM's colours, the one monitor Yuna
     /// knows; `false` none.

@@ -3,7 +3,7 @@
 The changes Yuna's fork of Smithay makes, each with its reason. The fork is the public repository
 `HoneySlatt/smithay`; each upstream base has its own branch, one commit per patch on top of it,
 never rewritten ([ADR-0021](adr/0021-smithays-fork.md),
-[ADR-0044](adr/0044-the-fork-over-https-a-branch-per-base.md)). Yuna never contributes them
+[ADR-0045](adr/0045-the-fork-over-https-a-branch-per-base.md)). Yuna never contributes them
 upstream ([ADR-0011](adr/0011-built-on-smithay.md)).
 
 Base: upstream `8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55` ([ADR-0017](adr/0017-smithays-revision.md)),

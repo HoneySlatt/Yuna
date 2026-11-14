@@ -6,7 +6,7 @@
 //! frame waits for its refresh, and one could begin now: at a fixed rate, the boundary after its
 //! last refresh has passed; under VRR, the panel can start a refresh a vertical blank from now,
 //! and, with nothing new to draw, a shortest refresh after the last one
-//! ([ADR-0050](../../../docs/adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)).
+//! ([ADR-0051](../../../docs/adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)).
 //! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
 //! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
 //! whose time minus the lead is not yet past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least

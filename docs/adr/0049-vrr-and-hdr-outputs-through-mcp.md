@@ -1,4 +1,4 @@
-# 0048. VRR and HDR outputs through MCP, and surfaces' colours read
+# 0049. VRR and HDR outputs through MCP, and surfaces' colours read
 
 - Status: Accepted; amends [0033](0033-the-mcp-server.md) (two tools take more)
 - Date: 2026-11-14
@@ -6,8 +6,8 @@
 ## Context
 
 An agent tests a program on an output like the owner's monitor
-([ADR-0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
-[ADR-0047](0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)), and reads what colours the
+([ADR-0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0048](0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)), and reads what colours the
 program's surfaces declared. Aerith's video lies in a subsurface of its window. The `windows`
 reply already passes 25,000 tokens past a few hundred windows ([debt](../debt.md#the-mcp-server)).
 

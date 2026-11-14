@@ -1,5 +1,5 @@
 //! Image descriptions: what a surface's or an output's colours mean, as `color-management-v1`
-//! carries them, with no Wayland object ([ADR-0046](../../../../docs/adr/0046-color-management-v1-kwins-list.md)).
+//! carries them, with no Wayland object ([ADR-0047](../../../../docs/adr/0047-color-management-v1-kwins-list.md)).
 //!
 //! Values keep the protocol's units, so that what a client sent is what tests read back:
 //! chromaticities in millionths, minimum luminances in ten-thousandths of a cd/m², other
@@ -9,7 +9,7 @@
 use std::fmt;
 
 /// The transfer functions Yuna lists: KWin's, without `srgb`, deprecated from version 2 and a
-/// cause of `surface_exists` errors for version-1 clients (ADR-0046).
+/// cause of `surface_exists` errors for version-1 clients (ADR-0047).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferFunction {
     /// ITU-R BT.1886, a CRT's display response.
@@ -423,7 +423,7 @@ impl Params {
     }
 
     /// `set_mastering_display_primaries`. Primaries that describe no colour are dropped, as
-    /// KWin drops them: a refusal would end a Mesa client (ADR-0046). All eight at 0 means
+    /// KWin drops them: a refusal would end a Mesa client (ADR-0047). All eight at 0 means
     /// unset.
     pub fn set_target_primaries(&mut self, primaries: Chromaticities) -> Result<(), ParamsError> {
         if self.target_primaries.is_some() {
@@ -459,7 +459,7 @@ impl Params {
 
     /// `create`: the description, with each default filled in. Version 1's further checks of
     /// `max_cll` and `max_fall` against the target range are not made, as in version 2: Mesa
-    /// binds version 1 and sends them unchecked (ADR-0046).
+    /// binds version 1 and sends them unchecked (ADR-0047).
     pub fn create(self) -> Result<Description, ParamsError> {
         let (Some(transfer_function), Some((primaries, named_primaries))) =
             (self.transfer_function, self.primaries)
@@ -504,7 +504,7 @@ impl Params {
 }
 
 /// A monitor whose colours an HDR virtual output announces
-/// ([ADR-0047](../../../../docs/adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+/// ([ADR-0048](../../../../docs/adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Monitor {
     /// The name `outputs list` shows.
@@ -539,7 +539,7 @@ pub const PG32UCDM: Monitor = Monitor {
 impl Monitor {
     /// What an HDR output that shows it announces: PQ over BT.2020, a reference white of 203
     /// cd/m², and the monitor's own volume as the target. The transfer function is provisional
-    /// until Stage 5 chooses its pipeline (ADR-0047).
+    /// until Stage 5 chooses its pipeline (ADR-0048).
     pub fn hdr_description(&self) -> Description {
         Description {
             transfer_function: TransferFunction::St2084Pq,
@@ -554,7 +554,7 @@ impl Monitor {
     }
 }
 
-/// What an SDR output announces: gamma 2.2, sRGB's primaries and luminances (ADR-0047).
+/// What an SDR output announces: gamma 2.2, sRGB's primaries and luminances (ADR-0048).
 pub fn sdr_description() -> Description {
     let primaries = NamedPrimaries::Srgb.chromaticities();
     let luminances = Luminances::SRGB;

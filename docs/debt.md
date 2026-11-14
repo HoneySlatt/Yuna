@@ -118,16 +118,16 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - A client may make any number of `color-management-v1` feedback objects: each is a map entry,
   made and dropped in constant time, which Yuna checks after every arrangement. The protocol has no graceful refusal, and wayland-server
   bounds no count of objects; a cap per client would end the client
-  ([ADR-0046](adr/0046-color-management-v1-kwins-list.md)).
+  ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)).
 - An HDR output's captures show its clients' values unconverted: nothing is drawn in its
-  colours until Stage 5 ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+  colours until Stage 5 ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 - `wp_presentation` is version 2 in wayland-protocols 0.32.13: the `variable_rate` flag of
   version 3, which tells a client its output runs under VRR, cannot be sent yet.
 
 ## VRR
 
 What the emulation does not reproduce of the owner's monitor, from its two traces
-([ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)); to take up at Stage 4,
+([ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)); to take up at Stage 4,
 with games' VRR:
 
 - After the panel's own refresh, when no frame came for 1/48 s, the monitor holds a new frame 7

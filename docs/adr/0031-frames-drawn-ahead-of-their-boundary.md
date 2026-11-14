@@ -2,7 +2,7 @@
 
 - Status: Accepted; amends [0023](0023-frames-presentation-and-the-clock.md) (when a frame is
   drawn, when its feedback is sent); amended by
-  [0045](0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) (no deadline at a VRR floor)
+  [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) (no deadline at a VRR floor)
 - Date: 2026-11-13
 
 ## Context

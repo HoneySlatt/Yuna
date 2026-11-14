@@ -15,7 +15,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - A design study on 2026-11-13: Yuna leaves Smithay step by step, keeps wayland-rs, and decides
   Vulkan on a prototype's figures ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
-- [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0044 to ADR-0050. Next:
+- [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0045 to ADR-0051. Next:
   M1.7, on the owner's go.
 
 ## Status
@@ -107,19 +107,19 @@ milestone first needs it.
 
 - **Goal.** Virtual outputs behave as the owner's monitor does for VRR and HDR.
 - **Design.** Decided with the owner on 2026-11-14: the fork over HTTPS, a branch per base
-  ([ADR-0044](adr/0044-the-fork-over-https-a-branch-per-base.md)); amdgpu's VRR emulated, checked
-  against a trace of the monitor ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md));
-  `color-management-v1` with KWin's list ([ADR-0046](adr/0046-color-management-v1-kwins-list.md));
-  HDR outputs announce PQ, drawn at Stage 5 ([ADR-0047](adr/0047-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md));
-  `vrr_min`, `hdr` and `colour` through MCP ([ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md));
-  mpv in CI ([ADR-0049](adr/0049-mpv-in-the-applications-tests.md)).
+  ([ADR-0045](adr/0045-the-fork-over-https-a-branch-per-base.md)); amdgpu's VRR emulated, checked
+  against a trace of the monitor ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md));
+  `color-management-v1` with KWin's list ([ADR-0047](adr/0047-color-management-v1-kwins-list.md));
+  HDR outputs announce PQ, drawn at Stage 5 ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md));
+  `vrr_min`, `hdr` and `colour` through MCP ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md));
+  mpv in CI ([ADR-0050](adr/0050-mpv-in-the-applications-tests.md)).
 - **Steps.** D1: main on the fork, seats and outputs filtered per client, saturating
   positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
   versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
   `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
 - **Result.** Done on 2026-11-14. Main is on the fork; `color-management-v1` is Yuna's own
   handler; VRR outputs emulate amdgpu as two traces of the owner's monitor showed
-  ([ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)); mpv in CI reads
+  ([ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)); mpv in CI reads
   Yuna's colours and declares its own. A frame's start is the monitor's within 500 µs for 91 %
   of steady frames, 82 % of probes; what is left is [debt](debt.md#vrr). The closing review
   found two blocking defects and the last check one; all are fixed with their tests. CI's job

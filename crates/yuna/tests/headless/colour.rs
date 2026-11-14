@@ -1,4 +1,4 @@
-//! `color-management-v1` (ADR-0046, ADR-0047): what Yuna lists at each version, what an HDR and
+//! `color-management-v1` (ADR-0047, ADR-0048): what Yuna lists at each version, what an HDR and
 //! an SDR output announce, the description a surface's window prefers and its changes, each
 //! surface's description recorded at its commit, and every protocol error a client may earn.
 //!
@@ -74,7 +74,7 @@ fn each_version_lists_kwins_list_and_only_what_it_knows() {
             TransferFunction::Hlg as u32,
             TransferFunction::ExtLinear as u32,
         ];
-        // compound_power_2_4 exists from version 2; srgb is never listed (ADR-0046).
+        // compound_power_2_4 exists from version 2; srgb is never listed (ADR-0047).
         if version >= 2 {
             expected.push(TransferFunction::CompoundPower24 as u32);
         }
@@ -107,7 +107,7 @@ fn an_hdr_output_announces_the_monitors_volume_and_an_sdr_one_srgb() {
             Some(NamedPrimaries::Bt2020.chromaticities().values())
         );
         assert_eq!(info.luminances, Some((50, 10_000, 203)));
-        // The test pins the monitor's volume, not the provisional transfer function (ADR-0047).
+        // The test pins the monitor's volume, not the provisional transfer function (ADR-0048).
         assert_eq!(info.target_primaries, Some(PG32UCDM.primaries.values()));
         assert_eq!(info.target_luminance, Some((2, 1_015)));
         assert_eq!(info.target_max_cll, Some(1_015));

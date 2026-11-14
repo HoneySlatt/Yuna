@@ -183,7 +183,7 @@ xkeyboard-config, a font, and the applications the tests run
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
 ([ADR-0034](docs/adr/0034-captures.md)). Smithay is Yuna's public fork, read over HTTPS and
 pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
-[ADR-0044](docs/adr/0044-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
+[ADR-0045](docs/adr/0045-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
 [`docs/smithay-patches.md`](docs/smithay-patches.md).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.

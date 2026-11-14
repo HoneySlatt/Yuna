@@ -1,5 +1,5 @@
 # The owner's monitor under VRR, second trace: an ASUS PG32UCDM, 48 to 240 Hz, on amdgpu, Linux 7.3.1, mode 3840x2160 at 240.016 Hz,
-# recorded on 2026-11-14 by the throwaway program vrr-trace (trace format 3, scenario probes), on a quiet machine (ADR-0045):
+# recorded on 2026-11-14 by the throwaway program vrr-trace (trace format 3, scenario probes), on a quiet machine (ADR-0046):
 # frames late and early by 0.5 to 16 ms at 24, 30 and 48 fps and by 0.5 to 8 ms at 60 and 100 fps, changes of rate, gaps.
 # Reduced to what the replay reads: for each phase, a line `phase <label>`, then one line per frame flipped: its submission
 # (the middle of its commit ioctl) and its flip event, in nanoseconds since the phase began, and its refresh's sequence
