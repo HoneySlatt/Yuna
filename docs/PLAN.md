@@ -31,7 +31,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Planned |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
-| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
+| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
 | [M1.10](#m110--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
@@ -173,12 +173,14 @@ milestone first needs it.
 
 ### M1.8 — XWayland
 
-- **Goal.** X11 applications run, crisp at scale 1.5.
+- **Goal.** X11 applications run, crisp at scale 1.5 and the right size on every output.
 - **Delivers.** XWayland started on demand, through Smithay's window manager or Yuna's own, chosen
-  in its design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)); X11 windows rendered
-  at the physical size where they can scale themselves.
+  in its design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)); X11 windows drawn at the
+  largest output scale where they can scale themselves, and scaled down on outputs of a smaller
+  scale ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)).
 - **Done when.** An X11 test program and a Wine program run headless at 1.5, their captures sharp
-  against reference images.
+  against reference images; an X11 window moved between outputs at 1.5 and 1 keeps its size on
+  both. The design states how a fullscreen X11 game on the output at 1 draws at that output's mode.
 - **Measured.** XWayland's start time and memory.
 
 ### M1.9 — The rivals measured

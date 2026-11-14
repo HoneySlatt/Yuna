@@ -52,3 +52,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Accepted; amends 0012 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035 |
 | [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |
+| [0044](0044-xwayland-across-outputs-of-different-scales.md) | XWayland across outputs of different scales | Accepted |
