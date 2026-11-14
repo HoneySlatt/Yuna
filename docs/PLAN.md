@@ -119,19 +119,16 @@ milestone first needs it.
   ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)); motion, the
   special workspace's fade, a vertical switch over two workspaces, fullscreen instant, off
   headless unless `--animations` ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md));
+  reduced motion: nothing slides, fades stay ([ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md));
   the budget on the GPU against a still baseline
   ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)).
-- **Steps.** E1: workspace ids, each placed window's workspace and layer, each shown workspace's
-  camera. E2: `yuna-motion`'s springs and curves, checked against a numerical integration. E1
-  and E2 run in parallel. E3: the motion of an arrangement, under random sequences. E4: the
-  compositor: `--animations`, sampling and frames, the drawn list, what clients are told, the
-  pointer, captures, popups, MCP's `windows`. E5: frame-by-frame tests and pacing under draw
-  hooks. E6: the driver and the measures, the GPU's with the owner's consent.
-- **Reduced motion.** Honoured by each animation
-  ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): nothing slides,
-  fades stay, over half their duration ([ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
-- **Where it stands.** E1 to E4 are done (`yuna-layout`'s ids, `yuna-motion`, the compositor,
-  `--animations`, `--reduced-motion`); E4's review, E5 and E6 run.
+- **Result.** Built on 2026-11-14, closing review pending: `yuna-layout` names its workspaces and
+  columns; `yuna-motion` holds springs in closed form, curves, and the motion of an
+  arrangement, tested alone with random sequences; Yuna draws it with `--animations` or
+  `--reduced-motion`, each frame checked against the reference, pacing under slow drawings and
+  VRR in stories. On the GPU at 4K and 240 Hz, motion missed no frame of 10,000, the heaviest
+  1.3 ms; on llvmpipe at 1080p it misses more than half, recorded ([measurements](measurements.md)).
+  What is left is [debt](debt.md#motion).
 - **Done when.** Each animation is checked frame by frame on the test clock against
   `yuna-motion`'s reference; scrolls and switches on the GPU at 4K and 240 Hz miss no more
   frames than a still baseline over 10,000 frames.
