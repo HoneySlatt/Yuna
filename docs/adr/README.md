@@ -64,4 +64,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046; amended by 0061 |
 | [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003, 0015 |
 | [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010, 0058 |
-| [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened, point 9 a setting |
+| [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened |

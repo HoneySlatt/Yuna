@@ -91,7 +91,7 @@ it is met.
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |
 | HDR | the output's luminance and colours as the colour description says, against KWin on the same content | captures of the output buffer in CI; the owner's monitor by eye and by sensor |
 | The laptop | every feature, effects lighter, no missed frame at its refresh rate | the same measures on the laptop |
-| A capture | no frame of a game lost and its direct scanout kept while captured, by default the capture lowering its own rate rather than cost one, a setting giving the stream the priority instead; the capture's GPU time | presentation feedback with and without a capture running |
+| A capture | no frame of a game lost and its direct scanout kept while captured, the capture lowering its own rate rather than cost one; the capture's GPU time | presentation feedback with and without a capture running |
 | Colour accuracy | set from KWin's at Stage 5 | captures of the output buffer against the colours asked; the owner's monitor by probe |
 | A tablet | set from KWin's, once a tablet is at hand | input to present of the pen; pressure and tilt passed on |
 | `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
