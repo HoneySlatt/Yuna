@@ -138,6 +138,7 @@ it is met.
 | Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
+| XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
 
 ### Open
 
@@ -147,7 +148,6 @@ it is met.
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
 | Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
-| Yuna's X11 window manager or Smithay's | M1.8's design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | Public release | the owner's go |
 
 ## 5. Stages

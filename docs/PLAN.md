@@ -9,21 +9,16 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 ## Current
 
-- Design session 2026-11-11: [ADR-0001](adr/0001-what-yuna-is.md) to
-  [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar.
-- M1.1 to M1.6 are done (2026-11-11 to 14); a design study on 2026-11-13 decided to leave Smithay
-  step by step ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
-  [ADR-0042](adr/0042-main-on-smithays-fork.md)).
-- A design session on 2026-11-14 ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md),
-  [ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md),
-  [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md),
-  [ADR-0061](adr/0061-yunas-uses.md)): the line between Yuna and the shell; what the owner's
-  other projects taught; development first and Stage 3 removed; Yuna's uses. M1.10 and M1.11
-  added; reduced motion joins M1.7.
-- [M1.7](#m17--animations) is done (2026-11-14), with ADR-0052 to ADR-0056 and ADR-0059. Next:
-  M1.8, on the owner's go.
-- Hollow's needs of Yuna are in [`client-needs.md`](client-needs.md), three decided in
-  [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
+- Stage 1's design sessions: 2026-11-11 ([ADR-0001](adr/0001-what-yuna-is.md) to
+  [ADR-0015](adr/0015-agents-workspaces.md), the [survey](survey.md), the roadmap and its bar);
+  2026-11-13, leaving Smithay step by step ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)
+  to [ADR-0042](adr/0042-main-on-smithays-fork.md)); 2026-11-14, the line between Yuna and the
+  shell, development first, Yuna's uses ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)
+  to [ADR-0061](adr/0061-yunas-uses.md)).
+- M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
+  [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
+- [M1.8](#m18--xwayland) is in progress: its design was decided on 2026-11-14 (ADR-0066 to
+  ADR-0069); building next.
 
 ## Status
 
@@ -36,7 +31,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
-| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Planned |
+| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | In progress |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Planned |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
@@ -51,29 +46,15 @@ milestone first needs it.
 ### M1.1 — The workspace and its checks
 
 - **Goal.** Any agent builds, checks and tests Yuna with one command, and CI runs it.
-- **Delivers.** A Cargo workspace, the toolchain pinned, `flake.nix`, `scripts/check.sh` and CI
-  ([CONTRIBUTING](../CONTRIBUTING.md)); `docs/ARCHITECTURE.md`; `docs/glossary.md`. Smithay's
-  revision chosen and pinned.
-- **Done when.** `nix develop -c scripts/check.sh` passes locally and CI is green.
-- **Measured.** The check's time, warm and cold; CI's job time.
-- **Result.** Done on 2026-11-11: 1.2 s warm, about 13 s cold, CI's job 82 s uncached
-  ([measurements](measurements.md)).
+- **Result.** Done on 2026-11-11: the workspace, `flake.nix`, `scripts/check.sh` and CI
+  ([CONTRIBUTING](../CONTRIBUTING.md)); 1.2 s warm, about 13 s cold ([measurements](measurements.md)).
 
 ### M1.2 — The layout model
 
 - **Goal.** Every behaviour of [ADR-0005](adr/0005-the-layouts.md) is tested without a compositor.
-- **Delivers.** A crate with no Wayland object: workspaces, outputs and seats; scrolling columns,
-  dwindle, floating windows, special workspaces; fullscreen, full-width, fake fullscreen, preset
-  widths, a pinned window. Property tests over random sequences of operations; niri's behaviours,
-  read in its documentation and tests, rewritten as scenarios
-  ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md)); the one-column fullscreen and
-  dwindle cases the owner found broken in Umbriel among them.
-- **Done when.** Each behaviour has its scenario; the property tests find no broken invariant over
-  their runs in CI.
-- **Measured.** An operation's time on a workspace of 100 windows.
-- **Result.** Done on 2026-11-11: 97 scenarios, the two Umbriel cases among them; property tests
-  over 1,536 random sequences per run; an operation on 100 windows under 25 µs at the 99th
-  percentile ([measurements](measurements.md)).
+- **Result.** Done on 2026-11-11: 97 scenarios, niri's behaviours rewritten and the two Umbriel
+  cases among them; property tests over 1,536 random sequences per run; an operation on 100
+  windows under 25 µs at the 99th percentile ([measurements](measurements.md)).
 
 ### M1.3 — HDR through Smithay, a prototype
 
@@ -112,41 +93,31 @@ milestone first needs it.
 
 - **Goal.** Motion on springs and curves, interrupted without a jump
   ([ADR-0010](adr/0010-animations-and-effects.md)).
-- **Design.** Decided with the owner on 2026-11-14: a pure crate, `yuna-motion`, turns the
-  layout's jumps into offsets, one camera per scrolling workspace, workspace ids
-  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)); springs in closed form keeping their
-  velocity, ended within half a pixel; Bézier curves
-  ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)); sampled at each
-  frame's presentation, drawn apart from what clients are told
-  ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)); motion, the
-  special workspace's fade, a vertical switch over two workspaces, fullscreen instant, off
-  headless unless `--animations` ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md));
-  reduced motion: nothing slides, fades stay ([ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md));
-  the budget on the GPU against a still baseline
-  ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)).
-- **Result.** Done on 2026-11-14, its closing review's findings fixed or written as debt: `yuna-layout` names its workspaces and
-  columns; `yuna-motion` holds springs in closed form, curves, and the motion of an
-  arrangement, tested alone with random sequences; Yuna draws it with `--animations` or
-  `--reduced-motion`, each frame checked against the reference, pacing under slow drawings and
-  VRR in stories. On the GPU at 4K and 240 Hz, motion missed no frame of 10,000, the heaviest
-  1.3 ms; on llvmpipe at 1080p it misses more than half, recorded ([measurements](measurements.md)).
-  What is left is [debt](debt.md#motion).
-- **Done when.** Each animation is checked frame by frame on the test clock against
-  `yuna-motion`'s reference; scrolls and switches on the GPU at 4K and 240 Hz miss no more
-  frames than a still baseline over 10,000 frames.
-- **Measured.** A frame's time during the heaviest frame of the scripted sequence.
+- **Result.** Done on 2026-11-14 (ADR-0052 to ADR-0056, ADR-0059): `yuna-motion`, springs in
+  closed form and curves, tested alone; Yuna draws it with `--animations` or
+  `--reduced-motion`, each frame checked against the reference. On the GPU at 4K and 240 Hz,
+  motion missed no frame of 10,000, the heaviest 1.3 ms; on llvmpipe at 1080p it misses more than
+  half, recorded ([measurements](measurements.md), [debt](debt.md#motion)).
 
 ### M1.8 — XWayland
 
 - **Goal.** X11 applications run, crisp at scale 1.5 and the right size on every output.
-- **Delivers.** XWayland started on demand, through Smithay's window manager or Yuna's own, chosen
-  in its design ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)); X11 windows drawn at the
-  largest output scale where they can scale themselves, and scaled down on outputs of a smaller
-  scale ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)).
+- **Design.** Decided with the owner on 2026-11-14: Yuna's own X11 window manager on x11rb, its
+  replies awaited on a thread of its own
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); one Xwayland per seat, started
+  on the first connection, stopped 10 s after the last client, behind a cookie
+  ([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)); the seat's largest
+  scale, fixed for an Xwayland's life, X11 surfaces drawn by Yuna and scaled down through an
+  area filter ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md));
+  fullscreen games through gamescope, Xwayland's emulated modes kept
+  ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
+  The clipboard and drag and drop between X11 and Wayland move to M1.11.
 - **Done when.** An X11 test program and a Wine program run headless at 1.5, their captures sharp
   against reference images; an X11 window moved between outputs at 1.5 and 1 keeps its size on
-  both. The design states how a fullscreen X11 game on the output at 1 draws at that output's mode.
-- **Measured.** XWayland's start time and memory.
+  both; X11 windows slide, and menus with them, as Wayland's do; Xwayland starts on demand, stops
+  when idle, and its crash leaves Yuna running; one seat's X11 clients cannot reach another's.
+- **Measured.** XWayland's start time and memory; the area filter's cost at 4K on the GPU and on
+  llvmpipe.
 
 ### M1.9 — The rivals measured
 
@@ -178,7 +149,8 @@ milestone first needs it.
   ([ADR-0061](adr/0061-yunas-uses.md), [ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - **Delivers.** Through MCP: each program's protocol trace and log; the accessibility tree, its
   dependency put to the owner; outputs plugged and unplugged, scale and mode changed, a slow or
-  stuck client, keyboard layouts, clipboard and drag and drop between programs; a call that waits
+  stuck client, keyboard layouts, clipboard and drag and drop between programs, X11's and
+  Wayland's ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); a call that waits
   for an event; a rest auditor naming what wakes Yuna or makes it draw.
 - **Done when.** Through MCP alone, an agent finds a protocol error and a button by its name, and
   checks a window across an output unplugged.
@@ -209,6 +181,9 @@ milestone first needs it.
   actions).
 - From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be
   enabled, and a tool that reads a program's log, which an agent without a shell cannot.
+
+- A second Xwayland at scale 1 for games, on its own display, so that a game on an output of a
+  smaller scale always draws at its mode ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
 
 ## Known debt
 

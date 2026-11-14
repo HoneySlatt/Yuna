@@ -265,3 +265,14 @@ with games' VRR:
 - `agent_time.rs` keeps its own copies of what `examples/common/` now shares with `frame_time`
   and `motion_time` (its run folder, the vkcube environment, `percentile`); `motion_time` reads
   an output's mode with its own parser beside the program's private one.
+
+## XWayland
+
+- An X11 application that does not scale itself (xterm, xeyes, Motif) is small on outputs at
+  XWayland's scale: drawing it at one X11 pixel per logical unit needs a per-application rule
+  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+- No clipboard or drag and drop between X11 and Wayland programs until M1.11; between X11
+  programs of one seat they work inside Xwayland
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
+  key, until Stage 2.

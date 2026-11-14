@@ -47,12 +47,12 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009, 0021 |
 | [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
-| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013 |
+| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013; settled for X11 by 0066 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Superseded by 0063 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035; supersedes 0027; amended by 0045 |
 | [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0037, 0029 |
-| [0044](0044-xwayland-across-outputs-of-different-scales.md) | XWayland across outputs of different scales | Accepted |
+| [0044](0044-xwayland-across-outputs-of-different-scales.md) | XWayland across outputs of different scales | Accepted; carried out by 0068, 0069 |
 | [0045](0045-the-fork-over-https-a-branch-per-base.md) | The fork over HTTPS, a branch per base | Accepted; amends 0021 |
 | [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) | Emulated VRR: amdgpu's rule, checked against the owner's monitor | Accepted; amends 0023, 0031; amended by 0051, 0058 |
 | [0047](0047-color-management-v1-kwins-list.md) | `color-management-v1`: Yuna's own handler, KWin's list | Accepted |
@@ -74,3 +74,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041 |
 | [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057; amended by 0065 |
 | [0065](0065-what-hollow-asks-of-yuna.md) | What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief | Accepted; amends 0064 |
+| [0066](0066-yunas-own-x11-window-manager-on-x11rb.md) | Yuna's own X11 window manager, on x11rb | Accepted |
+| [0067](0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md) | One XWayland per seat, on demand, behind a cookie | Accepted |
+| [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Accepted |
+| [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md) | Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept | Accepted |
