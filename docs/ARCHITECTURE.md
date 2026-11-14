@@ -150,6 +150,28 @@ operation, and an example measures the model:
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 
+## Motion
+
+`yuna-motion` turns the layout's jumps into what each frame draws
+([ADR-0052](adr/0052-motion-in-a-pure-crate.md)); its crate documentation gives the detail.
+
+- `spring.rs`, `oscillator.rs`, `curve.rs`: a spring in closed form, its end within half a
+  pixel, retargeted keeping its velocity; Bézier curves and named easings
+  ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
+- `arrangement.rs`: `Motion`, its `Settings` and `Change`. `update` reads every output of
+  every seat after a change; `frame` gives what an output draws at a time; `end` when its
+  motions end; `told_visible` which windows are told they are shown.
+- `arrangement/output.rs`: one output's motion: each moved window's offset, each scrolling
+  workspace's camera and its anchor column, rounding once to the physical grid.
+- `arrangement/switch.rs`, `special.rs`: the workspace switch over the workspaces involved, and
+  the special workspace's fade.
+
+Its tests: `tests/spring.rs` and `tests/curve.rs` against a numerical integration and known
+values; `tests/arrangement.rs` and `tests/arrangement_still.rs`, scenarios of each behaviour,
+camera and windows on different springs among them; `tests/arrangement_properties.rs`, random
+sequences of operations, clock steps and settings, checking that nothing jumps and that each
+output rests on its arrangement. `examples/motion_timing.rs` times `update` and `frame`.
+
 ## The headless compositor
 
 `crates/yuna/src`, one job per module:
@@ -932,8 +954,10 @@ own thread, both `took_us`.
    [`layout.rs`](../crates/yuna-layout/src/layout.rs) for the operations.
 2. A few scenarios, for example
    [`scrolling.rs`](../crates/yuna-layout/tests/scenarios/scrolling.rs).
-3. [`../crates/yuna/src/lib.rs`](../crates/yuna/src/lib.rs), then
+3. [`../crates/yuna-motion/src/lib.rs`](../crates/yuna-motion/src/lib.rs), then
+   [`arrangement.rs`](../crates/yuna-motion/src/arrangement.rs).
+4. [`../crates/yuna/src/lib.rs`](../crates/yuna/src/lib.rs), then
    [`frames.rs`](../crates/yuna/src/frames.rs) and
    [`shell.rs`](../crates/yuna/src/shell.rs).
-4. A story of [`../crates/yuna/tests/headless/main.rs`](../crates/yuna/tests/headless/main.rs).
-5. [`../scripts/check.sh`](../scripts/check.sh).
+5. A story of [`../crates/yuna/tests/headless/main.rs`](../crates/yuna/tests/headless/main.rs).
+6. [`../scripts/check.sh`](../scripts/check.sh).
