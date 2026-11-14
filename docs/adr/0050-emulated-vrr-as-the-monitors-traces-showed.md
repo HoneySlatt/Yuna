@@ -34,8 +34,9 @@ with these rules once the probes showed what was understood and what was not:
   refresh to the longest. A frame shows a vertical blank after it is ready at the soonest: the
   owner's mode's 269 of 2,429 lines, 461 µs at 240 Hz.
 - **A refresh that draws nothing is paced**, a shortest refresh after the one before, so that
-  callbacks asked without damage never loop; something new to draw, a buffer, damage or a
-  change of the layout, is never paced by it.
+  callbacks asked without a buffer never loop; something new to draw, a buffer attached or
+  removed, a change of the layout or a popup gone, is never paced by it. Two refreshes in a row
+  armed for something new that drew nothing, its buffers all outside the output, pace again.
 - **The replay checks every frame of both traces**, the panel set back on the monitor's
   history after each, against a tolerance of 500 µs, the spread of the kernel's commit path the
   traces show.
@@ -47,7 +48,7 @@ with these rules once the probes showed what was understood and what was not:
 ## Alternatives considered
 
 - **Simulating amdgpu's commit path** event by event (vertical updates, the deferred worker, the
-  commit's waits), to model the remaining 12 % of frames: more traces and more reading, for
+  commit's waits), to model the remaining 13 % of frames: more traces and more reading, for
   regimes Yuna's own policy will avoid.
 - **Closing on the first trace alone**, the late frames left as debt: a rule recorded that the
   quiet trace showed wrong.

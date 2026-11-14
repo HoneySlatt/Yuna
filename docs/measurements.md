@@ -41,7 +41,8 @@ VRR on: steady rates from 23.976 to 300 fps while other builds loaded the machin
 on a quiet machine, frames late and early by 0.5 to 16 ms, gaps and changes of rate. Reduced, they
 are `crates/yuna/tests/fixtures/vrr-trace-pg32ucdm*.txt`. Per frame, the monitor showed 3
 refreshes at 24, 25 and 30 fps, 2 at 48, one from 60, at most 240 Hz above; under BTR, the first
-`n − 1` of a fixed length (13.9 ms at 24 fps), the last variable; idle, 20.83 ms refreshes. A flip
+`n − 1` of a fixed length (13.9 ms at 24 fps), the last variable; after a phase's last frame, 20.83 ms refreshes (12.5 ms
+during the idle seconds that open each run, a state the console left). A flip
 came 0.5 ms after its submission when nothing held it (0.5 to 0.95 ms), 1.2 ms at 240 fps and
 3.0 ms at 300, held by the flip before. After the panel's own refresh, a frame waited 7 to 12 ms
 more. Replayed through `vrr.rs`, every frame, the panel set back on the monitor's history after

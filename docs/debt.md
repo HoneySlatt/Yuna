@@ -133,8 +133,12 @@ with games' VRR:
 - After the panel's own refresh, when no frame came for 1/48 s, the monitor holds a new frame 7
   to 12 ms more; the emulation shows it a vertical blank later, or at the shortest refresh's end.
   About 6 % of the traces' frames.
-- After a perturbation, BTR's count of refreshes may differ: at 25 fps, the emulation keeps 4
-  where the monitor goes back to 3, about half of the steady frames.
+- After a perturbation, BTR's count of refreshes may differ: at 25 fps, 41 % of the frames are
+  counted wrong, 34 % with more refreshes than the monitor shows, the emulation keeping 4 where
+  the monitor goes back to 3.
+- A change that brings no buffer, a subsurface moved or restacked or a viewport changed alone,
+  is paced as if nothing were new: it may show up to a shortest refresh later than the monitor
+  would show it.
 - `freesync.c`'s workaround that holds the top rate after flips close to a vertical update, and
   its writes of the refresh's range deferred to a worker, are not emulated.
 - The kernel's commit path sometimes shows a frame 0.9 ms after its submission rather than 0.5;

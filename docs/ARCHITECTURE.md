@@ -317,7 +317,8 @@ DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
 - A frame shows a vertical blank after it is ready at the soonest: 269 of 2,429 lines of the
   shortest refresh, the owner's mode's, 461 µs at 240 Hz.
 - A refresh lasts at least 1/max and at most 1/min. A frame ready sooner than 1/max after the
-  refresh in progress began waits; a later one starts a refresh at once. With no new frame, the
+  refresh in progress began waits; a later one starts a refresh a vertical blank later. With no
+  new frame, the
   panel refreshes by itself every 1/min.
 - Below the range, BTR, freesync.c's rule, shows each frame `n` times; the first `n − 1`
   refreshes have a fixed length, chosen from the time between the last two frames, and a frame
@@ -326,8 +327,11 @@ DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
   show. An output at rest wakes nothing.
 - The frame loop is the same as at a fixed rate: at once when a refresh could begin now, else
   at the refresh the frame can reach minus the lead. A refresh with nothing new to draw, which
-  answers callbacks asked without damage, comes at most once a shortest refresh; a commit with a
-  buffer or damage, or a change of the layout, is never held back by it (`content_pending`).
+  answers callbacks asked without a buffer, comes at most once a shortest refresh. Something new
+  is never held back by it (`content_pending`): a buffer attached or removed anywhere in the
+  committed tree, read before Smithay takes it, a change of the layout, a popup gone. After two
+  refreshes in a row armed for something new that drew nothing, all is paced again
+  (`content_misses`), so that buffers outside the output never loop.
 - `seq` counts every refresh, the panel's own included; `wp_presentation` version 2 is told
   1/max as the refresh, version 1 zero.
 - The range is at least twice as wide as its least rate; a narrower one takes a path of the
