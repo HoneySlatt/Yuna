@@ -84,9 +84,11 @@ impl<'a> Area<'a> {
         let asked = whole_size(self.output.size());
         let drawn = self.drawn_size(&self.sizing(window), asked);
         // The corner is snapped alone and the size kept: snapping both edges of a rectangle that
-        // starts on a half pixel could round its width away.
-        let x = self.scale.snap(tile.x + (tile.w - drawn.w) / 2.0);
-        let y = self.scale.snap(tile.y + (tile.h - drawn.h) / 2.0);
+        // starts on a half pixel could round its width away. The margin is snapped apart from
+        // the tile, so that the window moves with its tile by whole pixels wherever the view
+        // puts it, a margin of a half pixel included.
+        let x = self.scale.snap(tile.x) + self.scale.snap((tile.w - drawn.w) / 2.0);
+        let y = self.scale.snap(tile.y) + self.scale.snap((tile.h - drawn.h) / 2.0);
         (Rect::new(x, y, drawn.w, drawn.h).clipped_to(&tile), asked)
     }
 }

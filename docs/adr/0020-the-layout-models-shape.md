@@ -1,6 +1,6 @@
 # 0020. The layout model's shape
 
-- Status: Accepted
+- Status: Accepted; amended by [0052](0052-motion-in-a-pure-crate.md) (workspace ids, the camera)
 - Date: 2026-11-11
 
 ## Context

@@ -1,15 +1,16 @@
 //! The whole model: seats, their outputs and workspaces, and the operations on them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::area::Area;
 use crate::geometry::{Rect, Scale, Size};
+use crate::ids::Ids;
 use crate::scrolling::ColumnWidth;
 use crate::sizing::Sizing;
 use crate::workspace::{Arranged, TilingLayout, Workspace};
 use crate::{
-    Direction, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId, Tiling,
-    WindowId, WindowInfo, WorkspaceInfo,
+    Direction, Layer, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId,
+    ShownWorkspaces, Tiling, WindowId, WindowInfo, WorkspaceId, WorkspaceInfo,
 };
 
 /// The layout of every seat's windows. See the crate's documentation.
@@ -19,6 +20,8 @@ pub struct Layout {
     seats: Vec<Seat>,
     /// What the model knows of each window beyond its place.
     windows: Windows,
+    /// The ids of the workspaces and columns the model creates, for all seats.
+    ids: Ids,
 }
 
 /// Every window's record, by its id.
@@ -106,6 +109,7 @@ impl Layout {
             options,
             seats: Vec::new(),
             windows: Windows::default(),
+            ids: Ids::default(),
         })
     }
 
@@ -178,14 +182,25 @@ impl Layout {
 
     /// The workspace in `slot` and its area, when it has an output.
     fn workspace_mut(&mut self, si: usize, slot: Slot) -> (&mut Workspace, Option<Area<'_>>) {
+        let (workspace, area, _) = self.workspace_and_ids_mut(si, slot);
+        (workspace, area)
+    }
+
+    /// [`Layout::workspace_mut`], with the ids to give the columns an operation creates.
+    fn workspace_and_ids_mut(
+        &mut self,
+        si: usize,
+        slot: Slot,
+    ) -> (&mut Workspace, Option<Area<'_>>, &mut Ids) {
         let gap = self.options.gap;
         let windows = &self.windows;
+        let ids = &mut self.ids;
         let seat = &mut self.seats[si];
         match slot {
             Slot::Output { output, index } => {
                 let output = &mut seat.outputs[output];
                 let area = output.area(gap, windows);
-                (&mut output.workspaces[index], Some(area))
+                (&mut output.workspaces[index], Some(area), ids)
             }
             Slot::ShownSpecial { output } => {
                 let output = &mut seat.outputs[output];
@@ -193,10 +208,10 @@ impl Layout {
                 let special = output.special.as_mut().expect(
                     "a ShownSpecial slot is made only for an output showing a special workspace",
                 );
-                (special, Some(area))
+                (special, Some(area), ids)
             }
-            Slot::Detached(i) => (&mut seat.detached[i], None),
-            Slot::HiddenSpecial(i) => (&mut seat.hidden_specials[i], None),
+            Slot::Detached(i) => (&mut seat.detached[i], None, ids),
+            Slot::HiddenSpecial(i) => (&mut seat.hidden_specials[i], None, ids),
         }
     }
 
@@ -242,10 +257,11 @@ impl Layout {
             return slot;
         }
         let tiling = self.options.default_tiling;
+        let id = self.ids.new_workspace();
         let seat = &mut self.seats[si];
         match seat.outputs.get_mut(seat.active) {
             Some(output) => {
-                let workspace = Workspace::new(Some(name.to_owned()), Some(output.id), tiling);
+                let workspace = Workspace::new(id, Some(name.to_owned()), Some(output.id), tiling);
                 output.workspaces.push(workspace);
                 Slot::Output {
                     output: seat.active,
@@ -254,7 +270,7 @@ impl Layout {
             }
             None => {
                 seat.detached
-                    .push(Workspace::new(Some(name.to_owned()), None, tiling));
+                    .push(Workspace::new(id, Some(name.to_owned()), None, tiling));
                 Slot::Detached(seat.detached.len() - 1)
             }
         }
@@ -294,10 +310,13 @@ impl Layout {
         let tiling = self.options.default_tiling;
         let output = &mut self.seats[si].outputs[oi];
         if output.workspaces.len() == 1 {
-            let id = output.id;
-            output
-                .workspaces
-                .push(Workspace::new(None, Some(id), tiling));
+            let home = output.id;
+            output.workspaces.push(Workspace::new(
+                self.ids.new_workspace(),
+                None,
+                Some(home),
+                tiling,
+            ));
         }
         if self.seats[si].outputs[oi].shown == index {
             let other = if index > 0 { index - 1 } else { index + 1 };
@@ -339,6 +358,7 @@ impl Layout {
                     .is_none_or(|w| w.name.is_some() || !w.is_empty());
             if needs_empty_last || output.workspaces.is_empty() {
                 output.workspaces.push(Workspace::new(
+                    self.ids.new_workspace(),
                     None,
                     Some(output.id),
                     options.default_tiling,
@@ -543,10 +563,11 @@ impl Layout {
             Some(Err(_)) | None => None,
         };
         let tiling = self.options.default_tiling;
+        let id = self.ids.new_workspace();
         let seat_ref = &mut self.seats[si];
         let index = home_index.or((!seat_ref.outputs.is_empty()).then_some(seat_ref.active));
         let home = output.or(index.map(|oi| seat_ref.outputs[oi].id));
-        let workspace = Workspace::new(Some(name.to_owned()), home, tiling);
+        let workspace = Workspace::new(id, Some(name.to_owned()), home, tiling);
         match index {
             Some(oi) => seat_ref.outputs[oi].workspaces.push(workspace),
             None => seat_ref.detached.push(workspace),
@@ -674,9 +695,10 @@ impl Layout {
                     }
                 })
             };
-            let special = hidden
-                .or_else(shown_elsewhere)
-                .unwrap_or_else(|| Workspace::new(Some(name.to_owned()), None, tiling));
+            let ids = &mut self.ids;
+            let special = hidden.or_else(shown_elsewhere).unwrap_or_else(|| {
+                Workspace::new(ids.new_workspace(), Some(name.to_owned()), None, tiling)
+            });
             if let Some(previous) = seat_ref.outputs[active].special.replace(special) {
                 seat_ref.hidden_specials.push(previous);
             }
@@ -692,24 +714,25 @@ impl Layout {
             return Ok(());
         };
         let width = self.options.default_width;
-        let (workspace, area) = self.workspace_mut(si, slot);
-        workspace.set_tiling(tiling, width, area.as_ref());
+        let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
+        workspace.set_tiling(tiling, width, area.as_ref(), ids);
         self.tidy(si);
         Ok(())
     }
 
     // ----- Focus and moves by a seat -----
 
-    /// Applies `change` to the workspace the seat works in, then tidies.
+    /// Applies `change` to the workspace the seat works in, with the ids to give new columns,
+    /// then tidies.
     fn with_focused_workspace(
         &mut self,
         seat: SeatId,
-        change: impl FnOnce(&mut Workspace, Option<&Area>),
+        change: impl FnOnce(&mut Workspace, Option<&Area>, &mut Ids),
     ) -> Result<(), LayoutError> {
         let si = self.seat_index(seat)?;
         if let Some(slot) = self.focused_slot(si) {
-            let (workspace, area) = self.workspace_mut(si, slot);
-            change(workspace, area.as_ref());
+            let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
+            change(workspace, area.as_ref(), ids);
             self.tidy(si);
         }
         Ok(())
@@ -718,13 +741,13 @@ impl Layout {
     /// Moves the seat's focus to the next window in `direction`. In scrolling columns, it stops
     /// at the strip's ends.
     pub fn focus(&mut self, seat: SeatId, direction: Direction) -> Result<(), LayoutError> {
-        self.with_focused_workspace(seat, |ws, area| ws.focus(direction, area))
+        self.with_focused_workspace(seat, |ws, area, _| ws.focus(direction, area))
     }
 
     /// Moves the seat's focused column (left, right) or window (up, down) in scrolling columns;
     /// exchanges the focused window with its neighbour in dwindle. Floating windows do not move.
     pub fn move_focused(&mut self, seat: SeatId, direction: Direction) -> Result<(), LayoutError> {
-        self.with_focused_workspace(seat, |ws, area| ws.move_focused(direction, area))
+        self.with_focused_workspace(seat, |ws, area, _| ws.move_focused(direction, area))
     }
 
     /// niri's consume-or-expel, left or right, on the seat's focused window in scrolling columns:
@@ -734,16 +757,16 @@ impl Layout {
         seat: SeatId,
         direction: Direction,
     ) -> Result<(), LayoutError> {
-        self.with_focused_workspace(seat, |ws, area| {
+        self.with_focused_workspace(seat, |ws, area, ids| {
             if let (TilingLayout::Scrolling(s), false) = (&mut ws.tiling, ws.focus_floating) {
-                s.consume_or_expel(direction, area);
+                s.consume_or_expel(direction, area, ids);
             }
         })
     }
 
     /// Switches the seat's focus between the floating and the tiled windows.
     pub fn switch_focus_floating(&mut self, seat: SeatId) -> Result<(), LayoutError> {
-        self.with_focused_workspace(seat, |ws, _| ws.switch_focus_side())
+        self.with_focused_workspace(seat, |ws, _, _| ws.switch_focus_side())
     }
 
     /// Moves the seat's focused window to the workspace named `name`, created if it does not
@@ -807,10 +830,14 @@ impl Layout {
         let target = match shown.or(hidden) {
             Some(target) => target,
             None => {
+                let id = self.ids.new_workspace();
                 let seat_ref = &mut self.seats[si];
-                seat_ref
-                    .hidden_specials
-                    .push(Workspace::new(Some(name.to_owned()), None, tiling));
+                seat_ref.hidden_specials.push(Workspace::new(
+                    id,
+                    Some(name.to_owned()),
+                    None,
+                    tiling,
+                ));
                 Slot::HiddenSpecial(seat_ref.hidden_specials.len() - 1)
             }
         };
@@ -873,7 +900,7 @@ impl Layout {
             Slot::Output { output, .. } => Some(self.seats[si].outputs[output].id),
             _ => None,
         };
-        let (workspace, area) = self.workspace_mut(si, slot);
+        let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
         if let Some(home) = home {
             workspace.settle_on(home);
         }
@@ -883,12 +910,12 @@ impl Layout {
             }
             None => {
                 let (width, full_width) = moving.column.unwrap_or((options.default_width, false));
-                workspace.add_tiled(moving.window, width, area.as_ref());
+                workspace.add_tiled(moving.window, width, area.as_ref(), ids);
                 if let (true, TilingLayout::Scrolling(s)) = (full_width, &mut workspace.tiling) {
                     s.set_full_width(moving.window, true, area.as_ref());
                 }
                 if moving.fullscreen {
-                    set_tiled_fullscreen(workspace, moving.window, true, area.as_ref());
+                    set_tiled_fullscreen(workspace, moving.window, true, area.as_ref(), ids);
                 }
             }
         }
@@ -954,7 +981,10 @@ impl Layout {
                     let tiling = self.options.default_tiling;
                     let seat_ref = &mut self.seats[si];
                     if seat_ref.detached.is_empty() {
-                        seat_ref.detached.push(Workspace::new(None, None, tiling));
+                        let id = self.ids.new_workspace();
+                        seat_ref
+                            .detached
+                            .push(Workspace::new(id, None, None, tiling));
                     }
                     Slot::Detached(0)
                 }
@@ -996,7 +1026,7 @@ impl Layout {
         // Behind a fullscreen game in dwindle, a window asking to open fullscreen opens normally.
         let fullscreen =
             options.fullscreen && !screen_held_by_another(self.workspace(si, slot), window);
-        let (workspace, area) = self.workspace_mut(si, slot);
+        let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
         if let Some(home) = home {
             workspace.settle_on(home);
         }
@@ -1026,9 +1056,9 @@ impl Layout {
             }
         } else {
             let width = options.width.unwrap_or(default_width);
-            workspace.add_tiled(window, width, area.as_ref());
+            workspace.add_tiled(window, width, area.as_ref(), ids);
             if fullscreen {
-                set_tiled_fullscreen(workspace, window, true, area.as_ref());
+                set_tiled_fullscreen(workspace, window, true, area.as_ref(), ids);
             }
         }
         if let Some(record) = self.windows.get_mut(&window) {
@@ -1061,6 +1091,7 @@ impl Layout {
                 .filter(|(_, record)| record.seat == seat)
                 .map(|(&id, record)| (id, record.clone()))
                 .collect(),
+            ids: self.ids.clone(),
         };
         // An id no window has; if every id were taken, opening would refuse it.
         let window = (0..=u64::MAX)
@@ -1146,12 +1177,12 @@ impl Layout {
         let default_width = self.options.default_width;
         let default_size = self.options.default_floating_size;
         let saved_rect = self.windows.get(&window).and_then(|r| r.floating_rect);
-        let (workspace, area) = self.workspace_mut(si, slot);
+        let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
         let is_tiled = workspace.is_tiled(window);
         let mut new_rect = None;
         if floating && is_tiled {
             // Out of fullscreen first, so that its tiled size, not the output's, is measured.
-            set_tiled_fullscreen(workspace, window, false, area.as_ref());
+            set_tiled_fullscreen(workspace, window, false, area.as_ref(), ids);
             let size = area
                 .as_ref()
                 .and_then(|area| drawn_rect(workspace, window, area))
@@ -1164,7 +1195,7 @@ impl Layout {
             if let Some(Some((rect, _))) = workspace.remove(window, area.as_ref()) {
                 new_rect = Some(rect);
             }
-            workspace.add_tiled(window, default_width, area.as_ref());
+            workspace.add_tiled(window, default_width, area.as_ref(), ids);
             if was_focused {
                 workspace.focus_window(window, area.as_ref());
             }
@@ -1325,7 +1356,7 @@ impl Layout {
         }
         let default_width = self.options.default_width;
         let record = self.windows.get(&window).cloned();
-        let (workspace, area) = self.workspace_mut(si, slot);
+        let (workspace, area, ids) = self.workspace_and_ids_mut(si, slot);
         let mut float_after = record.as_ref().is_some_and(|r| r.float_after_fullscreen);
         let mut saved_rect = record.as_ref().and_then(|r| r.floating_rect);
         if fullscreen {
@@ -1337,11 +1368,11 @@ impl Layout {
                 if let Some(Some((rect, _))) = workspace.remove(window, area.as_ref()) {
                     saved_rect = Some(rect);
                 }
-                workspace.add_tiled(window, default_width, area.as_ref());
+                workspace.add_tiled(window, default_width, area.as_ref(), ids);
             }
-            set_tiled_fullscreen(workspace, window, true, area.as_ref());
+            set_tiled_fullscreen(workspace, window, true, area.as_ref(), ids);
         } else if workspace.is_fullscreen(window) {
-            set_tiled_fullscreen(workspace, window, false, area.as_ref());
+            set_tiled_fullscreen(workspace, window, false, area.as_ref(), ids);
             if float_after {
                 let was_focused = workspace.focused() == Some(window);
                 workspace.remove(window, area.as_ref());
@@ -1477,6 +1508,17 @@ impl Layout {
         Ok(self.seats[si].outputs.iter().map(|o| o.id).collect())
     }
 
+    /// Every seat, in the order they were added.
+    pub fn seats(&self) -> Vec<SeatId> {
+        self.seats.iter().map(|s| s.id).collect()
+    }
+
+    /// The output's scale: physical pixels per logical unit.
+    pub fn output_scale(&self, output: OutputId) -> Result<Scale, LayoutError> {
+        let (si, oi) = self.output_index(output)?;
+        Ok(self.seats[si].outputs[oi].scale)
+    }
+
     /// The output's rectangle, in logical coordinates.
     pub fn output_rect(&self, output: OutputId) -> Result<Rect, LayoutError> {
         let (si, oi) = self.output_index(output)?;
@@ -1486,8 +1528,9 @@ impl Layout {
     /// The windows an output shows, in drawing order, bottom to top: the workspace it shows, its
     /// tiled windows then its floating ones; the special workspace over it; the pinned windows
     /// over everything, as in Hyprland. While a fullscreen window holds a workspace's focus, its
-    /// floating and pinned windows are not drawn. Each comes with the rectangle it is drawn in
-    /// and the size its client is asked ([`Placed`]).
+    /// floating and pinned windows are not drawn. Each comes with the rectangle it is drawn in,
+    /// the size its client is asked, and its workspace, layer and column ([`Placed`]);
+    /// [`Layout::shown_workspaces`] gives the camera its strip is seen through.
     ///
     /// Its cost is linear in the windows of the workspaces shown, save a scrolling column whose
     /// windows' minimum heights do not fit: that column costs up to the square of its windows.
@@ -1496,70 +1539,101 @@ impl Layout {
         let o = &self.seats[si].outputs[oi];
         let focused = self.focused(self.seats[si].id);
         let area = o.area(self.options.gap, &self.windows);
-        let mut raw = Vec::new();
-        o.workspaces[o.shown].arrange(&area, &mut raw);
-        let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
-        let mut placed: Vec<Placed> = unpinned
-            .into_iter()
-            .map(|a| self.placed(focused, a))
-            .collect();
+        let shown = &o.workspaces[o.shown];
+        // Sized once for every window of the model, so that neither list grows on the way.
+        let mut raw = Vec::with_capacity(self.windows.len());
+        shown.arrange(&area, &mut raw);
+        let mut placed: Vec<Placed> = Vec::with_capacity(self.windows.len());
+        let mut pinned = Vec::new();
+        for a in raw.drain(..) {
+            if a.layer == Layer::Pinned {
+                pinned.push(a);
+            } else {
+                placed.push(self.placed(focused, shown.id, a));
+            }
+        }
         let mut special_covers = false;
         if let Some(special) = &o.special {
-            let mut raw = Vec::new();
             special.arrange(&area, &mut raw);
-            placed.extend(raw.into_iter().map(|a| self.placed(focused, a)));
+            placed.extend(raw.drain(..).map(|a| self.placed(focused, special.id, a)));
             special_covers = special.fullscreen_covers();
         }
         // A fullscreen window of the special workspace hides them too: nothing over a game.
         if !special_covers {
-            placed.extend(pinned.into_iter().map(|a| self.placed(focused, a)));
+            placed.extend(
+                pinned
+                    .into_iter()
+                    .map(|a| self.placed(focused, shown.id, a)),
+            );
         }
         Ok(placed)
     }
 
-    /// The windows of one of an output's workspaces, the `index`-th as [`Layout::workspaces`]
-    /// lists them, shown or not, arranged as that output would show it alone: its tiled windows,
-    /// then its floating ones, then its pinned ones, without the special workspace over the
-    /// output. What the owner's peek at a workspace not shown draws, in a thumbnail or an
-    /// overview ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); it changes nothing,
-    /// and no client is asked a new size. A seat's workspaces are read whatever the seat: a peek
-    /// only reads. Refused for an unknown output, and for an index past its workspaces.
+    /// The workspaces an output shows, each with its camera and the working area it is arranged
+    /// in ([`WorkspaceView`](crate::WorkspaceView)): what following its windows from one
+    /// arrangement to the next needs. Refused for an unknown output.
+    pub fn shown_workspaces(&self, output: OutputId) -> Result<ShownWorkspaces, LayoutError> {
+        let (si, oi) = self.output_index(output)?;
+        let o = &self.seats[si].outputs[oi];
+        let area = o.area(self.options.gap, &self.windows);
+        Ok(ShownWorkspaces {
+            main: o.workspaces[o.shown].view(&area),
+            special: o.special.as_ref().map(|special| special.view(&area)),
+        })
+    }
+
+    /// The windows of `workspace`, one of an output's workspaces as [`Layout::workspaces`] lists
+    /// them, shown or not, arranged as that output would show it alone: its tiled windows, then
+    /// its floating ones, then its pinned ones, without the special workspace over the output.
+    /// What the owner's peek at a workspace not shown draws, in a thumbnail or an overview
+    /// ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)); it changes nothing, and no
+    /// client is asked a new size. A seat's workspaces are read whatever the seat: a peek only
+    /// reads. Refused for an unknown output, and for a workspace that is not one of its own,
+    /// the special workspace shown over it included.
     ///
     /// Its cost is that of [`Layout::arrange`] for that workspace alone.
     pub fn arrange_workspace(
         &self,
         output: OutputId,
-        index: usize,
+        workspace: WorkspaceId,
     ) -> Result<Vec<Placed>, LayoutError> {
         let (si, oi) = self.output_index(output)?;
         let o = &self.seats[si].outputs[oi];
-        let workspace = o.workspaces.get(index).ok_or(LayoutError::InvalidValue)?;
+        let workspace = o
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace)
+            .ok_or(LayoutError::InvalidValue)?;
         let focused = self.focused(self.seats[si].id);
         let area = o.area(self.options.gap, &self.windows);
         let mut raw = Vec::new();
         workspace.arrange(&area, &mut raw);
-        let (pinned, unpinned): (Vec<_>, Vec<_>) = raw.into_iter().partition(|a| a.pinned);
+        let (pinned, unpinned): (Vec<_>, Vec<_>) =
+            raw.into_iter().partition(|a| a.layer == Layer::Pinned);
         Ok(unpinned
             .into_iter()
             .chain(pinned)
-            .map(|a| self.placed(focused, a))
+            .map(|a| self.placed(focused, workspace.id, a))
             .collect())
     }
 
-    /// A window as arranged, with what the model knows of its state; `focused` is its seat's
-    /// focused window.
-    fn placed(&self, focused: Option<WindowId>, a: Arranged) -> Placed {
+    /// A window as arranged on `workspace`, with what the model knows of its state; `focused` is
+    /// its seat's focused window.
+    fn placed(&self, focused: Option<WindowId>, workspace: WorkspaceId, a: Arranged) -> Placed {
         Placed {
             window: a.window,
             rect: a.rect,
             configure: a.configure,
-            tiled: a.tiled,
+            tiled: matches!(a.layer, Layer::Strip | Layer::Tiles),
             fullscreen: a.fullscreen
                 || self
                     .windows
                     .get(&a.window)
                     .is_some_and(|r| r.fake_fullscreen),
             activated: focused == Some(a.window),
+            workspace,
+            layer: a.layer,
+            column: a.column,
         }
     }
 
@@ -1596,6 +1670,7 @@ impl Layout {
             .iter()
             .enumerate()
             .map(|(i, w)| WorkspaceInfo {
+                id: w.id,
                 name: w.name.clone(),
                 shown: i == o.shown,
                 tiling: w.tiling_kind(),
@@ -1712,6 +1787,35 @@ impl Layout {
                 return Err(format!(
                     "{window:?} would float back, but it is not fullscreen"
                 ));
+            }
+        }
+        self.check_ids()
+    }
+
+    /// Checks the ids the model gave: each workspace's and each column's unique across the whole
+    /// layout, and handed out by its counter, so that the next one given is new.
+    fn check_ids(&self) -> Result<(), String> {
+        let mut workspaces = HashSet::new();
+        let mut columns = HashSet::new();
+        for seat in &self.seats {
+            let every_workspace = seat
+                .outputs
+                .iter()
+                .flat_map(|o| o.workspaces.iter().chain(&o.special))
+                .chain(&seat.detached)
+                .chain(&seat.hidden_specials);
+            for workspace in every_workspace {
+                if !self.ids.gave_workspace(workspace.id) || !workspaces.insert(workspace.id) {
+                    return Err(format!(
+                        "{:?} is held twice, or was never handed out",
+                        workspace.id
+                    ));
+                }
+                for column in workspace.column_ids() {
+                    if !self.ids.gave_column(column) || !columns.insert(column) {
+                        return Err(format!("{column:?} is held twice, or was never handed out"));
+                    }
+                }
             }
         }
         Ok(())
@@ -1892,16 +1996,18 @@ fn record_windows(
 }
 
 /// Makes a tiled window fullscreen or not in whichever layout holds it, focus kept on the floating
-/// side only while no fullscreen window covers.
+/// side only while no fullscreen window covers. A column it leaves for one of its own takes its id
+/// from `ids`.
 fn set_tiled_fullscreen(
     workspace: &mut Workspace,
     window: WindowId,
     on: bool,
     area: Option<&Area>,
+    ids: &mut Ids,
 ) {
     match &mut workspace.tiling {
         TilingLayout::Scrolling(s) => {
-            s.set_fullscreen(window, on, area);
+            s.set_fullscreen(window, on, area, ids);
         }
         TilingLayout::Dwindle(d) => {
             d.set_fullscreen(window, on);

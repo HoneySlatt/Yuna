@@ -3,6 +3,7 @@
 //! at fixed boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)),
 //! or as a VRR panel (`vrr.rs`).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +18,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
 use smithay::wayland::presentation::Refresh;
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
+use yuna_layout::{OutputConfig, OutputId, Placed, SeatId, WindowId};
+use yuna_motion::{Change, Drawn};
 
 use crate::Error;
 use crate::capture::Failure;
@@ -221,6 +223,16 @@ pub(crate) struct VirtualOutput {
     /// The refresh its armed refresh aims at, and when that refresh is due.
     pub armed_refresh: RefreshAt,
     pub armed_at: Duration,
+    /// When the frame of its armed refresh is presented if on time, the time its motion is
+    /// sampled at: the boundary it aims at, or for a refresh armed at once, the one its drawing
+    /// reaches if it takes as long as the longest of the last
+    /// [`DRAWING_WINDOW`](crate::frames::DRAWING_WINDOW), or after rest the last one, at most one
+    /// period. While its motion runs, it is later than `sampled_at`
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub armed_sample_at: Duration,
+    /// The time its last frame sampled its motion at, the frame its buffer holds: that of its
+    /// last refresh whose drawing did not fail; zero before its first.
+    pub sampled_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,
     /// Whether something new waits to be drawn: a commit with a buffer or damage, or a change of
@@ -239,8 +251,28 @@ pub(crate) struct VirtualOutput {
     pub held_feedback: Vec<(RefreshAt, OutputPresentationFeedback)>,
     /// Its recent drawings, from which its lead is predicted.
     pub drawings: Drawings,
-    /// The windows it shows, bottom to top, as the layout last arranged them.
+    /// The windows it shows, bottom to top, as the layout last arranged them: their places.
     pub placed: Vec<Placed>,
+    /// What its last frame drew, bottom to top, as the motion gave it: what a capture of that
+    /// frame cuts.
+    pub drawn: Vec<Drawn>,
+    /// The windows it tells they are visible, in increasing order: as the motion said at the
+    /// last arrangement, or at the refresh where its motion ended.
+    pub told: Vec<WindowId>,
+    /// Whether its motion ran at its last arrangement or refresh: the refresh that finds it
+    /// ended tells its windows once.
+    pub in_motion: bool,
+}
+
+impl VirtualOutput {
+    /// The time hit tests, the pointer's focus and MCP's `windows` read its motion at, at `now`:
+    /// `now`, or the time its last frame sampled if that is later, so that none reads a motion
+    /// that frame drew past. Once it drew a motion's end, they read the output at rest, as it
+    /// shows it, though the clock has not reached that end
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub fn motion_read_at(&self, now: Duration) -> Duration {
+        now.max(self.sampled_at)
+    }
 }
 
 impl State {
@@ -345,6 +377,8 @@ impl State {
             timing,
             armed_refresh: creation,
             armed_at: Duration::ZERO,
+            armed_sample_at: Duration::ZERO,
+            sampled_at: Duration::ZERO,
             armed_at_once: false,
             content_pending: false,
             armed_for_content: false,
@@ -353,6 +387,9 @@ impl State {
             held_feedback: Vec::new(),
             drawings: Drawings::default(),
             placed: Vec::new(),
+            drawn: Vec::new(),
+            told: Vec::new(),
+            in_motion: false,
         });
         tracing::info!(
             output = id.0,
@@ -362,7 +399,9 @@ impl State {
             scale = mode.scale(),
             "virtual output created"
         );
-        self.mark_layout_changed();
+        // A new output starts at rest (ADR-0052): nothing else need show at once, and every
+        // other output's motion goes on (ADR-0015).
+        self.mark_layout_changed(Change::Animated);
         Ok(id)
     }
 }
@@ -414,6 +453,7 @@ impl State {
         self.fail_captures(id, "its output was removed", Failure::OutputGone);
         self.stop_capture_sessions(id);
         let removed = self.outputs.remove(index);
+        let seat = removed.seat;
         for (_, mut feedback) in removed.held_feedback {
             feedback.discarded();
         }
@@ -421,7 +461,9 @@ impl State {
             .disable_global::<State>(removed.global.clone());
         self.retired_globals.push((Instant::now(), removed.global));
         tracing::info!(output = id.0, "virtual output removed");
-        self.mark_layout_changed();
+        // Its seat's outputs, which take its workspaces, show the change at once (ADR-0052); the
+        // other seats' motions go on (ADR-0015).
+        self.mark_layout_changed(Change::InstantFor(BTreeSet::from([seat])));
     }
 
     /// Every output, in the order they were created.
@@ -495,8 +537,8 @@ impl Timing {
     /// The first refresh a frame ready at `ready` can show at, after the output's `last`: at a
     /// fixed rate, the first boundary at or after it; under VRR, the panel's answer. With
     /// `paced`, for a refresh with nothing new to draw, not before a shortest refresh after
-    /// `last` either: the panel never learns of a refresh that drew nothing, and callbacks asked
-    /// without damage must come once a shortest refresh, never in a loop.
+    /// `last` either: at rest the panel never learns of a refresh that drew nothing, and callbacks
+    /// asked without damage must come once a shortest refresh, never in a loop.
     pub fn reachable(&self, ready: Duration, last: RefreshAt, paced: bool) -> RefreshAt {
         match self {
             Timing::Fixed(boundaries) => {
@@ -534,7 +576,9 @@ impl Timing {
     }
 
     /// Where a frame whose drawing ended at `ready` is presented, never before the refresh it
-    /// aimed at: an earlier one is the frame before's. A VRR panel records it.
+    /// aimed at: an earlier one is the frame before's. A VRR panel records it. During a motion
+    /// on a VRR output, a refresh that drew nothing shows its frame again through it too
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
     pub fn present(&mut self, ready: Duration, aimed: RefreshAt, last: RefreshAt) -> RefreshAt {
         let reached = self.reachable(ready, last, false);
         let presented = if reached.seq < aimed.seq {

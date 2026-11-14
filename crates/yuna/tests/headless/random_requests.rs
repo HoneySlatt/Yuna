@@ -15,14 +15,19 @@
 //! first and stayed well-behaved, focused by a key binding, gets its frame callback at the next
 //! refresh boundary; once every client has gone, Yuna rests.
 //!
-//! Two tests share the cases, so that a runner with several cores runs them at once: one starts
-//! from a busy state, three clients with a window, a dialog and a menu each; the other from the
-//! sentinel alone. A failure shrinks to the shortest sequence that still fails; proptest keeps its
-//! seed in `random_requests.proptest-regressions`, beside this file, committed so that the case
-//! runs at every check. A seed replays its case only while the generator stays the same: when the
-//! generator changes, the sequences found move to [`sequences_found_before`]. The case counts fit
-//! about 10 s of the check in a debug build (`docs/ARCHITECTURE.md`); `PROPTEST_CASES=<n>` runs
-//! `n` in each test.
+//! The cases run with animations off, as both headless modes default to, and on, at their
+//! defaults (ADR-0056). With animations on, what a step moves goes on moving through the steps
+//! after it; once the sentinel is focused, and again once every client has gone, every deadline
+//! runs until Yuna rests, before the same checks.
+//!
+//! Four tests share the cases, so that a runner with several cores runs them at once: from a busy
+//! state, three clients with a window, a dialog and a menu each, or from the sentinel alone; each
+//! with animations off and on. A failure shrinks to the shortest sequence that still fails;
+//! proptest keeps its seed in `random_requests.proptest-regressions`, beside this file, committed
+//! so that the case runs at every check. A seed replays its case only while the generator stays
+//! the same: when the generator changes, the sequences found move to [`sequences_found_before`],
+//! which runs each with animations off and on. The case counts fit about 10 s of the check in a
+//! debug build (`docs/ARCHITECTURE.md`); `PROPTEST_CASES=<n>` runs `n` in each test.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -32,11 +37,12 @@ use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, TestRunner, contextualize_config};
 use wayland_client::protocol::wl_surface::WlSurface;
 use yuna::yuna_layout::{Direction, OutputId, Tiling, WindowId};
+use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 
 use crate::client::{Anchor, Client, ConstraintAdjustment, Gravity, Parent, Placement};
 use crate::selection_client::{SelectionClient, SelectionEvent};
-use crate::{LEAD, assert_rests, run_armed_deadlines};
+use crate::{LEAD, assert_rests, motion, run_armed_deadlines};
 
 /// The clients that send random requests, beside the sentinel.
 const CLIENTS: usize = 3;
@@ -50,6 +56,15 @@ const RATE: u32 = 60;
 const PERIOD: Duration = Duration::from_nanos(16_666_666);
 const SCALE: f64 = 1.5;
 const TEXT: &str = "text/plain;charset=utf-8";
+
+/// Whether the compositor's animations are on: the same cases run both ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Animations {
+    /// Off, as both headless modes default to: every change shows at once.
+    Off,
+    /// On, at their defaults: what moved moves on springs and fades.
+    On,
+}
 
 /// Who sends a request.
 #[derive(Debug, Clone, Copy)]
@@ -1055,14 +1070,18 @@ fn focus_window(compositor: &mut Compositor, start: Duration, index: usize) {
         .expect("the manual clock moves");
 }
 
-/// The test's compositor: manual clock, one small output.
-fn compositor() -> Compositor {
+/// The test's compositor: manual clock, one small output, its animations as `animations` says.
+fn compositor(animations: Animations) -> Compositor {
     let mode = OutputMode::new(OUTPUT_SIZE.0, OUTPUT_SIZE.1, f64::from(RATE), SCALE)
         .expect("a valid mode");
     Compositor::new(Config {
         outputs: vec![mode],
         clock: ClockMode::Manual,
         listen: false,
+        animations: Settings {
+            off: animations == Animations::Off,
+            ..Settings::default()
+        },
         ..Config::default()
     })
     .expect("the compositor starts")
@@ -1300,8 +1319,13 @@ fn check(compositor: &Compositor) -> Result<(), String> {
 
 /// Runs `steps`, checking after each, then checks the sentinel and rest, and adds to `reach`.
 /// See the module's documentation.
-fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseError> {
-    let mut compositor = compositor();
+fn run(
+    busy: bool,
+    animations: Animations,
+    steps: &[Step],
+    reach: &mut Reach,
+) -> Result<(), TestCaseError> {
+    let mut compositor = compositor(animations);
     let start = compositor.now();
     let mut sentinel = sentinel(&mut compositor, start);
     let mut clients: [Option<SelectionClient>; CLIENTS] = Default::default();
@@ -1346,13 +1370,19 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
         }
     }
 
-    // A key binding focuses the sentinel's window, which shows it. Three periods later the
-    // output is idle: the sentinel's frame callback, asked then, comes in the round that reads
-    // it; asked again, at the next boundary's deadline exactly, not a nanosecond before
-    // (ADR-0031).
+    // A key binding focuses the sentinel's window, which shows it; with animations on, what
+    // moves runs to its end and Yuna rests. Three periods later the output is idle: the
+    // sentinel's frame callback, asked then, comes in the round that reads it; asked again, at
+    // the next boundary's deadline exactly, not a nanosecond before (ADR-0031).
     compositor
         .change_layout(|layout| layout.focus_window(WindowId(1)))
         .map_err(|error| TestCaseError::fail(format!("the sentinel cannot focus: {error}")))?;
+    if animations == Animations::On {
+        motion::settle(&mut compositor, |compositor| {
+            settle(compositor, &mut sentinel, &mut clients);
+        });
+        prop_assert_eq!(check(&compositor), Ok(()));
+    }
     let quiet = compositor.now() + 3 * PERIOD;
     compositor
         .advance(quiet - compositor.now())
@@ -1387,14 +1417,17 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
     );
 
     // Every client leaves: once the display has seen it and the next boundary has drawn it, Yuna
-    // rests.
+    // rests; with animations on, once the motion of the windows closing has ended.
     drop(clients);
     sentinel.roundtrip(&mut compositor);
     drop(sentinel);
     compositor
         .dispatch(Some(Duration::ZERO))
         .expect("the compositor dispatches");
-    run_armed_deadlines(&mut compositor);
+    match animations {
+        Animations::Off => run_armed_deadlines(&mut compositor),
+        Animations::On => motion::settle(&mut compositor, |_| {}),
+    }
     prop_assert_eq!(check(&compositor), Ok(()));
     prop_assert_eq!(
         compositor
@@ -1407,10 +1440,10 @@ fn run(busy: bool, steps: &[Step], reach: &mut Reach) -> Result<(), TestCaseErro
     Ok(())
 }
 
-/// Runs the cases of one of the two tests, those that start busy or not, then prints how far
-/// they reached. Written out rather than with `proptest!`, so that the cases add to one
-/// [`Reach`].
-fn run_cases(busy: bool) {
+/// Runs the cases of one of the four tests, those that start busy or not, with animations off or
+/// on, then prints how far they reached. Written out rather than with `proptest!`, so that the
+/// cases add to one [`Reach`].
+fn run_cases(busy: bool, animations: Animations) {
     let mut config = contextualize_config(ProptestConfig {
         cases: CASES_PER_TEST,
         // Beside this file, as `proptest!` would set it.
@@ -1423,22 +1456,41 @@ fn run_cases(busy: bool) {
     let cases = config.cases;
     let reach = RefCell::new(Reach::default());
     let mut runner = TestRunner::new(config);
-    let result = runner.run(&steps(), |steps| run(busy, &steps, &mut reach.borrow_mut()));
+    let result = runner.run(&steps(), |steps| {
+        run(busy, animations, &steps, &mut reach.borrow_mut())
+    });
     if let Err(error) = result {
         panic!("{error}\n{runner}");
     }
     let start = if busy { "busy" } else { "fresh" };
-    println!("{cases} cases from {start} starts: {}", reach.borrow());
+    let animated = match animations {
+        Animations::Off => "off",
+        Animations::On => "on",
+    };
+    println!(
+        "{cases} cases from {start} starts, animations {animated}: {}",
+        reach.borrow()
+    );
 }
 
 #[test]
 fn random_requests_from_busy_starts_keep_yuna_up() {
-    run_cases(true);
+    run_cases(true, Animations::Off);
 }
 
 #[test]
 fn random_requests_from_fresh_starts_keep_yuna_up() {
-    run_cases(false);
+    run_cases(false, Animations::Off);
+}
+
+#[test]
+fn random_requests_with_animations_from_busy_starts_keep_yuna_up() {
+    run_cases(true, Animations::On);
+}
+
+#[test]
+fn random_requests_with_animations_from_fresh_starts_keep_yuna_up() {
+    run_cases(false, Animations::On);
 }
 
 /// The popup of the regressions file's second seed, found before M1.6.
@@ -1458,7 +1510,8 @@ fn popup_on_nothing() -> Request {
 }
 
 /// Sequences the random tests found failing, written out with whether they started busy: a seed
-/// kept in the regressions file replays its case only while the generator stays the same.
+/// kept in the regressions file replays its case only while the generator stays the same. Each
+/// runs with animations off and on.
 #[test]
 fn sequences_found_before() {
     let by_first = |request| Step::Client {
@@ -1530,8 +1583,10 @@ fn sequences_found_before() {
         ),
     ];
     for (busy, steps) in found {
-        if let Err(error) = run(busy, &steps, &mut Reach::default()) {
-            panic!("{error}");
+        for animations in [Animations::Off, Animations::On] {
+            if let Err(error) = run(busy, animations, &steps, &mut Reach::default()) {
+                panic!("{error}, animations {animations:?}");
+            }
         }
     }
 }

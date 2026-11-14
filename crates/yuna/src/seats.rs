@@ -18,6 +18,7 @@
 //! its focus leaves, and only then are its clients ended; its outputs, its `wl_seat` global and its
 //! place in the layout go once they are freed (`Compositor::remove_seat`).
 
+use std::collections::BTreeSet;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +32,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::{Logical, Point, Serial};
 use yuna_layout::SeatId;
+use yuna_motion::Change;
 
 use crate::Error;
 use crate::popups::ActivePopupGrab;
@@ -346,7 +348,9 @@ impl State {
         }
         removed.seat.remove_keyboard();
         removed.seat.remove_pointer();
-        self.mark_layout_changed();
+        // A seat removed takes its outputs away at once, as an output removed does; the other
+        // seats' motions go on (ADR-0015).
+        self.mark_layout_changed(Change::InstantFor(BTreeSet::from([id])));
         tracing::info!(seat = id.0, "seat removed");
         Ok(())
     }

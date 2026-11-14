@@ -10,6 +10,7 @@ mod dwindle;
 mod floating;
 mod fullscreen;
 mod harness;
+mod ids;
 mod outputs;
 mod peek;
 mod robustness;

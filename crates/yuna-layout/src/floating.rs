@@ -12,7 +12,7 @@ use crate::area::Area;
 use crate::geometry::{Rect, Size, nearest_in_direction};
 use crate::sizing::whole_size;
 use crate::workspace::Arranged;
-use crate::{Direction, WindowId};
+use crate::{Direction, Layer, WindowId};
 
 /// One floating window.
 #[derive(Debug, Clone, Copy)]
@@ -190,9 +190,13 @@ impl Floating {
                 window: f.window,
                 rect,
                 configure,
-                tiled: false,
+                layer: if f.pinned {
+                    Layer::Pinned
+                } else {
+                    Layer::Floating
+                },
+                column: None,
                 fullscreen: false,
-                pinned: f.pinned,
             });
         }
     }

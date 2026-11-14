@@ -164,10 +164,40 @@ that rests on it is reopened in an ADR.
 
 ## Animations
 
-- niri: each animation a spring (damping ratio, stiffness, epsilon) or a duration and a curve; a
-  restarted animation starts from the current value.
-- Hyprland: Bézier curves, and springs since 0.57; an interrupted spring keeps its velocity.
-- KWin: animations retargeted while running; springs in some effects since 2026-07.
+Read in their sources on 2026-11-14: niri `73a04441` (`src/animation/`, `src/layout/scrolling.rs`,
+`monitor.rs`, `src/niri.rs`), hyprutils `ab978a33` and Hyprland `0767f634`, KWin `c90230b7`
+(`src/effect/springmotion.cpp`, `animationclock`), libadwaita `main` of 2026-11-07, Apple's
+`SwiftUI.Spring` documentation and WWDC23 session 10158.
+
+- **The spring.** All solve `x'' + c x' + k x = 0`, mass 1, around the target. niri and
+  libadwaita evaluate it in closed form from (from, to, velocity, start); Hyprland steps a
+  normalised (value, velocity) by the elapsed time, exactly since hyprutils PR #110
+  (2026-05-22), by Euler with a clamped step before; KWin integrates it by RK4 at 10 ms.
+- **Its parameters.** niri, KWin, libadwaita and Android: damping ratio and stiffness. Hyprland:
+  mass, stiffness and damping. SwiftUI: duration and bounce, where stiffness = (2π/duration)² and
+  bounce = 1 − damping ratio for bounce ≥ 0; its "duration" is perceptual, not the time to rest.
+- **When it ends.** niri and libadwaita compute a duration once, from the envelope `e^(−βt)`
+  falling under epsilon; for a critically damped spring this ignores the factor `1 + ωt`, and
+  niri ends a 1,280-unit move about 2 physical pixels short at scale 1.5, then jumps.
+  Hyprland ends on epsilons of position and velocity; KWin on one epsilon of 1 pixel for both.
+- **Interrupted.** Hyprland's springs and SwiftUI keep the velocity; niri restarts the camera
+  and the workspace switch at velocity 0 (its own `FIXME`s); Hyprland's Bézier curves restart
+  from the current value over their full duration. Springs since Hyprland 0.55 (2026-05-09).
+- **The scrolling view.** niri keeps one camera per workspace, relative to the active column,
+  and gives each moved column an offset that decays to 0, so that logical positions jump and
+  nothing on screen does; its workspace switch is one fractional index over the whole stack.
+  Hyprland animates the leaving and the entering workspace each by its own offset or alpha.
+- **Time.** niri samples every animation at the frame's predicted presentation, KWin at the
+  view's next presentation, with a step capped at one 60 Hz period; libadwaita at GDK's frame
+  time. Hyprland ticks every millisecond on the wall clock.
+- **Tests.** niri's layout runs on a frozen clock that tests advance by milliseconds, with linear
+  1,000 ms animations so that positions are exact, and snapshots them; random sequences of
+  operations check its invariants.
+- **Pointer.** niri does not refresh the pointer's focus while a transition runs under it, and
+  hit-tests the positions it draws.
+- **Defaults.** niri: springs of ratio 1 and stiffness 800 for the view and windows, 1,000 for
+  workspaces; a 150 ms fade to open and to close. Hyprland's example: a spring of ratio 0.785 for
+  windows; a fade for workspaces.
 
 ## When a frame is drawn
 

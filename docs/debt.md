@@ -20,11 +20,12 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 - A dwindle tree deeper than its space gives its last windows empty slots: they are asked 1 × 1
   and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
-- "Float, then tile" on a workspace of 100 windows misses
-  [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile in 3 of 5
-  runs measured in M1.4's B4, up to 32 µs; its median is 15.7 to 24.2 µs. Every other row met
-  its budget on a quiet machine ([measurements](measurements.md)). The cause is not found; the
-  operation is to be profiled before M1.7 animates the layout's moves.
+- "Float, then tile" on a workspace of 100 windows sits close to
+  [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile: met on a
+  quiet machine at M1.7, 19.1 and 23.9 µs, missed under load, up to 32 µs at M1.4 and 25.4 µs
+  at M1.7, main's code before M1.7 too ([measurements](measurements.md)). The cause is not
+  found: the agents' isolation refuses `perf` its events, so it could not be profiled. The
+  stage's audit profiles it, the owner allowing a profiler.
 
 ## The headless compositor
 
@@ -224,3 +225,43 @@ with games' VRR:
   not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.
+
+## Motion
+
+- While a special workspace fades out, `Motion::update` asks the layout where each of its
+  windows is, a search of the seat's workspaces each: the cost grows with the square of the
+  windows for that time. A lookup by window in `yuna-layout` would make it linear.
+- A workspace that leaves its output while a switch shows it (an empty one the layout removes,
+  one moved to another output) closes up the switch: the workspace beside it shows at once. So
+  does leaving, with dynamic workspaces, a workspace whose last window just closed: it is gone
+  before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
+  as an empty slot until the switch ends would let it slide.
+- A second special workspace shown while the first fades out replaces it at once.
+- On llvmpipe at 1080p, motion misses more than half its frames, against 1.9 % still: Yuna's
+  main thread takes 2.7 ms a frame in motion against 1.0 ms, and clients in view draw on the
+  CPU beside llvmpipe ([measurements](measurements.md)). The cause is not isolated; the GPU at
+  4K misses none.
+- A special workspace replaced by another one vanishes at once rather than fading out, and the
+  new one fades in from 0: a fade holds one special workspace.
+- A motion wholly outside an output (a column off the view widening) keeps that output
+  refreshing until it ends, drawing nothing new, about 80 refreshes at 240 Hz.
+- `SpringParams::time_to_rest` and `Motion::set_settings` have no caller but tests: the 1.5 s
+  refusal of [ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md) and settings
+  changed live come with the configuration file (Stage 2).
+- A failed drawing of a motion's last frame is drawn again at the next boundary; no test covers
+  it, since a drawing cannot be made to fail headless.
+- At each arrangement and each motion's end, every window not told visible is looked up in the
+  layout, a search of its seat each: the cost grows with the square of the windows. Reading
+  fullscreen states once per arrangement would make it linear.
+- `ten_thousand_columns` runs 10,000 windows through an animated update but times nothing: a
+  quadratic search coming back would fail no check; `examples/motion_timing.rs` shows it.
+- On a VRR output, a motion that starts after a pause shows its second frame about 12 ms after
+  its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
+  shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):
+  it matters for motion on agents' VRR outputs only.
+
+## The examples
+
+- `agent_time.rs` keeps its own copies of what `examples/common/` now shares with `frame_time`
+  and `motion_time` (its run folder, the vkcube environment, `percentile`); `motion_time` reads
+  an output's mode with its own parser beside the program's private one.

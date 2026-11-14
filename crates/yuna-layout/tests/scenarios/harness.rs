@@ -4,7 +4,7 @@
 use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{
     Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId, WindowId,
-    WindowInfo,
+    WindowInfo, WorkspaceId,
 };
 
 /// The owner's seat.
@@ -158,6 +158,12 @@ impl Model {
             .map(|w| w.name.unwrap_or_else(|| "-".to_owned()))
             .collect();
         (names, shown)
+    }
+
+    /// The id of `output`'s workspace at `index`, in the order [`Model::workspaces`] lists them.
+    #[track_caller]
+    pub fn workspace_id(&self, output: OutputId, index: usize) -> WorkspaceId {
+        self.layout.workspaces(output).unwrap()[index].id
     }
 }
 

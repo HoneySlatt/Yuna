@@ -3,11 +3,16 @@
 //!
 //! Input reaches a seat only through these calls, which the MCP server makes for the seat an
 //! agent names; the owner's seat takes none. A pointer moves in logical units of one of its
-//! seat's outputs; what is under it is found among the windows that output shows, top to bottom,
-//! each window's popups before it: the surface whose input region holds the point. A button
-//! press focuses the window under it, which takes the seat's keyboard at the next refresh
-//! (`frames.rs`), and its serial may start a popup grab or a drag on that window. Every focus of a
-//! seat is on its own clients' surfaces: no event of one seat reaches another's client.
+//! seat's outputs; what is under it is found among the windows that output draws at the event's
+//! time, or at the time its last frame sampled if that is later (`frames.rs`), where the motion
+//! draws them, top to bottom, each window's popups before it: the surface whose input region
+//! holds the point. While windows move under a still pointer, its focus waits: a button or a
+//! scroll first puts it on what is drawn under it then, and the refresh where the motion ends
+//! puts it there once ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+//! A button press focuses the window under it, which takes the seat's keyboard at the next
+//! refresh (`frames.rs`), and its serial may start a popup grab or a drag on that window. Every
+//! focus of a seat is on its own clients' surfaces: no event of one seat reaches another's
+//! client.
 //!
 //! Keys are pressed by their XKB keycode. Text is typed through the seat's `us` keymap, Shift
 //! held where a character needs it. A character the keymap lacks is committed to the text field
@@ -35,8 +40,10 @@ use smithay::wayland::compositor::get_role;
 use smithay::wayland::selection::data_device::WaylandDndGrabHandler;
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
 use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_motion::Change;
 
 use crate::Error;
+use crate::output::VirtualOutput;
 use crate::popups::popup_toplevel;
 use crate::seats::{seat_id, seat_of_surface};
 use crate::state::{OWNER_SEAT, State, tree_root};
@@ -172,40 +179,72 @@ impl State {
             .ok_or_else(|| Error::Refused(format!("no seat {}", seat.0)))
     }
 
-    /// The surface under `location`, in logical coordinates, among the windows that the output of
-    /// `seat` holding it shows, with that surface's origin in the same coordinates.
-    fn surface_under(
-        &self,
-        seat: SeatId,
-        location: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let output = self.outputs.iter().find(|output| {
+    /// The output of `seat` that holds `location`, in logical coordinates.
+    fn output_at(&self, seat: SeatId, location: Point<f64, Logical>) -> Option<&VirtualOutput> {
+        self.outputs.iter().find(|output| {
             output.seat == seat
                 && location.x >= output.rect.x
                 && location.x < output.rect.right()
                 && location.y >= output.rect.y
                 && location.y < output.rect.bottom()
-        })?;
+        })
+    }
+
+    /// The output `seat`'s pointer is on; none before it first moves.
+    fn output_under_pointer(&self, seat: SeatId) -> Option<&VirtualOutput> {
+        let data = self.seat(seat).filter(|data| data.pointer_moved)?;
+        let location = data.pointer.as_ref()?.current_location();
+        self.output_at(seat, location)
+    }
+
+    /// The id of the output `seat`'s pointer is on; none before it first moves.
+    pub(crate) fn pointer_output(&self, seat: SeatId) -> Option<OutputId> {
+        self.output_under_pointer(seat).map(|output| output.id)
+    }
+
+    /// Whether windows move now, as hit tests read them, on the output `seat`'s pointer is on:
+    /// its focus then waits for a pointer event or the motion's end, rather than follow every
+    /// frame ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub(crate) fn pointer_in_motion(&self, seat: SeatId) -> bool {
+        let now = self.clock.now();
+        self.output_under_pointer(seat).is_some_and(|output| {
+            self.motion
+                .end(output.id, output.motion_read_at(now))
+                .is_some()
+        })
+    }
+
+    /// The surface under `location`, in logical coordinates, among the windows that the output of
+    /// `seat` holding it draws now, read at [`VirtualOutput::motion_read_at`], with that surface's
+    /// origin in the same coordinates.
+    fn surface_under(
+        &self,
+        seat: SeatId,
+        location: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let output = self.output_at(seat, location)?;
+        let at = output.motion_read_at(self.clock.now());
         let hit = |surface: &WlSurface, origin: Point<f64, Logical>| {
             under_from_surface_tree(surface, location - origin, (0, 0), WindowSurfaceType::ALL)
                 .map(|(found, at)| (found, origin + at.to_f64()))
         };
-        // What the output shows, as drawn (`frames.rs`): a window scrolled out is not, nor
-        // its popups.
-        let shown = output
-            .placed
+        // What the output draws then, as its frames do (`frames.rs`): a window moving is where
+        // it is drawn, not at its place; a window scrolled out is not, nor its popups.
+        let frame = self.motion.frame(output.id, at);
+        let shown = frame
+            .windows
             .iter()
             .rev()
-            .filter(|placed| placed.rect.overlaps(&output.rect));
-        for placed in shown {
+            .filter(|drawn| drawn.rect.overlaps(&output.rect));
+        for drawn in shown {
             let Some(toplevel) = self
                 .windows
-                .get(&placed.window)
+                .get(&drawn.window)
                 .and_then(|surface| self.toplevels.get(surface))
             else {
                 continue;
             };
-            let rect = placed.rect;
+            let rect = drawn.rect;
             let corner = Point::<f64, Logical>::from((rect.x, rect.y));
             // Topmost first; a menu may overflow its window.
             for (popup, at) in PopupManager::popups_for_surface(toplevel.wl_surface()) {
@@ -246,8 +285,8 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Puts `seat`'s pointer on what is under it now, after windows moved: a motion where it is,
-    /// sent only when the surface under it or its place in it changed.
+    /// Puts `seat`'s pointer on what is under it as drawn now, after windows moved: a motion
+    /// where it is, sent only when the surface under it or its place in it changed.
     pub(crate) fn refresh_pointer_focus(&mut self, seat: SeatId) {
         let Some(pointer) = self.seat(seat).and_then(|data| data.pointer.clone()) else {
             return;
@@ -342,6 +381,7 @@ impl State {
             let state = if pressed { "held already" } else { "not held" };
             return Err(Error::Refused(format!("button {button:#x} is {state}")));
         }
+        self.focus_what_is_drawn(seat);
         let serial = SERIAL_COUNTER.next_serial();
         if pressed {
             let window = pointer
@@ -354,7 +394,7 @@ impl State {
                 && self.layout.focused(seat) != Some(id)
             {
                 match self.layout.focus_window(id) {
-                    Ok(()) => self.mark_layout_changed(),
+                    Ok(()) => self.mark_layout_changed(Change::Animated),
                     Err(error) => tracing::debug!(%error, window = id.0, "focus refused"),
                 }
             }
@@ -368,6 +408,15 @@ impl State {
         self.send_button(&pointer, button, pressed, serial);
         self.after_popup_grab_input(seat);
         Ok(self.describe_pointer(seat))
+    }
+
+    /// Before a button or a scroll of `seat`'s pointer, while windows move under it: puts its
+    /// focus on what is drawn under it now, so that the event reaches what the screen shows
+    /// there. At rest its focus is current already.
+    fn focus_what_is_drawn(&mut self, seat: SeatId) {
+        if self.pointer_in_motion(seat) {
+            self.refresh_pointer_focus(seat);
+        }
     }
 
     /// After input that a popup grab may have ended, Smithay's grab dismissing its popups on a
@@ -421,6 +470,7 @@ impl State {
                 "a scroll takes 1 to {MAX_SCROLL_STEPS} steps on an axis"
             )));
         }
+        self.focus_what_is_drawn(seat);
         let time = self.input_time();
         let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
         for (axis, steps) in [(Axis::Horizontal, dx), (Axis::Vertical, dy)] {
@@ -452,17 +502,10 @@ impl State {
             .pointer
             .as_ref()
             .map_or_else(Point::default, PointerHandle::current_location);
-        let output = self
-            .outputs
-            .iter()
-            .filter(|_| data.pointer_moved)
-            .find(|output| {
-                output.seat == seat
-                    && location.x >= output.rect.x
-                    && location.x < output.rect.right()
-                    && location.y >= output.rect.y
-                    && location.y < output.rect.bottom()
-            });
+        let output = data
+            .pointer_moved
+            .then(|| self.output_at(seat, location))
+            .flatten();
         let focus = data.pointer.as_ref().and_then(PointerHandle::current_focus);
         let window = focus
             .as_ref()

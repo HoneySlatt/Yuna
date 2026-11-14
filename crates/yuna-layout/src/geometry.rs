@@ -125,7 +125,7 @@ pub const EPSILON: f64 = 1e-6;
 ///
 /// Always finite and positive; [`Scale::new`] refuses anything else.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Scale(f64);
+pub struct Scale(f64);
 
 impl Scale {
     /// The smallest scale accepted. Below it, a 4K output would be more than 16,000 logical units
@@ -144,9 +144,11 @@ impl Scale {
         self.0
     }
 
-    /// `value` moved to the nearest edge of a physical pixel.
+    /// `value` moved to the nearest edge of a physical pixel; a value half way between two goes
+    /// to the higher one, so that a value moved by whole pixels snaps by as many
+    /// ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
     pub fn snap(self, value: f64) -> f64 {
-        (value * self.0).round() / self.0
+        (value * self.0 + 0.5).floor() / self.0
     }
 
     /// Whether `value` lies on an edge of a physical pixel, to a ten-thousandth of a pixel: far

@@ -4,8 +4,9 @@ use crate::area::Area;
 use crate::dwindle::Dwindle;
 use crate::floating::Floating;
 use crate::geometry::{Rect, Size};
+use crate::ids::Ids;
 use crate::scrolling::{ColumnWidth, Scrolling};
-use crate::{Direction, OutputId, Tiling, WindowId};
+use crate::{ColumnId, Direction, Layer, OutputId, Tiling, WindowId, WorkspaceId, WorkspaceView};
 
 /// A window as its workspace places it.
 #[derive(Debug, Clone, Copy)]
@@ -15,9 +16,10 @@ pub(crate) struct Arranged {
     pub rect: Rect,
     /// The size its client is asked, in whole logical units; 0 on an axis to let it choose.
     pub configure: Size,
-    pub tiled: bool,
+    pub layer: Layer,
+    /// Its column, for [`Layer::Strip`] alone.
+    pub column: Option<ColumnId>,
     pub fullscreen: bool,
-    pub pinned: bool,
 }
 
 /// How a workspace tiles its windows.
@@ -30,6 +32,8 @@ pub(crate) enum TilingLayout {
 /// A workspace.
 #[derive(Debug, Clone)]
 pub(crate) struct Workspace {
+    /// Given by the model when it creates the workspace, kept for its life.
+    pub id: WorkspaceId,
     /// Named workspaces persist until removed; unnamed ones go when empty and not shown.
     pub name: Option<String>,
     /// The output this workspace goes back to when that output returns after being removed
@@ -46,8 +50,14 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(name: Option<String>, home: Option<OutputId>, tiling: Tiling) -> Workspace {
+    pub fn new(
+        id: WorkspaceId,
+        name: Option<String>,
+        home: Option<OutputId>,
+        tiling: Tiling,
+    ) -> Workspace {
         Workspace {
+            id,
             name,
             home,
             was_shown_at_home: false,
@@ -86,6 +96,14 @@ impl Workspace {
         match &self.tiling {
             TilingLayout::Scrolling(s) => s.is_empty(),
             TilingLayout::Dwindle(d) => d.is_empty(),
+        }
+    }
+
+    /// The ids of its scrolling columns, left to right; none in dwindle.
+    pub fn column_ids(&self) -> Vec<ColumnId> {
+        match &self.tiling {
+            TilingLayout::Scrolling(s) => s.column_ids().collect(),
+            TilingLayout::Dwindle(_) => Vec::new(),
         }
     }
 
@@ -176,10 +194,17 @@ impl Workspace {
         }
     }
 
-    /// Adds `window` to the tiled layout, where a new window goes, and focuses it.
-    pub fn add_tiled(&mut self, window: WindowId, width: ColumnWidth, area: Option<&Area>) {
+    /// Adds `window` to the tiled layout, where a new window goes, and focuses it; a new column
+    /// takes its id from `ids`.
+    pub fn add_tiled(
+        &mut self,
+        window: WindowId,
+        width: ColumnWidth,
+        area: Option<&Area>,
+        ids: &mut Ids,
+    ) {
         match &mut self.tiling {
-            TilingLayout::Scrolling(s) => s.add_window(window, width, area),
+            TilingLayout::Scrolling(s) => s.add_window(window, width, area, ids),
             TilingLayout::Dwindle(d) => d.add_window(window),
         }
         if self.focused_tiled() == Some(window) {
@@ -302,8 +327,15 @@ impl Workspace {
     /// width: scrolling to dwindle inserts the windows in reading order, each splitting the one
     /// before; dwindle to scrolling gives each window, in tree order, a column of `width`. Dwindle
     /// holds one fullscreen and one maximised window, and never hides the focused one: there,
-    /// only the focused window keeps either state. Column widths and groupings are not kept.
-    pub fn set_tiling(&mut self, kind: Tiling, width: ColumnWidth, area: Option<&Area>) {
+    /// only the focused window keeps either state. Column widths and groupings are not kept: the
+    /// columns are new, their ids from `ids`.
+    pub fn set_tiling(
+        &mut self,
+        kind: Tiling,
+        width: ColumnWidth,
+        area: Option<&Area>,
+        ids: &mut Ids,
+    ) {
         if self.tiling_kind() == kind {
             return;
         }
@@ -334,12 +366,12 @@ impl Workspace {
                 self.tiling = TilingLayout::Dwindle(dwindle);
             }
             Tiling::Scrolling => {
-                let mut scrolling = Scrolling::from_windows(&windows, width, focus);
+                let mut scrolling = Scrolling::from_windows(&windows, width, focus, ids);
                 for &w in &full_width {
                     scrolling.set_full_width(w, true, area);
                 }
                 for &w in &fullscreen {
-                    scrolling.set_fullscreen(w, true, area);
+                    scrolling.set_fullscreen(w, true, area, ids);
                 }
                 scrolling.fit_view(area);
                 self.tiling = TilingLayout::Scrolling(scrolling);
@@ -360,6 +392,18 @@ impl Workspace {
     pub fn set_view_from_focused(&mut self, offset: f64, area: &Area) {
         if let TilingLayout::Scrolling(s) = &mut self.tiling {
             s.set_view_from_focused(offset, area);
+        }
+    }
+
+    /// The workspace as an output shows it on `area`: its id, its camera and its working area.
+    pub fn view(&self, area: &Area) -> WorkspaceView {
+        WorkspaceView {
+            id: self.id,
+            view_x: match &self.tiling {
+                TilingLayout::Scrolling(s) => Some(s.view_x()),
+                TilingLayout::Dwindle(_) => None,
+            },
+            working: area.working,
         }
     }
 

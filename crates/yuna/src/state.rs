@@ -43,6 +43,7 @@ use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
+use yuna_motion::{Change, Motion, Settings};
 
 use crate::Error;
 use crate::capture::{CaptureTicket, CapturedFrame, PendingCapture};
@@ -87,6 +88,13 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
+    /// How the layout changed since it was last arranged: the changes made since, combined
+    /// ([`Change::and`]), instant on the outputs where one of them must show at once
+    /// (`frames.rs`).
+    pub layout_change: Change,
+    /// The motion of every output's arrangement: what each frame draws, and which windows are
+    /// told they are visible (`frames.rs`).
+    pub motion: Motion,
     /// Whether a window closed, a surface or a dmabuf's buffer was destroyed, or a dmabuf was
     /// imported for a client that left, since the last round: their textures wait to be freed.
     pub surfaces_gone: bool,
@@ -142,12 +150,13 @@ pub(crate) struct State {
 
 impl State {
     /// The state of a compositor whose owner's seat announces a `wl_seat` when
-    /// `announce_owner_seat`.
+    /// `announce_owner_seat`, and whose layout's changes move as `animations` says.
     pub(crate) fn new(
         display_handle: DisplayHandle,
         clock_mode: ClockMode,
         device: Device,
         announce_owner_seat: bool,
+        animations: Settings,
     ) -> Result<State, Error> {
         let dh = &display_handle;
         let (renderer, max_output_side) = crate::render::open_renderer(device)?;
@@ -173,6 +182,8 @@ impl State {
             windows: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
+            layout_change: Change::Animated,
+            motion: Motion::new(animations),
             surfaces_gone: false,
             counters: Counters::default(),
             draw_hook: None,

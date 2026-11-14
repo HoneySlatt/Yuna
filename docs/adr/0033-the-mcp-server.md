@@ -1,7 +1,9 @@
 # 0033. The MCP server: a private Yuna on stdio, its own MCP layer
 
 - Status: Accepted; amended by [0049](0049-vrr-and-hdr-outputs-through-mcp.md) (VRR and HDR
-  outputs, surfaces' colours)
+  outputs, surfaces' colours), [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md)
+  (windows' drawn rectangles), [0055](0055-what-moves-first-and-animations-off-headless.md)
+  (`--animations`)
 - Date: 2026-11-13
 
 ## Context

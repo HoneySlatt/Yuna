@@ -12,6 +12,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
   ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+- **Camera**: the position of a scrolling workspace's view on its strip, `view_x`; it moves on a
+  spring while windows keep their places ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
   logical point of its top-left corner, and the logical units one pixel covers.
 - **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
@@ -29,6 +31,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   destroy it.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
+- **Drawn rectangle**: where a frame draws a window during motion, rounded once to the physical
+  grid; pointer, clicks and captures use it. Its client is told from its **place**, the
+  rectangle the layout gives it ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 - **DRM usage statistics**: what the kernel counts for each client of a GPU, read in the
   `fdinfo` of its render node: each engine's busy time in nanoseconds (`drm-engine-gfx`), the
   measure of a frame's GPU time ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
@@ -63,6 +68,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
   every Vulkan client.
+- **Layer**: the part of a workspace a window is placed in: the strip of scrolling columns, the
+  tiles of dwindle, the floating windows, or the pinned ones above them
+  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **llvmpipe**: Mesa's OpenGL driver that draws on the CPU; the headless mode's default
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
@@ -75,8 +83,13 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   time.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
+- **Motion**: a value moving to a target on a spring or a curve, a function of time alone, held by
+  `yuna-motion`; it ends when it can no longer move a pixel
+  ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
 - **Newest frame**: what a capture shows: the frame an output's armed refresh draws, else the
   one its buffer holds.
+- **Offset**: a window's drawn position minus its place, after a layout operation moved it; it
+  decays to 0 on a spring ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for its seat's keyboard and pointer until it is dismissed, as
   an open menu holds them; granted only with a serial its client's own seat sent to its window,
@@ -101,6 +114,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
   A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
+- **Retarget**: giving a running motion a new target; a spring goes on from its value and its
+  velocity ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
   seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is

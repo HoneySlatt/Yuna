@@ -71,9 +71,32 @@ nix develop -c target/release/examples/frame_time
 It needs no screen of its own. On the owner's machine, agents run it inside `agent-headless`,
 one measure at a time.
 
+Motion's cost is measured with `crates/yuna/examples/motion_time.rs`, as
+[ADR-0056](docs/adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) asks: it
+runs Yuna in its own process with six `vkcube`, and plays a round of scrolls, column moves,
+workspace switches and the special workspace's fade, against a still baseline of as many frames;
+it prints, for each, the frames a second against the output's rate, the frames drawn at once and
+missed, and where the misses fall; then the heaviest frame and the ADR's verdict. The verdict names
+the mode it ran at, and counts as the ADR's only at 3840x2160@240,1.5 on `--gpu`; anywhere else it
+is recorded without a pass mark. It gives none when the baseline ran below 95 % of the output's
+rate. Under `--reduced-motion` the round has no retarget: its load is jumps and fades. Its
+documentation gives its options, `--gpu` among them:
+
+```sh
+nix develop -c cargo build --release -p yuna --example motion_time
+nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
+```
+
+It runs alone among measurements, as `frame_time` does; on the owner's machine, inside
+`agent-headless`, under the agents' lock of exclusive runs. Both examples share
+`crates/yuna/examples/common/`.
+
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
-input and output, with `--gpu`, one `--output` for each seat's first output, and
-`--manual-clock` ([ADR-0033](docs/adr/0033-the-mcp-server.md)). An agent's first call is `seat
+input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
+([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which
+`yuna --headless` takes too: both show each change at once without them
+([ADR-0055](docs/adr/0055-what-moves-first-and-animations-off-headless.md),
+[ADR-0059](docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). An agent's first call is `seat
 create`; every other tool but `clock` takes the seat's handle
 ([ADR-0037](docs/adr/0037-seats-tools-input-and-closing.md)). For Claude Code, for example:
 `claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes,
@@ -115,8 +138,9 @@ to the shortest sequence that still fails, and keep its seed in a `.proptest-reg
 beside the test. Commit that file with the fix: the case then runs at every check. A seed
 replays its case only while the test's generator stays the same; when you change the random
 requests' generator, write each sequence found into `sequences_found_before` in that file, and
-drop the seeds. The random requests run, in two tests, as many cases as fit about 10 s of the
-check ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests)); `PROPTEST_CASES` runs that many in
+drop the seeds. The random requests run in four tests, two of them with animations on, each as
+many cases as fitted about 10 s of the check at M1.4
+([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#tests)); `PROPTEST_CASES` runs that many in
 each, for a search before a release or after a change to the protocols' handling. With
 `--nocapture`, each test prints how often the requests that need the keyboard's focus took
 effect:

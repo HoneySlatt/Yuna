@@ -19,6 +19,7 @@ use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
 use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
+use yuna_motion::{Change, Drawn, Settings};
 
 use crate::Error;
 use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
@@ -50,10 +51,15 @@ pub struct Config {
     /// so that an agent's programs see only agents' seats
     /// ([ADR-0035](../../../docs/adr/0035-agents-seats.md)).
     pub announce_owner_seat: bool,
+    /// How the layout's changes move on screen. Off by default, as in both headless modes: an
+    /// operation shows its result at once; `--animations` turns them on
+    /// ([ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
+    pub animations: Settings,
 }
 
 impl Default for Config {
-    /// What `yuna --headless` runs: one default output, llvmpipe, real time, a socket.
+    /// What `yuna --headless` runs: one default output, llvmpipe, real time, a socket, no
+    /// animation.
     fn default() -> Config {
         Config {
             outputs: vec![OutputMode::default()],
@@ -61,6 +67,10 @@ impl Default for Config {
             clock: ClockMode::Real,
             listen: true,
             announce_owner_seat: true,
+            animations: Settings {
+                off: true,
+                ..Settings::default()
+            },
         }
     }
 }
@@ -95,12 +105,23 @@ pub struct WindowDescription {
     pub pid: Option<i32>,
     /// The seat whose workspaces hold it: its client's.
     pub seat: SeatId,
-    /// The output that shows it, as last arranged; none when it is hidden.
+    /// The output it is shown on, the one that tells it it is visible: where its place is, or,
+    /// while it slides out of view, where it is still drawn; none when it is hidden.
     pub output: Option<OutputId>,
     /// Its workspace's name; none for an unnamed workspace.
     pub workspace: Option<String>,
-    /// Where it is drawn, in logical coordinates, as last arranged; none when it is hidden.
+    /// Where it is drawn now, in logical coordinates: its place moved by its motion, read now,
+    /// or at the time its output's last frame sampled if that is later, as hit tests read it;
+    /// none when its output's frame does not draw it: hidden, slid out of view, or told visible
+    /// while it has not yet slid into view.
     pub rect: Option<Rect>,
+    /// Its place in the layout, as last arranged: where it is drawn once its motion ends; none
+    /// when it is hidden, or no longer arranged while it slides out of view
+    /// ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+    pub place: Option<Rect>,
+    /// When the motion of its output ends, on the clock's scale, read as `rect` is; none at
+    /// rest, from the refresh that drew the motion's end on, and when it is hidden.
+    pub motion_ends: Option<Duration>,
     /// Whether its seat focuses it.
     pub focused: bool,
     /// Whether it floats.
@@ -170,6 +191,7 @@ impl Compositor {
             config.clock,
             config.device,
             config.announce_owner_seat,
+            config.animations,
         )?;
         for mode in config.outputs {
             state.add_output(OWNER_SEAT, mode)?;
@@ -601,8 +623,8 @@ impl Compositor {
         self.state.describe_outputs()
     }
 
-    /// Every window the layout holds, all seats together, in the order they opened, as last
-    /// arranged.
+    /// Every window the layout holds, all seats together, in the order they opened: where each
+    /// is drawn now, its place as last arranged, and when its output's motion ends.
     pub fn windows(&self) -> Vec<WindowDescription> {
         self.state.describe_windows()
     }
@@ -653,11 +675,22 @@ impl Compositor {
     }
 
     /// Changes the layout model, as a key binding would: every output arranges it again at its
-    /// next refresh.
+    /// next refresh, and what moved moves there on screen when animations are on.
     pub fn change_layout<R>(&mut self, change: impl FnOnce(&mut Layout) -> R) -> R {
         let result = change(&mut self.state.layout);
-        self.state.mark_layout_changed();
+        self.state.mark_layout_changed(Change::Animated);
         result
+    }
+
+    /// What `output` drew in its last frame, bottom to top: each window at its rectangle and
+    /// alpha then, windows outside the output included, as [`Motion::frame`] gave it at the
+    /// boundary the frame aimed at. Empty for an unknown output and before its first frame.
+    ///
+    /// [`Motion::frame`]: yuna_motion::Motion::frame
+    pub fn drawn(&self, output: OutputId) -> &[Drawn] {
+        self.state
+            .output_index(output)
+            .map_or(&[], |index| &self.state.outputs[index].drawn)
     }
 
     /// Sets the hook run each time a frame's drawing ends, before Yuna reads the time it ended

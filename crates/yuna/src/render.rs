@@ -142,7 +142,7 @@ pub(crate) fn create_buffer(
 }
 
 /// A window's elements on an output, front to back: its surface tree with the window
-/// geometry's top-left corner at `rect`'s, cut to `rect`.
+/// geometry's top-left corner at `rect`'s, cut to `rect`, drawn at opacity `alpha`, from 0 to 1.
 ///
 /// The surface is placed on whole pixels. Where the geometry's offset in its surface is not a
 /// whole number of pixels (13 logical units at scale 1.5 are 19.5 pixels), the offset is rounded
@@ -158,6 +158,7 @@ pub(crate) fn window_elements(
     surface: &WlSurface,
     geometry: Rectangle<i32, Logical>,
     rect: Rect,
+    alpha: f32,
     output: &VirtualOutput,
 ) -> Vec<WindowElement> {
     let scale = output.mode.scale();
@@ -182,7 +183,7 @@ pub(crate) fn window_elements(
         surface,
         top_left - offset,
         scale,
-        1.0,
+        alpha,
         Kind::Unspecified,
     )
     .into_iter()
@@ -191,14 +192,15 @@ pub(crate) fn window_elements(
 }
 
 /// The elements of the popups of the window whose toplevel surface is `toplevel` and whose
-/// rectangle is `rect`, front to back. Each popup's window geometry has its top-left corner at
-/// its place relative to the window's, rounded to the nearest pixel; its offset in its surface
-/// is rounded up, as a window's is. Popups are cut to the output, not to the window: a menu may
-/// overflow its window.
+/// rectangle is `rect`, front to back, at the window's opacity `alpha`. Each popup's window
+/// geometry has its top-left corner at its place relative to the window's, rounded to the nearest
+/// pixel; its offset in its surface is rounded up, as a window's is. Popups are cut to the output,
+/// not to the window: a menu may overflow its window.
 pub(crate) fn popup_elements(
     renderer: &mut GlesRenderer,
     toplevel: &WlSurface,
     rect: Rect,
+    alpha: f32,
     output: &VirtualOutput,
 ) -> Vec<WindowElement> {
     let scale = output.mode.scale();
@@ -223,7 +225,7 @@ pub(crate) fn popup_elements(
                 popup.wl_surface(),
                 corner - offset,
                 scale,
-                1.0,
+                alpha,
                 Kind::Unspecified,
             )
             .into_iter()

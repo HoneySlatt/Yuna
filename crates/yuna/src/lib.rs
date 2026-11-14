@@ -3,12 +3,15 @@
 //! ([ADR-0002](../../../docs/adr/0002-the-headless-mode-first.md),
 //! [ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)).
 //!
-//! A [`Compositor`] holds Smithay's protocol state, the layout model ([`yuna_layout`]), virtual
-//! outputs drawn offscreen by one GLES renderer, and a [`Clock`] that owns the frame loop's
-//! deadlines. Frames follow damage: a commit of a shown surface, or a change of the layout, arms
-//! its output's next refresh, drawn ahead of its boundary; at rest nothing is armed
+//! A [`Compositor`] holds Smithay's protocol state, the layout model ([`yuna_layout`]), the
+//! motion that turns the layout's jumps into frames ([`yuna_motion`]), virtual outputs drawn
+//! offscreen by one GLES renderer, and a [`Clock`] that owns the frame loop's deadlines. Frames
+//! follow damage: a commit of a shown surface, or a change of the layout, arms its output's next
+//! refresh, drawn ahead of its boundary; while a motion runs, each frame arms the next; at rest
+//! nothing is armed
 //! ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
-//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
+//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md),
+//! [ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 //!
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
 //! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
@@ -67,6 +70,7 @@ pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use text_input::MAX_TEXT_BYTES;
 pub use yuna_layout;
+pub use yuna_motion;
 
 /// Why the compositor could not start, or refused a request.
 #[derive(Debug)]
