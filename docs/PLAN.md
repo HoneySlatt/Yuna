@@ -171,32 +171,26 @@ milestone first needs it.
 
 ### M1.10 — Yuna for the owner's other projects
 
-- **Goal.** The owner's other projects can add Yuna to their shells and measure and drive their
-  programs in it, as they do in a headless sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
-- **Delivers.** A Nix package of Yuna, built in CI; `zwp_virtual_keyboard_v1` and
-  `zwlr_virtual_pointer_v1` on agents' seats only, with a test that they never reach the owner's
-  seat; `docs/client-needs.md`, what each project needs of Yuna and Yuna's answer;
-  `docs/protocols.md`, every protocol with its state, stage and users, and a test that compares
-  it with the globals Yuna announces; `scripts/test-check.sh`, which proves each check fails when
-  it should.
-- **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna headless as they do
-  in sway, run by hand from this repository without changing theirs; the protocols' test and
-  `test-check.sh` run in `check.sh`.
-- **Measured.** A frame's presentation times in Yuna against headless sway's, for the same
-  program.
+- **Goal.** The owner's other projects measure and drive their programs in Yuna as in a headless
+  sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
+- **Delivers.** A Nix package, built in CI; the virtual keyboard and pointer on agents' seats
+  only, tested never to reach the owner's; `docs/client-needs.md`; `docs/protocols.md` and its
+  test against the globals announced; `scripts/test-check.sh`.
+- **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna as in sway, without
+  changing their repositories; both tests run in `check.sh`.
+- **Measured.** A program's presentation times in Yuna against headless sway's.
 
 ### M1.11 — The agents' toolbox
 
 - **Goal.** An agent sees inside the programs it drives and makes the situations it tests
-  ([ADR-0061](adr/0061-yunas-uses.md)).
-- **Delivers.** Through MCP: each program's Wayland protocol trace and its log; the accessibility
-  tree of a seat's windows, its dependency put to the owner; outputs plugged and unplugged, scale
-  and mode changed, a slow or stuck client, keyboard layouts, the clipboard and drag and drop
-  between programs; a call that waits for an event. Budgets for `yuna mcp`'s start, memory and
-  instances together.
-- **Done when.** An agent finds, through MCP alone, a program's protocol error and a button by its
-  name in the accessibility tree, and checks a window's behaviour across an output unplugged.
-- **Measured.** Those budgets, on the high tier.
+  ([ADR-0061](adr/0061-yunas-uses.md), [ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
+- **Delivers.** Through MCP: each program's protocol trace and log; the accessibility tree, its
+  dependency put to the owner; outputs plugged and unplugged, scale and mode changed, a slow or
+  stuck client, keyboard layouts, clipboard and drag and drop between programs; a call that waits
+  for an event; a rest auditor naming what wakes Yuna or makes it draw.
+- **Done when.** Through MCP alone, an agent finds a protocol error and a button by its name, and
+  checks a window across an output unplugged.
+- **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets.
 
 ### M1.12 — The stage's audit
 
@@ -206,8 +200,8 @@ milestone first needs it.
 
 ## Ideas
 
-- Contributing Yuna's headless series to the owner's other projects' CI, beside SlimeEngine's
-  compositors.
+- Scripts inside Yuna, on events only, bounded in time; an effect governor that lightens the
+  costliest effect near a frame's deadline; a replay capsule for agents, after M1.11 [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
 - Layout behaviours the owner uses in Umbriel and ADR-0005 does not list: maximize-to-edges
   (Mod+Alt+M) and per-window heights in a column (Mod+Ctrl+Shift+R, Mod+Shift+Minus/Equal).
 - The RemoteDesktop and InputCapture portals, for remote control or a mouse shared between

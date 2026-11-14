@@ -91,7 +91,7 @@ it is met.
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |
 | HDR | the output's luminance and colours as the colour description says, against KWin on the same content | captures of the output buffer in CI; the owner's monitor by eye and by sensor |
 | The laptop | every feature, effects lighter, no missed frame at its refresh rate | the same measures on the laptop |
-| A capture | no frame of a game lost and its direct scanout kept while captured; the capture's GPU time | presentation feedback with and without a capture running |
+| A capture | no frame of a game lost and its direct scanout kept while captured, the capture lowering its own rate rather than cost one; the capture's GPU time | presentation feedback with and without a capture running |
 | Colour accuracy | set from KWin's at Stage 5 | captures of the output buffer against the colours asked; the owner's monitor by probe |
 | A tablet | set from KWin's, once a tablet is at hand | input to present of the pen; pressure and tilt passed on |
 | `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
@@ -211,6 +211,8 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   and plugins' windows; `keyboard-shortcuts-inhibit`; windows never captured; a test output in a
   window; picture in picture; windows back in place after a reboot, on by default; the GPU's loss
   on demand for agents; VKMS studied first.
+- Hot corners; tabbed columns; focus following the mouse and floating windows' sizes remembered,
+  as settings [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
@@ -243,7 +245,8 @@ latency and frames at least as good as gamescope's.
   kept HDR or converted to SDR [ADR-0061](adr/0061-yunas-uses.md).
 - The night light, captures and screen sharing correct under HDR; films at an exact multiple of
   their rate, and told apart in the fullscreen state; no sleep while a video plays.
-- OLED care: luminance read from the panel, static elements protected from burn-in.
+- OLED care: luminance read from the panel, static elements protected from burn-in by a wear map
+  of each output [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
 
 **Exit.** The owner's films and HDR games show correctly, measured against KWin on the same content.
 
@@ -254,7 +257,8 @@ latency and frames at least as good as gamescope's.
 - Blur and glass, over the wallpaper too, animated borders, the built-in effects, exotic open and
   close animations; the wallpaper's animated transitions.
 - The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
-  Alt-Tab with previews, the capture tool's polish, a colour picker.
+  Alt-Tab with previews, the capture tool's polish, a colour picker; snap zones for floating
+  windows; shapes that morph [ADR-0062](adr/0062-the-compositors-comfort-and-look.md).
 - Sandboxed applications kept from sensitive protocols; reduced transparency for blur and glass.
 
 **Exit.** Each effect's GPU time and power measured and within budget; the owner approves the look.
