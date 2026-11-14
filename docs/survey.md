@@ -80,7 +80,25 @@ that rests on it is reopened in an ADR.
 - Tearing control: KWin, Hyprland, sway, jay; not niri or COSMIC. Games are recognised by the
   `content-type-v1` hint (Hyprland, KWin, Umbriel).
 - XWayland at fractional scale: KWin lets applications scale themselves; Hyprland's
-  `force_zero_scaling`; Umbriel's native resolution; jay's downscaled mode.
+  `force_zero_scaling`; Umbriel's native resolution; jay's downscaled mode; COSMIC's
+  `descale_xwayland`.
+- XWayland across outputs of different scales (read on 2026-11-14): X11 has one scale for every
+  output, and no compositor found keeps an X11 window both sharp and the right size on each.
+  - Umbriel's native resolution draws X11 at the largest output's scale and does not correct it
+    elsewhere ([its configuration
+    reference](https://github.com/noctalia-dev/umbriel/blob/main/docs/user/configuration.md)). Seen
+    by the owner on 2026-11-14: an X11 window sharp on an output at 1.5 stays 1.5 times too large
+    when moved to an output at 1.
+  - KWin's "apply scaling themselves" has the same limit (KDE bugs
+    [459183](https://bugs.kde.org/show_bug.cgi?id=459183) and
+    [474738](https://bugs.kde.org/show_bug.cgi?id=474738)). Its developers call downscaling on one
+    of the screens unavoidable with one XWayland, and name one XWayland per application as a
+    possible future fix ([502390](https://bugs.kde.org/show_bug.cgi?id=502390)).
+  - The approach proposed at Linux Plumbers 2019 ([Roman Gilg, "XWayland multi
+    DPI"](https://lpc.events/event/5/contributions/358/attachments/457/712/xwayland_multi_dpi.pdf)):
+    X11 draws at the largest scale, and the compositor scales each window down on outputs of a
+    smaller scale. It is sharp on the largest scale, the right size everywhere and a little softer
+    on smaller scales.
 - No measured comparison of compositors' power was found; only users' reports.
 
 ## Surviving a crash
