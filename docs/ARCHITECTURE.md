@@ -187,7 +187,10 @@ moves only through `Compositor::advance`, which runs each deadline it passes at 
 order. A draw hook can pass manual time while a frame draws, to make drawing late.
 
 An output's refresh boundary `k` comes `k / rate` seconds after the output was created, computed
-from the rate each time, so that errors never add up.
+from the rate each time, so that errors never add up. An output under VRR has no fixed
+boundaries: its panel (`vrr.rs`) says when a frame ready at a given time starts showing, and
+counts its refreshes ([VRR outputs](#vrr-outputs)). The frame loop asks both kinds the same
+questions, through `Timing` (`output.rs`).
 
 A commit, or a change of the layout, arms its output's refresh
 ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). When the output is idle, the
@@ -305,6 +308,37 @@ ignored.
 the modal hint (`dialog.rs`) is read from Smithay's record of the toplevel, and nothing uses it
 yet.
 
+### VRR outputs
+
+An output created with a VRR range ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)) emulates amdgpu driving a
+DisplayPort Adaptive-Sync monitor, as the owner's monitor's traces showed it:
+
+- A frame shows a vertical blank after it is ready at the soonest: 269 of 2,429 lines of the
+  shortest refresh, the owner's mode's, 461 µs at 240 Hz.
+- A refresh lasts at least 1/max and at most 1/min. A frame ready sooner than 1/max after the
+  refresh in progress began waits; a later one starts a refresh a vertical blank later. With no
+  new frame, the
+  panel refreshes by itself every 1/min.
+- Below the range, BTR, freesync.c's rule, shows each frame `n` times; the first `n − 1`
+  refreshes have a fixed length, chosen from the time between the last two frames, and a frame
+  ready during one of them shows at its end; the last is variable again.
+- None of these refreshes is a timer: the panel computes them when a frame asks when it would
+  show. An output at rest wakes nothing.
+- The frame loop is the same as at a fixed rate: at once when a refresh could begin now, else
+  at the refresh the frame can reach minus the lead. A refresh with nothing new to draw, which
+  answers callbacks asked without a buffer, comes at most once a shortest refresh. Something new
+  is never held back by it (`content_pending`): a buffer attached or removed anywhere in the
+  committed tree, read before Smithay takes it, a change of the layout, a popup gone. After two
+  refreshes in a row armed for something new that drew nothing, all is paced again
+  (`content_misses`), so that buffers outside the output never loop.
+- `seq` counts every refresh, the panel's own included; `wp_presentation` version 2 is told
+  1/max as the refresh, version 1 zero.
+- The range is at least twice as wide as its least rate; a narrower one takes a path of the
+  driver Yuna does not emulate.
+- A test replays both traces, every frame (`tests/fixtures/`): what the emulation does not
+  reproduce is in the [debt](debt.md#vrr).
+
 ### A frame
 
 At an output's refresh, due at once or a lead before the boundary it aims at:
@@ -420,9 +454,10 @@ The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` gl
 and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
 and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat
 whose socket it came through, recorded in its `ClientState`: its windows open on that seat's
-workspaces, and each seat's focus goes only to its own clients' surfaces. Upstream Smithay
-announces every `wl_seat` to every client: a client may bind another seat's, and then gets no
-input, since that seat's focus is never on its surfaces.
+workspaces, and each seat's focus goes only to its own clients' surfaces. A client is shown its
+own seat's `wl_seat` and its seat's outputs' `wl_output`s alone, through the filter per client of
+Yuna's fork of Smithay ([ADR-0042](adr/0042-main-on-smithays-fork.md)); a client that held
+another seat's would still get no input, since that seat's focus is never on its surfaces.
 
 Input (`input.rs`) reaches an agent's seat only through the compositor's calls, which the MCP
 server makes for the seat an agent names; the owner's seat takes none. Its events carry Yuna's
@@ -473,6 +508,28 @@ held for a frame not yet at its boundary is discarded; its two deadlines are dis
 is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
 to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
+
+### Colours
+
+`colour/` holds `color-management-v1`, Yuna's first handler written on wayland-server rather
+than through Smithay ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)). Its global lists
+KWin's set at the version each client bound. `description.rs` holds the image descriptions and
+their checks, with no Wayland object; `protocol.rs` the dispatch of every object, each keeping
+its state in its own user data. A record of a description gets an identity never used again.
+
+- Each output announces one description for its life, made when it is created: the owner's
+  monitor's PQ volume for an HDR output, gamma 2.2 and sRGB otherwise
+  ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). A removed
+  output's colour objects fail at once, with `no_output`.
+- A surface's description is double-buffered in Smithay's cached state, applied at its commit
+  as subsurfaces' state is; `Compositor::window_colours` reads a window's tree.
+- A surface's preferred description is its window's workspace's output's, else its seat's
+  focused output's. After each arrangement, each feedback object whose answer changed is told
+  `preferred_changed`, once.
+- The information a client asks of a description is sent after the dispatch, not inside it:
+  its last event destroys its object, and wayland-backend 0.3.17 panics when a request's new
+  object is destroyed before the request returns.
+- Nothing is drawn differently: the colour pipeline is Stage 5's.
 
 ### Captures
 
@@ -548,12 +605,22 @@ window or program unknown there:
   socket, `seat-<id>` in Yuna's folder; lists the seats; closes one. A manual-clock Yuna holds one
   seat at a time.
 - `outputs` lists, creates and removes a seat's outputs; `workspaces` lists them with their
-  windows, creates, removes and shows a named one, and moves a window to one.
+  windows, creates, removes and shows a named one, and moves a window to one. `seat` and
+  `outputs` create an output under VRR with `vrr_min`, over `vrr_min` to its rate, refused
+  unless the rate is at least twice it ([VRR outputs](#vrr-outputs)), and an HDR one, which
+  announces the colours of the owner's monitor, a PG32UCDM, with `hdr` ([Colours](#colours),
+  [ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
+  `--output`'s, `hdr` included, which `hdr: false` turns off; `--output`'s VRR range only when
+  the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
+  each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
-- `windows` lists a seat's windows, as `Compositor::windows` describes them, and with `wait_ms`
-  waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting call is
-  answered once the layout has placed the window, which on the manual clock takes a `clock`
-  advance; `notifications/cancelled` drops it unanswered; 64 wait at most.
+- `windows` lists a seat's windows, as `Compositor::windows` describes them. With `colour`,
+  each comes with the descriptions its surfaces declared, as `Compositor::window_colours` gives
+  them, luminances in cd/m² and chromaticities as numbers; without it the reply leaves them out,
+  so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
+  real time whatever the clock's, for one that matches. A waiting call is answered once the
+  layout has placed the window, which on the manual clock takes a `clock` advance;
+  `notifications/cancelled` drops it unanswered; 64 wait at most.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -594,8 +661,14 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
 `XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM
 or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
-clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes. The signal handler writes to a pipe
-the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
+clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
+`--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
+RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
+`hdr` ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
+order, each once. With `mcp`, it is each new seat's output. A mode refused, an item unknown,
+repeated or malformed, is a usage error: the program prints why and its help, and exits with 2.
+The signal handler writes to a pipe the event loop watches, so that the loop returns and the
+socket is removed. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
 process reads. `frame drawn` gives the frame's time, `took_us`: from when its elements begin to be
@@ -684,7 +757,13 @@ own thread, both `took_us`.
   machine's layers; cursors that never blink; GTK's animations off; GTK's renderer and Qt's
   pinned. What still reads the machine is listed in the file's documentation. Every process it
   starts dies with the test's thread. The test takes about 15 s. Through `yuna mcp`, as an agent
-  drives it, `vkcube` paused by its space key rests with its window open. SlimeEngine's examples,
+  drives it, `vkcube` paused by its space key rests with its window open. Two tests run mpv
+  there, in Vulkan on lavapipe, on a picture it makes itself: an SDR one on an HDR output and a
+  PQ one on an SDR output ([ADR-0050](adr/0050-mpv-in-the-applications-tests.md)). Once mpv
+  and Yuna have gone quiet, each reads through `windows` the colours its surface declared, and
+  requires values that only the description Yuna prefers for it gives: the HDR output's
+  monitor volume as mpv's target, or the SDR output's gamma 2.2 and minimum luminance for a PQ
+  picture. mpv then quits by its `q` key, and Yuna must rest. SlimeEngine's examples,
   built by the weekly job, run in ignored tests of the same file
   ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): `window` draws
   120 frames and leaves; `editor` rests with its window open; and M1.5's done-when, an agent

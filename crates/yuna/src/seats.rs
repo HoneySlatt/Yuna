@@ -8,9 +8,10 @@
 //! whose socket it connected through, recorded in its [`ClientState`]. Its windows open on that
 //! seat's workspaces, and only that seat's input reaches them (`input.rs`). The owner's seat
 //! exists from the start, with or without a `wl_seat` global; in `yuna mcp` it has none, so that
-//! an agent's programs see only agents' seats. Upstream Smithay announces every `wl_seat` to
-//! every client: a client of one agent may bind another's, and then gets nothing, since every
-//! focus of a seat is on its own clients' surfaces.
+//! a client sees no other seat's `wl_seat`, nor its outputs' `wl_output`s
+//! ([ADR-0042](../../../docs/adr/0042-main-on-smithays-fork.md)): Yuna's fork of Smithay shows
+//! those globals only to the clients [`belongs_to`] accepts. Every focus of a seat is on its own
+//! clients' surfaces as well, so that a client that held another seat's global would get nothing.
 //!
 //! An agent's seat has the `us` layout, whatever the machine's settings
 //! ([`AGENT_KEYBOARD_LAYOUT`]). When it is removed, the keys and buttons it holds are released,
@@ -87,7 +88,8 @@ impl SeatData {
         announced: bool,
     ) -> Result<SeatData, Error> {
         let mut seat = if announced {
-            seat_state.new_wl_seat(display, "seat0")
+            seat_state
+                .new_wl_seat_with_filter(display, "seat0", |client| belongs_to(client, OWNER_SEAT))
         } else {
             seat_state.new_seat("seat0")
         };
@@ -105,7 +107,10 @@ impl SeatData {
         seat_state: &mut SeatState<State>,
         display: &DisplayHandle,
     ) -> Result<SeatData, Error> {
-        let mut seat = seat_state.new_wl_seat(display, format!("agent-{}", id.0));
+        let mut seat =
+            seat_state.new_wl_seat_with_filter(display, format!("agent-{}", id.0), move |client| {
+                belongs_to(client, id)
+            });
         let config = XkbConfig {
             rules: "evdev",
             model: "pc105",
@@ -173,6 +178,14 @@ pub(crate) fn seat_of_client(client: &Client) -> SeatId {
         .map_or(OWNER_SEAT, |state| state.seat)
 }
 
+/// Whether `client` belongs to `seat`: what decides which seat's and outputs' globals it sees. A
+/// client Yuna did not insert, which cannot happen, belongs to none.
+pub(crate) fn belongs_to(client: &Client, seat: SeatId) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|state| state.seat == seat || state.sees_every_seat)
+}
+
 /// The seat the client of `surface` belongs to; the owner's for a surface whose client is gone.
 pub(crate) fn seat_of_surface(surface: &WlSurface) -> SeatId {
     surface
@@ -221,11 +234,21 @@ impl State {
 
     /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal.
     /// Refused for a seat that does not exist.
-    pub(crate) fn insert_client(&mut self, seat: SeatId, stream: UnixStream) -> Result<(), Error> {
+    /// With `sees_every_seat`, it is shown every seat's globals, for tests alone.
+    pub(crate) fn insert_client(
+        &mut self,
+        seat: SeatId,
+        stream: UnixStream,
+        sees_every_seat: bool,
+    ) -> Result<(), Error> {
         if self.seat(seat).is_none() {
             return Err(Error::Refused(format!("no seat {}", seat.0)));
         }
-        let data = Arc::new(ClientState::new(seat, self.departed_clients.clone()));
+        let data = Arc::new(ClientState::new(
+            seat,
+            sees_every_seat,
+            self.departed_clients.clone(),
+        ));
         let client = self
             .display_handle
             .insert_client(stream, data)

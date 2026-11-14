@@ -4,5 +4,3 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc c49a9c433172cef51150d2409fde1fd3b275e2d1583c72f117f8daa0dd045b04 # shrinks to [Client { who: Slot(0), request: OpenToplevel }]
-cc 132a07467db5a3cc089b7b4aaf2093354e3345b1dc76cbc36e3f08e3262db4c4 # shrinks to [Client { who: Slot(0), request: OpenPopup { parent: None, placement: RandomPlacement { size: (1, 533), anchor_rect: (673, 1591, 1244, 281), anchor: 6, gravity: 2, adjustment: 25, offset: (1989, 1477) }, grab: false } }]

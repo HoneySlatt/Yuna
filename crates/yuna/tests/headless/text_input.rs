@@ -184,7 +184,7 @@ fn no_seats_text_reaches_another_seats_field() {
     let (mut compositor, a, b) = two_seats();
     let mut own = InputClient::connect(&mut compositor, a, "agent-2");
     open(&mut own, &mut compositor);
-    let mut spy = InputClient::connect(&mut compositor, b, "agent-2");
+    let mut spy = InputClient::connect_spy(&mut compositor, b, "agent-2");
     open(&mut spy, &mut compositor);
     let mut owners = InputClient::connect(&mut compositor, OWNER_SEAT, "seat0");
     open(&mut owners, &mut compositor);

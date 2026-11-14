@@ -1,0 +1,34 @@
+# Checks the Markdown files alone, their links and the length of those read at every session, for
+# a change of them that CI's job skips (ci.yml): `scripts/check.sh docs`, with lychee and git from
+# the flake's own nixpkgs, without building the development shell's toolchain. Actions are pinned
+# to commit SHAs, their release in a comment.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+  pull_request:
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+
+# A new push to the same branch cancels the run in progress.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  documents:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes: the token need not stay in the checkout's configuration.
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: nix shell --inputs-from . nixpkgs#lychee nixpkgs#git --command scripts/check.sh docs

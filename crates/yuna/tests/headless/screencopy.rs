@@ -171,7 +171,9 @@ fn a_first_frame_is_the_one_on_its_way() {
 }
 
 /// A client captures only its own seat's outputs: a session of another seat's is stopped, the
-/// owner's client's of an agent's output and an agent's client's of the owner's alike.
+/// owner's client's of an agent's output and an agent's client's of the owner's alike. Such a
+/// client is never shown another seat's `wl_output` (ADR-0042): these are spies, made to check
+/// the layer below.
 #[test]
 fn a_session_of_another_seats_output_is_stopped() {
     let (mut compositor, _client) = compositor_with_a_window(RED);
@@ -182,14 +184,14 @@ fn a_session_of_another_seats_output_is_stopped() {
     run_armed_deadlines(&mut compositor);
     let agent_name = format!("HEADLESS-{}", agent_output.0);
 
-    let mut owner = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let mut owner = CaptureClient::connect_spy(&mut compositor, OWNER_SEAT);
     let stopped = owner.start_session(&agent_name);
     let kept = owner.start_session("HEADLESS-1");
     owner.roundtrip(&mut compositor);
     assert!(owner.session(stopped).stopped);
     assert!(!owner.session(kept).stopped);
 
-    let mut theirs = CaptureClient::connect(&mut compositor, agent);
+    let mut theirs = CaptureClient::connect_spy(&mut compositor, agent);
     let stopped = theirs.start_session("HEADLESS-1");
     let own = theirs.start_session(&agent_name);
     theirs.roundtrip(&mut compositor);

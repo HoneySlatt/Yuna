@@ -106,6 +106,7 @@ pub struct Window {
 /// What a subsurface of a window received: its `wl_surface.enter` events, and each
 /// `wl_surface.preferred_buffer_scale`.
 pub struct Subsurface {
+    pub surface: wl_surface::WlSurface,
     pub enters: u32,
     pub preferred_buffer_scales: Vec<i32>,
 }
@@ -181,6 +182,23 @@ impl Client {
         let stream = compositor
             .connect_client_to(seat)
             .expect("a client connects");
+        Client::connect_through(compositor, stream)
+    }
+
+    /// Connects as a client of `seat` that is shown every seat's and every output's globals,
+    /// which no real client is (`Compositor::connect_client_seeing_every_seat`): a spy, for
+    /// tests of what holding another seat's globals gives.
+    pub fn connect_seeing_every_seat(compositor: &mut Compositor, seat: SeatId) -> Client {
+        let stream = compositor
+            .connect_client_seeing_every_seat(seat)
+            .expect("a client connects");
+        Client::connect_through(compositor, stream)
+    }
+
+    fn connect_through(
+        compositor: &mut Compositor,
+        stream: std::os::unix::net::UnixStream,
+    ) -> Client {
         let connection = Connection::from_socket(stream).expect("a connection");
         let queue = connection.new_event_queue();
         connection.display().get_registry(&queue.handle(), ());
@@ -464,6 +482,12 @@ impl Client {
     /// Adds a desynchronised subsurface of 50 × 50 pixels at (10, 10) in `window`, and commits
     /// it; its parent is not committed.
     pub fn add_subsurface(&mut self, window: usize) -> usize {
+        self.add_subsurface_at(window, (10, 10))
+    }
+
+    /// As [`Client::add_subsurface`], at `at` in its parent: any value, past `i32`'s range
+    /// once summed with the window's place included.
+    pub fn add_subsurface_at(&mut self, window: usize, at: (i32, i32)) -> usize {
         let qh = self.queue.handle();
         let index = self.state.subsurfaces.len();
         let surface = self
@@ -480,12 +504,13 @@ impl Client {
             .expect("wl_subcompositor")
             .get_subsurface(&surface, parent, &qh, ());
         subsurface.set_desync();
-        subsurface.set_position(10, 10);
+        subsurface.set_position(at.0, at.1);
         let buffer = self.buffer(50, 50, &[0xFF_00_FF_00; 50 * 50]);
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, 50, 50);
         surface.commit();
         self.state.subsurfaces.push(Subsurface {
+            surface: surface.clone(),
             enters: 0,
             preferred_buffer_scales: Vec::new(),
         });

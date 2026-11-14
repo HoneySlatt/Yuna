@@ -11,6 +11,8 @@ mod activation;
 mod capture_client;
 mod captures;
 mod client;
+mod colour;
+mod colour_client;
 mod dialogs;
 mod dmabuf;
 mod input_client;
@@ -25,6 +27,7 @@ mod seats;
 mod selection;
 mod selection_client;
 mod text_input;
+mod vrr;
 mod window_cap;
 
 use std::cell::Cell;

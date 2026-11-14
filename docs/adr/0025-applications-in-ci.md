@@ -1,7 +1,8 @@
 # 0025. Real applications in CI, and rest checked on the program
 
 - Status: Accepted; amended by [0029](0029-the-rest-of-animated-applications.md) (when an
-  animated application's rest is checked; SlimeEngine's job a workflow of its own)
+  animated application's rest is checked; SlimeEngine's job a workflow of its own),
+  [0050](0050-mpv-in-the-applications-tests.md) (mpv)
 - Date: 2026-11-12
 
 ## Context

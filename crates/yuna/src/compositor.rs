@@ -23,6 +23,7 @@ use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use crate::Error;
 use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
+use crate::colour::SurfaceColourDescription;
 use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
@@ -117,7 +118,9 @@ pub struct OutputDescription {
     pub seat: SeatId,
     /// Its name, as `wl_output` gives it: `HEADLESS-<id>`.
     pub name: String,
-    /// Its size, rate and scale.
+    /// Its size, rate and scale; its VRR range's least rate
+    /// ([`OutputMode::vrr_min_millihertz`]), none at a fixed rate; and the monitor whose HDR
+    /// colours it announces ([`OutputMode::hdr`]), none for an SDR output.
     pub mode: OutputMode,
     /// Its place in logical coordinates.
     pub rect: Rect,
@@ -195,7 +198,7 @@ impl Compositor {
                 handle
                     .insert_source(socket, |stream, _, state| {
                         state.woke = true;
-                        if let Err(error) = state.insert_client(OWNER_SEAT, stream) {
+                        if let Err(error) = state.insert_client(OWNER_SEAT, stream, false) {
                             tracing::warn!(%error, "a client could not connect");
                         }
                     })
@@ -230,7 +233,17 @@ impl Compositor {
     /// socket. Refused for a seat that does not exist.
     pub fn connect_client_to(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
-        self.state.insert_client(seat, ours)?;
+        self.state.insert_client(seat, ours, false)?;
+        Ok(theirs)
+    }
+
+    /// Connects a client of `seat` that is shown every seat's `wl_seat` and every output's
+    /// `wl_output`, as the per-client filter of ADR-0042 never shows a client. Only for tests of
+    /// the layer below the filter: that a client holding another seat's globals gets none of its
+    /// input, focus or serials.
+    pub fn connect_client_seeing_every_seat(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
+        let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
+        self.state.insert_client(seat, ours, true)?;
         Ok(theirs)
     }
 
@@ -268,7 +281,7 @@ impl Compositor {
                     loop {
                         match socket.accept() {
                             Ok(Some(stream)) => {
-                                if let Err(error) = state.insert_client(seat, stream) {
+                                if let Err(error) = state.insert_client(seat, stream, false) {
                                     tracing::warn!(%error, "a client could not connect");
                                 }
                             }
@@ -420,6 +433,8 @@ impl Compositor {
             self.display
                 .dispatch_clients(&mut self.state)
                 .map_err(|e| Error::EventLoop(e.to_string()))?;
+            // After the dispatch, never inside it (`colour/protocol.rs`).
+            self.state.send_pending_information();
         }
         let now = self.state.clock.now();
         while let Some((_, deadline)) = self.state.clock.take_due(now) {
@@ -590,6 +605,13 @@ impl Compositor {
     /// arranged.
     pub fn windows(&self) -> Vec<WindowDescription> {
         self.state.describe_windows()
+    }
+
+    /// The colours the surfaces of `window` declared through `color-management-v1`, at their
+    /// last commit: its own surface's, its subsurfaces' and its popups'; those that declared
+    /// none are left out, and an unknown window has none.
+    pub fn window_colours(&self, window: WindowId) -> Vec<SurfaceColourDescription> {
+        self.state.window_colours(window)
     }
 
     /// The layout model, to read. Windows' ids start at 1 and increase in the order they map.

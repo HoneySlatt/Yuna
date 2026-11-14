@@ -29,7 +29,7 @@ The shell gives:
   ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
 - `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
 - the applications the tests run in Yuna, kept off the shell's own `PATH`: Alacritty, GTK 4's
-  `gtk4-demo`, Qt's `qml` and `vkcube`, in `YUNA_APPLICATIONS_PATH`, with what the tests give
+  `gtk4-demo`, Qt's `qml`, `vkcube` and mpv, in `YUNA_APPLICATIONS_PATH`, with what the tests give
   them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
@@ -153,7 +153,10 @@ otherwise.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
-([ADR-0036](docs/adr/0036-yuna-is-public.md)).
+([ADR-0036](docs/adr/0036-yuna-is-public.md)). A change of Markdown files alone skips it:
+[`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`, their
+links and the length of those read at every session, with lychee and git alone, in a minute or
+two. `scripts/check.sh docs` runs the same locally.
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
 changes the drawing path or what the agent's story uses; it builds the examples and cooks their
@@ -178,9 +181,10 @@ xkeyboard-config, a font, and the applications the tests run
 `actions/cache`, for SlimeEngine's binary. For the MCP server (M1.5), the owner accepted on
 2026-11-13 `serde`, with its `derive` feature, and `serde_json`
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
-([ADR-0034](docs/adr/0034-captures.md)). Smithay is pinned to one revision
-([ADR-0017](docs/adr/0017-smithays-revision.md)); its patches live in Yuna's fork
-([ADR-0021](docs/adr/0021-smithays-fork.md), [`docs/smithay-patches.md`](docs/smithay-patches.md)).
+([ADR-0034](docs/adr/0034-captures.md)). Smithay is Yuna's public fork, read over HTTPS and
+pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
+[ADR-0045](docs/adr/0045-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
+[`docs/smithay-patches.md`](docs/smithay-patches.md).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 

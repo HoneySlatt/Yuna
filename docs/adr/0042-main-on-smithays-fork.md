@@ -1,7 +1,9 @@
 # 0042. Main on Smithay's fork: seats and outputs filtered per client
 
 - Status: Accepted; amends [0021](0021-smithays-fork.md) (main moves to the fork now),
-  [0035](0035-agents-seats.md) (the seat filter comes at M1.6)
+  [0035](0035-agents-seats.md) (the seat filter comes at M1.6); supersedes
+  [0027](0027-smithay-without-overflow-checks.md); amended by
+  [0045](0045-the-fork-over-https-a-branch-per-base.md) (HTTPS, a branch per base)
 - Date: 2026-11-13
 
 ## Context

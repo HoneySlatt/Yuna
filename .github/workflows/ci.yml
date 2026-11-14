@@ -4,9 +4,13 @@
 name: CI
 
 on:
+  # A change of Markdown files alone runs the Docs workflow instead (docs.yml): nothing here reads
+  # them but the checks of their links and lengths.
   push:
     branches: [main]
+    paths: ["**", "!**.md"]
   pull_request:
+    paths: ["**", "!**.md"]
   # Every Monday at 06:17 UTC, without a push, so that a project at rest still learns of new
   # advisories against its dependencies. Off the hour, when GitHub delays scheduled runs.
   schedule:

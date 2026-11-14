@@ -5,6 +5,19 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- A virtual output may run under VRR, as amdgpu drives the owner's monitor, checked against two
+  traces of it: each frame shown a vertical blank after it is ready, within the range, and below
+  it shown several times as the driver does; clients see it in their presentation times. It may also announce the HDR colours
+  of the owner's monitor, a PG32UCDM. `--output` takes `vrr=MIN` and `hdr`, as in
+  `3840x2160@240,1.5,vrr=48,hdr`; `yuna mcp`'s `seat create` and `outputs create` take `vrr_min`
+  and `hdr`, and `outputs list` tells each output's VRR range and monitor. `windows` with
+  `colour: true` gives the colours each window's surfaces declared.
+- Clients can describe their surfaces' colours through `color-management-v1`, and read their
+  outputs': an HDR output announces the owner's monitor's colours, an SDR one sRGB. Nothing is
+  drawn differently yet.
+- A client sees only its own seat and that seat's outputs: an agent's programs no longer see
+  another seat's `wl_seat` or `wl_output`.
+
 - `yuna mcp` is the input method of each agent's seat: `keyboard type` commits a character
   outside the `us` layout to a text field that speaks `text-input-v3`, with no keymap change;
   `keyboard preedit` shows text being composed there; `keyboard get` and every `keyboard` result

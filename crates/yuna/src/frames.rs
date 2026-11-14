@@ -3,10 +3,13 @@
 //!
 //! A commit of a surface shown on an output, or a change of the layout, arms that output's next
 //! refresh; nothing is armed otherwise. The refresh is due at once when the output is idle: no
-//! frame waits for its boundary, and the boundary after its last refresh has passed. Otherwise
-//! it is due at a boundary minus the output's *lead*, so that its drawing ends before the
-//! boundary: the first boundary after its last refresh whose time minus the lead is not yet
-//! past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
+//! frame waits for its refresh, and one could begin now: at a fixed rate, the boundary after its
+//! last refresh has passed; under VRR, the panel can start a refresh a vertical blank from now,
+//! and, with nothing new to draw, a shortest refresh after the last one
+//! ([ADR-0051](../../../docs/adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)).
+//! Otherwise it is due at the refresh it can reach minus the output's *lead*, so that its
+//! drawing ends before that refresh: at a fixed rate, the first boundary after its last refresh
+//! whose time minus the lead is not yet past. The lead is the longest drawing of the last [`DRAWING_WINDOW`], each at least
 //! [`DRAWING_FLOOR`], plus [`LEAD_MARGIN`], at most one period; a drawing is timed from its
 //! deadline to its end.
 //!
@@ -40,16 +43,21 @@ use smithay::utils::{Monotonic, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
     SurfaceAttributes, SurfaceData, TraversalAction, with_surface_tree_downward,
 };
-use smithay::wayland::presentation::{PresentationFeedbackCachedState, Refresh};
+use smithay::wayland::presentation::PresentationFeedbackCachedState;
 use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
-use crate::output::VirtualOutput;
+use crate::output::{RefreshAt, Timing, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
 use crate::state::State;
+
+/// The later of two refreshes, by number.
+fn later(a: RefreshAt, b: RefreshAt) -> RefreshAt {
+    if b.seq > a.seq { b } else { a }
+}
 
 /// The shortest time between two frame callbacks of a hidden window.
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
@@ -70,38 +78,59 @@ impl State {
         self.layout_dirty = true;
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
-            self.schedule_refresh(id);
+            self.schedule_refresh_for_content(id);
         }
+    }
+
+    /// Arms `output`'s next refresh for something new to draw: under VRR, unpaced, and sooner
+    /// than a refresh armed already for nothing new.
+    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId) {
+        if let Some(index) = self.output_index(output) {
+            self.outputs[index].content_pending = true;
+        }
+        self.schedule_refresh(output);
     }
 
     /// Arms `output`'s next refresh, unless it is armed already: at once when the output is
     /// idle, else at the boundary it aims at minus its lead. See the module's documentation.
+    /// Under VRR, a refresh armed for nothing new is paced; something new that comes before it
+    /// arms it again, sooner.
     pub(crate) fn schedule_refresh(&mut self, output: OutputId) {
         let deadline = Deadline::Refresh(output);
-        if self.clock.is_armed(deadline) {
-            return;
-        }
         let now = self.clock.now();
         let Some(index) = self.output_index(output) else {
             return;
         };
         let output = &mut self.outputs[index];
-        // The boundary after its last refresh has passed, so no frame waits for its own.
-        let idle = now >= output.boundaries.at(output.last_refresh + 1);
-        let (at, boundary) = if idle {
-            (now, output.boundaries.first_at_or_after(now))
+        let paced = !output.content_pending || output.content_misses >= 2;
+        // At a fixed rate nothing is paced: a refresh armed stands, as before VRR.
+        let variable = matches!(output.timing, Timing::Variable(_));
+        if self.clock.is_armed(deadline) && (!variable || paced || output.armed_for_content) {
+            return;
+        }
+        // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
+        // may start a refresh now: no frame waits for its own.
+        let idle = output.timing.is_idle(now, output.last_refresh, paced);
+        let (at, aimed) = if idle {
+            (
+                now,
+                output.timing.reachable(now, output.last_refresh, paced),
+            )
         } else {
             let lead = output.drawings.lead(now, output.mode.period());
-            let boundary = output
-                .boundaries
-                .first_at_or_after(now.saturating_add(lead))
-                .max(output.last_refresh + 1);
-            (
-                output.boundaries.at(boundary).saturating_sub(lead),
-                boundary,
-            )
+            let aimed =
+                output
+                    .timing
+                    .reachable(now.saturating_add(lead), output.last_refresh, paced);
+            (aimed.at.saturating_sub(lead), aimed)
         };
-        output.armed_boundary = boundary;
+        if self.clock.is_armed(deadline) && output.armed_at <= at {
+            // The refresh armed for nothing new comes first already: it draws the new content.
+            output.armed_for_content = true;
+            return;
+        }
+        output.armed_for_content = !paced;
+        output.armed_refresh = aimed;
         output.armed_at = at;
         output.armed_at_once = idle;
         self.clock.arm(deadline, at);
@@ -129,7 +158,11 @@ impl State {
             return;
         }
         if let Some(output) = shown_on {
-            self.schedule_refresh(output);
+            if std::mem::take(&mut self.committed_content) {
+                self.schedule_refresh_for_content(output);
+            } else {
+                self.schedule_refresh(output);
+            }
         } else if unseen {
             discard_presentation_feedback(root);
             if waits_for_frame(root) {
@@ -156,6 +189,9 @@ impl State {
         let Some(index) = self.output_index(output) else {
             return;
         };
+        // What waited is drawn now, or found unchanged.
+        let armed_for_content = std::mem::take(&mut self.outputs[index].armed_for_content);
+        self.outputs[index].content_pending = false;
         let shown = self.shown(index);
         let drawing = self.draw(index, &shown);
         let now = self.clock.now();
@@ -165,36 +201,38 @@ impl State {
             }
         }
         let drew = matches!(drawing, Drawing::Drawn { .. });
+        let misses = &mut self.outputs[index].content_misses;
+        *misses = match (drew, armed_for_content) {
+            (true, _) => 0,
+            (false, true) => misses.saturating_add(1),
+            (false, false) => *misses,
+        };
         let output = &mut self.outputs[index];
-        let aimed = output.armed_boundary;
-        let seq = match drawing {
+        let aimed = output.armed_refresh;
+        let presented = match drawing {
             Drawing::Drawn { started, damaged } => {
                 let took = now.saturating_sub(output.armed_at);
                 output.drawings.record(now, took);
-                // When the drawing could first show, and never before the boundary it aimed at:
-                // an earlier one is the frame before's.
-                let seq = output.boundaries.first_at_or_after(now).max(aimed);
+                // When the drawing could first show, and never before the refresh it aimed at.
+                let presented = output.timing.present(now, aimed, output.last_refresh);
                 tracing::debug!(
                     output = output.id.0,
                     elements = shown.len(),
                     damaged_rectangles = damaged,
                     took_us = started.elapsed().as_micros(),
-                    lead_us = output
-                        .boundaries
-                        .at(aimed)
-                        .saturating_sub(output.armed_at)
-                        .as_micros(),
+                    lead_us = aimed.at.saturating_sub(output.armed_at).as_micros(),
                     at_once = output.armed_at_once,
-                    boundary = aimed,
-                    presented = seq,
+                    boundary = aimed.seq,
+                    presented = presented.seq,
+                    presented_at_us = presented.at.as_micros() as u64,
                     "frame drawn"
                 );
-                seq
+                presented
             }
             // Nothing new to show: content updates show with the frame this refresh aimed at.
             Drawing::Unchanged => aimed,
             Drawing::Failed => {
-                output.last_refresh = output.last_refresh.max(aimed);
+                output.last_refresh = later(output.last_refresh, aimed);
                 for placed in &shown {
                     if let Some(root) = self.root_of(placed.window) {
                         discard_presentation_feedback(&root);
@@ -204,9 +242,9 @@ impl State {
                 return;
             }
         };
-        output.last_refresh = output.last_refresh.max(seq);
-        // The frame shown from `seq` on is in the buffer now: the captures that waited for it.
-        self.copy_captures(output_id, drew, seq);
+        output.last_refresh = later(output.last_refresh, presented);
+        // The frame shown from `presented` on is in the buffer now: the captures that waited.
+        self.copy_captures(output_id, drew, presented);
         let output = &mut self.outputs[index];
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
@@ -231,9 +269,9 @@ impl State {
             return;
         }
         let output = &mut self.outputs[index];
-        output.held_feedback.push((seq, feedback));
-        let at = output.boundaries.at(seq);
-        self.clock.arm(Deadline::Presentation(output.id), at);
+        output.held_feedback.push((presented, feedback));
+        self.clock
+            .arm(Deadline::Presentation(output.id), presented.at);
     }
 
     /// An output's presentation deadline: the feedback held for each boundary now reached is
@@ -244,20 +282,20 @@ impl State {
             return;
         };
         let VirtualOutput {
-            boundaries,
+            timing,
             held_feedback,
             mode,
             ..
         } = &mut self.outputs[index];
-        let refresh = Refresh::Fixed(mode.period());
+        let refresh = timing.refresh(mode.period());
         let mut next = None;
-        held_feedback.retain_mut(|(seq, feedback)| {
-            let at = boundaries.at(*seq);
+        held_feedback.retain_mut(|(presented, feedback)| {
+            let at = presented.at;
             if at > now {
                 next = Some(next.map_or(at, |next: Duration| next.min(at)));
                 return true;
             }
-            feedback.presented::<Duration, Monotonic>(at, refresh, *seq, Kind::Vsync);
+            feedback.presented::<Duration, Monotonic>(at, refresh, presented.seq, Kind::Vsync);
             false
         });
         if let Some(at) = next {
@@ -399,6 +437,8 @@ impl State {
         self.focus_keyboard();
         self.clear_urgency_of_focused();
         self.arm_hidden_frames();
+        // Windows may have moved to another output, with other colours.
+        self.update_preferred_descriptions();
     }
 
     /// Records the output a toplevel is shown on, and sends its surfaces `wl_surface.enter` and

@@ -24,6 +24,7 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::Deadline;
+use crate::output::RefreshAt;
 use crate::output::{OutputMode, to_i32};
 use crate::screencopy::ClientFrame;
 use crate::seats::seat_of_surface;
@@ -109,7 +110,8 @@ pub struct CapturedFrame {
     pub mapping: CaptureMapping,
     /// The window captured, for a window's capture.
     pub window: Option<WindowId>,
-    /// The refresh boundary the frame is presented at.
+    /// The refresh the frame is presented at: its boundary at a fixed rate, its number counting
+    /// every refresh under VRR.
     pub boundary: u64,
     /// That boundary's time on the clock.
     pub presented_at: Duration,
@@ -510,8 +512,8 @@ impl State {
         let armed = self.clock.is_armed(Deadline::Refresh(output));
         match destination {
             Destination::Agent { .. } if !new_content && !armed => {
-                let seq = self.outputs[index].last_refresh;
-                self.copy(index, vec![destination], seq);
+                let last = self.outputs[index].last_refresh;
+                self.copy(index, vec![destination], last);
             }
             destination => {
                 if !new_content && !armed {
@@ -526,11 +528,11 @@ impl State {
         }
     }
 
-    /// At output `id`'s refresh, presented at boundary `seq`, after its arrangement: copies the
+    /// At output `id`'s refresh, presented at refresh `presented`, after its arrangement: copies the
     /// captures that waited for it, those that wait for new content only if it `drew`. A
     /// window's capture that waited for the arrangement takes its window's output now, or fails
     /// if the window is hidden.
-    pub(crate) fn copy_captures(&mut self, id: OutputId, drew: bool, seq: u64) {
+    pub(crate) fn copy_captures(&mut self, id: OutputId, drew: bool, presented: RefreshAt) {
         if self.pending_captures.is_empty() {
             return;
         }
@@ -570,7 +572,7 @@ impl State {
         }
         self.pending_captures = waiting;
         if let Some(index) = self.output_index(id) {
-            self.copy(index, due, seq);
+            self.copy(index, due, presented);
         }
     }
 
@@ -586,11 +588,12 @@ impl State {
         }
     }
 
-    /// Copies output `index`'s last frame, presented at boundary `seq`, for each destination:
-    /// the region each agent's capture shows, and the whole output once for every client's.
-    fn copy(&mut self, index: usize, destinations: Vec<Destination>, seq: u64) {
+    /// Copies output `index`'s last frame, presented at refresh `presented`, for each
+    /// destination: the region each agent's capture shows, and the whole output once for every
+    /// client's.
+    fn copy(&mut self, index: usize, destinations: Vec<Destination>, presented: RefreshAt) {
         let output = &self.outputs[index];
-        let presented_at = output.boundaries.at(seq);
+        let presented_at = presented.at;
         if !output.drawn_once {
             for destination in destinations {
                 fail(
@@ -626,7 +629,7 @@ impl State {
                             Ok(CapturedFrame {
                                 mapping: area.mapping,
                                 window,
-                                boundary: seq,
+                                boundary: presented.seq,
                                 presented_at,
                                 area,
                                 scale: mode.scale(),

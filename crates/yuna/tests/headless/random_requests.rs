@@ -213,6 +213,22 @@ enum Request {
     FractionalScale {
         window: usize,
     },
+    /// Damage of any rectangle, in the surface's coordinates or its buffer's, then a commit.
+    Damage {
+        target: Target,
+        rect: (i32, i32, i32, i32),
+        in_buffer: bool,
+    },
+    /// A buffer's offset (`wl_surface.offset`), then a commit.
+    Offset {
+        target: Target,
+        at: (i32, i32),
+    },
+    /// A subsurface of the window at any place, then the window's commit, which applies it.
+    Subsurface {
+        window: usize,
+        at: (i32, i32),
+    },
     SetSelection {
         primary: bool,
         serial: Serial,
@@ -498,6 +514,12 @@ fn request() -> impl Strategy<Value = Request> {
                 source
             }),
         1 => index().prop_map(|window| Request::FractionalScale { window }),
+        1 => (target(), (coordinate(), coordinate(), coordinate(), coordinate()), any::<bool>())
+            .prop_map(|(target, rect, in_buffer)| Request::Damage { target, rect, in_buffer }),
+        1 => (target(), coordinate_pair())
+            .prop_map(|(target, at)| Request::Offset { target, at }),
+        1 => (index(), coordinate_pair())
+            .prop_map(|(window, at)| Request::Subsurface { window, at }),
         1 => (any::<bool>(), serial())
             .prop_map(|(primary, serial)| Request::SetSelection { primary, serial }),
         1 => (target(), 0..3u8, proptest::option::of(target()))
@@ -753,6 +775,38 @@ fn send(selection: &mut SelectionClient, request: &Request) -> Asked {
             surface.commit();
             if let Target::Popup(p) = target {
                 return Asked::PopupCommit(p);
+            }
+        }
+        Request::Damage {
+            target,
+            rect: (x, y, width, height),
+            in_buffer,
+        } => {
+            let Some(surface) =
+                surface_of(client, focus, target).and_then(|target| wl_surface(client, target))
+            else {
+                return Asked::Other;
+            };
+            if in_buffer {
+                surface.damage_buffer(x, y, width, height);
+            } else {
+                surface.damage(x, y, width, height);
+            }
+            surface.commit();
+        }
+        Request::Offset { target, at } => {
+            let Some(surface) =
+                surface_of(client, focus, target).and_then(|target| wl_surface(client, target))
+            else {
+                return Asked::Other;
+            };
+            surface.offset(at.0, at.1);
+            surface.commit();
+        }
+        Request::Subsurface { window: w, at } => {
+            if let Some(w) = window(w) {
+                client.add_subsurface_at(w, at);
+                client.window(w).surface.commit();
             }
         }
         Request::SetMinSize { window: w, size } => {
@@ -1387,6 +1441,22 @@ fn random_requests_from_fresh_starts_keep_yuna_up() {
     run_cases(false);
 }
 
+/// The popup of the regressions file's second seed, found before M1.6.
+fn popup_on_nothing() -> Request {
+    Request::OpenPopup {
+        parent: None,
+        placement: RandomPlacement {
+            size: (1, 533),
+            anchor_rect: (673, 1591, 1244, 281),
+            anchor: 6,
+            gravity: 2,
+            adjustment: 25,
+            offset: (1989, 1477),
+        },
+        grab: false,
+    }
+}
+
 /// Sequences the random tests found failing, written out with whether they started busy: a seed
 /// kept in the regressions file replays its case only while the generator stays the same.
 #[test]
@@ -1396,6 +1466,13 @@ fn sequences_found_before() {
         request,
     };
     let found = [
+        // Two seeds of the regressions file, from the generator before M1.6 added damage,
+        // offsets and subsurfaces: a toplevel alone, and a popup on nothing; each from both
+        // starts, the file not saying which test found it.
+        (false, vec![by_first(Request::OpenToplevel)]),
+        (true, vec![by_first(Request::OpenToplevel)]),
+        (false, vec![by_first(popup_on_nothing())]),
+        (true, vec![by_first(popup_on_nothing())]),
         // A toplevel again on an `xdg_surface` whose surface its client destroyed: Yuna kept a
         // record of it on the dead surface.
         (

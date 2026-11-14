@@ -13,6 +13,12 @@
 //! `yuna mcp`, as an agent drives it, `vkcube` paused by its space key rests with its window open
 //! ([ADR-0029](../../../docs/adr/0029-the-rest-of-animated-applications.md)).
 //!
+//! Through `yuna mcp` too, mpv shows a picture it makes itself, an SDR one on an HDR output and a
+//! PQ one on an SDR output, until it has gone quiet. The test reads the colours mpv's surface
+//! declared through `color-management-v1`: values that hold only if mpv read the description Yuna
+//! prefers for it. mpv then quits by its `q` key, and Yuna must rest
+//! ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
+//!
 //! SlimeEngine's examples run in ignored tests, which its weekly job runs: `window` draws its
 //! frames and leaves, `editor` rests with its window open, and an agent types and clicks in
 //! `interface` and checks it by capture, M1.5's done-when
@@ -28,7 +34,9 @@
 //! What still reads the machine, measured with strace on NixOS: Mesa reads `/etc/drirc` where a
 //! machine has one, and lists `/dev/dri` without opening a device; Vulkan's loader reads the
 //! machine's list of layers and loads none; the fontconfig of Alacritty and Qt looks for two
-//! NixOS files in `/etc/fonts`, `local.conf` and `70-no-bitmaps-except-emoji.conf`.
+//! NixOS files in `/etc/fonts`, `local.conf` and `70-no-bitmaps-except-emoji.conf`; lavapipe, in
+//! mpv, opens `/dev/udmabuf`; mpv reads `/etc/localtime`, and looks for each of its libraries in
+//! the machine's `/run/opengl-driver/lib` first, where the machine measured has none of them.
 //!
 //! Every program comes from the development shell (`flake.nix`). Each process the test starts is
 //! killed if the test's thread ends first, so that a test killed or out of time leaves nothing.
@@ -185,6 +193,144 @@ fn pause_vkcube_and_rest() -> Result<String, String> {
     Ok(format!(
         "vkcube, paused by its space key: quiet after {} frames drawn, {} commits; then {rest}",
         paused.frames_drawn, paused.commits
+    ))
+}
+
+/// mpv shows an SDR picture on an HDR output, which announces the PG32UCDM's colours. Its
+/// target is the description Yuna prefers for its surface: it declares its picture in PQ over
+/// BT.2020, the output's, aimed at the monitor's own volume, the panel's primaries and 0.0002
+/// to 1015 cd/m², which only that description gave it. Its own luminances are PQ's, with
+/// libplacebo's reference white of 203 cd/m²; it leaves `max_fall` unset, as it reads a
+/// display's as a full frame's maximum, not an average
+/// ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
+#[test]
+fn mpv_aims_an_sdr_picture_at_the_hdr_outputs_monitor() {
+    let declared = json!([{
+        "role": "window",
+        "transfer_function": "st2084_pq",
+        "primaries": "bt2020",
+        "luminances": {"min": 0.0, "max": 10_000, "reference": 203},
+        // The PG32UCDM's own values, `colour/description.rs`, written again here on purpose:
+        // an independent check of what Yuna announced.
+        "target_primaries": {
+            "red": [0.6835, 0.3046],
+            "green": [0.2441, 0.7089],
+            "blue": [0.1435, 0.0556],
+            "white": [0.3134, 0.3291],
+        },
+        "target_luminance": {"min": 0.0002, "max": 1015},
+        "max_cll": 1015,
+        "max_fall": null,
+        "intent": "perceptual",
+    }]);
+    let report = mpv_declares(true, &[], &declared).unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+/// mpv shows a PQ picture on an SDR output, which announces gamma 2.2 over sRGB, 0.2 to 80
+/// cd/m² with a reference white of 80. Its target is that description: it tone-maps the
+/// picture and declares gamma 2.2 over sRGB, not the picture's PQ. It scales the luminances so
+/// that the reference white is libplacebo's 203 cd/m² and keeps the output's minimum: 0.2 to
+/// 203, no headroom above white, as the output announced. Gamma 2.2 carries no HDR metadata
+/// ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
+#[test]
+fn mpv_tone_maps_a_pq_picture_to_the_sdr_outputs_description() {
+    let declared = json!([{
+        "role": "window",
+        "transfer_function": "gamma22",
+        "primaries": "srgb",
+        "luminances": {"min": 0.2, "max": 203, "reference": 203},
+        "target_primaries": {
+            "red": [0.64, 0.33],
+            "green": [0.3, 0.6],
+            "blue": [0.15, 0.06],
+            "white": [0.3127, 0.329],
+        },
+        "target_luminance": {"min": 0.2, "max": 203},
+        "max_cll": null,
+        "max_fall": null,
+        "intent": "perceptual",
+    }]);
+    let pq = ["--vf=format:primaries=bt.2020:gamma=pq"];
+    let report = mpv_declares(false, &pq, &declared).unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+/// The picture mpv makes itself, so that nothing is fetched: one second of FFmpeg's test
+/// pattern, whose last frame `--keep-open` holds.
+const MPV_PICTURE: &str = "av://lavfi:testsrc2=size=640x360:rate=24:duration=1";
+
+/// Runs mpv through MCP on a seat of its own, its output HDR or SDR, with `options` before its
+/// picture, and requires that its window's surfaces declared the colours `declared`, as
+/// `windows` gives them with `colour`, read once mpv and Yuna have gone quiet: mpv sets its
+/// colours before its first frame, so a pause in its playback would read the same. mpv then quits by its
+/// `q` key, and Yuna must rest.
+fn mpv_declares(hdr: bool, options: &[&str], declared: &Value) -> Result<String, String> {
+    let mut yuna = Yuna::start_mcp();
+    let seat = yuna.create_seat_with(json!({"action": "create", "hdr": hdr}))?;
+    // Vulkan on lavapipe, which mpv refuses as a software device without `--gpu-sw`; no
+    // configuration file and no sound; the context pinned, so that a new mpv does not pick
+    // another unseen. Its `select` script would list the machine's sound cards for its menu,
+    // opening their ALSA control devices: off, as mpv's own `libmpv` profile sets it. Its
+    // Wayland module's verbose lines say what it read and declared.
+    let mut command = vec![
+        "mpv",
+        "--no-config",
+        "--vo=gpu-next",
+        "--gpu-api=vulkan",
+        "--gpu-context=waylandvk",
+        "--gpu-sw",
+        "--audio=no",
+        "--script-opts=select-populate_menu_data=no",
+        "--keep-open=yes",
+        "--msg-level=vo/gpu-next/wayland=v",
+    ];
+    command.extend(options);
+    command.push(MPV_PICTURE);
+    let mpv = yuna.start_program(seat, &command, &[])?;
+    let failure = |what: String| format!("mpv: {what}\n{}", yuna.diagnosis(&mpv.log));
+    yuna.agent_window(seat).map_err(failure)?;
+    yuna.wait_for_frames().map_err(failure)?;
+    let shown = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    if !yuna.program_runs(seat, &mpv).map_err(failure)? {
+        return Err(failure("it left before its colours were read".to_owned()));
+    }
+    let listed = yuna
+        .call("windows", json!({"seat": seat, "colour": true}))
+        .map_err(failure)?;
+    let colours = &listed["structuredContent"]["windows"][0]["colours"];
+    if colours != declared {
+        let log = fs::read_to_string(&mpv.log).unwrap_or_default();
+        let wayland: Vec<&str> = log
+            .lines()
+            .filter(|line| line.starts_with("[vo/gpu-next/wayland]"))
+            .collect();
+        return Err(failure(format!(
+            "its surface declared\n{colours:#}\nnot\n{declared:#}\nwhat it read and \
+             declared:\n{}",
+            wayland.join("\n")
+        )));
+    }
+
+    yuna.call(
+        "keyboard",
+        json!({"action": "tap", "seat": seat, "keys": "q"}),
+    )
+    .map_err(failure)?;
+    let ended = yuna.wait_for_end(seat, &mpv).map_err(failure)?;
+    if ended["state"] != json!("exited") || ended["exit_code"] != json!(0) {
+        return Err(failure(format!("it did not end well: {ended}")));
+    }
+    yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let rest = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest after it quit: {activity}")))?;
+    yuna.stop()?;
+    let output = if hdr { "an HDR" } else { "an SDR" };
+    Ok(format!(
+        "mpv on {output} output: quiet after {} frames drawn, {} commits, its colours as \
+         expected; it quit, then {rest}",
+        shown.frames_drawn, shown.commits
     ))
 }
 
@@ -919,12 +1065,36 @@ impl Yuna {
 
     /// Whether `program` of `seat` still runs, as `spawn list` says.
     fn program_runs(&self, seat: u64, program: &Program) -> Result<bool, String> {
+        Ok(self.listed_program(seat, program)?["state"] == json!("running"))
+    }
+
+    /// `program` of `seat` as `spawn list` gives it: its state, exit code and signal among
+    /// them; null when it is not listed.
+    fn listed_program(&self, seat: u64, program: &Program) -> Result<Value, String> {
         let listed = self.call("spawn", json!({"action": "list", "seat": seat}))?;
         Ok(listed["structuredContent"]["programs"]
             .as_array()
             .into_iter()
             .flatten()
-            .any(|p| p["id"] == json!(program.id) && p["state"] == json!("running")))
+            .find(|p| p["id"] == json!(program.id))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Waits through MCP until `program` of `seat` no longer runs, and gives what `spawn list`
+    /// then says of it.
+    fn wait_for_end(&self, seat: u64, program: &Program) -> Result<Value, String> {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let listed = self.listed_program(seat, program)?;
+            if listed["state"] != json!("running") {
+                return Ok(listed);
+            }
+            if Instant::now() > deadline {
+                return Err(format!("it did not end in {} s", PATIENCE.as_secs()));
+            }
+            std::thread::sleep(POLL);
+        }
     }
 
     fn runtime_dir(&self) -> PathBuf {

@@ -4,6 +4,7 @@
 //! `dmabuf.rs`, the preferred scale in `scale.rs`, captures in `capture.rs` and
 //! `screencopy.rs`; viewporter needs no handler.
 
+use crate::colour::ColourState;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
@@ -25,7 +26,8 @@ use smithay::utils::ClockSource;
 use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    CompositorClientState, CompositorHandler, CompositorState, get_parent, get_role,
+    CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
+    get_parent, get_role, with_surface_tree_downward,
 };
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
@@ -132,6 +134,10 @@ pub(crate) struct State {
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     /// The next agent's capture's ticket: tickets increase and are never reused.
     pub next_capture_ticket: u64,
+    /// Whether the commit being handled attached or removed a buffer: something new to draw.
+    pub committed_content: bool,
+    /// `color-management-v1`'s identities and feedback objects (`colour/`).
+    pub colour: ColourState,
 }
 
 impl State {
@@ -201,6 +207,11 @@ impl State {
             pending_captures: Vec::new(),
             captured: Vec::new(),
             next_capture_ticket: 1,
+            committed_content: false,
+            colour: {
+                crate::colour::protocol::manager_global(dh);
+                ColourState::new()
+            },
         })
     }
 
@@ -233,6 +244,10 @@ pub(crate) struct ClientState {
     pub compositor: CompositorClientState,
     /// The seat it belongs to: the one whose socket it connected through.
     pub seat: SeatId,
+    /// Whether it is shown every seat's and output's globals, not only its own seat's: only for
+    /// tests of what a client holding another seat's globals would get
+    /// (`Compositor::connect_client_seeing_every_seat`).
+    pub sees_every_seat: bool,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -240,10 +255,15 @@ pub(crate) struct ClientState {
 }
 
 impl ClientState {
-    pub(crate) fn new(seat: SeatId, departed: DepartedClients) -> ClientState {
+    pub(crate) fn new(
+        seat: SeatId,
+        sees_every_seat: bool,
+        departed: DepartedClients,
+    ) -> ClientState {
         ClientState {
             compositor: CompositorClientState::default(),
             seat,
+            sees_every_seat,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
@@ -283,6 +303,25 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
+        // Read before the buffer handler takes them: a buffer attached or removed anywhere in the
+        // tree this commit applies is something new to draw. Damage alone is not: Smithay keeps
+        // it until a buffer comes, and draws nothing new for it.
+        let mut content = false;
+        with_surface_tree_downward(
+            surface,
+            (),
+            |_, _, _| TraversalAction::DoChildren(()),
+            |_, states, _| {
+                content |= states
+                    .cached_state
+                    .get::<SurfaceAttributes>()
+                    .current()
+                    .buffer
+                    .is_some();
+            },
+            |_, _, _| true,
+        );
+        self.committed_content = content;
         on_commit_buffer_handler::<State>(surface);
         let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);

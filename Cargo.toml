@@ -11,9 +11,10 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
-# Pinned to one revision of the upstream repository, raised at each stage's end (ADR-0011,
-# ADR-0017). Each crate turns on the features it uses.
-smithay = { git = "https://github.com/Smithay/smithay.git", rev = "8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55", default-features = false }
+# Yuna's fork of Smithay, pinned to one commit: upstream's revision and Yuna's patches
+# (docs/smithay-patches.md, ADR-0042, ADR-0045). Raised at each stage's end (ADR-0017). Each
+# crate turns on the features it uses.
+smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "e229954ae0d592c6ecfa3bd4932c16371310cf0a", default-features = false }
 # Property tests of the layout model (M1.2), in tests only. Without its default features: no
 # forking, no timeouts, no temporary files.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
@@ -34,11 +35,6 @@ png = "0.18.1"
 # (`ext-data-control-v1`, fractional scale, xdg-activation, xdg-dialog).
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
-
-# Smithay adds a popup positioner's values with plain sums before Yuna sees them: with overflow
-# checks, a client's absurd values would panic a debug build. Built as in release (ADR-0027).
-[profile.dev.package.smithay]
-overflow-checks = false
 
 [workspace.lints.rust]
 missing_docs = "warn"

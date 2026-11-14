@@ -50,6 +50,25 @@ that rests on it is reopened in an ADR.
   EDID's HDR static metadata, overridable, 800 cd/m² when missing; night light as a white-point
   change with a final colorimetric step, correct under HDR.
 - Hyprland's wiki still marks HDR experimental, and its releases 0.55.1 to 0.57.2 fix HDR bugs.
+- What compositors list in `color-management-v1`, read on 2026-11-14 (KWin `01a35d1f`, Mutter
+  and Weston `main`, wlroots 0.20.2, jay `ede5bd77`): KWin version 3, parametric, no ICC, no
+  `srgb` transfer function ("intentionally not supported"); Mutter version 2, ICC, `srgb` to
+  version-1 clients; Weston version 2, ICC; wlroots version 2, gamma 2.2 and PQ; jay version 3,
+  no ICC. KWin announces its blending space (gamma 2.2 over BT.2020) as outputs' and surfaces'
+  preferred description; jay announces PQ with the display's EDID volume. None caps a client's
+  descriptions.
+- What clients need from it, read the same day: mpv 0.42 (`video/out/wayland_common.c`) uses it
+  only with `parametric`, sets PQ over BT.2020 with 0 / 10,000 / 203 cd/m² and HDR metadata, and
+  by default copies its surface's preferred description as its target. Mesa's Vulkan WSI binds
+  version 1, exposes a Vulkan colour space when its primaries and transfer function are listed,
+  takes a colour surface for sRGB swapchains only when `srgb` is listed, and turns a refused
+  description into a lost surface when `extended_target_volume` is listed. GTK 4 binds version 1
+  and drops colour management without `srgb`; Chromium needs `parametric`.
+- In `color-management-v1` version 1, `max_cll` and `max_fall` outside the target range are a
+  protocol error; version 2 drops the rule. Mesa binds version 1.
+- `wp_presentation` version 3 (wayland-protocols 1.50) adds the flags `fixed_rate` and
+  `variable_rate`; KWin, Mutter and wlroots send version 2, where a VRR output's refresh is its
+  fastest rate or 0. No other protocol tells a client that VRR is on.
 - No compositor reads panel luminance from DisplayID (libdisplay-info does not parse it yet), models
   an OLED's automatic brightness limiting, or protects OLEDs from burn-in.
 - No Wayland protocol lets a client ask for a refresh rate; no compositor switches the rate itself
@@ -70,8 +89,23 @@ that rests on it is reopened in an ADR.
   `no_break_fs_vrr`, niri `skip-cursor-only-updates-during-vrr`, KWin merge request 7700). KWin
   turned adaptive sync off by default (merge request 7684), citing flicker "we can't properly limit
   without new KMS APIs". No compositor limits the rate's change per frame or holds a floor.
-- amdgpu doubles frames below the panel's minimum (BTR, `freesync.c`); KMS exposes only a
-  `VRR_ENABLED` boolean.
+- amdgpu repeats frames below the panel's minimum (BTR, `freesync.c`, Linux master `97d73c82`,
+  2026-11-13, the same as 6.17): from the time between the last two flips it picks `n`
+  refreshes of equal, fixed length near the range's middle, with hysteresis; at 48–240 Hz, a
+  24 fps film gets 3 refreshes of 13.9 ms. Ranges under 2× take `apply_fixed_refresh`, which
+  holds the top rate after five slow frames. KMS exposes only a `VRR_ENABLED` boolean.
+- In amdgpu's display code (Linux `e0d8e8de`, 2026-11-08, the same in 7.3): BTR's flip
+  timestamp is taken in the commit's plane loop; its writes of the refresh's range are deferred
+  from the vertical-update interrupt to a worker that takes the lock the flip holds; after five
+  flips close to a vertical update, a workaround holds the top rate and skips BTR; the commit
+  waits in 1 ms steps while the CRTC is in its blank. A flip event's time is the next active
+  area's start.
+- Under VRR, KWin, Mutter, niri and gamescope aim a frame at the last presentation plus 1/max and
+  report the page flip's time; KWin and gamescope hold cursor-only updates, Mutter coalesces at
+  30 Hz, gamescope can hold the Steam interface at its rate; none limits how fast the rate
+  changes (KWin `01a35d1f`, Mutter `35f64c3d`, gamescope `56603967`).
+- The owner's monitor's EDID (read 2026-11-14): 48–240 Hz, PQ and BT.2020, desired content
+  luminance 1015.2 cd/m², 265.0 on a frame's average.
 
 ## Games
 

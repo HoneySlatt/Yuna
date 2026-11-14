@@ -565,7 +565,8 @@ impl State {
             .get(&toplevel.id())
             .and_then(|toplevel| toplevel.shown_on)
         {
-            self.schedule_refresh(output);
+            // A popup gone is something new to draw.
+            self.schedule_refresh_for_content(output);
         }
     }
 }

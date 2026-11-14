@@ -162,6 +162,17 @@ impl InputClient {
     /// listen to another seat does.
     pub fn connect(compositor: &mut Compositor, seat: SeatId, seat_name: &str) -> InputClient {
         let client = Client::connect_to(compositor, seat);
+        InputClient::bind_input(client, compositor, seat_name)
+    }
+
+    /// As [`InputClient::connect`], for a spy: a client of `seat` shown every seat's globals,
+    /// which may take another seat's `wl_seat` (`Client::connect_seeing_every_seat`).
+    pub fn connect_spy(compositor: &mut Compositor, seat: SeatId, seat_name: &str) -> InputClient {
+        let client = Client::connect_seeing_every_seat(compositor, seat);
+        InputClient::bind_input(client, compositor, seat_name)
+    }
+
+    fn bind_input(client: Client, compositor: &mut Compositor, seat_name: &str) -> InputClient {
         let queue = client.connection().new_event_queue();
         client
             .connection()

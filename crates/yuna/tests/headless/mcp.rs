@@ -10,12 +10,14 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{MAX_LINE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS, MODERN_REVISION, Server, Stop};
 use yuna::yuna_layout::SeatId;
-use yuna::{ClockMode, Compositor, Config};
+use yuna::{ClockMode, Compositor, Config, OutputMode};
 
 use crate::RED;
 use crate::client::Client;
+use crate::colour_client::{ColourClient, Primaries, RenderIntent, TransferFunction};
 
 /// A test's end of a server: what it writes to, what it reads from.
 pub struct Mcp {
@@ -252,6 +254,167 @@ fn outputs_are_created_listed_and_removed() {
     );
     assert_eq!(last["isError"], json!(true));
     assert_eq!(mcp.server.compositor().outputs().len(), 1);
+}
+
+/// A seat's output may run under VRR and announce the owner's monitor's HDR colours, which
+/// `outputs list` tells; a range less than twice as wide as its least rate is refused. `windows`
+/// gives the colours a window's surfaces declared only when asked, when it answers at once and
+/// when it answers a waiting call (ADR-0049).
+#[test]
+fn vrr_and_hdr_outputs_are_listed_and_declared_colours_given_when_asked() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let narrow = mcp.call(
+        "seat",
+        json!({"action": "create", "rate": 240, "vrr_min": 200}),
+    );
+    assert_eq!(narrow["isError"], json!(true));
+    let text = narrow["content"][0]["text"].as_str().expect("a reason");
+    assert!(text.contains("VRR range of 200 to 240 Hz"), "{text}");
+    let created = mcp.call(
+        "seat",
+        json!({"action": "create", "width": 1920, "height": 1080, "rate": 240, "scale": 1,
+               "vrr_min": 48, "hdr": true}),
+    );
+    assert_eq!(created["isError"], json!(false), "{created}");
+    let seat = created["structuredContent"]["seat"]
+        .as_u64()
+        .expect("a handle");
+    let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    let output = &listed["structuredContent"]["outputs"][0];
+    assert_eq!(output["refresh_mhz"], json!(240_000));
+    assert_eq!(output["vrr"], json!({"min": 48.0, "max": 240.0}));
+    assert_eq!(output["hdr"], json!("PG32UCDM"));
+
+    let narrow = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "rate": 240, "vrr_min": 200}),
+    );
+    assert_eq!(narrow["isError"], json!(true));
+    let text = narrow["content"][0]["text"].as_str().expect("a reason");
+    assert!(text.contains("VRR range of 200 to 240 Hz"), "{text}");
+    let plain = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 640, "height": 480, "rate": 60,
+               "scale": 1}),
+    );
+    assert_eq!(plain["structuredContent"]["output"]["vrr"], Value::Null);
+    assert_eq!(plain["structuredContent"]["output"]["hdr"], Value::Null);
+
+    // A call that waits for the window, asking for its colours.
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 300, "method": "tools/call",
+                      "params": modern(json!({"name": "windows", "arguments": {
+                          "seat": seat, "app_id": "org.example.Hdr", "colour": true,
+                          "wait_ms": 10_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    // A window whose first buffer comes with PQ over BT.2020, the least an HDR10 client sends.
+    let mut colour = ColourClient::connect(mcp.server.compositor(), SeatId(seat), 3);
+    let params = colour.params();
+    params.set_tf_named(TransferFunction::St2084Pq);
+    params.set_primaries_named(Primaries::Bt2020);
+    let description = colour.create(params);
+    colour.roundtrip(mcp.server.compositor());
+    assert!(colour.events(description).ready.is_some());
+    let window = colour.client.open_window(mcp.server.compositor());
+    colour
+        .client
+        .set_app_id_and_title(window, "org.example.Hdr", "HDR");
+    colour.client.ack(window);
+    let surface = colour.client.window(window).surface.clone();
+    colour
+        .colour_surface(&surface)
+        .set_image_description(colour.description(description), RenderIntent::Perceptual);
+    colour.client.attach(window, 400, 300, RED);
+    colour.client.commit(window);
+    colour.roundtrip(mcp.server.compositor());
+    crate::run_armed_deadlines(mcp.server.compositor());
+
+    let bt2020 = json!({
+        "red": [0.708, 0.292], "green": [0.17, 0.797], "blue": [0.131, 0.046],
+        "white": [0.3127, 0.329],
+    });
+    // PQ's luminances when a client sets none: 0.005, 10,000 and 203 cd/m²; its target, the
+    // same volume.
+    let declared = json!([{
+        "role": "window",
+        "transfer_function": "st2084_pq",
+        "primaries": "bt2020",
+        "luminances": {"min": 0.005, "max": 10_000, "reference": 203},
+        "target_primaries": bt2020,
+        "target_luminance": {"min": 0.005, "max": 10_000},
+        "max_cll": null,
+        "max_fall": null,
+        "intent": "perceptual",
+    }]);
+    let waited = mcp.reply_to(300);
+    let windows = &waited["result"]["structuredContent"]["windows"];
+    assert_eq!(windows[0]["app_id"], json!("org.example.Hdr"));
+    assert_eq!(windows[0]["colours"], declared);
+
+    let asked = mcp.call("windows", json!({"seat": seat, "colour": true}));
+    let with_colours = &asked["structuredContent"]["windows"][0];
+    assert_eq!(with_colours["colours"], declared);
+    for arguments in [
+        json!({"seat": seat}),
+        json!({"seat": seat, "colour": false}),
+    ] {
+        let listed = mcp.call("windows", arguments);
+        let window = &listed["structuredContent"]["windows"][0];
+        assert_eq!(window.get("colours"), None, "{listed}");
+        // Nothing else differs.
+        let mut without = with_colours.clone();
+        without
+            .as_object_mut()
+            .expect("an object")
+            .remove("colours");
+        assert_eq!(window, &without);
+    }
+    // A window that declared nothing gives an empty list.
+    let mut other = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let undeclared = other.open_window(mcp.server.compositor());
+    other.ack(undeclared);
+    other.attach(undeclared, 400, 300, RED);
+    other.commit(undeclared);
+    other.roundtrip(mcp.server.compositor());
+    crate::run_armed_deadlines(mcp.server.compositor());
+    let asked = mcp.call("windows", json!({"seat": seat, "colour": true}));
+    let windows = &asked["structuredContent"]["windows"];
+    assert_eq!(windows[0]["colours"], declared);
+    assert_eq!(windows[1]["colours"], json!([]));
+}
+
+/// `yuna mcp --output`'s VRR range and HDR monitor reach each new seat's output, as its size
+/// does; a call's own values replace them.
+#[test]
+fn the_seats_default_output_gives_its_vrr_range_and_hdr_monitor() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let default = OutputMode::new(1920, 1080, 240.0, 1.0)
+        .and_then(|mode| mode.with_vrr(48.0))
+        .expect("a mode")
+        .with_hdr(PG32UCDM);
+    mcp.server.set_seat_output(default);
+    let seat = mcp.seat();
+    let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    let output = &listed["structuredContent"]["outputs"][0];
+    assert_eq!(output["width"], json!(1920));
+    assert_eq!(output["vrr"], json!({"min": 48.0, "max": 240.0}));
+    assert_eq!(output["hdr"], json!("PG32UCDM"));
+
+    let own = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "vrr_min": 60, "hdr": false}),
+    );
+    let output = &own["structuredContent"]["output"];
+    assert_eq!(output["vrr"], json!({"min": 60.0, "max": 240.0}), "{own}");
+    assert_eq!(output["hdr"], Value::Null);
+    // A call that names its own rate gets no default range: a fixed 60 Hz, though 48 Hz is
+    // more than half of 60.
+    let slow = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "rate": 60}),
+    );
+    let output = &slow["structuredContent"]["output"];
+    assert_eq!(output["vrr"], Value::Null, "{slow}");
+    assert_eq!(output["refresh_mhz"], json!(60_000));
 }
 
 /// `windows` waits for a window that matches, and is answered as soon as one maps; a waiting

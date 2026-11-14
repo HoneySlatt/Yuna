@@ -4,6 +4,69 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.6 — mpv in the applications' tests (2026-11-14)
+
+On GitHub's `ubuntu-24.04` runner, for commit `f9f32bb`: CI's one job took 3 min 39 s, against
+2 min 41 s at M1.5's end; mpv's 348 MB come with it. The applications' tests took 32.6 s there
+(commit `71cfee2`).
+
+Machine and Mesa as in M1.4's B4 below, load average 1.5 to 3.6. Build: debug, mpv's
+two tests (commit `32bfc5a`) on `e04dee7`. Command: `nix develop -c cargo test -p yuna --test applications`, with
+and without `-- --skip mpv`, on all 16 threads and on two cores (`taskset -c 0,1`), run with
+`run.sh --exclusive` (its proof does not record the lock), outside `agent-headless`, since `yuna mcp` and `yuna --headless`
+open no display. The figure is libtest's own time for the whole file.
+
+| What | Runs | Without mpv → with |
+|---|---|---|
+| The applications' tests, all threads | 3 + 3 | 16.43 s → 16.45–16.46 s |
+| The same on two cores, where libtest runs two tests at a time | 2 + 2 | 31.4–31.7 s → 47.3–47.6 s |
+| mpv's two tests alone, two cores | 1 | 16.4 s |
+| Both mpv cases in one test, run at once, on two cores (measured, not kept) | 2 | 32.3 s |
+| What mpv 0.42.0 adds to the shell | 1 | 348 MB, 52 store paths |
+
+- Each mpv test takes about 16 s: mpv shows its 24 frames, Yuna drew 23 to 27 frames from 69
+  to 81 commits, then 2 s of quiet, the read, mpv's exit, 2 s of quiet and 10 s of rest, with
+  no context switch in Yuna's 35 threads.
+- On all threads they run beside the others and add nothing measurable. On two cores they add
+  16 s; in one test, both at once, they would add 1 s. CI's own time comes with the first push.
+
+## M1.6 — Presentation times under emulated VRR (2026-11-14)
+
+On the manual clock, the VRR stories (`crates/yuna/tests/headless/vrr.rs`) pin the emulation on a
+1920 × 1080 output of 48 to 240 Hz, after six frames of warm-up from a pause of 1 s: at 100 fps,
+every presentation 10 ms after the last and one refresh later; at 300 fps, none sooner than
+1/240 s, the frames that could not be shown discarded; at 24 fps, 41.667 ms apart within 1 µs,
+three refreshes later each, as amdgpu's BTR inserts them; at 23.976 fps, at most 2 of 41
+intervals a whole number of 1/240 s periods, against all of them on a fixed 240 Hz output.
+Checked against the owner's monitor ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
+[ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)): the owner ran the throwaway
+`vrr-trace` twice from a text console on 2026-11-14, Linux 7.3.1, mode 3840 × 2160 at 240.016 Hz,
+VRR on: steady rates from 23.976 to 300 fps while other builds loaded the machine, then probes
+on a quiet machine, frames late and early by 0.5 to 16 ms, gaps and changes of rate. Reduced, they
+are `crates/yuna/tests/fixtures/vrr-trace-pg32ucdm*.txt`. Per frame, the monitor showed 3
+refreshes at 24, 25 and 30 fps, 2 at 48, one from 60, at most 240 Hz above; under BTR, the first
+`n − 1` of a fixed length (13.9 ms at 24 fps), the last variable; after a phase's last frame, 20.83 ms refreshes (12.5 ms
+during the idle seconds that open each run, a state the console left). A flip
+came 0.5 ms after its submission when nothing held it (0.5 to 0.95 ms), 1.2 ms at 240 fps and
+3.0 ms at 300, held by the flip before. After the panel's own refresh, a frame waited 7 to 12 ms
+more. Replayed through `vrr.rs`, every frame, the panel set back on the monitor's history after
+each: a frame's start within 500 µs of the monitor's for 91 % of the steady rates' 8,319 frames
+and 82 % of the probes' 7,330; its refresh's number for 96 % and 94 %. The model before the
+traces gives 63 % for the steady rates ([debt](debt.md#vrr)).
+
+On the real clock: machine as in M1.5's B4 below, Linux 7.3.1. Build: release, commit `e04dee7`
+with the log's `presented_at_us`. One run, with the owner's consent, under the agents' lock of
+exclusive runs, no game running; other agents' builds ran meanwhile. Command: `nix develop -c
+agent-headless -- target/release/examples/frame_time --output 1920x1080@240,1,vrr=48 --seconds
+20`: two `vkcube` on lavapipe, Yuna on llvmpipe, 20 s after 3 s of warm-up.
+
+- 4,515 frames drawn, 225.7 a second; a frame's time median 2,343 µs, p99 7,792 µs, longest
+  40.4 ms.
+- Between two presentations, 4,514 intervals: shortest 4,166 µs, p1 4,166 µs, median 4,167 µs,
+  p99 8,391 µs, longest 52.0 ms; none sooner than 1/240 s.
+- 15 frames presented after the refresh they aimed at; Yuna's own CPU, llvmpipe apart, 1,316 µs
+  a frame.
+
 ## M1.5, C5 — An agent's calls and captures (2026-11-13)
 
 Machine and Mesa as in B4 below. Build: release, commit `6023949`. One series, run with

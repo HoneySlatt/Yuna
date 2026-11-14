@@ -688,8 +688,8 @@ fn a_nested_popup_is_placed_again_relative_to_its_parent() {
     assert_rests(&mut compositor);
 }
 
-/// A positioner whose anchor rectangle ends past `i32::MAX`: Smithay's sums wrap, as in a
-/// release build, rather than panic a debug one (ADR-0027), and Yuna's own bound on positioner
+/// A positioner whose anchor rectangle ends past `i32::MAX`: Smithay's sums saturate, in the
+/// fork's patch, rather than panic a debug build (ADR-0042), and Yuna's own bound on positioner
 /// values dismisses the popup. The client keeps its window, and Yuna rests.
 #[test]
 fn a_positioner_past_i32_max_is_dismissed_not_a_panic() {
