@@ -127,13 +127,13 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 ## VRR
 
 - A frame later than BTR's inserted refreshes waits longer on the owner's monitor than the
-  emulation says: about as long again as it was late, on every rate the trace covers, with
-  one refresh more once it is later than 1/240 s. The rule is seen in the trace, not found in
+  emulation says: about as long again as it was late, at every rate where BTR inserts
+  refreshes, 24 to 48 fps, with one refresh more once it is later than 1/240 s. The rule is seen in the trace, not found in
   the driver's code read; the emulation shows such a frame at once. The replay leaves late
   frames out (`vrr.rs`, `the_emulation_replays_the_owners_monitor`).
-- After a perturbation, the monitor may keep BTR's count of refreshes where the emulation
+- After a perturbation, the emulation may keep BTR's count of refreshes where the monitor
   changes it: at 25 fps, 4 refreshes a frame for about half the steady frames, where the
-  emulation shows 3. BTR's history follows the flips' commit times, which the trace and the
+  monitor shows 3. BTR's history follows the flips' commit times, which the trace and the
   emulation do not see the same way.
 - The trace's rates are steady: it shows neither whether a frame early in BTR's inserted
   refreshes waits for their end, nor BTR's hysteresis across a change of rate, which the

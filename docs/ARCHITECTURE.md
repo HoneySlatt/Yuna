@@ -326,7 +326,8 @@ emulates amdgpu driving a DisplayPort Adaptive-Sync monitor:
 - The range is at least twice as wide as its least rate; a narrower one takes a path of the
   driver Yuna does not emulate.
 - A test replays a trace of the owner's monitor (`tests/fixtures/vrr-trace-pg32ucdm.txt`):
-  frames on time match it; late frames wait longer on the monitor ([debt](debt.md#vrr)).
+  frames on time match it; late frames under BTR wait longer on the monitor, a gap being
+  modelled from a second trace ([debt](debt.md#vrr)).
 
 ### A frame
 

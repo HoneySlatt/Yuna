@@ -412,8 +412,10 @@ mod tests {
     /// Replays a rate's submissions through the panel, its first flip as the panel's start, and
     /// gives, for each flip after `warm_up` whose submission and the one before came within
     /// 200 µs of the rate's period, the error of the interval since the flip before and whether
-    /// the count of refreshes between them matched. Frames submitted late are left out: the
-    /// monitor holds them longer than the emulation does ([debt](../../../docs/debt.md#vrr)).
+    /// the count of refreshes between them matched. The others are left out: frames late,
+    /// which the monitor holds longer than the emulation does under BTR, frames early to catch
+    /// up, and frames held back by the flip before above the range
+    /// ([debt](../../../docs/debt.md#vrr)).
     fn replay_steady(
         millihertz: u32,
         flips: &[TracedFlip],
@@ -443,12 +445,13 @@ mod tests {
         found
     }
 
-    /// ADR-0045's check: the owner's monitor's trace, replayed. For frames on time, at every rate
-    /// from 23.976 to 300 fps, the time between two presentations is the monitor's within
-    /// 100 µs for at least 85 % of them (the trace's event times are whole microseconds, its
-    /// submissions jitter), and the count of refreshes between them is the monitor's for at
-    /// least 95 %. At 25 fps, the monitor keeps 4 refreshes a frame after a perturbation where
-    /// the emulation goes back to 3, about half the time: at least 50 % there.
+    /// The owner's monitor's first trace, replayed, for frames on time: at every rate from
+    /// 23.976 to 300 fps, the time between two presentations is the monitor's within 100 µs for
+    /// at least 85 % of them, and the count of refreshes between them for at least 95 %. At 25
+    /// fps the emulation keeps 4 refreshes a frame after a perturbation where the monitor goes
+    /// back to 3, about half the time: at least 50 % there. The thresholds are this trace's
+    /// replay, fitted to it: they guard the emulation against regressions, they do not prove its
+    /// fidelity beyond these frames ([debt](../../../docs/debt.md#vrr)).
     #[test]
     fn the_emulation_replays_the_owners_monitor() {
         let rates = traced_rates();
