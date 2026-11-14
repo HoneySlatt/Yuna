@@ -4,6 +4,28 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.6 — mpv in the applications' tests (2026-11-14)
+
+Machine and Mesa as in M1.4's B4 below, load average 1.5 to 3.6. Build: debug, commit `423bd38`
+with mpv's two tests. Command: `nix develop -c cargo test -p yuna --test applications`, with
+and without `-- --skip mpv`, on all 16 threads and on two cores (`taskset -c 0,1`), run with
+`run.sh --exclusive` (its proof does not record the lock), outside `agent-headless`, since `yuna mcp` and `yuna --headless`
+open no display. The figure is libtest's own time for the whole file.
+
+| What | Runs | Without mpv → with |
+|---|---|---|
+| The applications' tests, all threads | 3 + 3 | 16.43 s → 16.45–16.46 s |
+| The same on two cores, where libtest runs two tests at a time | 2 + 2 | 31.4–31.7 s → 47.3–47.6 s |
+| mpv's two tests alone, two cores | 1 | 16.4 s |
+| Both mpv cases in one test, run at once, on two cores (measured, not kept) | 2 | 32.3 s |
+| What mpv 0.42.0 adds to the shell | 1 | 348 MB, 52 store paths |
+
+- Each mpv test takes about 16 s: mpv shows its 24 frames, Yuna drew 23 to 27 frames from 69
+  to 81 commits, then 2 s of quiet, the read, mpv's exit, 2 s of quiet and 10 s of rest, with
+  no context switch in Yuna's 35 threads.
+- On all threads they run beside the others and add nothing measurable. On two cores they add
+  16 s; in one test, both at once, they would add 1 s. CI's own time comes with the first push.
+
 ## M1.6 — Presentation times under emulated VRR (2026-11-14)
 
 On the manual clock, the VRR stories (`crates/yuna/tests/headless/vrr.rs`) pin the emulation on a

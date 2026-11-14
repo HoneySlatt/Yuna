@@ -29,7 +29,7 @@ The shell gives:
   ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
 - `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
 - the applications the tests run in Yuna, kept off the shell's own `PATH`: Alacritty, GTK 4's
-  `gtk4-demo`, Qt's `qml` and `vkcube`, in `YUNA_APPLICATIONS_PATH`, with what the tests give
+  `gtk4-demo`, Qt's `qml`, `vkcube` and mpv, in `YUNA_APPLICATIONS_PATH`, with what the tests give
   them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
