@@ -4,6 +4,42 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.7 — Motion (2026-11-14)
+
+Machine and Mesa as in M1.4's B4 below. Build: release, commit `92fb627`. One run each, in
+order, under the agents' exclusive lock, inside `agent-headless`; `--gpu` drew on the render
+node. Command: `target/release/examples/motion_time` ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md)):
+Yuna in the example's process on the real clock, six `vkcube`, four of them in columns as wide
+as the output; 10,000 frames still, then 10,000 while a round of 14 operations repeats
+(scrolls, a column moved and back, a workspace switch down and up, the special workspace in and
+out, a scroll turned back after 30 ms), each started once the motion before ended. A frame
+*missed* was presented after the boundary it aimed at. The machine's load was read each second
+beside the runs, as [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md) asks.
+
+| Output, drawing, clients | Phase | Frames a second | Missed | A frame's time: median | p99 | longest |
+|---|---|---|---|---|---|---|
+| 3840 × 2160 at 240 Hz, scale 1.5, GPU, radv | still | 237.6 | 34 of 10,000, 0.34 % | 214 µs | 2,752 µs | 10,956 µs |
+| | motion | 240.0 | 0 of 10,000 | 226 µs | 587 µs | 1,306 µs |
+| 1920 × 1080 at 240 Hz, scale 1, llvmpipe, lavapipe | still | 233.6 | 190 of 10,000, 1.90 % | 2,206 µs | 4,538 µs | 22,056 µs |
+| | motion | 149.4 | 5,755 of 10,000, 57.6 % | 4,108 µs | 7,694 µs | 36,022 µs |
+
+- **On the GPU at 4K, ADR-0056's budget is met**: motion missed no frame, against 34 for the
+  still output. The heaviest frame, the second after the special workspace shown, took 1.3 ms
+  of a 4.17 ms period. A frame cost Yuna 201 µs of CPU and 116 µs of GPU in motion, against
+  236 µs and 112 µs still.
+- **The still phase on the GPU was disturbed**: another session's SlimeEngine tests kept the
+  processor up to 74 % busy during it (10 to 44 % most seconds), against 2 to 7 % during the
+  motion phase. Its 34 misses may owe to them; motion's zero meets the budget even counted
+  alone.
+- **On llvmpipe at 1080p, motion misses more than half its frames**, recorded without a pass
+  mark, most likely because every client in view draws on the CPU while windows slide in (35 ms
+  of client CPU a frame, against 14 ms still; not isolated by a run of its own), and llvmpipe's
+  rasterizer and the `vkcube` on lavapipe share
+  the 16 threads; the machine sat at 51 to 77 % busy, the runs' own load, quiet before. Misses
+  fall 485 in a motion's first three frames, 5,270 elsewhere. As at M1.4, llvmpipe holds no
+  whole-output redraw at 240 Hz under load; it is [debt](debt.md#the-headless-compositor)
+  already, not a cost of motion.
+
 ## M1.6 — mpv in the applications' tests (2026-11-14)
 
 On GitHub's `ubuntu-24.04` runner, for commit `f9f32bb`: CI's one job took 3 min 39 s, against
