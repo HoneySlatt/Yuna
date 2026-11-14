@@ -895,6 +895,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuna-motion"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

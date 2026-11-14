@@ -18,8 +18,8 @@ The owner chose, on 2026-11-14, to keep the velocity; the rest follows from it:
 
 - **The spring** is `x'' + c x' + k x = 0`, mass 1, set by its damping ratio and stiffness,
   evaluated in closed form at any time from its start, value and velocity alike. Overdamped
-  springs are two decaying exponentials, so that nothing overflows; a ratio within 1e-6 of 1 is
-  critical.
+  springs are written with decaying exponentials only, so that nothing overflows, and every
+  form stays precise as the ratio nears 1, without rounding it to 1.
 - **Interrupted**, a spring starts again from its value and velocity at that time, toward the new
   target. A spring without bounce does not overshoot from rest; after a change of mind it may,
   by the velocity it carried.
