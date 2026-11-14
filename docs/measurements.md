@@ -44,6 +44,55 @@ beside the runs, as [ADR-0060](adr/0060-development-first-agents-in-their-own-yu
   quiet. The verdict holds, since motion missed none. The figures are of commit `92fb627`;
   `eed33e0` changed only frames drawn at once after rest, which the motion phase had none of.
 
+### The layout and the motion, on one core
+
+`taskset -c 6`, release, under the exclusive lock, the load read beside each run. The layout's
+`timing` example ([M1.2](#m12--the-layout-model-2026-11-11), its command below) and `yuna-motion`'s
+`motion_timing` (`crates/yuna-motion/examples/motion_timing.rs`). Medians and 99th percentiles
+in microseconds.
+
+**What M1.7 cost the layout**, two runs each, back to back, of main before M1.7 (`da44c97`) and
+of `b14d618`, at a load average of 4 to 5: in scrolling columns `arrange` at 100 windows went
+from 6.9 to 8.6, focusing from 10.2 to 12.8; dwindle 10 to 15 % more. Sizing the arrangement's
+lists once and a column id that is never 0 (`769ce2d`) gave it back: 7.0 and 7.1 for `arrange`
+in scrolling columns, dwindle as main's.
+
+**The layout at `769ce2d`**, one run, the processor 3 % busy beside it, load average 1.2 to 3.7:
+
+| Operation, then `arrange` | Windows | Scrolling: median | p99 | Dwindle: median | p99 |
+|---|---|---|---|---|---|
+| Arrange alone | 100 | 6.95 | 7.83 | 7.71 | 9.96 |
+| Focus left, then right | 100 | 10.5 | 14.2 | 10.8 | 14.7 |
+| Open a window, then close it | 100 | 12.6 | 16.2 | 14.4 | 15.7 |
+| Move the focused window, then back | 100 | 10.6 | 13.8 | 10.9 | 13.9 |
+| Fullscreen on, then off | 100 | 12.4 | 15.5 | 8.05 | 8.71 |
+| Float, then tile | 100 | 18.1 | 19.1 | 20.5 | 23.9 |
+| Switch the tiling, then back | 100 | 12.5 | 13.8 | 9.68 | 12.7 |
+| Arrange alone | 1,000 | 75.4 | 86.6 | 80.3 | 88.1 |
+| Float, then tile | 1,000 | 181 | 194 | 203 | 220 |
+
+Every row meets [ADR-0020](adr/0020-the-layout-models-shape.md)'s budgets, 25 µs at 100
+windows and 300 µs at 1,000. Under a load average of 4 to 5, "float, then tile" in dwindle
+reached 25.1 to 25.4 µs at the 99th percentile, as main's own code did, 24.4 to 25.3
+([debt](debt.md#the-layout-model)).
+
+**The motion at `769ce2d`**, the same run's conditions; each update one 240 Hz refresh after
+the last, interrupting the motion it started:
+
+| What is timed | Windows | Median | p99 |
+|---|---|---|---|
+| `Motion::update`: focus 2 columns left, then back | 100 | 29.9 | 50.9 |
+| `Motion::update`: open a column left, then close it | 100 | 40.5 | 57.8 |
+| `Motion::frame`, while a column opens | 100 | 4.7 | 6.9 |
+| `Motion::update`: focus 2 columns left, then back | 1,000 | 317 | 377 |
+| `Motion::update`: open a column left, then close it | 1,000 | 435 | 517 |
+| `Motion::frame`, while a column opens | 1,000 | 48.5 | 75.5 |
+
+An update runs once per operation, beside the layout's; a frame's sampling once per refresh,
+about 5 µs of a 4.17 ms period at 100 windows. No budget is set for them yet: M1.9 sets the bar's
+budgets from the rivals'. "Float, then tile" could not be profiled: the agents' isolation
+refuses `perf` its events.
+
 ## M1.6 — mpv in the applications' tests (2026-11-14)
 
 On GitHub's `ubuntu-24.04` runner, for commit `f9f32bb`: CI's one job took 3 min 39 s, against

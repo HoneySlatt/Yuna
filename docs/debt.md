@@ -20,11 +20,12 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 
 - A dwindle tree deeper than its space gives its last windows empty slots: they are asked 1 × 1
   and not drawn ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
-- "Float, then tile" on a workspace of 100 windows misses
-  [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile in 3 of 5
-  runs measured in M1.4's B4, up to 32 µs; its median is 15.7 to 24.2 µs. Every other row met
-  its budget on a quiet machine ([measurements](measurements.md)). The cause is not found; the
-  operation is to be profiled before M1.7 animates the layout's moves.
+- "Float, then tile" on a workspace of 100 windows sits close to
+  [ADR-0020](adr/0020-the-layout-models-shape.md)'s 25 µs at the 99th percentile: met on a
+  quiet machine at M1.7, 19.1 and 23.9 µs, missed under load, up to 32 µs at M1.4 and 25.4 µs
+  at M1.7, main's code before M1.7 too ([measurements](measurements.md)). The cause is not
+  found: the agents' isolation refuses `perf` its events, so it could not be profiled. The
+  stage's audit profiles it, the owner allowing a profiler.
 
 ## The headless compositor
 
