@@ -17,7 +17,7 @@
 use crate::area::Area;
 use crate::geometry::{Rect, nearest_in_direction};
 use crate::workspace::Arranged;
-use crate::{Direction, WindowId};
+use crate::{Direction, Layer, WindowId};
 
 /// The distance from `point` to the nearest point of `rect`; zero inside it.
 fn distance_to_rect(point: crate::geometry::Point, rect: &Rect) -> f64 {
@@ -625,9 +625,9 @@ impl Dwindle {
                 window,
                 rect,
                 configure,
-                tiled: true,
+                layer: Layer::Tiles,
+                column: None,
                 fullscreen,
-                pinned: false,
             });
         }
     }

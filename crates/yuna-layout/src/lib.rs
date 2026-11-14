@@ -16,6 +16,15 @@
 //! error rather than a panic; none leaves the model inconsistent, which
 //! [`Layout::check_invariants`] checks.
 //!
+//! The caller names windows, outputs and seats; the model names what it creates itself:
+//! workspaces ([`WorkspaceId`]) and scrolling columns ([`ColumnId`]), from counters it owns,
+//! never reusing an id. Each window [`Layout::arrange`] places says its workspace, its [`Layer`]
+//! and its column; [`Layout::shown_workspaces`] gives the workspaces an output shows, each with
+//! its camera: in scrolling columns, the view's position on the strip. So what animates the
+//! model's jumps ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)) can follow each
+//! window, column and workspace from one arrangement to the next, and tell a strip that moved
+//! under the view from a view that moved over the strip ([`WorkspaceView`]).
+//!
 //! Clients do not always take the size they are given. The compositor passes on what each one
 //! asks and does: its minimum and maximum sizes ([`Layout::set_size_limits`]) and the size it
 //! commits ([`Layout::commit_size`]). [`Layout::arrange`] gives each window the size it is asked,
@@ -32,6 +41,7 @@ pub mod geometry;
 mod area;
 mod dwindle;
 mod floating;
+mod ids;
 mod layout;
 mod scrolling;
 mod sizing;
@@ -54,6 +64,36 @@ pub struct OutputId(pub u64);
 /// A seat: a pointer and a keyboard with their own focus, the owner's or an agent's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SeatId(pub u64);
+
+/// A workspace's id, which the model gives every workspace it creates: named, unnamed or special.
+/// Ids start at 1 and are never reused for the life of a [`Layout`], across seats. A workspace
+/// keeps its id when it moves to another output and back, and when it loses its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceId(pub u64);
+
+/// A column's id, which the model gives every column of scrolling columns it creates. Ids start
+/// at 1 and are never reused for the life of a [`Layout`], across seats and workspaces. A column
+/// keeps its id while it exists: when it moves along its strip, a window joins or leaves it, it
+/// changes width, or it goes fullscreen and back. A window that leaves it for a column of its own
+/// gets a new column, with a new id; a column whose last window leaves is gone. A workspace whose
+/// tiling changes to dwindle and back gets new columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ColumnId(pub u64);
+
+/// The part of its workspace a window is placed in, which says how it moves: the columns of a
+/// strip slide together under one camera, the others do not
+/// ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Layer {
+    /// A tiled window of scrolling columns: on the workspace's strip, in a column.
+    Strip,
+    /// A tiled window of a dwindle tree.
+    Tiles,
+    /// A floating window, not pinned.
+    Floating,
+    /// A floating window pinned over every workspace of its output.
+    Pinned,
+}
 
 /// A direction on screen. Workspaces of an output are stacked vertically: up is the previous one,
 /// down the next.
@@ -199,7 +239,7 @@ impl std::fmt::Display for LayoutError {
 
 impl std::error::Error for LayoutError {}
 
-/// A window placed on an output, as [`Layout::arrange`] gives it.
+/// A window placed on an output, as [`Layout::arrange`] and [`Layout::arrange_workspace`] give it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placed {
     /// The window.
@@ -221,6 +261,16 @@ pub struct Placed {
     pub fullscreen: bool,
     /// Whether it has its seat's focus.
     pub activated: bool,
+    /// The workspace that holds it: for [`Layout::arrange`], the main workspace its output shows
+    /// or the special one shown over it; a pinned window is always on the main one, even under a
+    /// special one. For [`Layout::arrange_workspace`], the one asked.
+    pub workspace: WorkspaceId,
+    /// The part of its workspace it is placed in. A window really fullscreen is tiled, so it keeps
+    /// its tiling's layer, [`Layer::Strip`] or [`Layer::Tiles`]; a fake fullscreen one keeps its
+    /// own layer; `fullscreen` says the rest.
+    pub layer: Layer,
+    /// Its column: some exactly for [`Layer::Strip`].
+    pub column: Option<ColumnId>,
 }
 
 /// Where a window is and what state it is in, as [`Layout::window`] gives it.
@@ -249,6 +299,8 @@ pub struct WindowInfo {
 /// A workspace of an output, as [`Layout::workspaces`] gives it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkspaceInfo {
+    /// Its id, which [`Layout::arrange_workspace`] takes.
+    pub id: WorkspaceId,
     /// Its name; none for an unnamed workspace.
     pub name: Option<String>,
     /// Whether the output shows it.
@@ -257,4 +309,35 @@ pub struct WorkspaceInfo {
     pub tiling: Tiling,
     /// Its windows: the tiled ones in reading order, then the floating ones bottom to top.
     pub windows: Vec<WindowId>,
+}
+
+/// A workspace an output shows, as [`Layout::shown_workspaces`] gives it: what following its
+/// windows from one arrangement to the next needs
+/// ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
+///
+/// Each window of [`Layer::Strip`] has a place on its workspace's strip, its *strip position*:
+/// `rect.x - working.x + view_x`, from its [`Placed::rect`], on the output's physical grid. An
+/// operation changes it only when it moves the window's column along the strip, or the window to
+/// another column. Focusing another column moves the view alone: `view_x` changes, every strip
+/// position stays. A column that comes in, goes or changes width left of the focused one moves the
+/// columns on its right along the strip, and `view_x` by as much, so that those columns stay where
+/// they are on screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkspaceView {
+    /// The workspace.
+    pub id: WorkspaceId,
+    /// The camera: in scrolling columns, the strip position shown at the working area's left
+    /// edge, on the output's physical grid; none in dwindle, which has no strip.
+    pub view_x: Option<f64>,
+    /// The working area it is arranged in, on the output's physical grid.
+    pub working: Rect,
+}
+
+/// The workspaces an output shows, as [`Layout::shown_workspaces`] gives them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShownWorkspaces {
+    /// The workspace the output shows.
+    pub main: WorkspaceView,
+    /// The special workspace shown over it, if any.
+    pub special: Option<WorkspaceView>,
 }

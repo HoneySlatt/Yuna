@@ -3,7 +3,7 @@
 //! [ADR-0020](../../../../docs/adr/0020-the-layout-models-shape.md)).
 
 use crate::harness::*;
-use yuna_layout::{LayoutError, OpenOptions, Placed};
+use yuna_layout::{LayoutError, OpenOptions, Placed, WorkspaceId};
 
 fn floating() -> OpenOptions {
     OpenOptions {
@@ -12,11 +12,11 @@ fn floating() -> OpenOptions {
     }
 }
 
-/// Peeks at `output`'s workspace `index`, and checks that the model did not change.
+/// Peeks at `output`'s workspace `workspace`, and checks that the model did not change.
 #[track_caller]
-fn peek(m: &Model, output: yuna_layout::OutputId, index: usize) -> Vec<Placed> {
+fn peek(m: &Model, output: yuna_layout::OutputId, workspace: WorkspaceId) -> Vec<Placed> {
     let before = format!("{:?}", m.layout);
-    let placed = m.layout.arrange_workspace(output, index).unwrap();
+    let placed = m.layout.arrange_workspace(output, workspace).unwrap();
     assert_eq!(
         before,
         format!("{:?}", m.layout),
@@ -44,8 +44,9 @@ fn a_workspace_not_shown_is_arranged_as_its_output_showed_it() {
         .workspaces(MAIN)
         .unwrap()
         .iter()
-        .position(|w| w.name.as_deref() == Some("code"))
-        .unwrap();
+        .find(|w| w.name.as_deref() == Some("code"))
+        .unwrap()
+        .id;
 
     m.ok(|l| l.focus_workspace(AGENT, "web"));
     m.open_with(AGENT, 4, OpenOptions::default());
@@ -82,7 +83,7 @@ fn the_workspace_shown_peeks_without_the_special_workspace_over_it() {
     m.ok(|l| l.toggle_special(OWNER, "scratch"));
     m.open(4);
     assert_eq!(m.shown(MAIN), vec![1, 3, 4, 2]);
-    let shown = m.workspaces(MAIN).1;
+    let shown = m.workspace_id(MAIN, m.workspaces(MAIN).1);
     let peeked = peek(&m, MAIN, shown);
     assert_eq!(
         peeked.iter().map(|p| p.window.0).collect::<Vec<_>>(),
@@ -109,9 +110,10 @@ fn a_fullscreen_window_covers_its_hidden_workspace_in_the_peek() {
     m.open(2);
     m.ok(|l| l.set_fullscreen(w(2), true));
     let game = m.workspaces(MAIN).1;
+    let game_id = m.workspace_id(MAIN, game);
     m.ok(|l| l.focus_workspace(OWNER, "desk"));
     assert_ne!(m.workspaces(MAIN).1, game);
-    let peeked = peek(&m, MAIN, game);
+    let peeked = peek(&m, MAIN, game_id);
     assert_eq!(peeked.len(), 1);
     assert_eq!(peeked[0].window, w(2));
     assert!(peeked[0].fullscreen);
@@ -119,27 +121,27 @@ fn a_fullscreen_window_covers_its_hidden_workspace_in_the_peek() {
 }
 
 /// The owner peeks at an agent's workspace: a peek reads another seat's branch and changes it
-/// not. An unknown output and an index past the workspaces are refused.
+/// not. An unknown output and a workspace that is not the output's own are refused.
 #[test]
 fn the_owner_peeks_at_an_agents_workspace_and_bad_requests_are_refused() {
     let mut m = Model::new();
     m.ok(|l| l.add_seat(AGENT));
     m.ok(|l| l.add_output(AGENT, SIDE, output(1920.0, 1920, 1080, 1.0)));
     m.open_with(AGENT, 1, OpenOptions::default());
-    let peeked = peek(&m, SIDE, 0);
+    let peeked = peek(&m, SIDE, m.workspace_id(SIDE, 0));
     assert_eq!(peeked.len(), 1);
     assert_eq!(peeked[0].window, w(1));
     assert!(peeked[0].activated, "it holds the agent's focus");
     assert_eq!(peeked[0].rect, m.rect(1));
 
-    let count = m.layout.workspaces(SIDE).unwrap().len();
+    let not_its_own = m.workspace_id(MAIN, 0);
     assert_eq!(
-        m.layout.arrange_workspace(SIDE, count),
+        m.layout.arrange_workspace(SIDE, not_its_own),
         Err(LayoutError::InvalidValue)
     );
     let unknown = yuna_layout::OutputId(9);
     assert_eq!(
-        m.layout.arrange_workspace(unknown, 0),
+        m.layout.arrange_workspace(unknown, m.workspace_id(SIDE, 0)),
         Err(LayoutError::UnknownOutput(unknown))
     );
 }
@@ -157,7 +159,7 @@ fn a_pinned_window_hidden_by_a_covering_special_workspace_stays_in_the_peek() {
     m.open(4);
     m.ok(|l| l.set_fullscreen(w(4), true));
     assert_eq!(m.shown(MAIN), vec![1, 4]);
-    let shown = m.workspaces(MAIN).1;
+    let shown = m.workspace_id(MAIN, m.workspaces(MAIN).1);
     let peeked: Vec<u64> = peek(&m, MAIN, shown).iter().map(|p| p.window.0).collect();
     assert_eq!(peeked, vec![1, 2]);
 }

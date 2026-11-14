@@ -43,13 +43,14 @@ Layout
 ├── options: gaps, widths, default tiling, dynamic workspaces
 ├── windows: what is known of each window beyond its place (its sizes, its parent, fake
 │   fullscreen, last floating place)
+├── ids: the counters that name the workspaces and columns the model creates
 └── seats
     └── Seat (the owner's, or an agent's)
         ├── outputs
         │   └── Output: rectangle, scale
         │       ├── workspaces, one shown
-        │       │   └── Workspace: name, home output
-        │       │       ├── tiling: scrolling columns or a dwindle tree
+        │       │   └── Workspace: id, name, home output
+        │       │       ├── tiling: scrolling columns, each with an id, or a dwindle tree
         │       │       └── floating windows, pinned ones among them
         │       └── the special workspace shown over it, if any
         ├── workspaces without an output (only while the seat has none)
@@ -75,10 +76,27 @@ The flow of an operation:
 The compositor then reads `Layout::arrange(output)`: the windows that output shows, bottom to top,
 each with the size its client is asked, its rectangle in logical coordinates on the output's
 physical pixel grid, whether it is told it is fullscreen, and whether it has its seat's focus.
-Nothing in the model runs between operations. `Layout::arrange_workspace(output, index)`
-arranges any of an output's workspaces as that output would show it alone, changing nothing:
-what the owner's peek at a workspace not shown draws, in a thumbnail or an overview
-([ADR-0015](adr/0015-agents-workspaces.md)). Nothing draws a peek before the desktop.
+Nothing in the model runs between operations. `Layout::arrange_workspace(output, workspace)`
+arranges any of an output's workspaces, named by its id, as that output would show it alone,
+changing nothing: what the owner's peek at a workspace not shown draws, in a thumbnail or an
+overview ([ADR-0015](adr/0015-agents-workspaces.md)). Nothing draws a peek before the desktop.
+
+The model jumps from one state to the next. So that animations can follow windows, columns and
+workspaces across a jump ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)), the model names the
+workspaces and scrolling columns it creates, from counters that never give an id twice, and each
+window `arrange` places also says:
+
+- its **workspace**, by id: the one its output shows, or the special one over it;
+- its **layer**: on the strip of scrolling columns, in the tiles of dwindle, floating or pinned;
+- its **column**, by id, on a strip.
+
+A workspace keeps its id when it moves to another output or loses its name; a column keeps its
+id while it exists, wherever it moves along its strip and whatever its width.
+`Layout::shown_workspaces(output)` gives each workspace an output shows with its working area
+and its **camera**, `view_x`: in scrolling columns, the position on the strip shown at the
+working area's left edge. A window's strip position, `rect.x - working.x + view_x`, changes only
+when its column moves along the strip or it changes column; focusing another column moves the
+camera alone. `WorkspaceView`'s documentation holds the whole rule and its one limit.
 
 Clients do not always take the size they are given
 ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). The compositor passes on each client's
@@ -115,8 +133,10 @@ operation, and an example measures the model:
 - `crates/yuna-layout/tests/properties.rs`: random sequences of operations over two seats and up
   to three outputs, with clients that ask limits, commit sizes of their own and open dialogs,
   checking the invariants, that one seat never changes another's, that a refused operation
-  changes nothing, that `Layout::size_on_open` foretells a new window's size, and that a peek
-  at each workspace shows its own windows, the one shown as its output draws them;
+  changes nothing, that `Layout::size_on_open` foretells a new window's size, that a peek
+  at each workspace shows its own windows, the one shown as its output draws them, that each
+  window's workspace and layer are right, that no workspace or column id comes back once gone,
+  and that moving the focus moves no window along its strip;
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 

@@ -15,9 +15,10 @@
 
 use crate::area::Area;
 use crate::geometry::{Rect, Size};
+use crate::ids::Ids;
 use crate::sizing::{Sizing, whole, whole_floor};
 use crate::workspace::Arranged;
-use crate::{Direction, WindowId};
+use crate::{ColumnId, Direction, Layer, WindowId};
 
 /// How wide a column is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +63,8 @@ impl ColumnWidth {
 /// One column: windows stacked from top to bottom.
 #[derive(Debug, Clone)]
 struct Column {
+    /// Given when the column is created, kept while it exists.
+    id: ColumnId,
     /// Never empty.
     windows: Vec<WindowId>,
     /// The index in `windows` of the window focused in this column.
@@ -77,8 +80,9 @@ struct Column {
 }
 
 impl Column {
-    fn new(window: WindowId, width: ColumnWidth) -> Column {
+    fn new(id: ColumnId, window: WindowId, width: ColumnWidth) -> Column {
         Column {
+            id,
             windows: vec![window],
             focused: 0,
             width,
@@ -88,11 +92,12 @@ impl Column {
         }
     }
 
-    /// A column for a window leaving this one, with its width and full width, as niri does.
-    fn split_off(&self, window: WindowId) -> Column {
+    /// A column for a window leaving this one, with its width and full width, as niri does; a
+    /// new column, with a new id.
+    fn split_off(&self, id: ColumnId, window: WindowId) -> Column {
         Column {
             full_width: self.full_width,
-            ..Column::new(window, self.width)
+            ..Column::new(id, window, self.width)
         }
     }
 
@@ -234,7 +239,8 @@ pub(crate) struct Scrolling {
     columns: Vec<Column>,
     /// The index of the focused column; 0 when there is none.
     focused: usize,
-    /// The strip position shown at the working area's left edge.
+    /// The strip position shown at the working area's left edge, on the physical grid: the
+    /// camera ([`crate::WorkspaceView`]).
     view_x: f64,
     /// Set when a window opens, cleared when focus moves on: if the new window closes before,
     /// focus and view go back to where they were (niri's principle that dealing with a short-lived
@@ -255,9 +261,17 @@ struct BeforeOpen {
 }
 
 impl Scrolling {
-    /// Builds a strip from windows in order, one column each, the window at `focus` focused.
-    pub fn from_windows(windows: &[WindowId], width: ColumnWidth, focus: Option<WindowId>) -> Self {
-        let columns: Vec<Column> = windows.iter().map(|&w| Column::new(w, width)).collect();
+    /// Builds a strip from windows in order, one new column each, the window at `focus` focused.
+    pub fn from_windows(
+        windows: &[WindowId],
+        width: ColumnWidth,
+        focus: Option<WindowId>,
+        ids: &mut Ids,
+    ) -> Self {
+        let columns: Vec<Column> = windows
+            .iter()
+            .map(|&w| Column::new(ids.new_column(), w, width))
+            .collect();
         let focused = focus
             .and_then(|f| windows.iter().position(|&w| w == f))
             .unwrap_or(0);
@@ -271,6 +285,16 @@ impl Scrolling {
     /// Whether the strip holds no window.
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty()
+    }
+
+    /// The camera: the strip position shown at the working area's left edge.
+    pub fn view_x(&self) -> f64 {
+        self.view_x
+    }
+
+    /// The ids of its columns, left to right.
+    pub fn column_ids(&self) -> impl Iterator<Item = ColumnId> + '_ {
+        self.columns.iter().map(|c| c.id)
     }
 
     /// Every window, column by column, from left to right and top to bottom.
@@ -362,17 +386,24 @@ impl Scrolling {
     /// Adds `window` in a new column right of the focused one, or first if the strip is empty,
     /// and focuses it, unless the focused column is fullscreen: then focus and view stay, so that
     /// nothing takes a game's screen (niri's rule). Existing columns keep their sizes and the
-    /// focused one does not move.
-    pub fn add_window(&mut self, window: WindowId, width: ColumnWidth, area: Option<&Area>) {
+    /// focused one does not move. The new column's id comes from `ids`.
+    pub fn add_window(
+        &mut self,
+        window: WindowId,
+        width: ColumnWidth,
+        area: Option<&Area>,
+        ids: &mut Ids,
+    ) {
+        let column = Column::new(ids.new_column(), window, width);
         if self.columns.is_empty() {
-            self.columns.push(Column::new(window, width));
+            self.columns.push(column);
             self.focused = 0;
             self.before_open = None;
             self.fit_view(area);
             return;
         }
         let index = self.focused + 1;
-        self.columns.insert(index, Column::new(window, width));
+        self.columns.insert(index, column);
         if self.columns[self.focused].fullscreen {
             return;
         }
@@ -518,10 +549,11 @@ impl Scrolling {
     }
 
     /// niri's consume-or-expel: a focused window sharing its column leaves it for a new column on
-    /// that side; a window alone in its column joins the bottom of the neighbour column on that
-    /// side, if there is one. Only left and right mean something. A fullscreen column leaves
-    /// fullscreen first, so that a fullscreen column keeps holding one window.
-    pub fn consume_or_expel(&mut self, direction: Direction, area: Option<&Area>) {
+    /// that side, its id from `ids`; a window alone in its column joins the bottom of the
+    /// neighbour column on that side, if there is one, and its own column is gone. Only left and
+    /// right mean something. A fullscreen column leaves fullscreen first, so that a fullscreen
+    /// column keeps holding one window.
+    pub fn consume_or_expel(&mut self, direction: Direction, area: Option<&Area>, ids: &mut Ids) {
         if self.columns.is_empty() || !matches!(direction, Direction::Left | Direction::Right) {
             return;
         }
@@ -533,7 +565,7 @@ impl Scrolling {
             if column.focused == column.windows.len() {
                 column.focused -= 1;
             }
-            let new_column = column.split_off(window);
+            let new_column = column.split_off(ids.new_column(), window);
             let index = if left { ci } else { ci + 1 };
             self.columns.insert(index, new_column);
             self.focused = index;
@@ -589,9 +621,16 @@ impl Scrolling {
     }
 
     /// Makes `window` fullscreen or not; returns whether it is here. A window sharing its column
-    /// first leaves it for a column of its own, right of it, since a fullscreen column holds one
-    /// window. Leaving fullscreen gives the column back its width, and the view where it was.
-    pub fn set_fullscreen(&mut self, window: WindowId, on: bool, area: Option<&Area>) -> bool {
+    /// first leaves it for a new column of its own, right of it, its id from `ids`, since a
+    /// fullscreen column holds one window. Leaving fullscreen gives the column back its width, and
+    /// the view where it was.
+    pub fn set_fullscreen(
+        &mut self,
+        window: WindowId,
+        on: bool,
+        area: Option<&Area>,
+        ids: &mut Ids,
+    ) -> bool {
         let Some((mut ci, wi)) = self.locate(window) else {
             return false;
         };
@@ -613,7 +652,7 @@ impl Scrolling {
                 if column.focused > wi || column.focused == column.windows.len() {
                     column.focused -= 1;
                 }
-                let new_column = column.split_off(window);
+                let new_column = column.split_off(ids.new_column(), window);
                 if self.focused > ci || had_focus {
                     self.focused += 1;
                 }
@@ -795,9 +834,9 @@ impl Scrolling {
                     window,
                     rect,
                     configure,
-                    tiled: true,
+                    layer: Layer::Strip,
+                    column: Some(column.id),
                     fullscreen: true,
-                    pinned: false,
                 });
                 area.output.w
             } else {
@@ -820,9 +859,9 @@ impl Scrolling {
                         window,
                         rect: Rect::new(corner.0, corner.1, drawn.w, drawn.h),
                         configure,
-                        tiled: true,
+                        layer: Layer::Strip,
+                        column: Some(column.id),
                         fullscreen: false,
-                        pinned: false,
                     });
                     y += drawn.h + area.gap;
                     widest = widest.max(drawn.w);

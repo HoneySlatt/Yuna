@@ -9,7 +9,14 @@
 //! - a window opening is asked the size [`Layout::size_on_open`] gave just before;
 //! - every workspace of every output peeks ([`Layout::arrange_workspace`]) at windows of its own,
 //!   the one shown as its output draws them, but its pinned windows that a covering special
-//!   workspace hides, the others without the seat's focus.
+//!   workspace hides, the others without the seat's focus;
+//! - an output refuses a peek at a workspace it does not list: another output's, or the special
+//!   one shown over it;
+//! - every window drawn or peeked at is on the workspace it says, one its output shows for
+//!   [`Layout::arrange`], a pinned one on the main one; its layer is its workspace's tiling, and
+//!   it has a column exactly on a strip;
+//! - no workspace or column id comes back once gone, nor changes its seat or its workspace;
+//! - moving the focus moves no window of a strip along its strip ([`yuna_layout::WorkspaceView`]).
 //!
 //! Clients are random too: they ask minimum and maximum sizes, commit sizes other than the ones
 //! they are asked, and open dialogs, with sizes of 1, small, typical, huge and nonsense.
@@ -17,11 +24,13 @@
 //! A failure shrinks to the shortest sequence that still fails; proptest keeps its seed in
 //! `properties.proptest-regressions`, which is committed so that the case runs again every time.
 
+use std::collections::{HashMap, HashSet};
+
 use proptest::prelude::*;
 use yuna_layout::geometry::{Point, Rect, Size};
 use yuna_layout::{
-    ColumnWidth, Direction, Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId,
-    SeatId, Tiling, WindowId,
+    ColumnId, ColumnWidth, Direction, Layer, Layout, LayoutError, OpenOptions, Options,
+    OutputConfig, OutputId, Placed, SeatId, Tiling, WindowId, WorkspaceId,
 };
 
 /// The seats that exist from the start; seat 3 never does, to exercise unknown ids.
@@ -344,7 +353,7 @@ fn check_peeks(layout: &Layout) -> Result<(), String> {
             let workspaces = layout.workspaces(output).map_err(|e| e.to_string())?;
             for (index, workspace) in workspaces.iter().enumerate() {
                 let peeked = layout
-                    .arrange_workspace(output, index)
+                    .arrange_workspace(output, workspace.id)
                     .map_err(|e| format!("peek at {output:?}'s workspace {index}: {e}"))?;
                 let mut seen = Vec::new();
                 for p in &peeked {
@@ -369,9 +378,234 @@ fn check_peeks(layout: &Layout) -> Result<(), String> {
                     }
                 }
             }
-            if layout.arrange_workspace(output, workspaces.len()).is_ok() {
-                return Err(format!("{output:?} peeks past its workspaces"));
+            // The model never gives 0: no workspace has it.
+            if layout.arrange_workspace(output, WorkspaceId(0)).is_ok() {
+                return Err(format!("{output:?} peeks at a workspace not its own"));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Each output refuses a peek at a workspace it does not list: the special workspace shown over
+/// it, and every other output's, of its seat or another.
+fn check_peeks_refused(layout: &Layout) -> Result<(), String> {
+    let outputs: Vec<OutputId> = SEATS
+        .map(SeatId)
+        .into_iter()
+        .flat_map(|seat| layout.outputs(seat).unwrap_or_default())
+        .collect();
+    for &output in &outputs {
+        let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
+        let others = outputs
+            .iter()
+            .filter(|&&other| other != output)
+            .flat_map(|&other| layout.workspaces(other).unwrap_or_default())
+            .map(|w| w.id);
+        for workspace in shown.special.map(|s| s.id).into_iter().chain(others) {
+            if layout.arrange_workspace(output, workspace).is_ok() {
+                return Err(format!("{output:?} peeks at {workspace:?}, not its own"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Each window an output draws or peeks at, against the workspace it says it is on: one the
+/// output shows (its main one for a pinned window) for [`Layout::arrange`], the one peeked at for
+/// [`Layout::arrange_workspace`]; and its layer and column against that workspace's tiling.
+fn check_layers(layout: &Layout) -> Result<(), String> {
+    for seat in SEATS.map(SeatId) {
+        for output in layout.outputs(seat).unwrap_or_default() {
+            let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
+            let workspaces = layout.workspaces(output).map_err(|e| e.to_string())?;
+            if workspaces.iter().find(|w| w.shown).map(|w| w.id) != Some(shown.main.id) {
+                return Err(format!("{output:?} shows another workspace than {shown:?}"));
+            }
+            let views = [Some(shown.main), shown.special];
+            for p in layout.arrange(output).map_err(|e| e.to_string())? {
+                let view = views
+                    .iter()
+                    .flatten()
+                    .find(|v| v.id == p.workspace)
+                    .ok_or_else(|| format!("{p:?} is on a workspace {output:?} does not show"))?;
+                if p.layer == Layer::Pinned && p.workspace != shown.main.id {
+                    return Err(format!(
+                        "pinned {p:?} is not on {output:?}'s main workspace"
+                    ));
+                }
+                check_layer(&p, view.view_x.is_some())?;
+            }
+            for workspace in &workspaces {
+                let peeked = layout
+                    .arrange_workspace(output, workspace.id)
+                    .map_err(|e| e.to_string())?;
+                for p in peeked {
+                    if p.workspace != workspace.id {
+                        return Err(format!("{p:?} is in the peek at {:?}", workspace.id));
+                    }
+                    check_layer(&p, workspace.tiling == Tiling::Scrolling)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A window's layer and column against its workspace's tiling: a tiled window on the strip of
+/// scrolling columns, with a column, or in the tiles of dwindle; a floating or pinned one, without
+/// a column, in either.
+fn check_layer(p: &Placed, scrolling: bool) -> Result<(), String> {
+    let tiled_layer = if scrolling {
+        Layer::Strip
+    } else {
+        Layer::Tiles
+    };
+    let layer_fits = match p.layer {
+        Layer::Strip | Layer::Tiles => p.tiled && p.layer == tiled_layer,
+        Layer::Floating | Layer::Pinned => !p.tiled,
+    };
+    if !layer_fits || p.column.is_some() != (p.layer == Layer::Strip) {
+        return Err(format!(
+            "{p:?} is in the wrong layer, or has a column off a strip"
+        ));
+    }
+    Ok(())
+}
+
+/// The workspace and column ids a run has seen, and those it knows are gone from the model, so
+/// that an id gone never comes back. The model shows no reader its hidden special workspaces, nor
+/// the workspaces of a seat without an output: an id is retired only when it cannot be on one of
+/// these. That is a regular workspace missing while its seat has an output; a column missing
+/// while its workspace is listed or shown; and every column of a retired workspace.
+#[derive(Debug, Default)]
+struct IdsSeen {
+    /// Each workspace seen, with its seat and whether it is special: neither ever changes.
+    workspaces: Workspaces,
+    /// Each column seen, with its workspace, which never changes.
+    columns: Columns,
+    retired_workspaces: HashSet<WorkspaceId>,
+    retired_columns: HashSet<ColumnId>,
+}
+
+impl IdsSeen {
+    /// Reads every id the model shows now; checks that none was retired and none changed its seat,
+    /// its kind or its workspace; then retires the ids certainly gone.
+    fn update(&mut self, layout: &Layout) -> Result<(), String> {
+        let (workspaces, columns) = ids_shown(layout)?;
+        for (id, owner) in &workspaces {
+            if self.retired_workspaces.contains(id) {
+                return Err(format!("{id:?} came back once gone"));
+            }
+            if let Some(seen) = self.workspaces.insert(*id, *owner)
+                && seen != *owner
+            {
+                return Err(format!("{id:?} was {seen:?}, it is {owner:?}"));
+            }
+        }
+        for (id, workspace) in &columns {
+            if self.retired_columns.contains(id) {
+                return Err(format!("{id:?} came back once gone"));
+            }
+            if let Some(seen) = self.columns.insert(*id, *workspace)
+                && seen != *workspace
+            {
+                return Err(format!("{id:?} moved from {seen:?} to {workspace:?}"));
+            }
+        }
+        for (id, &(seat, special)) in &self.workspaces {
+            let seat_has_an_output = layout.outputs(seat).is_ok_and(|o| !o.is_empty());
+            if !workspaces.contains_key(id) && !special && seat_has_an_output {
+                self.retired_workspaces.insert(*id);
+            }
+        }
+        for (id, workspace) in &self.columns {
+            let workspace_known =
+                workspaces.contains_key(workspace) || self.retired_workspaces.contains(workspace);
+            if !columns.contains_key(id) && workspace_known {
+                self.retired_columns.insert(*id);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Workspaces, each with its seat and whether it is special.
+type Workspaces = HashMap<WorkspaceId, (SeatId, bool)>;
+/// Columns, each with its workspace.
+type Columns = HashMap<ColumnId, WorkspaceId>;
+
+/// The workspaces and columns a reader can see: each workspace of each output and each special
+/// one shown; each column of these.
+fn ids_shown(layout: &Layout) -> Result<(Workspaces, Columns), String> {
+    let (mut workspaces, mut columns) = (HashMap::new(), HashMap::new());
+    let mut add_columns = |placed: Vec<Placed>, of: WorkspaceId| {
+        for p in placed.into_iter().filter(|p| p.workspace == of) {
+            columns.extend(p.column.map(|column| (column, p.workspace)));
+        }
+    };
+    for seat in SEATS.map(SeatId) {
+        for output in layout.outputs(seat).unwrap_or_default() {
+            for workspace in layout.workspaces(output).map_err(|e| e.to_string())? {
+                workspaces.insert(workspace.id, (seat, false));
+                let peeked = layout
+                    .arrange_workspace(output, workspace.id)
+                    .map_err(|e| e.to_string())?;
+                add_columns(peeked, workspace.id);
+            }
+            let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
+            if let Some(special) = shown.special {
+                workspaces.insert(special.id, (seat, true));
+                add_columns(
+                    layout.arrange(output).map_err(|e| e.to_string())?,
+                    special.id,
+                );
+            }
+        }
+    }
+    Ok((workspaces, columns))
+}
+
+/// Each window of a strip that an output draws, with its workspace, its column and its strip
+/// position (`rect.x - working.x + view_x`, [`yuna_layout::WorkspaceView`]).
+fn strip_positions(layout: &Layout) -> HashMap<WindowId, (WorkspaceId, ColumnId, f64)> {
+    let mut positions = HashMap::new();
+    for seat in SEATS.map(SeatId) {
+        for output in layout.outputs(seat).unwrap_or_default() {
+            let (Ok(shown), Ok(placed)) = (layout.shown_workspaces(output), layout.arrange(output))
+            else {
+                continue;
+            };
+            for p in placed {
+                let view = [Some(shown.main), shown.special]
+                    .into_iter()
+                    .flatten()
+                    .find(|v| v.id == p.workspace);
+                if let (Some(view), Some(view_x), Some(column)) =
+                    (view, view.and_then(|v| v.view_x), p.column)
+                {
+                    let position = p.rect.x - view.working.x + view_x;
+                    positions.insert(p.window, (p.workspace, column, position));
+                }
+            }
+        }
+    }
+    positions
+}
+
+/// Checks that moving the focus moved no window of a strip along its strip: only views moved.
+fn check_strip_kept(
+    before: &HashMap<WindowId, (WorkspaceId, ColumnId, f64)>,
+    layout: &Layout,
+) -> Result<(), String> {
+    for (window, (workspace, column, position)) in strip_positions(layout) {
+        if let Some(&(was_workspace, was_column, was)) = before.get(&window)
+            && (was_workspace, was_column) == (workspace, column)
+            && (position - was).abs() > 1e-6
+        {
+            return Err(format!(
+                "{window:?} moved along its strip from {was} to {position}"
+            ));
         }
     }
     Ok(())
@@ -558,6 +792,7 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
     let mut layout = Layout::new(options).expect("the strategy gives valid options");
     layout.add_seat(SeatId(1)).unwrap();
     layout.add_seat(SeatId(2)).unwrap();
+    let mut ids_seen = IdsSeen::default();
     for (step, op) in ops.iter().enumerate() {
         let actor = acting_seat(&layout, op);
         let others: Vec<_> = SEATS
@@ -568,6 +803,7 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
             .collect();
         let before = format!("{layout:?}");
         let predicted = predicted_size(&layout, op);
+        let strip_before = matches!(op, Op::Focus { .. }).then(|| strip_positions(&layout));
         let result = apply(&mut layout, op);
         if let Err(error) = layout.check_invariants() {
             return Err(TestCaseError::fail(format!(
@@ -575,6 +811,10 @@ fn run(options: Options, ops: &[Op]) -> Result<(), TestCaseError> {
             )));
         }
         check_peeks(&layout)
+            .and_then(|()| check_peeks_refused(&layout))
+            .and_then(|()| check_layers(&layout))
+            .and_then(|()| ids_seen.update(&layout))
+            .and_then(|()| strip_before.map_or(Ok(()), |b| check_strip_kept(&b, &layout)))
             .map_err(|e| TestCaseError::fail(format!("step {step}, {op:?}: {e}")))?;
         if result.is_err() {
             prop_assert_eq!(
@@ -703,6 +943,61 @@ fn a_pinned_window_under_a_covering_special_workspace_keeps_every_property() {
         Op::SetPinned(2, true),
         Op::ToggleSpecial { seat: 1, name: 2 },
         open(4, false, true),
+    ];
+    run(Options::default(), &ops).unwrap_or_else(|failure| panic!("{failure}"));
+}
+
+/// Columns joined and split. The random sequences seldom split a column, since a column of
+/// several windows needs a consume first: kept as a case, so that every property, the ids' among
+/// them, runs over a window expelled, a column consumed, a window leaving a shared column to go
+/// fullscreen, a column closed, and a switch to dwindle and back.
+#[test]
+fn columns_joined_and_split_keep_every_property() {
+    let open = |window: u64| Op::Open {
+        seat: 1,
+        window,
+        floating: false,
+        fullscreen: false,
+        width: None,
+        workspace: None,
+        parent: None,
+        limits: None,
+        committed: None,
+        size: None,
+    };
+    let consume_or_expel = |direction| Op::ConsumeOrExpel { seat: 1, direction };
+    let focus = |direction| Op::Focus { seat: 1, direction };
+    let ops = [
+        Op::AddOutput {
+            seat: 1,
+            output: 1,
+            scale: 2,
+            size: 1,
+            x: 0,
+        },
+        open(1),
+        open(2),
+        open(3),
+        // 3 joins 2's column, leaves it for a column of its own on its left, and joins it again.
+        consume_or_expel(Direction::Left),
+        consume_or_expel(Direction::Left),
+        consume_or_expel(Direction::Right),
+        focus(Direction::Left),
+        // 2 leaves the column it shares for a fullscreen one, right of the focused column.
+        Op::SetFullscreen(2, true),
+        focus(Direction::Right),
+        focus(Direction::Right),
+        focus(Direction::Left),
+        Op::Close(3),
+        Op::SetFullscreen(2, false),
+        Op::SetTiling {
+            seat: 1,
+            dwindle: true,
+        },
+        Op::SetTiling {
+            seat: 1,
+            dwindle: false,
+        },
     ];
     run(Options::default(), &ops).unwrap_or_else(|failure| panic!("{failure}"));
 }

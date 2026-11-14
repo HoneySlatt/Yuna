@@ -65,6 +65,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
   every Vulkan client.
+- **Layer**: the part of a workspace a window is placed in: the strip of scrolling columns, the
+  tiles of dwindle, the floating windows, or the pinned ones above them
+  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **llvmpipe**: Mesa's OpenGL driver that draws on the CPU; the headless mode's default
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
