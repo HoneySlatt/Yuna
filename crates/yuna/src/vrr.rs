@@ -159,9 +159,10 @@ impl Panel {
         self.shortest
     }
 
-    /// The refreshes after the last frame's, before the panel refreshes by itself at its
-    /// longest period: `n − 1` inserted ones of a fixed length when BTR inserts `n`, none
-    /// otherwise. Returns where those end and the least the last of them lasts.
+    /// The refreshes that show the last frame before the panel refreshes by itself at its
+    /// longest period: how many, each one's fixed length, and the least the last of them lasts.
+    /// When BTR inserts `n`, `n` of the inserted length; otherwise one, of no fixed length,
+    /// lasting at least the shortest refresh.
     fn fixed(&self) -> (u64, Duration, Duration) {
         match self.btr.inserted() {
             Some((count, length)) => (count, length, length),

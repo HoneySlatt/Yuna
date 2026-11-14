@@ -1441,8 +1441,6 @@ fn random_requests_from_fresh_starts_keep_yuna_up() {
     run_cases(false);
 }
 
-/// Sequences the random tests found failing, written out with whether they started busy: a seed
-/// kept in the regressions file replays its case only while the generator stays the same.
 /// The popup of the regressions file's second seed, found before M1.6.
 fn popup_on_nothing() -> Request {
     Request::OpenPopup {
@@ -1459,6 +1457,8 @@ fn popup_on_nothing() -> Request {
     }
 }
 
+/// Sequences the random tests found failing, written out with whether they started busy: a seed
+/// kept in the regressions file replays its case only while the generator stays the same.
 #[test]
 fn sequences_found_before() {
     let by_first = |request| Step::Client {

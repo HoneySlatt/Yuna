@@ -6,8 +6,8 @@ section names the machine, the build, the command, and the figures with their sp
 
 ## M1.6 — mpv in the applications' tests (2026-11-14)
 
-Machine and Mesa as in M1.4's B4 below, load average 1.5 to 3.6. Build: debug, commit `423bd38`
-with mpv's two tests. Command: `nix develop -c cargo test -p yuna --test applications`, with
+Machine and Mesa as in M1.4's B4 below, load average 1.5 to 3.6. Build: debug, mpv's
+two tests (commit `32bfc5a`) on `e04dee7`. Command: `nix develop -c cargo test -p yuna --test applications`, with
 and without `-- --skip mpv`, on all 16 threads and on two cores (`taskset -c 0,1`), run with
 `run.sh --exclusive` (its proof does not record the lock), outside `agent-headless`, since `yuna mcp` and `yuna --headless`
 open no display. The figure is libtest's own time for the whole file.

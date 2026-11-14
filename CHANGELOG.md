@@ -5,14 +5,13 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
-- A virtual output can run under VRR and announce the HDR colours of the owner's monitor, a
-  PG32UCDM: `--output` takes `vrr=MIN` and `hdr`, as in `3840x2160@240,1.5,vrr=48,hdr`, and
-  `yuna mcp`'s `seat create` and `outputs create` take `vrr_min` and `hdr`; `outputs list` tells
-  each output's VRR range and monitor. `windows` with `colour: true` gives the colours each
-  window's surfaces declared through `color-management-v1`.
 - A virtual output may run under VRR, as amdgpu drives a DisplayPort Adaptive-Sync monitor:
   each frame shown when it is ready, within the range, and below it shown several times as the
-  driver does. Clients see it in their presentation times.
+  driver does; clients see it in their presentation times. It may also announce the HDR colours
+  of the owner's monitor, a PG32UCDM. `--output` takes `vrr=MIN` and `hdr`, as in
+  `3840x2160@240,1.5,vrr=48,hdr`; `yuna mcp`'s `seat create` and `outputs create` take `vrr_min`
+  and `hdr`, and `outputs list` tells each output's VRR range and monitor. `windows` with
+  `colour: true` gives the colours each window's surfaces declared.
 - Clients can describe their surfaces' colours through `color-management-v1`, and read their
   outputs': an HDR output announces the owner's monitor's colours, an SDR one sRGB. Nothing is
   drawn differently yet.
