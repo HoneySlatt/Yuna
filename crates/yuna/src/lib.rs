@@ -11,7 +11,7 @@
 //! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md)).
 //!
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
-//! boundaries (`output.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
+//! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
 //! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`) and their
 //! pointer and keyboard input (`input.rs`); `xdg-shell` and
 //! `xdg-decoration` in front of the layout (`shell.rs`), with popups (`popups.rs`),
@@ -41,6 +41,7 @@ mod selection;
 mod shell;
 mod state;
 mod text_input;
+mod vrr;
 
 use std::fmt;
 

@@ -40,16 +40,21 @@ use smithay::utils::{Monotonic, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
     SurfaceAttributes, SurfaceData, TraversalAction, with_surface_tree_downward,
 };
-use smithay::wayland::presentation::{PresentationFeedbackCachedState, Refresh};
+use smithay::wayland::presentation::PresentationFeedbackCachedState;
 use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
-use crate::output::VirtualOutput;
+use crate::output::{RefreshAt, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
 use crate::state::State;
+
+/// The later of two refreshes, by number.
+fn later(a: RefreshAt, b: RefreshAt) -> RefreshAt {
+    if b.seq > a.seq { b } else { a }
+}
 
 /// The shortest time between two frame callbacks of a hidden window.
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
@@ -86,22 +91,19 @@ impl State {
             return;
         };
         let output = &mut self.outputs[index];
-        // The boundary after its last refresh has passed, so no frame waits for its own.
-        let idle = now >= output.boundaries.at(output.last_refresh + 1);
-        let (at, boundary) = if idle {
-            (now, output.boundaries.first_at_or_after(now))
+        // At a fixed rate, the boundary after its last refresh has passed; under VRR, the panel
+        // may start a refresh now: no frame waits for its own.
+        let idle = output.timing.is_idle(now, output.last_refresh);
+        let (at, aimed) = if idle {
+            (now, output.timing.reachable(now, output.last_refresh))
         } else {
             let lead = output.drawings.lead(now, output.mode.period());
-            let boundary = output
-                .boundaries
-                .first_at_or_after(now.saturating_add(lead))
-                .max(output.last_refresh + 1);
-            (
-                output.boundaries.at(boundary).saturating_sub(lead),
-                boundary,
-            )
+            let aimed = output
+                .timing
+                .reachable(now.saturating_add(lead), output.last_refresh);
+            (aimed.at.saturating_sub(lead), aimed)
         };
-        output.armed_boundary = boundary;
+        output.armed_refresh = aimed;
         output.armed_at = at;
         output.armed_at_once = idle;
         self.clock.arm(deadline, at);
@@ -166,35 +168,30 @@ impl State {
         }
         let drew = matches!(drawing, Drawing::Drawn { .. });
         let output = &mut self.outputs[index];
-        let aimed = output.armed_boundary;
-        let seq = match drawing {
+        let aimed = output.armed_refresh;
+        let presented = match drawing {
             Drawing::Drawn { started, damaged } => {
                 let took = now.saturating_sub(output.armed_at);
                 output.drawings.record(now, took);
-                // When the drawing could first show, and never before the boundary it aimed at:
-                // an earlier one is the frame before's.
-                let seq = output.boundaries.first_at_or_after(now).max(aimed);
+                // When the drawing could first show, and never before the refresh it aimed at.
+                let presented = output.timing.present(now, aimed, output.last_refresh);
                 tracing::debug!(
                     output = output.id.0,
                     elements = shown.len(),
                     damaged_rectangles = damaged,
                     took_us = started.elapsed().as_micros(),
-                    lead_us = output
-                        .boundaries
-                        .at(aimed)
-                        .saturating_sub(output.armed_at)
-                        .as_micros(),
+                    lead_us = aimed.at.saturating_sub(output.armed_at).as_micros(),
                     at_once = output.armed_at_once,
-                    boundary = aimed,
-                    presented = seq,
+                    boundary = aimed.seq,
+                    presented = presented.seq,
                     "frame drawn"
                 );
-                seq
+                presented
             }
             // Nothing new to show: content updates show with the frame this refresh aimed at.
             Drawing::Unchanged => aimed,
             Drawing::Failed => {
-                output.last_refresh = output.last_refresh.max(aimed);
+                output.last_refresh = later(output.last_refresh, aimed);
                 for placed in &shown {
                     if let Some(root) = self.root_of(placed.window) {
                         discard_presentation_feedback(&root);
@@ -204,9 +201,9 @@ impl State {
                 return;
             }
         };
-        output.last_refresh = output.last_refresh.max(seq);
-        // The frame shown from `seq` on is in the buffer now: the captures that waited for it.
-        self.copy_captures(output_id, drew, seq);
+        output.last_refresh = later(output.last_refresh, presented);
+        // The frame shown from `presented` on is in the buffer now: the captures that waited.
+        self.copy_captures(output_id, drew, presented);
         let output = &mut self.outputs[index];
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
@@ -231,9 +228,9 @@ impl State {
             return;
         }
         let output = &mut self.outputs[index];
-        output.held_feedback.push((seq, feedback));
-        let at = output.boundaries.at(seq);
-        self.clock.arm(Deadline::Presentation(output.id), at);
+        output.held_feedback.push((presented, feedback));
+        self.clock
+            .arm(Deadline::Presentation(output.id), presented.at);
     }
 
     /// An output's presentation deadline: the feedback held for each boundary now reached is
@@ -244,20 +241,20 @@ impl State {
             return;
         };
         let VirtualOutput {
-            boundaries,
+            timing,
             held_feedback,
             mode,
             ..
         } = &mut self.outputs[index];
-        let refresh = Refresh::Fixed(mode.period());
+        let refresh = timing.refresh(mode.period());
         let mut next = None;
-        held_feedback.retain_mut(|(seq, feedback)| {
-            let at = boundaries.at(*seq);
+        held_feedback.retain_mut(|(presented, feedback)| {
+            let at = presented.at;
             if at > now {
                 next = Some(next.map_or(at, |next: Duration| next.min(at)));
                 return true;
             }
-            feedback.presented::<Duration, Monotonic>(at, refresh, *seq, Kind::Vsync);
+            feedback.presented::<Duration, Monotonic>(at, refresh, presented.seq, Kind::Vsync);
             false
         });
         if let Some(at) = next {

@@ -187,7 +187,10 @@ moves only through `Compositor::advance`, which runs each deadline it passes at 
 order. A draw hook can pass manual time while a frame draws, to make drawing late.
 
 An output's refresh boundary `k` comes `k / rate` seconds after the output was created, computed
-from the rate each time, so that errors never add up.
+from the rate each time, so that errors never add up. An output under VRR has no fixed
+boundaries: its panel (`vrr.rs`) says when a frame ready at a given time starts showing, and
+counts its refreshes ([VRR outputs](#vrr-outputs)). The frame loop asks both kinds the same
+questions, through `Timing` (`output.rs`).
 
 A commit, or a change of the layout, arms its output's refresh
 ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). When the output is idle, the
@@ -304,6 +307,24 @@ ignored.
 `xdg-dialog-v1` is offered. Dialogs already open on their parent through `xdg_toplevel.set_parent`;
 the modal hint (`dialog.rs`) is read from Smithay's record of the toplevel, and nothing uses it
 yet.
+
+### VRR outputs
+
+An output created with a VRR range ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md))
+emulates amdgpu driving a DisplayPort Adaptive-Sync monitor:
+
+- A refresh lasts at least 1/max and at most 1/min. A frame ready sooner than 1/max after the
+  refresh in progress began waits; a later one starts a refresh at once.
+- With no new frame, the panel refreshes by itself every 1/min. Below the range, BTR, freesync.c's
+  rule, shows each frame `n` times, in refreshes of a fixed length chosen from the time between
+  the last two frames; a frame ready during one of them waits for its end.
+- None of these refreshes is a timer: the panel computes them when a frame asks when it would
+  show. An output at rest wakes nothing.
+- The frame loop is the same as at a fixed rate: at once when a refresh could begin now, else
+  at the refresh the frame can reach minus the lead. `seq` counts every refresh, the panel's own
+  included; `wp_presentation` version 2 is told 1/max as the refresh, version 1 zero.
+- The range is at least twice as wide as its least rate; a narrower one takes a path of the
+  driver Yuna does not emulate.
 
 ### A frame
 

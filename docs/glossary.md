@@ -9,6 +9,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
+  is shown several times, in refreshes of a fixed length, to keep the panel inside its range
+  ([ADR-0045](adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
 - **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
   logical point of its top-left corner, and the logical units one pixel covers.
 - **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
@@ -91,6 +94,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   turn stays under Yuna, its **subreaper**, and ends with it.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+  A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
   seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is

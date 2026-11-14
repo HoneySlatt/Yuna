@@ -1,6 +1,7 @@
 //! Virtual outputs: outputs of any size, rate and scale that no monitor shows, drawn offscreen
-//! ([ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)), and their refresh
-//! boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
+//! ([ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)), and when they refresh:
+//! at fixed boundaries ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)),
+//! or as a VRR panel (`vrr.rs`).
 
 use std::fmt;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
+use smithay::wayland::presentation::Refresh;
 use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{OutputConfig, OutputId, Placed, SeatId};
 
@@ -25,6 +27,7 @@ use crate::colour::description::{Monitor, sdr_description};
 use crate::compositor::OutputDescription;
 use crate::frames::Drawings;
 use crate::state::State;
+use crate::vrr::Panel;
 
 /// The slowest refresh rate accepted, in Hz.
 const MIN_RATE: f64 = 1.0;
@@ -38,14 +41,16 @@ const MAX_SCALE: f64 = 8.0;
 /// rate in millihertz.
 const NANOS_PER_SECOND_IN_MILLIHERTZ: u128 = 1_000_000_000_000;
 
-/// A virtual output's size, refresh rate and scale, checked by [`OutputMode::new`], and the
-/// monitor whose HDR colours it announces, if any ([`OutputMode::with_hdr`]).
+/// A virtual output's size, refresh rate and scale, checked by [`OutputMode::new`]; the least
+/// rate of its VRR range, if it runs under VRR ([`OutputMode::with_vrr`]); and the monitor
+/// whose HDR colours it announces, if any ([`OutputMode::with_hdr`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputMode {
     width: u32,
     height: u32,
     refresh_millihertz: u32,
     scale: f64,
+    vrr_min_millihertz: Option<u32>,
     hdr: Option<Monitor>,
 }
 
@@ -94,8 +99,32 @@ impl OutputMode {
             height,
             refresh_millihertz,
             scale,
+            vrr_min_millihertz: None,
             hdr: None,
         })
+    }
+
+    /// The same mode under VRR, over `min_rate` to its rate, in Hz
+    /// ([ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+    /// Refused unless its rate is at least twice `min_rate`: a narrower range takes a path of
+    /// amdgpu's that Yuna does not emulate.
+    pub fn with_vrr(self, min_rate: f64) -> Result<OutputMode, InvalidOutput> {
+        let rate = f64::from(self.refresh_millihertz) / 1_000.0;
+        if !(MIN_RATE..=rate / 2.0).contains(&min_rate) {
+            return Err(InvalidOutput(format!(
+                "a VRR range of {min_rate} to {rate} Hz is not at least twice as wide as its \
+                 least rate, from {MIN_RATE} Hz"
+            )));
+        }
+        Ok(OutputMode {
+            vrr_min_millihertz: Some((min_rate * 1_000.0).round() as u32),
+            ..self
+        })
+    }
+
+    /// The least rate of its VRR range, in millihertz; none at a fixed rate.
+    pub fn vrr_min_millihertz(&self) -> Option<u32> {
+        self.vrr_min_millihertz
     }
 
     /// The same mode, announcing `monitor`'s HDR colours
@@ -147,6 +176,7 @@ impl Default for OutputMode {
             height: 2160,
             refresh_millihertz: 240_000,
             scale: 1.5,
+            vrr_min_millihertz: None,
             hdr: None,
         }
     }
@@ -176,18 +206,18 @@ pub(crate) struct VirtualOutput {
     pub drawn_frames: u64,
     /// The colours it announces, for its whole life (`colour/`).
     pub colour: Arc<Record>,
-    /// Its refresh boundaries, from its creation.
-    pub boundaries: Boundaries,
-    /// The boundary its armed refresh aims at, and when that refresh is due.
-    pub armed_boundary: u64,
+    /// When it refreshes: at fixed boundaries from its creation, or as a VRR panel.
+    pub timing: Timing,
+    /// The refresh its armed refresh aims at, and when that refresh is due.
+    pub armed_refresh: RefreshAt,
     pub armed_at: Duration,
     /// Whether that refresh was armed at once, the output being idle (ADR-0031).
     pub armed_at_once: bool,
-    /// The latest boundary a refresh of it aimed at or was presented at; 0, its creation, at
-    /// first.
-    pub last_refresh: u64,
-    /// The presentation feedback of frames drawn, held until their boundary, with its number.
-    pub held_feedback: Vec<(u64, OutputPresentationFeedback)>,
+    /// The latest refresh a refresh of it aimed at or was presented at; refresh 0, its
+    /// creation, at first.
+    pub last_refresh: RefreshAt,
+    /// The presentation feedback of frames drawn, held until their refresh.
+    pub held_feedback: Vec<(RefreshAt, OutputPresentationFeedback)>,
     /// Its recent drawings, from which its lead is predicted.
     pub drawings: Drawings,
     /// The windows it shows, bottom to top, as the layout last arranged them.
@@ -269,9 +299,17 @@ impl State {
             mode.hdr()
                 .map_or_else(sdr_description, |monitor| monitor.hdr_description()),
         );
-        let boundaries = Boundaries {
-            created_at: self.clock.now(),
-            refresh_millihertz: mode.refresh_millihertz(),
+        let created_at = self.clock.now();
+        let timing = match mode.vrr_min_millihertz() {
+            Some(min) => Timing::Variable(Panel::new(min, mode.refresh_millihertz(), created_at)),
+            None => Timing::Fixed(Boundaries {
+                created_at,
+                refresh_millihertz: mode.refresh_millihertz(),
+            }),
+        };
+        let creation = RefreshAt {
+            seq: 0,
+            at: created_at,
         };
         self.outputs.push(VirtualOutput {
             id,
@@ -285,11 +323,11 @@ impl State {
             drawn_once: false,
             drawn_frames: 0,
             colour,
-            boundaries,
-            armed_boundary: 0,
+            timing,
+            armed_refresh: creation,
             armed_at: Duration::ZERO,
             armed_at_once: false,
-            last_refresh: 0,
+            last_refresh: creation,
             held_feedback: Vec::new(),
             drawings: Drawings::default(),
             placed: Vec::new(),
@@ -407,6 +445,74 @@ pub const RETIRED_GLOBAL_LIFETIME: Duration = Duration::from_secs(10);
 /// limit, and rates against 1,000 Hz, far below `i32::MAX`, before they get here.
 pub(crate) fn to_i32(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+/// A refresh of an output: its number, counting from 0 at the output's creation, and when it
+/// starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefreshAt {
+    pub seq: u64,
+    pub at: Duration,
+}
+
+/// When an output refreshes: at boundaries a fixed period apart, or as a VRR panel does
+/// ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
+/// [ADR-0045](../../../docs/adr/0045-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+#[derive(Debug)]
+pub(crate) enum Timing {
+    Fixed(Boundaries),
+    Variable(Panel),
+}
+
+impl Timing {
+    /// The first refresh a frame ready at `ready` can show at, after the output's `last`: at a
+    /// fixed rate, the first boundary at or after it; under VRR, the panel's answer.
+    pub fn reachable(&self, ready: Duration, last: RefreshAt) -> RefreshAt {
+        match self {
+            Timing::Fixed(boundaries) => {
+                let seq = boundaries.first_at_or_after(ready).max(last.seq + 1);
+                RefreshAt {
+                    seq,
+                    at: boundaries.at(seq),
+                }
+            }
+            Timing::Variable(panel) => {
+                let (seq, at) = panel.first_reachable(ready);
+                RefreshAt { seq, at }
+            }
+        }
+    }
+
+    /// Whether a frame drawn at `now` shows at once: the output is idle.
+    pub fn is_idle(&self, now: Duration, last: RefreshAt) -> bool {
+        match self {
+            Timing::Fixed(boundaries) => now >= boundaries.at(last.seq + 1),
+            Timing::Variable(panel) => panel.first_reachable(now).1 == now,
+        }
+    }
+
+    /// Where a frame whose drawing ended at `ready` is presented, never before the refresh it
+    /// aimed at: an earlier one is the frame before's. A VRR panel records it.
+    pub fn present(&mut self, ready: Duration, aimed: RefreshAt, last: RefreshAt) -> RefreshAt {
+        let reached = self.reachable(ready, last);
+        let presented = if reached.seq < aimed.seq {
+            aimed
+        } else {
+            reached
+        };
+        if let Timing::Variable(panel) = self {
+            panel.flip(ready, presented.seq, presented.at);
+        }
+        presented
+    }
+
+    /// The refresh `wp_presentation` gives: the period, or a VRR panel's shortest refresh.
+    pub fn refresh(&self, period: Duration) -> Refresh {
+        match self {
+            Timing::Fixed(_) => Refresh::Fixed(period),
+            Timing::Variable(panel) => Refresh::Variable(panel.shortest()),
+        }
+    }
 }
 
 /// An output's refresh boundaries: boundary 0 is its creation, and boundary `k` comes `k`
