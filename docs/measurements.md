@@ -6,6 +6,10 @@ section names the machine, the build, the command, and the figures with their sp
 
 ## M1.6 — mpv in the applications' tests (2026-11-14)
 
+On GitHub's `ubuntu-24.04` runner, for commit `f9f32bb`: CI's one job took 3 min 39 s, against
+2 min 41 s at M1.5's end; mpv's 348 MB come with it. The applications' tests took 32.6 s there
+(commit `71cfee2`).
+
 Machine and Mesa as in M1.4's B4 below, load average 1.5 to 3.6. Build: debug, mpv's
 two tests (commit `32bfc5a`) on `e04dee7`. Command: `nix develop -c cargo test -p yuna --test applications`, with
 and without `-- --skip mpv`, on all 16 threads and on two cores (`taskset -c 0,1`), run with

@@ -15,8 +15,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - A design study on 2026-11-13: Yuna leaves Smithay step by step, keeps wayland-rs, and decides
   Vulkan on a prototype's figures ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md) to
   [ADR-0042](adr/0042-main-on-smithays-fork.md)).
-- [M1.6](#m16--emulated-vrr-and-hdr) is under way: designed with the owner on 2026-11-14
-  (ADR-0044 to ADR-0049).
+- [M1.6](#m16--emulated-vrr-and-hdr) is done (2026-11-14), with ADR-0044 to ADR-0050. Next:
+  M1.7, on the owner's go.
 
 ## Status
 
@@ -27,7 +27,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.3](#m13--hdr-through-smithay-a-prototype) | HDR drawn through Smithay on the owner's monitor, or the reason it cannot be | Done |
 | [M1.4](#m14--the-headless-compositor) | An application runs in Yuna without a screen | Done |
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
-| [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | In progress |
+| [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Planned |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 | Planned |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, Vulkan against GLES | Planned |
@@ -117,13 +117,13 @@ milestone first needs it.
   positioners ([ADR-0042](adr/0042-main-on-smithays-fork.md)). D2: `color-management-v1`,
   versions 1 to 3, through Yuna's own test client. D3: VRR outputs on the manual clock. D4:
   `vrr_min`, `hdr`, `colour`. D5: mpv. D6: the owner's trace, replayed; the measures.
-- **Where it stands** (2026-11-14). D1 to D6 are done, checked and reviewed. A second trace of
-  probes, on a quiet machine, showed the panel's rules; the emulation follows them and replays
-  both traces, every frame ([ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md));
-  what it does not reproduce is debt for Stage 4 ([debt](debt.md#vrr)).
-- **Done when.** A test application sees VRR and HDR as on the owner's monitor, and a test reads
-  the colour description mpv's surface sent (Aerith's once its relay passes colours on).
-- **Measured.** Presentation times against the emulated range, and against the monitor's trace.
+- **Result.** Done on 2026-11-14. Main is on the fork; `color-management-v1` is Yuna's own
+  handler; VRR outputs emulate amdgpu as two traces of the owner's monitor showed
+  ([ADR-0050](adr/0050-emulated-vrr-as-the-monitors-traces-showed.md)); mpv in CI reads
+  Yuna's colours and declares its own. A frame's start is the monitor's within 500 µs for 91 %
+  of steady frames, 82 % of probes; what is left is [debt](debt.md#vrr). The closing review
+  found two blocking defects and the last check one; all are fixed with their tests. CI's job
+  takes 3 min 39 s ([measurements](measurements.md)).
 
 ### M1.7 — Animations
 
