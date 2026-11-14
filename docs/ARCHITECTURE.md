@@ -592,12 +592,22 @@ window or program unknown there:
   socket, `seat-<id>` in Yuna's folder; lists the seats; closes one. A manual-clock Yuna holds one
   seat at a time.
 - `outputs` lists, creates and removes a seat's outputs; `workspaces` lists them with their
-  windows, creates, removes and shows a named one, and moves a window to one.
+  windows, creates, removes and shows a named one, and moves a window to one. `seat` and
+  `outputs` create an output under VRR with `vrr_min`, over `vrr_min` to its rate, refused
+  unless the rate is at least twice it ([VRR outputs](#vrr-outputs)), and an HDR one, which
+  announces the colours of the owner's monitor, a PG32UCDM, with `hdr` ([Colours](#colours),
+  [ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
+  `--output`'s, these two included: `hdr: false` makes an SDR output, but no value turns
+  `--output`'s VRR range off. An output is told with its VRR range in Hz and its monitor's name,
+  each null when it has none.
 - `spawn` starts, lists and stops a seat's programs.
-- `windows` lists a seat's windows, as `Compositor::windows` describes them, and with `wait_ms`
-  waits up to 50 s, on real time whatever the clock's, for one that matches. A waiting call is
-  answered once the layout has placed the window, which on the manual clock takes a `clock`
-  advance; `notifications/cancelled` drops it unanswered; 64 wait at most.
+- `windows` lists a seat's windows, as `Compositor::windows` describes them. With `colour`,
+  each comes with the descriptions its surfaces declared, as `Compositor::window_colours` gives
+  them, luminances in cd/m² and chromaticities as numbers; without it the reply leaves them out,
+  so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
+  real time whatever the clock's, for one that matches. A waiting call is answered once the
+  layout has placed the window, which on the manual clock takes a `clock` advance;
+  `notifications/cancelled` drops it unanswered; 64 wait at most.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -638,8 +648,14 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
 `XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, and runs until SIGTERM
 or SIGINT. `yuna mcp` starts the same compositor without an output or a socket, on the manual
-clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes. The signal handler writes to a pipe
-the event loop watches, so that the loop returns and the socket is removed. At the `debug` level, it logs
+clock with `--manual-clock`, and serves MCP until its input closes or SIGTERM or SIGINT comes.
+`--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
+RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
+`hdr` ([ADR-0048](adr/0048-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
+order, each once. With `mcp`, it is each new seat's output. A mode refused, an item unknown,
+repeated or malformed, is a usage error: the program prints why and its help, and exits with 2.
+The signal handler writes to a pipe the event loop watches, so that the loop returns and the
+socket is removed. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
 process reads. `frame drawn` gives the frame's time, `took_us`: from when its elements begin to be

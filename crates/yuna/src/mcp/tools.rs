@@ -15,6 +15,8 @@ use serde_json::{Map, Value, json};
 
 use super::programs::{End, Program};
 use super::protocol::{self, Revision};
+use crate::colour::SurfaceColourDescription;
+use crate::colour::description::Chromaticities;
 use crate::compositor::{OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
 use crate::{CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion};
@@ -33,6 +35,13 @@ const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
 /// Every tool's definition, for `tools/list`, always in this order.
 pub fn definitions() -> Value {
     let seat = json!({ "type": "integer", "minimum": 2, "description": SEAT_PROPERTY });
+    // `seat create`'s output and `outputs create`'s take the same two (ADR-0048).
+    let vrr_min = json!({ "type": "number", "minimum": 1, "maximum": 500,
+        "description": "create: run under VRR, from this many refreshes a second up to \
+            rate, which must be at least twice it; a fixed rate by default" });
+    let hdr = json!({ "type": "boolean",
+        "description": "create: true announces the HDR colours of the owner's monitor, a \
+            PG32UCDM; SDR by default" });
     json!([
         {
             "name": "seat",
@@ -56,6 +65,8 @@ pub fn definitions() -> Value {
                         "description": "create: refreshes a second; default 240" },
                     "scale": { "type": "number", "minimum": 0.25, "maximum": 8,
                         "description": "create: physical pixels per logical unit; default 1.5" },
+                    "vrr_min": vrr_min,
+                    "hdr": hdr,
                     "seat": { "type": "integer", "minimum": 2, "description": "close: its handle" }
                 },
                 "required": ["action"],
@@ -66,9 +77,11 @@ pub fn definitions() -> Value {
             "name": "outputs",
             "title": "Virtual outputs",
             "description": "List, create or remove a seat's virtual outputs: screens no monitor \
-                shows, drawn at their own size, rate and scale. Windows open on the seat's \
-                focused output. Coordinates are logical: physical pixels divided by the scale. \
-                A seat keeps one output at least.",
+                shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, \
+                announcing SDR or HDR colours. Windows open on the seat's focused output. \
+                Coordinates are logical: physical pixels divided by the scale. A seat keeps \
+                one output at least. list gives each output's VRR range in Hz and the monitor \
+                whose HDR colours it announces, each null when it has none.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -82,6 +95,8 @@ pub fn definitions() -> Value {
                         "description": "create: refreshes a second; default 240" },
                     "scale": { "type": "number", "minimum": 0.25, "maximum": 8,
                         "description": "create: physical pixels per logical unit; default 1.5" },
+                    "vrr_min": vrr_min,
+                    "hdr": hdr,
                     "output": { "type": "integer", "description": "remove: the output's id" }
                 },
                 "required": ["action", "seat"],
@@ -143,14 +158,22 @@ pub fn definitions() -> Value {
             "description": "List a seat's windows, in the order they opened: id, seat, \
                 application id (null when its client gave none), title, process id, output, \
                 workspace (null for an unnamed one), logical rectangle (null when hidden), \
-                focus, floating, fullscreen. With wait_ms, waits up to that long for a window \
-                that matches the filters, when none does yet.",
+                focus, floating, fullscreen. With colour, each window also gives colours: one \
+                entry for each of its surfaces that declared its colours through \
+                color-management-v1, its own, then its subsurfaces' and its popups': the \
+                surface's role, transfer function, primaries (a protocol name, else their \
+                chromaticities), luminances in cd/m², target primaries and luminance, max_cll, \
+                max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches \
+                the filters, when none does yet.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "seat": seat,
                     "app_id": { "type": "string", "description": "only this application id" },
                     "pid": { "type": "integer", "description": "only this client process" },
+                    "colour": { "type": "boolean",
+                        "description": "also give the colours each window's surfaces declared; \
+                            false by default" },
                     "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
                         "description": "how long to wait for a match; 0 by default" }
                 },
@@ -296,6 +319,8 @@ pub enum SeatCall {
         height: Option<u32>,
         rate: Option<f64>,
         scale: Option<f64>,
+        vrr_min: Option<f64>,
+        hdr: Option<bool>,
     },
     List {},
     Close {
@@ -318,6 +343,8 @@ pub enum OutputsCall {
         height: Option<u32>,
         rate: Option<f64>,
         scale: Option<f64>,
+        vrr_min: Option<f64>,
+        hdr: Option<bool>,
     },
     Remove {
         seat: u64,
@@ -481,6 +508,9 @@ pub struct WindowsCall {
     pub seat: u64,
     pub app_id: Option<String>,
     pub pid: Option<i32>,
+    /// Whether each window also gives its surfaces' colours.
+    #[serde(default)]
+    pub colour: bool,
     #[serde(default)]
     pub wait_ms: u64,
 }
@@ -626,16 +656,23 @@ impl ToolResult {
     }
 }
 
-/// An output, as the tools give it.
+/// An output, as the tools give it: its VRR range in Hz and the name of the monitor whose HDR
+/// colours it announces, each null when it has none.
 pub fn output_json(output: &OutputDescription) -> Value {
+    let mode = &output.mode;
+    let hertz = |millihertz: u32| f64::from(millihertz) / 1_000.0;
     json!({
         "id": output.id.0,
         "seat": output.seat.0,
         "name": output.name,
-        "width": output.mode.width(),
-        "height": output.mode.height(),
-        "refresh_mhz": output.mode.refresh_millihertz(),
-        "scale": output.mode.scale(),
+        "width": mode.width(),
+        "height": mode.height(),
+        "refresh_mhz": mode.refresh_millihertz(),
+        "scale": mode.scale(),
+        "vrr": mode.vrr_min_millihertz().map(|min| json!({
+            "min": hertz(min), "max": hertz(mode.refresh_millihertz()),
+        })),
+        "hdr": mode.hdr().map(|monitor| monitor.name),
         "logical": {
             "x": output.rect.x, "y": output.rect.y,
             "width": output.rect.w, "height": output.rect.h,
@@ -643,9 +680,13 @@ pub fn output_json(output: &OutputDescription) -> Value {
     })
 }
 
-/// A window, as the tools give it.
-pub fn window_json(window: &WindowDescription) -> Value {
-    json!({
+/// A window, as the tools give it; with `colours`, those its surfaces declared, which `windows`
+/// gives only when asked, so that its reply does not grow for agents that do not ask.
+pub fn window_json(
+    window: &WindowDescription,
+    colours: Option<&[SurfaceColourDescription]>,
+) -> Value {
+    let mut described = json!({
         "id": window.id.0,
         "seat": window.seat.0,
         "app_id": window.app_id,
@@ -659,6 +700,52 @@ pub fn window_json(window: &WindowDescription) -> Value {
         "focused": window.focused,
         "floating": window.floating,
         "fullscreen": window.fullscreen,
+    });
+    if let Some(colours) = colours {
+        described["colours"] = colours.iter().map(surface_colour_json).collect();
+    }
+    described
+}
+
+/// A surface's declared colours, in the protocol's names, its luminances in cd/m² and its
+/// chromaticities as numbers (ADR-0048).
+fn surface_colour_json(surface: &SurfaceColourDescription) -> Value {
+    let description = &surface.description;
+    let (target_min, target_max) = description.target_luminance;
+    json!({
+        "role": surface.role.name(),
+        "transfer_function": description.transfer_function.name(),
+        "primaries": description.named_primaries.map_or_else(
+            || chromaticities_json(&description.primaries),
+            |named| json!(named.name()),
+        ),
+        "luminances": {
+            "min": candelas_of_min(description.luminances.min),
+            "max": description.luminances.max,
+            "reference": description.luminances.reference,
+        },
+        "target_primaries": chromaticities_json(&description.target_primaries),
+        "target_luminance": { "min": candelas_of_min(target_min), "max": target_max },
+        "max_cll": description.max_cll,
+        "max_fall": description.max_fall,
+        // The one intent Yuna lists (ADR-0046): every description is set with it.
+        "intent": "perceptual",
+    })
+}
+
+/// A minimum luminance in cd/m², from the protocol's ten-thousandths.
+fn candelas_of_min(ten_thousandths: u32) -> f64 {
+    f64::from(ten_thousandths) / 10_000.0
+}
+
+/// Chromaticities as `{"red": [x, y], …}`, from the protocol's millionths.
+fn chromaticities_json(chromaticities: &Chromaticities) -> Value {
+    let xy = |(x, y): (i32, i32)| json!([f64::from(x) / 1e6, f64::from(y) / 1e6]);
+    json!({
+        "red": xy(chromaticities.red),
+        "green": xy(chromaticities.green),
+        "blue": xy(chromaticities.blue),
+        "white": xy(chromaticities.white),
     })
 }
 
@@ -765,6 +852,11 @@ pub fn advance_length(by_ns: Option<u64>, by_ms: Option<f64>) -> Result<Duration
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OutputMode;
+    use crate::colour::SurfaceRole;
+    use crate::colour::description::{Description, Luminances, PG32UCDM, TransferFunction};
+    use yuna_layout::SeatId;
+    use yuna_layout::geometry::Rect;
 
     fn args(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap_or_default()
@@ -931,6 +1023,179 @@ mod tests {
         assert!(arguments::<OutputsCall>(args(json!({"action": "create", "width": -1}))).is_err());
         assert!(arguments::<WindowsCall>(args(json!({"seat": 2, "wait": 1}))).is_err());
         assert!(arguments::<SpawnCall>(args(json!({"action": "start", "seat": 2}))).is_err());
+    }
+
+    #[test]
+    fn vrr_hdr_and_colour_are_named_read_and_their_wrong_types_refused() {
+        let tools = definitions();
+        let property = |tool: usize, name: &str| {
+            tools[tool]["inputSchema"]["properties"][name]["type"].clone()
+        };
+        for tool in [0, 1] {
+            assert_eq!(
+                property(tool, "vrr_min"),
+                json!("number"),
+                "{}",
+                tools[tool]["name"]
+            );
+            assert_eq!(
+                property(tool, "hdr"),
+                json!("boolean"),
+                "{}",
+                tools[tool]["name"]
+            );
+        }
+        assert_eq!(tools[4]["name"], json!("windows"));
+        assert_eq!(property(4, "colour"), json!("boolean"));
+
+        let seat: Result<SeatCall, _> = arguments(args(
+            json!({"action": "create", "vrr_min": 48, "hdr": true}),
+        ));
+        assert!(
+            matches!(seat, Ok(SeatCall::Create { vrr_min: Some(min), hdr: Some(true), .. })
+                if min == 48.0),
+            "{seat:?}"
+        );
+        let outputs: Result<OutputsCall, _> = arguments(args(json!({
+            "action": "create", "seat": 2, "vrr_min": 47.952, "hdr": false
+        })));
+        assert!(
+            matches!(outputs, Ok(OutputsCall::Create { vrr_min: Some(min), hdr: Some(false), .. })
+                if min == 47.952),
+            "{outputs:?}"
+        );
+        // Absent, they leave the mode as it was.
+        assert!(matches!(
+            arguments(args(json!({"action": "create"}))),
+            Ok(SeatCall::Create {
+                vrr_min: None,
+                hdr: None,
+                ..
+            })
+        ));
+        let windows: WindowsCall =
+            arguments(args(json!({"seat": 2, "colour": true}))).expect("windows' arguments");
+        assert!(windows.colour);
+        let windows: WindowsCall = arguments(args(json!({"seat": 2}))).expect("windows' arguments");
+        assert!(!windows.colour);
+
+        for wrong in [json!("48"), json!(true), json!([48])] {
+            let call = json!({"action": "create", "vrr_min": wrong});
+            assert!(
+                arguments::<SeatCall>(args(call)).is_err(),
+                "vrr_min {wrong}"
+            );
+            let call = json!({"action": "create", "seat": 2, "vrr_min": wrong});
+            assert!(
+                arguments::<OutputsCall>(args(call)).is_err(),
+                "vrr_min {wrong}"
+            );
+        }
+        for wrong in [json!("true"), json!(1), json!({})] {
+            let call = json!({"action": "create", "hdr": wrong});
+            assert!(arguments::<SeatCall>(args(call)).is_err(), "hdr {wrong}");
+            let call = json!({"action": "create", "seat": 2, "hdr": wrong});
+            assert!(arguments::<OutputsCall>(args(call)).is_err(), "hdr {wrong}");
+            let call = json!({"seat": 2, "colour": wrong});
+            assert!(
+                arguments::<WindowsCall>(args(call)).is_err(),
+                "colour {wrong}"
+            );
+        }
+        // Only `create` takes them.
+        assert!(
+            arguments::<OutputsCall>(args(json!({"action": "list", "seat": 2, "hdr": true})))
+                .is_err()
+        );
+        assert!(arguments::<SeatCall>(args(json!({"action": "list", "vrr_min": 48}))).is_err());
+    }
+
+    #[test]
+    fn an_outputs_vrr_range_and_hdr_monitor_are_listed_null_when_it_has_none() {
+        let fixed = OutputMode::new(1920, 1080, 240.0, 1.0).expect("a mode");
+        let description = |mode: OutputMode| OutputDescription {
+            id: OutputId(3),
+            seat: SeatId(2),
+            name: "HEADLESS-3".to_owned(),
+            mode,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1920.0,
+                h: 1080.0,
+            },
+        };
+        let plain = output_json(&description(fixed));
+        assert_eq!(plain["vrr"], Value::Null);
+        assert_eq!(plain["hdr"], Value::Null);
+        let vrr_hdr = fixed
+            .with_vrr(47.952)
+            .expect("a range twice as wide")
+            .with_hdr(PG32UCDM);
+        let listed = output_json(&description(vrr_hdr));
+        assert_eq!(listed["vrr"], json!({"min": 47.952, "max": 240.0}));
+        assert_eq!(listed["hdr"], json!("PG32UCDM"));
+    }
+
+    #[test]
+    fn a_windows_colours_come_only_when_asked_with_unnamed_primaries_as_numbers() {
+        let window = WindowDescription {
+            id: WindowId(1),
+            app_id: None,
+            title: None,
+            pid: None,
+            seat: SeatId(2),
+            output: None,
+            workspace: None,
+            rect: None,
+            focused: false,
+            floating: false,
+            fullscreen: false,
+        };
+        assert_eq!(window_json(&window, None).get("colours"), None);
+        assert_eq!(window_json(&window, Some(&[]))["colours"], json!([]));
+
+        let primaries = Chromaticities {
+            red: (680_000, 320_000),
+            green: (265_000, 690_000),
+            blue: (150_000, 60_000),
+            white: (312_700, 329_000),
+        };
+        let declared = SurfaceColourDescription {
+            role: SurfaceRole::Popup,
+            description: Description {
+                transfer_function: TransferFunction::Gamma22,
+                primaries,
+                named_primaries: None,
+                luminances: Luminances {
+                    min: 2_000,
+                    max: 80,
+                    reference: 80,
+                },
+                target_primaries: primaries,
+                target_luminance: (5, 400),
+                max_cll: Some(400),
+                max_fall: None,
+            },
+        };
+        let p3 = json!({
+            "red": [0.68, 0.32], "green": [0.265, 0.69], "blue": [0.15, 0.06],
+            "white": [0.3127, 0.329],
+        });
+        assert_eq!(
+            window_json(&window, Some(&[declared]))["colours"],
+            json!([{
+                "role": "popup",
+                "transfer_function": "gamma22",
+                "primaries": p3,
+                "luminances": {"min": 0.2, "max": 80, "reference": 80},
+                "target_primaries": p3,
+                "target_luminance": {"min": 0.0005, "max": 400},
+                "max_cll": 400,
+                "max_fall": null,
+                "intent": "perceptual",
+            }])
+        );
     }
 
     #[test]

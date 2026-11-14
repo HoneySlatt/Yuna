@@ -48,8 +48,9 @@ use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::rustix::process::{Pid, Signal};
 use yuna_layout::{OutputId, SeatId, WindowId};
 
-use crate::compositor::Compositor;
-use crate::output::OutputMode;
+use crate::colour::description::PG32UCDM;
+use crate::compositor::{Compositor, WindowDescription};
+use crate::output::{InvalidOutput, OutputMode};
 use crate::state::OWNER_SEAT;
 use crate::{CaptureMapping, CaptureTicket, ClockMode, Error};
 use image::Encoded;
@@ -656,22 +657,40 @@ impl Server {
         }
     }
 
-    /// An output mode from a call's values, each defaulting to the seats' default output's.
+    /// An output mode from a call's values, each defaulting to the seats' default output's, its
+    /// VRR range's least rate and its HDR monitor included (ADR-0048). `hdr: true` announces
+    /// the PG32UCDM's colours, the one monitor Yuna knows; `false` none.
     fn mode_of(
         &self,
         width: Option<u32>,
         height: Option<u32>,
         rate: Option<f64>,
         scale: Option<f64>,
+        vrr_min: Option<f64>,
+        hdr: Option<bool>,
     ) -> Result<OutputMode, ToolResult> {
         let default = self.seat_output;
-        OutputMode::new(
+        let hertz = |millihertz: u32| f64::from(millihertz) / 1_000.0;
+        let refused = |reason: InvalidOutput| ToolResult::failed(reason.to_string());
+        let mut mode = OutputMode::new(
             width.unwrap_or(default.width()),
             height.unwrap_or(default.height()),
-            rate.unwrap_or(f64::from(default.refresh_millihertz()) / 1_000.0),
+            rate.unwrap_or(hertz(default.refresh_millihertz())),
             scale.unwrap_or(default.scale()),
         )
-        .map_err(|reason| ToolResult::failed(reason.to_string()))
+        .map_err(refused)?;
+        if let Some(min) = vrr_min.or(default.vrr_min_millihertz().map(hertz)) {
+            mode = mode.with_vrr(min).map_err(refused)?;
+        }
+        let monitor = match hdr {
+            Some(true) => Some(PG32UCDM),
+            Some(false) => None,
+            None => default.hdr(),
+        };
+        if let Some(monitor) = monitor {
+            mode = mode.with_hdr(monitor);
+        }
+        Ok(mode)
     }
 
     /// The output `output` of `seat`, described; none for an unknown one or another seat's.
@@ -700,7 +719,9 @@ impl Server {
                 height,
                 rate,
                 scale,
-            } => match self.mode_of(width, height, rate, scale) {
+                vrr_min,
+                hdr,
+            } => match self.mode_of(width, height, rate, scale, vrr_min, hdr) {
                 Ok(mode) => self.create_seat(mode),
                 Err(failed) => failed,
             },
@@ -1034,12 +1055,14 @@ impl Server {
                 height,
                 rate,
                 scale,
+                vrr_min,
+                hdr,
             } => {
                 let seat = match self.agent_seat(seat) {
                     Ok(seat) => seat,
                     Err(failed) => return failed,
                 };
-                let mode = match self.mode_of(width, height, rate, scale) {
+                let mode = match self.mode_of(width, height, rate, scale, vrr_min, hdr) {
                     Ok(mode) => mode,
                     Err(failed) => return failed,
                 };
@@ -1643,8 +1666,16 @@ impl Server {
             .windows()
             .iter()
             .filter(|window| call.matches(window))
-            .map(tools::window_json)
+            .map(|window| self.window_json(call, window))
             .collect()
+    }
+
+    /// `window` as `call` asks for it: with its surfaces' colours when it asks for them.
+    fn window_json(&self, call: &WindowsCall, window: &WindowDescription) -> Value {
+        let colours = call
+            .colour
+            .then(|| self.compositor.window_colours(window.id));
+        tools::window_json(window, colours.as_deref())
     }
 
     /// Answers each waiting call a window now matches.
@@ -1652,10 +1683,11 @@ impl Server {
         let windows = self.compositor.windows();
         let mut index = 0;
         while index < self.waits.len() {
+            let call = &self.waits[index].call;
             let matching: Vec<Value> = windows
                 .iter()
-                .filter(|window| self.waits[index].call.matches(window))
-                .map(tools::window_json)
+                .filter(|window| call.matches(window))
+                .map(|window| self.window_json(call, window))
                 .collect();
             if matching.is_empty() {
                 index += 1;

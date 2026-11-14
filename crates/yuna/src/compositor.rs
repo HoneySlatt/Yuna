@@ -118,7 +118,9 @@ pub struct OutputDescription {
     pub seat: SeatId,
     /// Its name, as `wl_output` gives it: `HEADLESS-<id>`.
     pub name: String,
-    /// Its size, rate and scale.
+    /// Its size, rate and scale; its VRR range's least rate
+    /// ([`OutputMode::vrr_min_millihertz`]), none at a fixed rate; and the monitor whose HDR
+    /// colours it announces ([`OutputMode::hdr`]), none for an SDR output.
     pub mode: OutputMode,
     /// Its place in logical coordinates.
     pub rect: Rect,

@@ -12,14 +12,15 @@ use std::process::ExitCode;
 
 use smithay::reexports::rustix;
 use tracing::level_filters::LevelFilter;
+use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
 use yuna::{ClockMode, Compositor, Config, Device, Error, OutputMode};
 
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
-Usage: yuna --headless [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE]...
-       yuna mcp [--gpu] [--output WIDTHxHEIGHT@RATE,SCALE] [--manual-clock]
+Usage: yuna --headless [--gpu] [--output MODE]...
+       yuna mcp [--gpu] [--output MODE] [--manual-clock]
        yuna -h | --help
        yuna -V | --version
 
@@ -37,10 +38,13 @@ Options:
                      WAYLAND_DISPLAY=<socket> on standard output, logs to standard error,
                      and stops on SIGTERM or SIGINT.
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
-      --output MODE  Add a virtual output of WIDTHxHEIGHT physical pixels, refreshed RATE
-                     times a second, at SCALE physical pixels per logical unit; outputs are
-                     laid out left to right. Default: one output, 3840x2160@240,1.5. With
-                     mcp, given once at most: the mode of each new seat's output.
+      --output MODE  Add a virtual output. MODE is WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]:
+                     WIDTHxHEIGHT physical pixels, refreshed RATE times a second, at SCALE
+                     physical pixels per logical unit; with vrr=MIN, under VRR from MIN to
+                     RATE Hz, RATE at least twice MIN; with hdr, announcing the HDR colours
+                     of the owner's monitor, a PG32UCDM. Outputs are laid out left to right.
+                     Default: one output, 3840x2160@240,1.5. With mcp, given once at most:
+                     the mode of each new seat's output.
       --manual-clock With mcp: time moves only when the clock tool advances it, never past
                      real time.
   -h, --help         Print this help
@@ -149,20 +153,58 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
     }
 }
 
-/// Reads `WIDTHxHEIGHT@RATE,SCALE`, and checks it as an output's mode.
+/// Reads `WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]`, the two items in any order, each once, and
+/// checks it as an output's mode (ADR-0048).
 fn read_output(text: &OsStr) -> Result<OutputMode, String> {
-    let bad =
-        || format!("--output {text:?}: expected WIDTHxHEIGHT@RATE,SCALE, such as 1920x1080@60,1");
+    let bad = || {
+        format!(
+            "--output {text:?}: expected WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr], such as \
+             1920x1080@60,1"
+        )
+    };
     let text_str = text.to_str().ok_or_else(bad)?;
+    let refused = |reason: String| format!("--output {text_str}: {reason}");
     let (size, rest) = text_str.split_once('@').ok_or_else(bad)?;
     let (width, height) = size.split_once('x').ok_or_else(bad)?;
-    let (rate, scale) = rest.split_once(',').ok_or_else(bad)?;
+    let mut items = rest.split(',');
+    let (Some(rate), Some(scale)) = (items.next(), items.next()) else {
+        return Err(bad());
+    };
     let width: u32 = width.parse().map_err(|_| bad())?;
     let height: u32 = height.parse().map_err(|_| bad())?;
     let rate: f64 = rate.parse().map_err(|_| bad())?;
     let scale: f64 = scale.parse().map_err(|_| bad())?;
-    OutputMode::new(width, height, rate, scale)
-        .map_err(|reason| format!("--output {text_str}: {reason}"))
+    let mut mode =
+        OutputMode::new(width, height, rate, scale).map_err(|r| refused(r.to_string()))?;
+    let mut vrr_min = None;
+    let mut hdr = false;
+    for item in items {
+        if item == "hdr" {
+            if hdr {
+                return Err(refused("hdr is given twice".to_owned()));
+            }
+            hdr = true;
+        } else if let Some(min) = item.strip_prefix("vrr=") {
+            if vrr_min.is_some() {
+                return Err(refused("vrr is given twice".to_owned()));
+            }
+            let min: f64 = min
+                .parse()
+                .map_err(|_| refused(format!("vrr={min} is not a rate in Hz")))?;
+            vrr_min = Some(min);
+        } else {
+            return Err(refused(format!(
+                "unknown item {item:?}: expected vrr=MIN or hdr"
+            )));
+        }
+    }
+    if let Some(min) = vrr_min {
+        mode = mode.with_vrr(min).map_err(|r| refused(r.to_string()))?;
+    }
+    if hdr {
+        mode = mode.with_hdr(PG32UCDM);
+    }
+    Ok(mode)
 }
 
 fn main() -> ExitCode {
@@ -513,6 +555,76 @@ mod tests {
             request(&["--headless", "--output"]),
             Request::Invalid(_)
         ));
+    }
+
+    #[test]
+    fn an_output_takes_vrr_and_hdr_in_either_order() {
+        let fixed = mode(1920, 1080, 240.0, 1.0);
+        let vrr = fixed.with_vrr(48.0).expect("a range twice as wide");
+        let vrr_hdr = vrr.with_hdr(PG32UCDM);
+        for (text, expected) in [
+            ("1920x1080@240,1,vrr=48,hdr", vrr_hdr),
+            ("1920x1080@240,1,hdr,vrr=48", vrr_hdr),
+            ("1920x1080@240,1,vrr=48", vrr),
+            ("1920x1080@240,1,hdr", fixed.with_hdr(PG32UCDM)),
+            // Exactly twice: the narrowest range accepted.
+            (
+                "1920x1080@240,1,vrr=120",
+                fixed.with_vrr(120.0).expect("a range twice as wide"),
+            ),
+        ] {
+            assert_eq!(
+                request(&["--headless", "--output", text]),
+                Request::Headless(Headless {
+                    gpu: false,
+                    outputs: vec![expected],
+                    manual_clock: false,
+                }),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            request(&["mcp", "--output", "1920x1080@240,1,hdr,vrr=48"]),
+            Request::Mcp(Headless {
+                gpu: false,
+                outputs: vec![vrr_hdr],
+                manual_clock: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_repeated_unknown_or_malformed_item_and_a_narrow_range_are_named() {
+        for (bad, named) in [
+            ("1920x1080@240,1,hdr,hdr", "hdr is given twice"),
+            ("1920x1080@240,1,hdr,vrr=48,hdr", "hdr is given twice"),
+            ("1920x1080@240,1,vrr=48,vrr=60", "vrr is given twice"),
+            ("1920x1080@240,1,sdr", "unknown item \"sdr\""),
+            ("1920x1080@240,1,HDR", "unknown item \"HDR\""),
+            ("1920x1080@240,1,hdr=1", "unknown item \"hdr=1\""),
+            ("1920x1080@240,1,vrr", "unknown item \"vrr\""),
+            ("1920x1080@240,1,", "unknown item \"\""),
+            ("1920x1080@240,1,vrr=abc", "vrr=abc is not a rate in Hz"),
+            ("1920x1080@240,1,vrr=", "vrr= is not a rate in Hz"),
+            ("1920x1080@240,1,vrr=200", "VRR range of 200 to 240 Hz"),
+            ("1920x1080@240,1,hdr,vrr=121", "VRR range of 121 to 240 Hz"),
+            ("1920x1080@240,1,vrr=0", "VRR range of 0 to 240 Hz"),
+            ("1920x1080@240,1,vrr=-48", "VRR range of -48 to 240 Hz"),
+            ("1920x1080@240,1,vrr=NaN", "VRR range of NaN to 240 Hz"),
+        ] {
+            for command in [
+                &["--headless", "--output", bad][..],
+                &["mcp", "--output", bad],
+            ] {
+                match request(command) {
+                    Request::Invalid(reason) => {
+                        assert!(reason.contains(named), "{bad}: {reason}");
+                        assert!(reason.starts_with("--output 1920x1080@240,1,"), "{reason}");
+                    }
+                    other => panic!("{bad} was accepted: {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]
