@@ -28,10 +28,11 @@ transition; Hyprland ticks on the wall clock ([survey](../survey.md#animations))
   that sampled it arms the next one, whether it drew or found nothing changed, and a refresh whose
   drawing failed too. The last frame shows the target exactly; then nothing is armed.
 - **What is drawn follows the motion; what a client is told follows its place.** A window is told
-  it is visible (`suspended` cleared, `enter`, full-rate callbacks) when its place enters the
-  output, and hidden only when its output's motions have ended with neither its place nor its
-  drawn rectangle on it. A window that only passes through the view is drawn from its last buffer
-  and told nothing. Each window gets at most one such change per operation.
+  it is visible (`suspended` cleared, `enter`) when its place enters the output, and hidden only
+  when its output's motions have ended with neither its place nor its drawn rectangle on it. A
+  window that only passes through the view is drawn from its last buffer and told nothing. Each
+  window gets at most one such change per operation. Frame callbacks go at full rate to every
+  window a frame draws, told or not, so that what shows keeps updating.
 - **The pointer and clicks** hit-test what is drawn, at each pointer event; between events, the
   pointer's focus is refreshed once when its output's motions end, not at each frame.
 - **Captures** cut what their frame drew. MCP's `windows` gives a window's place, its drawn
