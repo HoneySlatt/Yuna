@@ -1540,19 +1540,22 @@ impl Layout {
         let focused = self.focused(self.seats[si].id);
         let area = o.area(self.options.gap, &self.windows);
         let shown = &o.workspaces[o.shown];
-        let mut raw = Vec::new();
+        // Sized once for every window of the model, so that neither list grows on the way.
+        let mut raw = Vec::with_capacity(self.windows.len());
         shown.arrange(&area, &mut raw);
-        let (pinned, unpinned): (Vec<_>, Vec<_>) =
-            raw.into_iter().partition(|a| a.layer == Layer::Pinned);
-        let mut placed: Vec<Placed> = unpinned
-            .into_iter()
-            .map(|a| self.placed(focused, shown.id, a))
-            .collect();
+        let mut placed: Vec<Placed> = Vec::with_capacity(self.windows.len());
+        let mut pinned = Vec::new();
+        for a in raw.drain(..) {
+            if a.layer == Layer::Pinned {
+                pinned.push(a);
+            } else {
+                placed.push(self.placed(focused, shown.id, a));
+            }
+        }
         let mut special_covers = false;
         if let Some(special) = &o.special {
-            let mut raw = Vec::new();
             special.arrange(&area, &mut raw);
-            placed.extend(raw.into_iter().map(|a| self.placed(focused, special.id, a)));
+            placed.extend(raw.drain(..).map(|a| self.placed(focused, special.id, a)));
             special_covers = special.fullscreen_covers();
         }
         // A fullscreen window of the special workspace hides them too: nothing over a game.

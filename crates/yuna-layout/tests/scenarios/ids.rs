@@ -127,8 +127,8 @@ fn every_workspace_created_gets_a_new_id_whatever_its_seat() {
 fn every_column_created_gets_a_new_id_whatever_its_workspace_or_seat() {
     let mut m = Model::new();
     m.open(1);
-    assert_eq!(column(&m, 1), ColumnId(1));
-    let mut seen = vec![ColumnId(1)];
+    assert_eq!(column(&m, 1), ColumnId(std::num::NonZeroU64::MIN));
+    let mut seen = vec![ColumnId(std::num::NonZeroU64::MIN)];
     m.open(2);
     assert_new(&mut seen, column(&m, 2));
     m.ok(|l| l.focus_workspace(OWNER, "other"));

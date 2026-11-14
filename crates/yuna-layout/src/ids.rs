@@ -1,5 +1,7 @@
 //! The ids the model gives what it creates: workspaces and scrolling columns.
 
+use std::num::NonZeroU64;
+
 use crate::{ColumnId, WorkspaceId};
 
 /// Hands out workspace and column ids, each kind from 1 and never twice, so that an id once gone
@@ -9,15 +11,16 @@ use crate::{ColumnId, WorkspaceId};
 pub(crate) struct Ids {
     /// The id the next workspace gets.
     next_workspace: u64,
-    /// The id the next column gets.
-    next_column: u64,
+    /// The id the next column gets; never 0, so that a window's `Option<ColumnId>` takes no
+    /// more room than the id.
+    next_column: NonZeroU64,
 }
 
 impl Default for Ids {
     fn default() -> Ids {
         Ids {
             next_workspace: 1,
-            next_column: 1,
+            next_column: NonZeroU64::MIN,
         }
     }
 }
@@ -34,7 +37,7 @@ impl Ids {
     /// A new column's id; it never runs out either.
     pub fn new_column(&mut self) -> ColumnId {
         let id = ColumnId(self.next_column);
-        self.next_column += 1;
+        self.next_column = self.next_column.saturating_add(1);
         id
     }
 
@@ -45,6 +48,6 @@ impl Ids {
 
     /// Whether `id` was handed out already.
     pub fn gave_column(&self, id: ColumnId) -> bool {
-        (1..self.next_column).contains(&id.0)
+        id.0 < self.next_column
     }
 }

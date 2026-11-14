@@ -50,6 +50,8 @@ mod workspace;
 pub use layout::{Layout, MAX_SIZE};
 pub use scrolling::ColumnWidth;
 
+use std::num::NonZeroU64;
+
 use geometry::{Rect, Size};
 
 /// A window, named by the caller. The caller keeps ids unique among the windows it opens.
@@ -78,7 +80,7 @@ pub struct WorkspaceId(pub u64);
 /// gets a new column, with a new id; a column whose last window leaves is gone. A workspace whose
 /// tiling changes to dwindle and back gets new columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ColumnId(pub u64);
+pub struct ColumnId(pub NonZeroU64);
 
 /// The part of its workspace a window is placed in, which says how it moves: the columns of a
 /// strip slide together under one camera, the others do not
