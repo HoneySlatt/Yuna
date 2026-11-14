@@ -1,6 +1,7 @@
 # 0055. What moves first, and animations off headless
 
-- Status: Accepted; amends [0033](0033-the-mcp-server.md) (`--animations`)
+- Status: Accepted; amends [0033](0033-the-mcp-server.md) (`--animations`); amended by
+  [0059](0059-reduced-motion-nothing-slides-fades-stay.md) (reduced motion now)
 - Date: 2026-11-14
 
 ## Context

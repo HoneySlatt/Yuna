@@ -92,6 +92,15 @@ impl CurveParams {
         CurveParams { easing, duration }
     }
 
+    /// The same easing over half the duration, at least 1 ms: a fade under reduced motion
+    /// ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+    pub fn halved(self) -> CurveParams {
+        CurveParams {
+            duration: (self.duration / 2).max(*DURATIONS.start()),
+            ..self
+        }
+    }
+
     /// A curve's parameters. Refused (Err) unless the duration is 1 ms..=10 s, a Bézier's x1 and
     /// x2 are in 0..=1, and its y1 and y2 within ±1,000,000.
     pub fn new(easing: Easing, duration: Duration) -> Result<CurveParams, InvalidParams> {

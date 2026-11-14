@@ -63,7 +63,8 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0052](0052-motion-in-a-pure-crate.md) | Motion in a pure crate, the layout's jumps turned into offsets | Accepted; amends 0020 |
 | [0053](0053-springs-in-closed-form-keeping-their-velocity.md) | Springs in closed form, keeping their velocity; curves | Accepted |
 | [0054](0054-motion-sampled-at-presentation-drawn-apart-from-told.md) | Motion sampled at its presentation; what is drawn apart from what a client is told | Accepted; amends 0023, 0033, 0038 |
-| [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033 |
+| [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033; amended by 0059 |
 | [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) | Motion's budget judged on the GPU, against a still baseline | Accepted |
 | [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004 |
 | [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023, 0046 |
+| [0059](0059-reduced-motion-nothing-slides-fades-stay.md) | Reduced motion: nothing slides, fades stay | Accepted; amends 0055 |

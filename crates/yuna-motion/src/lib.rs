@@ -179,6 +179,10 @@
 //! moved or rescaled, for that output, and a window going fullscreen or leaving it, for its
 //! workspace's camera and offsets, pinned windows aside: a game wants its output at once.
 //!
+//! Under [`Settings::reduced_motion`], nothing crosses the screen: the switch, cameras and
+//! offsets show their result at once, while the special workspace's fade stays, over half its
+//! duration ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+//!
 //! ## Cost
 //!
 //! [`Motion::update`] is linear in the windows of the workspaces each output draws: it arranges

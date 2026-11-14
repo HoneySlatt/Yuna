@@ -231,7 +231,8 @@ impl OutputMotion {
     }
 
     /// Turns what moved since `previous` into motion: the switch, the special workspace's fade,
-    /// the cameras, the windows' offsets; then what is told and when it all ends.
+    /// the cameras, the windows' offsets; then what is told and when it all ends. Under reduced
+    /// motion, the fade alone.
     fn follow(
         &mut self,
         previous: &OutputMotion,
@@ -242,6 +243,19 @@ impl OutputMotion {
         settings: &Settings,
     ) {
         let now = self.updated;
+        // A window of a special workspace fading out is drawn while it stays hidden: once
+        // closed or shown elsewhere, it is not.
+        let still_hidden = |window| {
+            layout
+                .window(window)
+                .is_some_and(|info| info.special && info.output.is_none())
+        };
+        if settings.reduced_motion {
+            self.follow_fade(previous, settings.special_fade.halved(), still_hidden);
+            self.follow_told(previous);
+            self.end = self.latest_end();
+            return;
+        }
         let slide = Slide {
             height: self.rect.h,
             tolerance: self.tolerance(),
@@ -260,13 +274,6 @@ impl OutputMotion {
                 }
             }
         }
-        // A window of a special workspace fading out is drawn while it stays hidden: once
-        // closed or shown elsewhere, it is not.
-        let still_hidden = |window| {
-            layout
-                .window(window)
-                .is_some_and(|info| info.special && info.output.is_none())
-        };
         self.follow_fade(previous, settings.special_fade, still_hidden);
         let before: Vec<&Placed> = previous.drawn_at(now).collect();
         let instant = fullscreen_changed(&before, self.drawn_places());

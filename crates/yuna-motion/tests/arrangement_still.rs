@@ -295,3 +295,42 @@ fn a_hundred_columns() {
     }
     assert!(told_max <= 4, "fly-bys told: {told_max}");
 }
+
+/// Reduced motion: nothing crosses the screen, the camera and the switch show their result at
+/// once; the special workspace's fade stays, over half its duration
+/// ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+#[test]
+fn reduced_motion_slides_nothing_and_keeps_fades() {
+    let settings = Settings {
+        reduced_motion: true,
+        ..distinct()
+    };
+    let mut rig = strip(4, settings);
+    rig.now += ms(5);
+    rig.op(|l| l.focus(SEAT, Direction::Left));
+    rig.animated();
+    assert_eq!(rig.motion.end(OUTPUT, rig.now), None);
+    for n in 1..=4 {
+        assert_eq!(rig.rect(n, rig.now), rig.placed(n));
+    }
+    rig.op(|l| l.add_workspace(SEAT, "2", Some(OUTPUT)));
+    rig.op(|l| l.focus_workspace(SEAT, "2"));
+    rig.animated();
+    assert_eq!(rig.motion.end(OUTPUT, rig.now), None);
+    assert!(rig.frame(rig.now).windows.is_empty());
+    rig.op(|l| l.focus_workspace_relative(SEAT, Direction::Up));
+    rig.op(|l| l.move_to_special(SEAT, "s"));
+    rig.instant();
+    rig.op(|l| l.toggle_special(SEAT, "s"));
+    rig.animated();
+    let end = rig.motion.end(OUTPUT, rig.now).expect("the fade runs");
+    // Half of the default fade's 200 ms.
+    assert_eq!(end - rig.now, ms(100));
+    let mid = rig.frame(rig.now + ms(50));
+    let faded = mid
+        .windows
+        .iter()
+        .find(|d| d.alpha < 1.0)
+        .expect("a window fades");
+    assert!(faded.alpha > 0.0);
+}

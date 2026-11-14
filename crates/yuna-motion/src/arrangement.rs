@@ -26,6 +26,10 @@ pub struct Settings {
     /// Every change instant: no motion starts, as with [`Change::Instant`]. For game mode and
     /// agents, and the headless modes' default.
     pub off: bool,
+    /// Reduced motion: nothing crosses the screen, the camera, windows and the workspace switch
+    /// showing their result at once; fades stay, over half their duration
+    /// ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+    pub reduced_motion: bool,
     /// The scrolling camera's spring: the view sliding along a strip of columns.
     pub camera: SpringParams,
     /// The spring of each window's offset, from where it was drawn to its new place.
@@ -40,6 +44,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             off: false,
+            reduced_motion: false,
             camera: SpringParams::known_valid(1.0, 800.0),
             windows: SpringParams::known_valid(1.0, 800.0),
             workspace_switch: SpringParams::known_valid(1.0, 1000.0),

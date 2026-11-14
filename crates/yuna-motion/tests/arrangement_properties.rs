@@ -216,6 +216,7 @@ fn settings() -> impl Strategy<Value = Settings> {
     ];
     (
         prop::bool::weighted(0.05),
+        prop::bool::weighted(0.1),
         spring_params(),
         spring_params(),
         spring_params(),
@@ -223,8 +224,9 @@ fn settings() -> impl Strategy<Value = Settings> {
         50..400u64,
     )
         .prop_map(
-            |(off, camera, windows, workspace_switch, easing, fade)| Settings {
+            |(off, reduced_motion, camera, windows, workspace_switch, easing, fade)| Settings {
                 off,
+                reduced_motion,
                 camera,
                 windows,
                 workspace_switch,
@@ -259,6 +261,8 @@ fn options() -> impl Strategy<Value = Options> {
 struct World {
     layout: Layout,
     motion: Motion,
+    /// Whether nothing moves across the screen: animations off, or reduced motion; continuity is
+    /// then not checked, since every move shows at once.
     off: bool,
     scales: HashMap<OutputId, f64>,
     now: Duration,
@@ -600,7 +604,7 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
     let mut world = World {
         layout,
         motion: Motion::new(settings),
-        off: settings.off,
+        off: settings.off || settings.reduced_motion,
         scales: HashMap::from([(OutputId(1), 1.0)]),
         now: Duration::from_secs(10),
     };
@@ -676,7 +680,7 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
             }
             Step::Settings(settings) => {
                 world.motion.set_settings(*settings);
-                world.off = settings.off;
+                world.off = settings.off || settings.reduced_motion;
                 check_at(&world, world.now)?;
                 for (output, _) in world.outputs() {
                     prop_assert_eq!(world.motion.end(output, world.now), None);
