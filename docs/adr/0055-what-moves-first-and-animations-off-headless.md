@@ -29,7 +29,7 @@ The owner chose, on 2026-11-14:
   once, as before. `--animations` turns them on, in both. The desktop will have them on. `off`
   stays a setting of its own, for game mode and agents; reduced motion later chooses a kind per
   animation.
-- **Settings** are one `Animations` value in the compositor's configuration, each animation a
+- **Settings** are one `Settings` value in the compositor's configuration, each animation a
   spring or a curve with its defaults, until the configuration file is read (Stage 2).
 
 ## Alternatives considered

@@ -161,7 +161,7 @@ pub fn definitions() -> Value {
                 application id (null when its client gave none), title, process id, output, \
                 workspace (null for an unnamed one), rect: the logical rectangle it is drawn at \
                 now, or where its output's last frame drew it when that frame was sampled \
-                later (null when hidden), place: its rectangle in the layout, where it rests \
+                later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests \
                 once its motion ends (null when hidden), motion_ends_ns: when its output's \
                 motion ends, on the clock's scale (null at rest), focus, floating, fullscreen. \
                 With neither --animations nor --reduced-motion, rect is place and \

@@ -49,8 +49,9 @@
 //!
 //! It needs no screen. On the owner's machine, agents run it inside `agent-headless`, which gives
 //! it throwaway XDG folders and stops every process of its run, under the agents' lock of
-//! exclusive runs (`run.sh --exclusive`), with no build, game or other measure meanwhile; `--gpu`
-//! only with the owner's consent. The figures go to `docs/measurements.md` with the machine, its
+//! exclusive runs (`run.sh --exclusive`), the load of other programs read beside it and a run
+//! they disturb reported ([ADR-0060](../../../docs/adr/0060-development-first-agents-in-their-own-yuna.md)).
+//! The figures go to `docs/measurements.md` with the machine, its
 //! load and the commit.
 //!
 //! Options: `--gpu` draws on the GPU's render node (never in the tests); `--client-vulkan

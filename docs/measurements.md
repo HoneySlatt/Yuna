@@ -36,9 +36,13 @@ beside the runs, as [ADR-0060](adr/0060-development-first-agents-in-their-own-yu
   of client CPU a frame, against 14 ms still; not isolated by a run of its own), and llvmpipe's
   rasterizer and the `vkcube` on lavapipe share
   the 16 threads; the machine sat at 51 to 77 % busy, the runs' own load, quiet before. Misses
-  fall 485 in a motion's first three frames, 5,270 elsewhere. As at M1.4, llvmpipe holds no
-  whole-output redraw at 240 Hz under load; it is [debt](debt.md#the-headless-compositor)
-  already, not a cost of motion.
+  fall 485 in a motion's first three frames, 5,270 elsewhere. Yuna's main thread took 2.7 ms a
+  frame in motion against 1.0 ms still. This is motion's cost on llvmpipe, its cause not
+  isolated ([debt](debt.md#motion)).
+- **The two phases on the GPU did not run under the same load**, as ADR-0056 asks: during the
+  still phase a link (`ld.mold`, 5 to 11 cores) and SlimeEngine's tests ran; the motion phase was
+  quiet. The verdict holds, since motion missed none. The figures are of commit `92fb627`;
+  `eed33e0` changed only frames drawn at once after rest, which the motion phase had none of.
 
 ## M1.6 — mpv in the applications' tests (2026-11-14)
 

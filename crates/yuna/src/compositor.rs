@@ -112,7 +112,8 @@ pub struct WindowDescription {
     pub workspace: Option<String>,
     /// Where it is drawn now, in logical coordinates: its place moved by its motion, read now,
     /// or at the time its output's last frame sampled if that is later, as hit tests read it;
-    /// none when it is hidden, or not drawn while it slides out of view.
+    /// none when its output's frame does not draw it: hidden, slid out of view, or told visible
+    /// while it has not yet slid into view.
     pub rect: Option<Rect>,
     /// Its place in the layout, as last arranged: where it is drawn once its motion ends; none
     /// when it is hidden, or no longer arranged while it slides out of view

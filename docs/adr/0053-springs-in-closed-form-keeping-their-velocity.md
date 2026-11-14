@@ -31,8 +31,8 @@ The owner chose, on 2026-11-14, to keep the velocity; the rest follows from it:
   as a configuration error, which never stops Yuna
   ([ADR-0008](0008-configuration-in-kdl.md)).
 - **Curves** are cubic Béziers in CSS's convention, with `linear`, `ease-out-quad`,
-  `ease-out-cubic` and `ease-out-expo` named, over a duration; solved analytically, no table.
-  An interrupted curve starts again from its value, over the share of its duration that the
+  `ease-out-cubic` and `ease-out-expo` named, over a duration; solved by Newton's method kept
+  within a bracket, no table. An interrupted curve starts again from its value, over the share of its duration that the
   distance left takes. An alpha stays within 0 and 1.
 - **What users write** is decided with the configuration file (Stage 2): damping ratio and
   stiffness, SwiftUI's duration and bounce, or both.

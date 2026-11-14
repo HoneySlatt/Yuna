@@ -22,9 +22,8 @@ The owner chose, on 2026-11-14:
   that take 70 % of a period (nothing missed), one drawing of 1.5 periods (one missed, the next
   aimed right, the end unmoved), and every drawing 1.2 periods (every other boundary, the end
   unmoved); random sequences of operations with animations on.
-- **The budget, on the GPU**: at 3840 × 2160, 240 Hz, scale 1.5, with the owner's consent, a
-  scripted sequence of scrolls, column moves, switches and the special workspace's fade misses no
-  more frames than the same output redrawn whole without motion, over 10,000 frames or more.
+- **The budget, on the GPU**: at 3840 × 2160, 240 Hz, scale 1.5, a scripted sequence of scrolls,
+  column moves, switches and the special workspace's fade misses no more frames than the same output redrawn whole without motion, over 10,000 frames or more.
   Misses are counted by where they fall: a motion's first frames, a window entering the view.
 - **llvmpipe at 1080p** is measured the same way and recorded, without a pass mark.
 - **The driver** is an example that runs Yuna in its own process on the real clock and calls the

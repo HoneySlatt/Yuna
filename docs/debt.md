@@ -236,6 +236,17 @@ with games' VRR:
   before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
   as an empty slot until the switch ends would let it slide.
 - A second special workspace shown while the first fades out replaces it at once.
+- On llvmpipe at 1080p, motion misses more than half its frames, against 1.9 % still: Yuna's
+  main thread takes 2.7 ms a frame in motion against 1.0 ms, and clients in view draw on the
+  CPU beside llvmpipe ([measurements](measurements.md)). The cause is not isolated; the GPU at
+  4K misses none.
+- A special workspace replaced by another one vanishes at once rather than fading out, and the
+  new one fades in from 0: a fade holds one special workspace.
+- A motion wholly outside an output (a column off the view widening) keeps that output
+  refreshing until it ends, drawing nothing new, about 80 refreshes at 240 Hz.
+- `SpringParams::time_to_rest` and `Motion::set_settings` have no caller but tests: the 1.5 s
+  refusal of [ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md) and settings
+  changed live come with the configuration file (Stage 2).
 - If the refresh that samples a motion's end fails to draw, clients are told the motion ended
   and nothing more is armed: the output keeps a frame of the motion until its next damage. A
   failed drawing cannot be caused headless; none was seen.
