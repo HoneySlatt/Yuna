@@ -13,7 +13,12 @@
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      ...
+    }:
     let
       # Linux only (ADR-0006); the machines the owner develops on are x86_64.
       system = "x86_64-linux";
@@ -21,8 +26,46 @@
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
       };
+
+      # The throwaway Vulkan prototype (prototypes/vulkan, ADR-0073), on its own branch only. It
+      # builds with the pinned channel's rustc and cargo alone, a smaller download for the
+      # machines the owner runs it on.
+      toolchainChannel = (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain.channel;
+      minimalToolchain = pkgs.rust-bin.stable.${toolchainChannel}.minimal;
+      prototypePlatform = pkgs.makeRustPlatform {
+        cargo = minimalToolchain;
+        rustc = minimalToolchain;
+      };
+      vulkanPrototype = prototypePlatform.buildRustPackage {
+        pname = "vulkan-prototype";
+        version = "0.0.0";
+        src = ./prototypes/vulkan;
+        cargoLock.lockFile = ./prototypes/vulkan/Cargo.lock;
+        nativeBuildInputs = [ pkgs.glslang ];
+        env = {
+          # The report names the commit it was built from; Nix's copy of the source has no .git.
+          PROTOTYPE_COMMIT = self.rev or self.dirtyRev or "unknown";
+          # Vulkan's loader, which the prototype opens at run time: build.rs puts it on the run
+          # path. The loader finds the machine's own drivers (/run/opengl-driver on NixOS).
+          VULKAN_LOADER_DIR = "${pkgs.vulkan-loader}/lib";
+        };
+        # Shrinking the run path would drop the loader's folder: no library links it, the
+        # prototype opens it with dlopen.
+        dontPatchELF = true;
+        # Its unit tests run in the shell (`cargo test`); the machines it is built on to be
+        # measured need not build it twice.
+        doCheck = false;
+        meta.mainProgram = "vulkan-prototype";
+      };
     in
     {
+      packages.${system}.vulkan-prototype = vulkanPrototype;
+      apps.${system}.vulkan-prototype = {
+        type = "app";
+        program = "${vulkanPrototype}/bin/vulkan-prototype";
+        meta.description = "What Vulkan imports, synchronises and costs on this machine (ADR-0073)";
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
@@ -34,7 +77,14 @@
           pkgs.git
           # The X server Yuna starts for X11 programs, found on PATH (ADR-0067).
           pkgs.xwayland
+          # Compiles the Vulkan prototype's shaders (prototypes/vulkan, ADR-0073).
+          pkgs.glslang
         ];
+
+        # The Vulkan prototype's loader, put on its run path by its build.rs, and Khronos'
+        # validation layer, which its `--validate` turns on (prototypes/vulkan, ADR-0073).
+        VULKAN_LOADER_DIR = "${pkgs.vulkan-loader}/lib";
+        VK_ADD_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 
         # Linked by Smithay's keyboard (xkbcommon).
         buildInputs = [ pkgs.libxkbcommon ];

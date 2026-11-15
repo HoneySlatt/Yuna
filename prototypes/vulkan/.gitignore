@@ -1,0 +1,3 @@
+/target
+# The report's default file, from runs in this folder.
+/vulkan-prototype.json

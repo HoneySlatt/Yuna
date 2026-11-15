@@ -1,0 +1,25 @@
+#version 450
+
+// Samples every texel of an imported image once, at its centre with a nearest-filter sampler,
+// into a buffer the CPU checks against the pattern.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D image;
+layout(set = 0, binding = 1, std430) writeonly buffer Texels {
+    vec4 texels[];
+};
+
+layout(push_constant) uniform Size {
+    uint width;
+    uint height;
+} size;
+
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= size.width || p.y >= size.height) {
+        return;
+    }
+    vec2 centre = (vec2(p) + 0.5) / vec2(size.width, size.height);
+    texels[p.y * size.width + p.x] = textureLod(image, centre, 0.0);
+}

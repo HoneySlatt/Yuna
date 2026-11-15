@@ -1,0 +1,24 @@
+[package]
+name = "vulkan-prototype"
+version = "0.0.0"
+edition = "2024"
+# The toolchain the repository pins in rust-toolchain.toml.
+rust-version = "1.99.1"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Measures what Vulkan does on one machine for Yuna's renderer (ADR-0073); thrown away after Stage 2"
+
+# A workspace of its own, so that the repository's workspace (crates/*) never builds the prototype.
+[workspace]
+
+[dependencies]
+# Vulkan's bindings, the prototype's only dependency (ADR-0073). `loaded` opens the system's
+# libvulkan.so.1 at run time; `debug` names Vulkan's flags in the report.
+ash = { version = "0.38.0", default-features = false, features = ["loaded", "debug"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# AGENTS.md: every `unsafe` block says why it is sound, in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "warn"
