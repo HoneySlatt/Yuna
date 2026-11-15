@@ -29,6 +29,9 @@ pub(crate) enum Deadline {
     Presentation(OutputId),
     /// The next frame callbacks of windows that are not shown.
     HiddenFrames,
+    /// The earliest time an X11 window's sync request or ping goes unanswered
+    /// (`xwayland/answers.rs`).
+    X11Answers,
 }
 
 /// The time and the armed deadlines. See the module's documentation.
@@ -38,7 +41,7 @@ pub struct Clock {
     system: SystemClock<Monotonic>,
     /// Manual mode's time; unused in real mode.
     manual_now: Duration,
-    /// Armed deadlines, in the order they were first armed: two per output and one more at
+    /// Armed deadlines, in the order they were first armed: two per output and two more at
     /// most, so a scan costs less than any ordered structure.
     deadlines: Vec<(Duration, Deadline)>,
 }

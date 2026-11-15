@@ -4,6 +4,159 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.8 — A flood of X11 windows and menus (2026-11-15)
+
+What one X11 program flooding its seat costs the other windows (ADR-0070): the story
+`x11_misbehaving::five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame`, in a release
+build of branch `m1.8` after `f0a39dc` with the closing review's fixes, run alone under the
+agents' exclusive lock (`.delegation/m1.8-lead/01`, local). One X11 program maps 5,000 windows,
+another 5,000 override-redirect windows; a Wayland sentinel on the same seat asks a frame
+callback each frame. Load: no other process above 5 % of a core and the GPU 0 % busy before and
+after; the one-minute load average read 6.0, the release build that had just ended. Quiet.
+
+| What | Figure |
+|---|---|
+| 5,000 windows sent | 29 ms |
+| 1,000 open, the cap of one X11 client | 2.68 s |
+| 5,000 menus mapped, 64 shown, the cap | 5.43 s |
+| The sentinel's frames meanwhile | 354, the longest gap between two 43 ms |
+| The longest round of Yuna's loop | 8.6 ms of CPU |
+
+- Before ADR-0070's bounds, one round took up to 455 ms (the story's first runs, in a debug build,
+  without a proof kept).
+- CI runs the story in a debug build, where it checks only that the sentinel gets 4 callbacks a
+  second or more; the bound of 16 ms a round is checked in a release build alone, by hand.
+
+## M1.8 — XWayland's start and memory, the area filter on the GPU (2026-11-15)
+
+Machine and Mesa as in M1.4's B4 below; Xwayland 24.1.14 from the development shell. Build:
+release, of branch `m1.8` at `d1f8f46` with the applications' tests' change, before its X11
+menus (`ae57ce4`) were merged. One run of each, in order, under the agents' exclusive lock, outside
+`agent-headless`, whose sandbox hides other processes' GPU files; `yuna --headless` opens no
+display. `--gpu` drew on the render node, where Xwayland then draws with glamor. Commands, after
+`nix develop -c cargo build --release -p yuna --bin yuna --example xwayland_time`:
+
+```sh
+nix develop -c target/release/examples/xwayland_time [--gpu]
+nix develop -c target/release/examples/xwayland_time --area-filter [--gpu]
+```
+
+`xwayland_time` (`crates/yuna/examples/xwayland_time.rs`) runs `yuna --headless` on Yuna's
+default output, 3840 × 2160 at 240 Hz and scale 1.5. A start is an X11 program's wait, from its
+`connect` to the reply to its first request; *cold* is the first X11 program in a new Yuna, 30
+Yunas; *warm* is in one Yuna once the Xwayland before ended when idle, 30 times. Yuna's own
+figure is from Xwayland's spawn to its manager owning `WM_S0`, logged in whole milliseconds.
+
+The program reads, every 2 s, what the machine's other programs use: their processor time, the
+machine's busy time less the program's own and its descendants', Yuna and Xwayland among them;
+and their GPU time on the drawing engines, `gfx` and `compute`, from the DRM statistics of the
+8 other processes holding GPU files. A phase is disturbed when they used more than 2 cores or
+10 % of that GPU time on average. Every phase below is quiet by that rule; the other programs'
+GPU time was nil in each, their processor time is given.
+
+| XWayland's start | Drawing | Median | 90th percentile | Longest | Yuna's spawn to `WM_S0`: median, p90 | Other programs: cores on average, at most |
+|---|---|---|---|---|---|---|
+| Cold | llvmpipe | 28.63 ms | 29.56 ms | 31.70 ms | 24 ms, 25 ms | 0.15, 0.74 |
+| Warm | llvmpipe | 28.64 ms | 30.90 ms | 65.79 ms | 24 ms, 26 ms | 0.58, 5.76 |
+| Cold | GPU | 75.53 ms | 78.86 ms | 87.52 ms | 73 ms, 76 ms | 0.40, 3.13 |
+| Warm | GPU | 75.47 ms | 79.70 ms | 227.08 ms | 73 ms, 77 ms | 0.95, 11.50 |
+
+| Memory, one X11 window of 256 × 256 at rest | llvmpipe | GPU |
+|---|---|---|
+| Xwayland's PSS (its RSS) | 35.5 MiB (45.4 MiB) | 60.8 MiB (91.0 MiB) |
+| Yuna's RSS before the first X11 program | 130.9 MiB | 82.5 MiB |
+| Yuna's RSS with the window shown | 167.7 MiB | 83.3 MiB |
+| Yuna's RSS once Xwayland ended | 152.7 MiB | 83.5 MiB |
+| Other programs: cores on average, at most | 0.95, 2.71 | 0.19, 0.26 |
+
+With `--area-filter`, a fullscreen X11 window is filled with a new colour without pause, so
+that each frame draws it whole; a frame's time is Yuna's `took_us`, as the test's figure below,
+over 10 s after 3 s of warm-up, on 3840 × 2160 outputs at 60 Hz. The area filter's case has a
+second output at 1.5, which makes XWayland's scale 1.5. Yuna's and Xwayland's GPU time a frame
+are the kernel's, on the `gfx` engine.
+
+| What is drawn | Drawing | Frames in 10 s | A frame: median | 90th percentile | Longest | GPU a frame: Yuna, Xwayland | Other programs: cores |
+|---|---|---|---|---|---|---|---|
+| 5760 × 3240 to 3840 × 2160, area filter | GPU | 601 | 422 µs | 478 µs | 824 µs | 319 µs, 414 µs | 0.68, 3.44 |
+| 3840 × 2160 copied at 1.5 | GPU | 598 | 246 µs | 326 µs | 5,104 µs | 138 µs, 303 µs | 1.78, 5.20 |
+| 5760 × 3240 to 3840 × 2160, area filter | llvmpipe | 194 | 40,891 µs | 42,366 µs | 80,931 µs | | 1.00, 3.32 |
+| 3840 × 2160 copied at 1.5 | llvmpipe | 301 | 14,943 µs | 15,526 µs | 16,232 µs | | 0.87, 3.10 |
+
+- **A start costs an X11 program 29 ms on llvmpipe, 76 ms on the GPU**, by the medians, cold or
+  warm alike: each Xwayland starts afresh. Yuna's own figure, from Xwayland's spawn to its
+  manager owning `WM_S0`, is 24 and 73 ms of it; the other 2 to 5 ms run from the program's
+  connection to the spawn, and from `WM_S0` to the program's reply. On the GPU, Xwayland starts
+  glamor on the render node, which llvmpipe's shared memory spares it: the likely cause of the
+  difference, not isolated. The longest warm starts, 66 and 227 ms, came in the phases where
+  other programs once reached 5.8 and 11.5 cores over 2 s; that the two coincide is likely, not
+  checked.
+- **Xwayland holds 35 MiB on llvmpipe, 61 MiB on the GPU**, by its proportional set size, with
+  one small window; 45 and 91 MiB resident. A proportional set size divides shared pages among
+  the processes that map them: an earlier run beside other programs read 48 MiB on the GPU for
+  the same resident size. On llvmpipe, Yuna's resident set grows by 37 MiB while
+  Xwayland runs and keeps 22 MiB of it after Xwayland ends; on the GPU it grows by less than
+  1 MiB ([debt](debt.md#xwayland)).
+- **On the GPU, the area filter costs about 180 µs a frame more than the plain copy** at 4K:
+  422 µs against 246 µs by the median, 319 µs against 138 µs of Yuna's GPU time; 4 % of a
+  240 Hz period. Both drew every refresh at 60 Hz. ADR-0068's question, the filter's cost on the
+  GPU, is answered for this machine. The kernel's GPU time a frame was the same in the runs that
+  other programs disturbed: 319 µs and 137 µs.
+- **On llvmpipe, the program's frames cost more than the test's below**, 40.9 ms against 22.1 ms
+  for the area filter, most likely because Xwayland draws in shared memory there, and Yuna
+  uploads its 75 MB buffer into a texture at each frame, which the test, drawing a texture it
+  made once, does not; not isolated. The ratio to the copy, 2.7, is near the test's 3.3.
+- Earlier runs the same day, beside a game and other sessions' builds, are not kept: they gave
+  95 to 141 ms for a start on the GPU, and 1,096 µs against 775 µs for the area filter.
+
+## M1.8 — The X11 element's area filter, on llvmpipe (2026-11-14)
+
+Machine as in M1.4's B4 below: Ryzen 7 5800X (16 threads), Linux 7.3.1, Mesa 26.2.6 from the
+development shell. Build: the test profile (debug), from commit `30b9999` with the X11 element's
+changes not yet committed; the drawing is llvmpipe's, built for release by Nix. Two runs, under
+the agents' exclusive lock; the table gives the first. Command:
+
+```sh
+nix develop -c cargo test -p yuna --lib --locked x11_element_drawing_time -- --ignored --nocapture --test-threads=1
+```
+
+The test `x11_element_drawing_time_at_4k` (`crates/yuna/src/render/x11_surface.rs`) draws a
+3840 × 2160 output whole, 200 times after 10 to warm up, with one X11 window of noise, XWayland's
+scale 1.5. A frame's time is `render::draw`'s: from the start of the drawing to the end of its
+wait for the renderer, the background cleared included. Two cases on an output at 1: a window as
+wide as X11 sees that output, 5760 × 3240 X11 pixels, which covers it, the heaviest a window gets;
+and 3840 × 2160 X11 pixels, drawn at 2560 × 1440. Each is drawn through the area filter, then
+through the renderer's own bilinear filter, Smithay's default shader, at the same size. The plain
+copy is 3840 × 2160 X11 pixels on an output at 1.5.
+
+| What is drawn | A frame: median | 90th percentile | longest |
+|---|---|---|---|
+| The background alone, at 1 | 1,558 µs | 1,694 µs | 1,904 µs |
+| 5760 × 3240 to 3840 × 2160, area filter | 22,135 µs | 24,123 µs | 29,026 µs |
+| 5760 × 3240 to 3840 × 2160, bilinear | 8,011 µs | 8,471 µs | 9,198 µs |
+| 3840 × 2160 to 2560 × 1440, area filter | 15,875 µs | 16,366 µs | 17,485 µs |
+| 3840 × 2160 to 2560 × 1440, bilinear | 4,729 µs | 4,937 µs | 5,181 µs |
+| 3840 × 2160 copied at 1.5 | 6,743 µs | 7,289 µs | 12,517 µs |
+
+- **On llvmpipe, the area filter costs about three times the bilinear filter**: 20.6 ms against
+  6.5 ms for a window over the whole output, the background's 1.6 ms taken off, and 14.3 ms
+  against 3.2 ms at 2560 × 1440. It reads up to 3 × 3 texels a pixel at a ratio of 2/3, each a
+  sample of llvmpipe's bilinear filter, where the default shader takes one sample: most likely
+  the cause, not isolated. A frame with a window over a whole 4K output at 1 takes longer than a
+  60 Hz period on llvmpipe. Only an agent's seat with outputs of two scales pays it there; an
+  agent's single output is at XWayland's scale, where its windows are copied.
+- **The load**: before the first run, a load average of 1.80 over a minute (7.52 and 8.67 over 5
+  and 15 minutes, from earlier builds), the processor 95.5 % idle; after it, 3.94, most likely
+  the run's own, llvmpipe's 16 threads busy for its 17 s, and the processor 93.4 % idle. The
+  exclusive lock kept other measurements out; other sessions' builds were not watched during the
+  run.
+- **The second run**, on the element as it is to be committed (its damage and tests changed
+  since, not its drawing), gave every median within 2 % of the first: 21,785 µs and 7,974 µs
+  over the whole output, 15,865 µs and 4,731 µs at 2560 × 1440, 6,701 µs copied, 1,543 µs for
+  the background. It counts as disturbed: its load average was 5.11 over a minute, from the
+  checks run just before it, though the processor was 98.9 % idle at its start.
+- **Not measured on the GPU here**: tests never take the GPU, and no measurement program drew X11
+  windows yet. `xwayland_time --area-filter` measures it since, in the section above.
+
 ## M1.7 — Motion (2026-11-14)
 
 Machine and Mesa as in M1.4's B4 below. Build: release, commit `92fb627`. One run each, in

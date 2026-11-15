@@ -84,6 +84,8 @@ pub(crate) struct State {
     pub toplevels: HashMap<ObjectId, Toplevel>,
     /// The surface of each window the layout holds.
     pub windows: HashMap<WindowId, ObjectId>,
+    /// How many windows the layout holds of each client, for its cap (`shell.rs`).
+    pub window_counts: HashMap<crate::shell::WindowOwner, usize>,
     /// The next window's id: ids increase and are never reused.
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
@@ -146,6 +148,11 @@ pub(crate) struct State {
     pub committed_content: bool,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
+    /// What XWayland's sources noted in this round, for the compositor to act on after it
+    /// (`xwayland/`).
+    pub xwayland_notes: Vec<crate::xwayland::Note>,
+    /// Every Xwayland's X11 windows, and the commands for their managers (`xwayland/windows.rs`).
+    pub x11: crate::xwayland::X11Windows,
 }
 
 impl State {
@@ -180,6 +187,7 @@ impl State {
             retired_globals: Vec::new(),
             toplevels: HashMap::new(),
             windows: HashMap::new(),
+            window_counts: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
             layout_change: Change::Animated,
@@ -223,6 +231,12 @@ impl State {
                 crate::colour::protocol::manager_global(dh);
                 ColourState::new()
             },
+            xwayland_notes: Vec::new(),
+            x11: {
+                // Seen by each seat's Xwayland alone (`xwayland/shell.rs`).
+                crate::xwayland::shell_global(dh);
+                crate::xwayland::X11Windows::default()
+            },
         })
     }
 
@@ -259,6 +273,10 @@ pub(crate) struct ClientState {
     /// tests of what a client holding another seat's globals would get
     /// (`Compositor::connect_client_seeing_every_seat`).
     pub sees_every_seat: bool,
+    /// The Xwayland it is, by its id, if it is its seat's Xwayland: one Wayland client for all
+    /// of the seat's X11 programs
+    /// ([ADR-0067](../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+    pub xwayland: Option<u64>,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
     /// Where the client records that the display ended it: the compositor's list.
@@ -275,6 +293,7 @@ impl ClientState {
             compositor: CompositorClientState::default(),
             seat,
             sees_every_seat,
+            xwayland: None,
             window_cap_logged: AtomicBool::new(false),
             departed,
         }
@@ -289,7 +308,7 @@ impl ClientData for ClientState {
     /// display calls this under its own lock, so it only records the client: a call back into
     /// the display would wait for ever.
     fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
-        tracing::debug!(?reason, "a client left");
+        tracing::debug!(?reason, xwayland = self.xwayland.is_some(), "a client left");
         self.departed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -336,10 +355,18 @@ impl CompositorHandler for State {
         on_commit_buffer_handler::<State>(surface);
         let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);
+        // Its serial first: it may pair the surface with its X11 window, which then takes this
+        // very commit as a window's.
+        if get_role(&root) == Some(crate::xwayland::SURFACE_ROLE) {
+            self.xwayland_surface_committed(&root);
+        }
         if self.toplevels.contains_key(&root.id()) {
             self.toplevel_committed(&root, surface);
         } else if get_role(&root) == Some(XDG_POPUP_ROLE) {
             self.popup_committed(&root, surface);
+        } else if get_role(&root) == Some(crate::xwayland::SURFACE_ROLE) {
+            // An override-redirect window's: a menu or a tooltip.
+            self.x11_menu_committed(&root);
         }
     }
 
@@ -350,6 +377,9 @@ impl CompositorHandler for State {
             self.toplevel_gone(surface);
         } else if get_role(surface) == Some(XDG_POPUP_ROLE) {
             self.popup_gone(surface);
+        }
+        if get_role(surface) == Some(crate::xwayland::SURFACE_ROLE) {
+            self.xwayland_surface_destroyed(surface);
         }
     }
 }

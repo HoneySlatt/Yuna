@@ -29,8 +29,9 @@ The shell gives:
   ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
 - `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
 - the applications the tests run in Yuna, kept off the shell's own `PATH`: Alacritty, GTK 4's
-  `gtk4-demo`, Qt's `qml`, `vkcube` and mpv, in `YUNA_APPLICATIONS_PATH`, with what the tests give
-  them: `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
+  `gtk4-demo`, Qt's `qml`, `vkcube`, mpv and Wine, in `YUNA_APPLICATIONS_PATH`, with what the
+  tests give them: `YUNA_XWAYLAND_PATH` (Xwayland's folder, Yuna's own `PATH` in the tests),
+  `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
 
@@ -88,8 +89,22 @@ nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
 ```
 
 It runs alone among measurements, as `frame_time` does; on the owner's machine, inside
-`agent-headless`, under the agents' lock of exclusive runs. Both examples share
-`crates/yuna/examples/common/`.
+`agent-headless`, under the agents' lock of exclusive runs. The measures share
+`crates/yuna/examples/common/`; the `vkcube` clients of these two are in its `vkcube.rs`.
+
+XWayland's cost is measured with `crates/yuna/examples/xwayland_time.rs`: an X11 program's wait
+for Xwayland, cold and after an idle exit; Xwayland's memory and Yuna's with one X11 window; and,
+with `--area-filter`, a frame's time for a fullscreen X11 window drawn through the area filter
+against one copied pixel for pixel. Beside each phase it reads what the machine's other programs
+use, its own processes left out, and marks a phase they disturb; run inside `agent-headless`, it
+cannot read their GPU time, and says so. Its documentation gives its options, `--gpu` among
+them:
+
+```sh
+nix develop -c cargo build --release -p yuna --bin yuna --example xwayland_time
+nix develop -c target/release/examples/xwayland_time
+nix develop -c target/release/examples/xwayland_time --area-filter
+```
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
@@ -111,7 +126,8 @@ applications in it by hand, without a screen of your own:
 The compositor's tests (`crates/yuna/tests/headless/`) run it in their own process, on the manual
 clock, with clients written with `wayland-client`; they need the shell's Mesa. The
 applications' tests (`crates/yuna/tests/applications.rs`) run the program with real applications
-and check that it rests; they need the shell's applications, and take about 15 s.
+and check that it rests; they need the shell's applications, and take about 45 s, Qt's `qml` on
+X11 and Wine's notepad the longest, which each wait for Xwayland's end.
 Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATIONS_OUTPUT` names.
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
 in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's

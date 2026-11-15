@@ -5,6 +5,34 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 
 ## Unreleased
 
+- X11 programs can connect: each seat with a Wayland socket gets an X display of its own, and
+  the first X11 program to connect starts Xwayland for it, found on `PATH`, behind the seat's
+  own cookie; Xwayland stops 10 s after its last X11 program leaves, and a crash of it leaves
+  Yuna running. `yuna --headless` prints `DISPLAY=:<n>` and `XAUTHORITY=<file>` after
+  `WAYLAND_DISPLAY`; `yuna mcp`'s programs get their seat's. X11 programs read `Xft.dpi` and
+  XSETTINGS of the seat's largest output scale. On llvmpipe, the default, Xwayland draws on the
+  CPU and offers no GLX.
+- X11 programs' windows open in the layout as Wayland programs' do: tiled, focused, typed into
+  and clicked, made fullscreen or full width when they ask, hidden and told so, closed through
+  `WM_DELETE_WINDOW` or by ending their program, sliding with the motion. They are drawn sharp
+  at the seat's largest scale and the right size on every output, averaged where an output's
+  scale is smaller. A fullscreen game that sets an output's mode through RandR keeps it, drawn
+  pixel for pixel. `yuna mcp`'s `windows` gives each window's `shell`, `xdg` or `x11`, and an
+  X11 window's class as its application id. Java programs need `_JAVA_AWT_WM_NONREPARENTING=1`.
+  Wine reads its prefix's `LogPixels`, not `Xft.dpi`: a Wine program is the right size at 1.5
+  once its prefix's DPI is 144 (96 × the scale); X11 programs that do not scale themselves, such
+  as xterm, are small on outputs at that scale.
+- X11 programs' menus and tooltips show where the program puts them, over their window and
+  sliding with it, or alone over every window; a click reaches the pixel under the pointer, and
+  the keyboard stays with the window. Dialogs open floating at their own size, over their
+  window. A resized X11 window that takes `_NET_WM_SYNC_REQUEST` shows its new size whole, held
+  100 ms at most. A window asked to close that leaves its ping unanswered 5 s is marked
+  `unresponsive` in `yuna mcp`'s `windows`, never ended for it. A program started with an
+  activation token in its startup id is activated with it. A window mapped again starts without
+  the states it had. Huge or malformed properties, nonsense sizes, messages naming unknown atoms,
+  floods of thousands of windows and programs dying mid-request leave Yuna running, another
+  window's frames on time.
+
 - Animations, off by default in `yuna --headless` and `yuna mcp`, where each change still shows
   at once; `--animations` turns them on in both. The view slides along the strip of columns,
   windows the layout moves slide to their new places, workspaces slide past each other when

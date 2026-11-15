@@ -22,7 +22,9 @@
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
 //! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);
 //! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
-//! surfaces declare of their colours (`colour/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! surfaces declare of their colours (`colour/`); each seat's X display, its Xwayland and its
+//! X11 window manager (`xwayland/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md`
+//! gives the flow across them.
 
 mod activation;
 mod capture;
@@ -36,6 +38,7 @@ mod input;
 pub mod mcp;
 mod output;
 mod popups;
+mod process;
 mod render;
 mod scale;
 mod screencopy;
@@ -45,16 +48,19 @@ mod shell;
 mod state;
 mod text_input;
 mod vrr;
+mod xwayland;
 
 use std::fmt;
 
 pub use activation::TOKEN_LIFETIME;
+#[doc(hidden)]
+pub use capture::axis_taps;
 pub use capture::{
     CaptureMapping, CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame, LogicalRegion,
 };
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
-    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription,
+    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
 };
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
@@ -69,6 +75,11 @@ pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use text_input::MAX_TEXT_BYTES;
+pub use xwayland::{
+    DrawnX11Menu, FAILURE_MEMORY, FIRST_PAUSE, IDLE_SECONDS, LONGEST_PAUSE, MANAGER_GRACE,
+    MANAGER_SLICE, MAX_DISPLAYS, MAX_MENUS_PER_CLIENT, START_TIMEOUT, X11_PING_TIMEOUT,
+    X11_SYNC_TIMEOUT, X11Display, XwaylandConfig,
+};
 pub use yuna_layout;
 pub use yuna_motion;
 

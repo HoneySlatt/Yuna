@@ -41,6 +41,8 @@
 //! `docs/measurements.md` with the machine, its load and the commit.
 
 mod common;
+#[path = "common/vkcube.rs"]
+mod vkcube;
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -49,11 +51,9 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use common::{
-    Clients, PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, shell_variable,
-    vkcube_command,
-};
+use common::{PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, shell_variable};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use vkcube::{Clients, vkcube_command};
 
 /// What the command line asks for.
 struct Options {

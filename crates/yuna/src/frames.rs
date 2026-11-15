@@ -93,7 +93,9 @@ use crate::output::{RefreshAt, Timing, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
+use crate::shell::Told;
 use crate::state::State;
+use crate::xwayland::ShownMenus;
 
 /// The later of two refreshes, by number.
 fn later(a: RefreshAt, b: RefreshAt) -> RefreshAt {
@@ -205,10 +207,11 @@ impl State {
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
             return;
         };
-        let (mapped, shown_on, unseen) = (
+        let (mapped, shown_on, unseen, last_frame_sent) = (
             toplevel.window.is_some(),
             toplevel.shown_on,
             toplevel.is_unseen(),
+            toplevel.last_frame_sent,
         );
         if let Some(index) = shown_on.and_then(|output| self.output_index(output)) {
             // A subsurface committed for the first time enters its window's output, even when
@@ -225,11 +228,21 @@ impl State {
                 self.schedule_refresh(output);
             }
         } else if unseen {
-            discard_presentation_feedback(root);
-            if waits_for_frame(root) {
-                self.arm_hidden_frames();
+            let trees = self.window_trees(root);
+            discard_presentation_feedback(&trees);
+            if waits_for_frame(&trees) {
+                self.arm_hidden_frame(last_frame_sent);
             }
         }
+    }
+
+    /// Arms the hidden windows' deadline for one more window waiting, whose surfaces were last
+    /// called back at `last_frame_sent`: at its due time, unless armed sooner already. One
+    /// window's commit costs no walk of every window, which thousands of refused windows
+    /// committing would make quadratic.
+    pub(crate) fn arm_hidden_frame(&mut self, last_frame_sent: Option<Duration>) {
+        let due = hidden_frame_due(last_frame_sent, self.clock.now());
+        self.clock.arm(Deadline::HiddenFrames, due);
     }
 
     /// Runs a deadline that came due.
@@ -238,6 +251,7 @@ impl State {
             Deadline::Refresh(output) => self.refresh(output),
             Deadline::Presentation(output) => self.send_presentations(output),
             Deadline::HiddenFrames => self.send_hidden_frames(),
+            Deadline::X11Answers => self.x11_answers_due(),
         }
     }
 
@@ -282,7 +296,8 @@ impl State {
             .filter(|window| window.rect.overlaps(&output_rect))
             .copied()
             .collect();
-        let drawing = self.draw(index, &shown);
+        let menus = self.x11_shown_menus(&self.outputs[index]);
+        let drawing = self.draw(index, &shown, &menus);
         // Readers follow what the buffer holds: a failed drawing leaves the frame before.
         if !matches!(drawing, Drawing::Failed) {
             self.outputs[index].drawn = drawn;
@@ -292,6 +307,13 @@ impl State {
         for window in self.called_back(index, &shown) {
             if let Some(root) = self.root_of(window) {
                 self.send_frames(&root, now);
+            }
+        }
+        for lone in &menus.lone {
+            let sent = send_frame_callbacks(std::slice::from_ref(&lone.surface), now);
+            if sent > 0 {
+                self.counters.frame_callbacks += sent;
+                self.x11_menu_called_back(&lone.surface, now);
             }
         }
         let drew = matches!(drawing, Drawing::Drawn { .. });
@@ -338,9 +360,12 @@ impl State {
                 output.last_refresh = later(output.last_refresh, aimed);
                 for drawn in &shown {
                     if let Some(root) = self.root_of(drawn.window) {
-                        discard_presentation_feedback(&root);
+                        discard_presentation_feedback(&self.window_trees(&root));
                     }
                 }
+                let lone: Vec<WlSurface> =
+                    menus.lone.iter().map(|lone| lone.surface.clone()).collect();
+                discard_presentation_feedback(&lone);
                 self.fail_captures(output_id, "its frame could not be drawn", Failure::ForNow);
                 return;
             }
@@ -352,20 +377,22 @@ impl State {
         let smithay_output = output.output.clone();
         let mut feedback = OutputPresentationFeedback::new(&smithay_output);
         let mut any = false;
-        for drawn in &shown {
-            if let Some(root) = self.root_of(drawn.window) {
-                for tree in window_surface_trees(&root) {
-                    take_presentation_feedback_surface_tree(
-                        &tree,
-                        &mut feedback,
-                        |_, _| Some(smithay_output.clone()),
-                        |_, states| {
-                            any |= has_presentation_feedback(states);
-                            Kind::empty()
-                        },
-                    );
-                }
-            }
+        let mut trees: Vec<WlSurface> = shown
+            .iter()
+            .filter_map(|drawn| self.root_of(drawn.window))
+            .flat_map(|root| self.window_trees(&root))
+            .collect();
+        trees.extend(menus.lone.iter().map(|lone| lone.surface.clone()));
+        for tree in &trees {
+            take_presentation_feedback_surface_tree(
+                tree,
+                &mut feedback,
+                |_, _| Some(smithay_output.clone()),
+                |_, states| {
+                    any |= has_presentation_feedback(states);
+                    Kind::empty()
+                },
+            );
         }
         // Nothing to tell: no deadline, so that a frame nobody asked feedback for wakes nothing.
         if !any {
@@ -406,13 +433,25 @@ impl State {
         }
     }
 
-    /// Draws output `index`, which shows `shown`, if anything on it is damaged.
-    fn draw(&mut self, index: usize, shown: &[Drawn]) -> Drawing {
+    /// Draws output `index`, which shows `shown` and the X11 menus `menus`, if anything on it is
+    /// damaged.
+    fn draw(&mut self, index: usize, shown: &[Drawn], menus: &ShownMenus) -> Drawing {
         // From here, so that a frame's time includes the import of its clients' buffers, which
         // Smithay does while it builds their elements: a `wl_shm` buffer is copied then.
         let started = Instant::now();
         let output = &self.outputs[index];
         let mut elements = Vec::new();
+        // Menus over no window are over every window.
+        for lone in &menus.lone {
+            elements.extend(render::x11_menu_element(
+                &mut self.renderer,
+                &lone.surface,
+                lone.corner,
+                lone.x11_scale,
+                1.0,
+                output,
+            ));
+        }
         // The motion gives windows bottom to top; the renderer takes them front to back.
         for drawn in shown.iter().rev() {
             let Some(toplevel) = self
@@ -424,6 +463,33 @@ impl State {
             };
             // Within 0 and 1 already; a renderer's alpha is an `f32`.
             let alpha = drawn.alpha as f32;
+            if let Some(x11) = toplevel.x11() {
+                let geometry_offset = self.x11.geometry_offset(x11);
+                // A window's menus are in front of it, behind the windows over it, and go with
+                // it, as popups do.
+                let corner =
+                    render::x11_surface_corner(geometry_offset, drawn.rect, x11.scale, output);
+                for menu in menus.with(drawn.window) {
+                    elements.extend(render::x11_menu_element(
+                        &mut self.renderer,
+                        &menu.surface,
+                        render::x11_offset_on(corner, menu.offset, x11.scale, output),
+                        x11.scale,
+                        alpha,
+                        output,
+                    ));
+                }
+                elements.extend(render::x11_window_element(
+                    &mut self.renderer,
+                    &x11.surface,
+                    geometry_offset,
+                    drawn.rect,
+                    x11.scale,
+                    alpha,
+                    output,
+                ));
+                continue;
+            }
             // A window's popups are in front of it, behind the windows over it, and go with it.
             elements.extend(render::popup_elements(
                 &mut self.renderer,
@@ -484,7 +550,7 @@ impl State {
 
     /// Sends the frame callbacks the surfaces of the toplevel of `root` wait for, stamped `now`.
     fn send_frames(&mut self, root: &WlSurface, now: Duration) {
-        let sent = send_frame_callbacks(root, now);
+        let sent = send_frame_callbacks(&self.window_trees(root), now);
         if sent > 0 {
             self.counters.frame_callbacks += sent;
             if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
@@ -566,31 +632,51 @@ impl State {
                     // The output, and with it its scale, before the configure: the client then
                     // draws the buffer that acknowledges it at the right scale.
                     self.move_to_output(&root, Some(output));
-                    match placed {
-                        Some(placed) => self.configure(
-                            &root,
-                            Some(placed.configure),
-                            placed.fullscreen,
-                            placed.activated,
-                            false,
-                        ),
+                    let told = match placed {
+                        Some(placed) => Told {
+                            size: Some(placed.configure),
+                            corner: Some((placed.rect.x, placed.rect.y)),
+                            fullscreen: placed.fullscreen,
+                            activated: placed.activated,
+                            hidden: false,
+                        },
                         // Still drawn while it slides out of view, no longer arranged: visible
-                        // until the motion ends, at the size it has.
-                        None => {
-                            let fullscreen = self.is_told_fullscreen(window);
-                            self.configure(&root, None, fullscreen, false, false);
-                        }
-                    }
+                        // until the motion ends, at the size and place it has.
+                        None => Told {
+                            size: None,
+                            corner: None,
+                            fullscreen: self.is_told_fullscreen(window),
+                            activated: false,
+                            hidden: false,
+                        },
+                    };
+                    self.tell(&root, told);
                 }
                 None => {
-                    let size = placed_anywhere.get(&window).map(|placed| placed.configure);
-                    let fullscreen = self.is_told_fullscreen(window);
-                    self.configure(&root, size, fullscreen, false, true);
+                    // Hidden where it is: an X11 window keeps its place in X11, and a hidden
+                    // fullscreen game its emulated mode's (ADR-0069). A window placed somewhere,
+                    // scrolled out of view, has its state in its place: the layout's own lookup
+                    // walks the workspaces, and thousands of hidden windows would make each
+                    // arrangement quadratic.
+                    let placed = placed_anywhere.get(&window);
+                    let told = Told {
+                        size: placed.map(|placed| placed.configure),
+                        corner: None,
+                        fullscreen: placed.map_or_else(
+                            || self.is_told_fullscreen(window),
+                            |placed| placed.fullscreen,
+                        ),
+                        activated: false,
+                        hidden: true,
+                    };
+                    self.tell(&root, told);
                     self.move_to_output(&root, None);
-                    discard_presentation_feedback(&root);
+                    discard_presentation_feedback(&self.window_trees(&root));
                 }
             }
         }
+        // Xwayland finds the window under the pointer through X11's stacking.
+        self.restack_x11_windows();
     }
 
     /// Whether `window`'s client is told it is fullscreen, as the layout has it: it is, or it is
@@ -618,7 +704,7 @@ impl State {
             && let Some(index) = self.output_index(output)
         {
             let smithay_output = &self.outputs[index].output;
-            for tree in window_surface_trees(root) {
+            for tree in self.window_trees(root) {
                 with_surfaces_surface_tree(&tree, |surface, _| smithay_output.enter(surface));
                 self.tell_preferred_scale(&tree, output);
             }
@@ -630,7 +716,7 @@ impl State {
     pub(crate) fn leave_output(&mut self, root: &WlSurface, output: OutputId) {
         if let Some(index) = self.output_index(output) {
             let smithay_output = &self.outputs[index].output;
-            for tree in window_surface_trees(root) {
+            for tree in self.window_trees(root) {
                 with_surfaces_surface_tree(&tree, |surface, _| smithay_output.leave(surface));
             }
         }
@@ -668,7 +754,9 @@ impl State {
         };
         if keyboard.current_focus() != focus {
             self.give_selections_to(seat, focus.as_ref());
-            keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(self, focus.clone(), SERIAL_COUNTER.next_serial());
+            // X11 has its own input focus, which its manager sets.
+            self.focus_x11(seat, focus.as_ref());
         }
     }
 
@@ -677,13 +765,18 @@ impl State {
     /// that its client does not wait for ever.
     pub(crate) fn arm_hidden_frames(&mut self) {
         let now = self.clock.now();
-        let due = self
+        let windows = self
             .toplevels
             .values()
             .filter(|t| t.is_unseen())
-            .filter(|t| waits_for_frame(t.wl_surface()))
-            .map(|t| hidden_frame_due(t.last_frame_sent, now))
-            .min();
+            .filter(|t| waits_for_frame(&self.window_trees(t.wl_surface())))
+            .map(|t| hidden_frame_due(t.last_frame_sent, now));
+        let menus = self
+            .x11_unseen_menus()
+            .into_iter()
+            .filter(|(surface, _)| waits_for_frame(std::slice::from_ref(surface)))
+            .map(|(_, last)| hidden_frame_due(last, now));
+        let due = windows.chain(menus).min();
         self.clock.disarm(Deadline::HiddenFrames);
         if let Some(at) = due {
             self.clock.arm(Deadline::HiddenFrames, at);
@@ -706,6 +799,17 @@ impl State {
             if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                 toplevel.last_frame_sent = Some(now);
             }
+        }
+        let menus: Vec<WlSurface> = self
+            .x11_unseen_menus()
+            .into_iter()
+            .filter(|(_, last)| hidden_frame_due(*last, now) <= now)
+            .map(|(surface, _)| surface)
+            .collect();
+        for menu in menus {
+            let sent = send_frame_callbacks(std::slice::from_ref(&menu), now);
+            self.counters.frame_callbacks += sent;
+            self.x11_menu_called_back(&menu, now);
         }
         self.arm_hidden_frames();
     }
@@ -793,24 +897,33 @@ fn hidden_frame_due(last: Option<Duration>, now: Duration) -> Duration {
     })
 }
 
-/// Whether any drawn surface of the window whose toplevel surface is `root`, its popups included,
-/// waits for a frame callback.
-fn waits_for_frame(root: &WlSurface) -> bool {
+impl State {
+    /// The surfaces whose trees make the window whose toplevel surface is `root`: its own, its
+    /// popups', and, for an X11 window, its menus' (`xwayland/menus.rs`). They are drawn, called
+    /// back, told presented and enter outputs together.
+    pub(crate) fn window_trees(&self, root: &WlSurface) -> Vec<WlSurface> {
+        let mut trees = window_surface_trees(root);
+        trees.extend(self.x11_menus_with(root));
+        trees
+    }
+}
+
+/// Whether any drawn surface of `trees`, a window's surface trees, waits for a frame callback.
+pub(crate) fn waits_for_frame(trees: &[WlSurface]) -> bool {
     let mut waits = false;
-    for_each_drawn_surface(root, |attributes| {
+    for_each_drawn_surface(trees, |attributes| {
         waits |= !attributes.frame_callbacks.is_empty()
     });
     waits
 }
 
-/// Sends every frame callback the drawn surfaces of the window whose toplevel surface is `root`
-/// wait for, its popups' included, with `time` in milliseconds as `wl_callback.done` carries it,
-/// and returns how many were sent.
-fn send_frame_callbacks(root: &WlSurface, time: Duration) -> u64 {
+/// Sends every frame callback the drawn surfaces of `trees` wait for, with `time` in milliseconds
+/// as `wl_callback.done` carries it, and returns how many were sent.
+fn send_frame_callbacks(trees: &[WlSurface], time: Duration) -> u64 {
     // wl_callback's time is milliseconds in 32 bits, which wrap, as Wayland intends.
     let millis = time.as_millis() as u32;
     let mut sent = 0;
-    for_each_drawn_surface(root, |attributes| {
+    for_each_drawn_surface(trees, |attributes| {
         for callback in attributes.frame_callbacks.drain(..) {
             callback.done(millis);
             sent += 1;
@@ -819,15 +932,15 @@ fn send_frame_callbacks(root: &WlSurface, time: Duration) -> u64 {
     sent
 }
 
-/// Runs `f` on the current state of each surface that has a buffer, in the tree under `root`
-/// and in its popups' trees. A surface without one is not drawn, nor are the surfaces under it:
-/// their frame callbacks wait, as Smithay's own helpers have them wait.
-fn for_each_drawn_surface(root: &WlSurface, mut f: impl FnMut(&mut SurfaceAttributes)) {
-    for tree in window_surface_trees(root) {
+/// Runs `f` on the current state of each surface that has a buffer, in the surface trees
+/// `trees`. A surface without one is not drawn, nor are the surfaces under it: their frame
+/// callbacks wait, as Smithay's own helpers have them wait.
+fn for_each_drawn_surface(trees: &[WlSurface], mut f: impl FnMut(&mut SurfaceAttributes)) {
+    for tree in trees {
         // The walk holds each surface's state while it visits it: the callbacks read the state
         // they are given, never through `with_states` again, which would wait for itself.
         with_surface_tree_downward(
-            &tree,
+            tree,
             (),
             |_, states, ()| {
                 if is_drawn(states) {
@@ -865,11 +978,10 @@ fn has_presentation_feedback(states: &SurfaceData) -> bool {
         .is_empty()
 }
 
-/// Tells the clients of the window whose toplevel surface is `root`, its popups included, that
-/// their content updates were not shown.
-fn discard_presentation_feedback(root: &WlSurface) {
-    for tree in window_surface_trees(root) {
-        with_surfaces_surface_tree(&tree, |_, states| {
+/// Tells the clients of the surfaces of `trees` that their content updates were not shown.
+pub(crate) fn discard_presentation_feedback(trees: &[WlSurface]) {
+    for tree in trees {
+        with_surfaces_surface_tree(tree, |_, states| {
             if let Some(mut feedback) =
                 SurfacePresentationFeedback::from_states(states, Kind::empty())
             {

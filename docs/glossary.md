@@ -7,6 +7,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s.
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
   at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
+- **Area filter**: how Yuna draws an X11 window on an output below XWayland's scale: each
+  physical pixel the average of the X11 pixels it covers, weighted by how much of each, in a
+  texture shader of Yuna's ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
@@ -78,6 +81,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
+- **Managed window**: an X11 window its manager places, as Yuna's layout does an `xdg_toplevel`:
+  one that asks to be mapped, neither override-redirect nor a dock or a desktop
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- **Manager's slice**: the part of a round of Yuna's loop in which it handles its X11 managers'
+  events: until shortly before the next deadline, 8 ms at most; the rest wait for the next
+  rounds, which come at once.
 - **Manual clock**: the compositor's clock in tests, and in `yuna mcp --manual-clock`: it starts at
   the real monotonic time and moves only when a test, or an agent through the `clock` tool,
   advances it, running each deadline it passes, in order
@@ -85,6 +94,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   time.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
+- **Menu** (X11): an override-redirect window Yuna shows, a menu, a tooltip or a list: drawn with
+  the window the rules give it, just above it and sliding with it as a popup does, or, with none,
+  **alone**, at its own X11 position over every window
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
 - **Motion**: a value moving to a target on a spring or a curve, a function of time alone, held by
   `yuna-motion`; it ends when it can no longer move a pixel
   ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
@@ -92,6 +105,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   one its buffer holds.
 - **Offset**: a window's drawn position minus its place, after a layout operation moved it; it
   decays to 0 on a spring ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
+- **Override-redirect**: said of an X11 window its client places itself, past its manager:
+  menus, tooltips, a drag's icon.
+- **Pairing**: matching an X11 window with the Wayland surface Xwayland draws it into, through
+  the serial `xwayland-shell-v1` gives both, in either order.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for its seat's keyboard and pointer until it is dismissed, as
   an open menu holds them; granted only with a serial its client's own seat sent to its window,
@@ -135,9 +152,14 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   it the output shows, and scrolls to keep the focused column whole.
 - **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it
   to hidden windows, to clients whose `xdg_wm_base` version has it (6 and later).
+- **Sync request**: `_NET_WM_SYNC_REQUEST`, a value an X11 window is sent before a configure that
+  resizes it, which it sets in its sync counter once it drew the new size; meanwhile Xwayland
+  holds its commits, for 100 ms at most, so that its frame shows whole.
 - **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
   includes, reloaded live; its format is a public interface
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
+  unanswered 5 s; it stays until it answers one, never ended on a timer.
 - **Urgent**: said of a window that asked for the focus and did not get it, because its request
   came without a valid activation token or a fullscreen window held the screen; it stays urgent
   until it gets the focus or closes. Nothing shows it yet.
@@ -152,3 +174,6 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   client, a new connection or the clock's timer. At rest there are none.
 - **Working area**: the part of an output tiled windows go in; the whole output until panels
   reserve zones of it.
+- **XWayland's scale**: S, the largest scale among a seat's outputs when its Xwayland started,
+  fixed for that Xwayland's life: how many X11 pixels a logical unit is
+  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).

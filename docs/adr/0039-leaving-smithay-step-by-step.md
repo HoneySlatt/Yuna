@@ -2,7 +2,7 @@
 
 - Status: Accepted; amends [0011](0011-built-on-smithay.md) (Smithay is left by the end of Stage
   2), [0013](0013-our-own-code-niri-and-jay-as-references.md) (Smithay becomes a reading
-  reference)
+  reference); settled for X11 by [0066](0066-yunas-own-x11-window-manager-on-x11rb.md)
 - Date: 2026-11-13
 
 ## Context

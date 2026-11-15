@@ -1,6 +1,8 @@
 //! `xdg-shell` and `xdg-decoration` in front of the layout model
 //! ([ADR-0024](../../../docs/adr/0024-no-title-bars.md),
-//! [ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)).
+//! [ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)), and the record of windows
+//! both shells share, [`Toplevel`]: an `xdg_toplevel`, or an X11 window paired with its
+//! Xwayland surface (`xwayland/windows.rs`).
 //!
 //! A toplevel's life: its initial commit gets a first configure with the size
 //! [`Layout::size_on_open`](yuna_layout::Layout::size_on_open) foretells; its first buffer opens
@@ -25,6 +27,7 @@ use smithay::desktop::utils::bbox_from_surface_tree;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{Logical, Rectangle, Serial};
 use smithay::wayland::compositor::with_states;
@@ -38,9 +41,10 @@ use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 use yuna_motion::Change;
 
 use crate::activation::TokenOrigin;
-use crate::compositor::WindowDescription;
+use crate::compositor::{WindowDescription, WindowShell};
 use crate::seats::seat_of_surface;
 use crate::state::{ClientState, State};
+use crate::xwayland::{X11Client, X11Toplevel};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
 const SUSPENDED_SINCE: u32 = 6;
@@ -55,10 +59,13 @@ pub const MAX_WINDOWS_PER_CLIENT: usize = 1_000;
 /// memory (ADR-0028). A window over the cap is treated as one over its client's cap.
 pub const MAX_WINDOWS: usize = 10_000;
 
-/// What Yuna keeps of an `xdg_toplevel`.
+/// What Yuna keeps of a window, whichever shell its client speaks: one record for the layout,
+/// the frame loop, input and captures, the shell behind it in [`Shell`]. Named after xdg-shell's
+/// top-level surfaces: an X11 window Yuna manages is a top-level window too, a child of its root.
+/// It is kept by its surface: an X11 window has one from its pairing (`xwayland/windows.rs`).
 #[derive(Debug)]
 pub(crate) struct Toplevel {
-    pub surface: ToplevelSurface,
+    pub shell: Shell,
     /// Its id in the layout, while it is mapped.
     pub window: Option<WindowId>,
     /// Asked before it was mapped, applied when it is.
@@ -66,7 +73,9 @@ pub(crate) struct Toplevel {
     pub wants_full_width: bool,
     /// The minimum and maximum sizes last given to the layout.
     pub limits: (Size, Size),
-    /// Its window geometry, from its last commit: where its window starts in its surface.
+    /// Its window geometry, from its last commit: where its window starts in its surface. An X11
+    /// window's is in X11 pixels, from its frame extents (`xwayland/windows.rs`), and this stays
+    /// empty.
     pub geometry: Rectangle<i32, Logical>,
     /// The output that tells it it is visible (`frames.rs`), from the last arrangement or the end
     /// of that output's motion; none when it is hidden.
@@ -75,19 +84,39 @@ pub(crate) struct Toplevel {
     pub last_frame_sent: Option<Duration>,
     /// The layout refused to open it: it has a buffer, but no output shows it.
     pub refused: bool,
-    /// A request it made is owed a configure, even if nothing changes (xdg-shell).
+    /// A request it made is owed a configure, even if nothing changes (xdg-shell); for an X11
+    /// window, its rectangle and its states are set again.
     pub configure_owed: bool,
     /// An activation was refused, or came without a valid token, and the window has not had the
     /// seat's focus since (`activation.rs`).
     pub urgent: bool,
     /// The token of an activation asked before it was mapped: judged when it is.
     pub waiting_activation: Option<TokenOrigin>,
+    /// Whose window it counts as against the cap on windows, while it is mapped.
+    owner: Option<WindowOwner>,
+}
+
+/// Whose windows count together against [`MAX_WINDOWS_PER_CLIENT`]: an xdg-shell window's
+/// Wayland client's, or an X11 window's X11 client's, never Xwayland's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum WindowOwner {
+    Wayland(ClientId),
+    X11(X11Client),
+}
+
+/// The shell behind a window: what its client speaks.
+#[derive(Debug)]
+pub(crate) enum Shell {
+    /// An `xdg_toplevel`.
+    Xdg(ToplevelSurface),
+    /// An X11 window, through its seat's Xwayland.
+    X11(X11Toplevel),
 }
 
 impl Toplevel {
-    fn new(surface: ToplevelSurface) -> Toplevel {
+    pub(crate) fn new(shell: Shell) -> Toplevel {
         Toplevel {
-            surface,
+            shell,
             window: None,
             wants_fullscreen: false,
             wants_full_width: false,
@@ -99,11 +128,31 @@ impl Toplevel {
             configure_owed: false,
             urgent: false,
             waiting_activation: None,
+            owner: None,
         }
     }
 
     pub fn wl_surface(&self) -> &WlSurface {
-        self.surface.wl_surface()
+        match &self.shell {
+            Shell::Xdg(surface) => surface.wl_surface(),
+            Shell::X11(x11) => &x11.surface,
+        }
+    }
+
+    /// Its `xdg_toplevel`, for an xdg-shell window.
+    pub fn xdg(&self) -> Option<&ToplevelSurface> {
+        match &self.shell {
+            Shell::Xdg(surface) => Some(surface),
+            Shell::X11(_) => None,
+        }
+    }
+
+    /// Its X11 window, for an X11 window.
+    pub fn x11(&self) -> Option<&X11Toplevel> {
+        match &self.shell {
+            Shell::Xdg(_) => None,
+            Shell::X11(x11) => Some(x11),
+        }
     }
 
     /// Whether it has a buffer that no output shows: mapped on no output, or refused by the
@@ -115,6 +164,20 @@ impl Toplevel {
             None => self.refused,
         }
     }
+}
+
+/// What a window is told at an arrangement (`frames.rs`), whichever its shell.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Told {
+    /// The size it is asked; none keeps the last one.
+    pub size: Option<Size>,
+    /// Its place's top-left corner, where it is told it is; none keeps the last one. Only X11
+    /// windows are told where they are.
+    pub corner: Option<(f64, f64)>,
+    pub fullscreen: bool,
+    pub activated: bool,
+    /// Hidden: on no output; `suspended` for xdg-shell, `_NET_WM_STATE_HIDDEN` for X11.
+    pub hidden: bool,
 }
 
 /// The states a toplevel is told: tiled on all four edges always (ADR-0024), then fullscreen,
@@ -212,7 +275,8 @@ struct OutputNow {
     motion_ends: Option<Duration>,
 }
 
-fn has_buffer(surface: &WlSurface) -> bool {
+/// Whether `surface` has a buffer: what a window shows, and maps at.
+pub(crate) fn has_buffer(surface: &WlSurface) -> bool {
     with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
 }
 
@@ -224,13 +288,18 @@ impl State {
         };
         let mapped = toplevel.window.is_some();
         let buffer = has_buffer(root);
+        let Some(xdg) = toplevel.xdg() else {
+            self.x11_toplevel_committed(root, mapped, buffer);
+            self.schedule_for_commit(root, surface);
+            return;
+        };
         match (mapped, buffer) {
             (true, true) => self.update_window(root),
             (true, false) => self.unmap(root),
             (false, true) => self.map(root),
             (false, false) => {
                 // The initial commit, or one again after the client unmapped its window.
-                let opening = !toplevel.surface.is_initial_configure_sent();
+                let opening = !xdg.is_initial_configure_sent();
                 if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                     toplevel.refused = false;
                 }
@@ -249,8 +318,8 @@ impl State {
         };
         let (min_size, max_size) = size_limits(root);
         let parent = toplevel
-            .surface
-            .parent()
+            .xdg()
+            .and_then(ToplevelSurface::parent)
             .and_then(|parent| self.toplevels.get(&parent.id()))
             .and_then(|parent| parent.window);
         OpenOptions {
@@ -276,7 +345,9 @@ impl State {
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
             return;
         };
-        let surface = toplevel.surface.clone();
+        let Some(surface) = toplevel.xdg().cloned() else {
+            return;
+        };
         let fullscreen = toplevel.wants_fullscreen;
         surface.with_pending_state(|state| {
             state.size = Some(configure_size(size));
@@ -287,16 +358,28 @@ impl State {
     }
 
     /// The toplevel's first buffer: it opens in the layout, its size known, unless it would pass
-    /// a cap on windows.
-    fn map(&mut self, root: &WlSurface) {
+    /// a cap on windows. An X11 window opens here once it is mapped, paired and has a buffer
+    /// (`xwayland/windows.rs`).
+    pub(crate) fn map(&mut self, root: &WlSurface) {
         if let Some(cap) = self.window_cap_passed(root) {
             self.refuse_over_cap(root, cap);
             return;
         }
-        let geometry = window_geometry(root);
-        let mut options = self.open_options(root);
-        options.committed = committed_size(geometry);
+        let x11 = self
+            .toplevels
+            .get(&root.id())
+            .and_then(|toplevel| toplevel.x11().cloned());
+        let (options, geometry) = match x11 {
+            Some(x11) => (self.x11_open_options(&x11), Rectangle::default()),
+            None => {
+                let geometry = window_geometry(root);
+                let mut options = self.open_options(root);
+                options.committed = committed_size(geometry);
+                (options, geometry)
+            }
+        };
         let limits = (options.min_size, options.max_size);
+        let owner = self.owner_of(root);
         let window = WindowId(self.next_window_id);
         // On its client's seat: the one whose socket it came through (ADR-0035).
         if let Err(error) = self
@@ -313,10 +396,14 @@ impl State {
         }
         self.next_window_id += 1;
         self.windows.insert(window, root.id());
+        if let Some(owner) = &owner {
+            *self.window_counts.entry(owner.clone()).or_default() += 1;
+        }
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
         };
         toplevel.window = Some(window);
+        toplevel.owner = owner;
         toplevel.refused = false;
         toplevel.limits = limits;
         toplevel.geometry = geometry;
@@ -334,34 +421,57 @@ impl State {
     }
 
     /// The cap a new window of the client of `root` would pass, if any. A window counts from its
-    /// mapping to its closing.
+    /// mapping to its closing. An X11 window's client is the X11 client behind it, not
+    /// Xwayland, which is one Wayland client for all of its seat's X11 programs (ADR-0067); an
+    /// xdg-shell window's is its Wayland client.
     fn window_cap_passed(&self, root: &WlSurface) -> Option<&'static str> {
         if self.windows.len() >= MAX_WINDOWS {
             return Some("the layout holds its most windows");
         }
+        // Counted as windows map and close: a window refused tries again at each commit, and
+        // thousands of them must not each walk every window.
         let of_client = self
-            .windows
-            .values()
-            .filter(|surface| surface.same_client_as(&root.id()))
-            .count();
+            .owner_of(root)
+            .and_then(|owner| self.window_counts.get(&owner))
+            .copied()
+            .unwrap_or(0);
         (of_client >= MAX_WINDOWS_PER_CLIENT).then_some("its client has its most windows")
+    }
+
+    /// Whose window the toplevel of `root` counts as: its X11 client's for an X11 window, else
+    /// its Wayland client's; none for a surface whose client is gone.
+    fn owner_of(&self, root: &WlSurface) -> Option<WindowOwner> {
+        let x11 = self
+            .toplevels
+            .get(&root.id())
+            .and_then(|toplevel| toplevel.x11().map(X11Toplevel::client));
+        match x11 {
+            Some(client) => Some(WindowOwner::X11(client)),
+            None => root
+                .client()
+                .map(|client| WindowOwner::Wayland(client.id())),
+        }
     }
 
     /// Refuses the toplevel of `root` a place in the layout, as the layout's own refusal does:
     /// not shown, its frame callbacks at the hidden windows' rate. Logged once per client, which
-    /// may try many windows.
+    /// may try many windows: once per X11 client for an X11 window.
     fn refuse_over_cap(&mut self, root: &WlSurface, cap: &str) {
-        if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
-            toplevel.refused = true;
-        }
-        let first = root
-            .client()
-            .and_then(|client| {
-                client
-                    .get_data::<ClientState>()
-                    .map(|state| !state.window_cap_logged.swap(true, Ordering::Relaxed))
-            })
-            .unwrap_or(true);
+        let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
+            return;
+        };
+        toplevel.refused = true;
+        let first = match toplevel.x11().map(X11Toplevel::client) {
+            Some(client) => self.x11.first_refusal_of(client),
+            None => root
+                .client()
+                .and_then(|client| {
+                    client
+                        .get_data::<ClientState>()
+                        .map(|state| !state.window_cap_logged.swap(true, Ordering::Relaxed))
+                })
+                .unwrap_or(true),
+        };
         if first {
             tracing::warn!(cap, "a window is not shown; said once per client");
         }
@@ -403,7 +513,7 @@ impl State {
 
     /// The toplevel committed without a buffer: it leaves the layout, and must start again with
     /// an initial commit, as xdg-shell says.
-    fn unmap(&mut self, root: &WlSurface) {
+    pub(crate) fn unmap(&mut self, root: &WlSurface) {
         self.close(root);
         if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
             toplevel.wants_fullscreen = false;
@@ -413,7 +523,7 @@ impl State {
 
     /// Takes the toplevel of `root` out of the layout and off its output, and dismisses its
     /// popups.
-    fn close(&mut self, root: &WlSurface) {
+    pub(crate) fn close(&mut self, root: &WlSurface) {
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
         };
@@ -421,6 +531,14 @@ impl State {
             return;
         };
         let shown_on = toplevel.shown_on.take();
+        if let Some(owner) = toplevel.owner.take()
+            && let Some(count) = self.window_counts.get_mut(&owner)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.window_counts.remove(&owner);
+            }
+        }
         toplevel.limits = (Size::default(), Size::default());
         toplevel.geometry = Rectangle::default();
         toplevel.urgent = false;
@@ -444,28 +562,37 @@ impl State {
         self.toplevels.remove(&root.id());
     }
 
-    /// Tells a mapped toplevel its size and states, if they changed since its last configure, or
-    /// if a request of its client is owed one. A size of none keeps the last one. `suspended`
-    /// reaches only clients whose version has it.
-    pub(crate) fn configure(
-        &mut self,
-        root: &WlSurface,
-        size: Option<Size>,
-        fullscreen: bool,
-        activated: bool,
-        suspended: bool,
-    ) {
+    /// Tells a mapped window what an arrangement says of it, `told`: an `xdg_toplevel` its size
+    /// and states, an X11 window its rectangle and states (`xwayland/windows.rs`). Each is told
+    /// only what changed since it was last told, or what a request of its client is owed.
+    pub(crate) fn tell(&mut self, root: &WlSurface, told: Told) {
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
         };
         let owed = std::mem::take(&mut toplevel.configure_owed);
-        let surface = &toplevel.surface;
-        let suspended = suspended && surface.version() >= SUSPENDED_SINCE;
+        match &toplevel.shell {
+            Shell::Xdg(surface) => {
+                let surface = surface.clone();
+                self.configure(&surface, told, owed);
+            }
+            Shell::X11(x11) => {
+                let x11 = x11.clone();
+                let shown_on = toplevel.shown_on;
+                self.tell_x11(&x11, told, shown_on, owed);
+            }
+        }
+    }
+
+    /// Tells an `xdg_toplevel` its size and states, if they changed since its last configure, or
+    /// if a request of its client is owed one. A size of none keeps the last one. `suspended`
+    /// reaches only clients whose version has it.
+    fn configure(&mut self, surface: &ToplevelSurface, told: Told, owed: bool) {
+        let suspended = told.hidden && surface.version() >= SUSPENDED_SINCE;
         surface.with_pending_state(|state| {
-            if let Some(size) = size {
+            if let Some(size) = told.size {
                 state.size = Some(configure_size(size));
             }
-            state.states = toplevel_states(fullscreen, activated, suspended);
+            state.states = toplevel_states(told.fullscreen, told.activated, suspended);
         });
         let changed = surface.send_pending_configure().is_some();
         if !changed && owed {
@@ -486,6 +613,23 @@ impl State {
             toplevel.send_configure();
             self.counters.configures += 1;
         }
+    }
+
+    /// Asks `window`'s client to close it, whichever its shell (`Compositor::close_window`).
+    pub(crate) fn close_window(&mut self, window: WindowId) -> Result<(), crate::Error> {
+        let toplevel = self
+            .windows
+            .get(&window)
+            .and_then(|surface| self.toplevels.get(surface))
+            .ok_or_else(|| crate::Error::Refused(format!("no window {}", window.0)))?;
+        match &toplevel.shell {
+            Shell::Xdg(surface) => surface.send_close(),
+            Shell::X11(x11) => {
+                let x11 = x11.clone();
+                self.close_x11(&x11);
+            }
+        }
+        Ok(())
     }
 
     /// Every window the layout holds, in the order they opened: where each is drawn now, and
@@ -529,26 +673,38 @@ impl State {
                 let toplevel = self.toplevels.get(surface)?;
                 let info = self.layout.window(window)?;
                 let root = toplevel.wl_surface();
-                let (app_id, title) = with_states(root, |states| {
-                    states
-                        .data_map
-                        .get::<XdgToplevelSurfaceData>()
-                        .map(|data| {
-                            let data = data.lock().unwrap_or_else(PoisonError::into_inner);
-                            (data.app_id.clone(), data.title.clone())
-                        })
-                        .unwrap_or_default()
-                });
-                let pid = root
-                    .client()
-                    .and_then(|client| client.get_credentials(&self.display_handle).ok())
-                    .map(|credentials| credentials.pid);
+                let (shell, app_id, title, pid) = match toplevel.x11() {
+                    // Xwayland's credentials are Yuna's own, through its socket pair: never an
+                    // X11 window's process.
+                    Some(x11) => {
+                        let (app_id, title, pid) = self.x11.describe(x11);
+                        (WindowShell::X11, app_id, title, pid)
+                    }
+                    None => {
+                        let (app_id, title) = with_states(root, |states| {
+                            states
+                                .data_map
+                                .get::<XdgToplevelSurfaceData>()
+                                .map(|data| {
+                                    let data = data.lock().unwrap_or_else(PoisonError::into_inner);
+                                    (data.app_id.clone(), data.title.clone())
+                                })
+                                .unwrap_or_default()
+                        });
+                        let pid = root
+                            .client()
+                            .and_then(|client| client.get_credentials(&self.display_handle).ok())
+                            .map(|credentials| credentials.pid);
+                        (WindowShell::Xdg, app_id, title, pid)
+                    }
+                };
                 let on_output = toplevel.shown_on.and_then(|output| outputs.get(&output));
                 let rect = on_output.and_then(|output| output.drawn.get(&window).copied());
                 let place = on_output.and_then(|output| output.places.get(&window).copied());
                 let motion_ends = on_output.and_then(|output| output.motion_ends);
                 Some(WindowDescription {
                     id: window,
+                    shell,
                     app_id,
                     title,
                     pid,
@@ -561,6 +717,7 @@ impl State {
                     focused: self.layout.focused(info.seat) == Some(window),
                     floating: info.floating,
                     fullscreen: info.fullscreen,
+                    unresponsive: toplevel.x11().is_some_and(|x11| self.x11_unresponsive(x11)),
                 })
             })
             .collect();
@@ -613,7 +770,7 @@ impl State {
 
     /// Answers a mapped window's request with a configure: at the next arrangement if the layout
     /// took it, at once with the state it has if the layout refused it.
-    fn answer_request(
+    pub(crate) fn answer_request(
         &mut self,
         root: &WlSurface,
         window: WindowId,
@@ -628,9 +785,18 @@ impl State {
             }
             Err(error) => {
                 tracing::debug!(%error, window = window.0, "a request is refused");
-                if let Some(toplevel) = self.toplevels.get(&root.id()) {
-                    toplevel.surface.send_configure();
-                    self.counters.configures += 1;
+                let Some(toplevel) = self.toplevels.get(&root.id()) else {
+                    return;
+                };
+                match &toplevel.shell {
+                    Shell::Xdg(surface) => {
+                        surface.send_configure();
+                        self.counters.configures += 1;
+                    }
+                    Shell::X11(x11) => {
+                        let x11 = x11.clone();
+                        self.x11_tell_state_again(&x11);
+                    }
                 }
             }
         }
@@ -640,7 +806,9 @@ impl State {
     /// it in the layout exactly while a live toplevel holds it; each output's workspaces hold
     /// only such windows; each toplevel Yuna keeps is alive and belongs to a client the display
     /// still serves; a toplevel with a window has a buffer the layout did not refuse, and a
-    /// configured toplevel with such a buffer has a window. Says which rule is broken.
+    /// configured toplevel, or an X11 window X11 maps, with such a buffer has a window; the windows
+    /// counted per client for the caps are those mapped; what is kept of X11 menus agrees with
+    /// them (`xwayland/menus.rs`). Says which rule is broken.
     pub(crate) fn check_windows(&self) -> Result<(), String> {
         let mut served = HashSet::new();
         self.display_handle
@@ -664,7 +832,11 @@ impl State {
             }
         }
         for (surface, toplevel) in &self.toplevels {
-            if !toplevel.surface.alive() {
+            let alive = match &toplevel.shell {
+                Shell::Xdg(xdg) => xdg.alive(),
+                Shell::X11(x11) => x11.surface.is_alive(),
+            };
+            if !alive {
                 return Err(format!("the toplevel of {surface} is dead"));
             }
             let client = toplevel.wl_surface().client().map(|client| client.id());
@@ -679,9 +851,13 @@ impl State {
                 return Err(format!("{surface}'s window {} is not recorded", window.0));
             }
             // A toplevel made on a surface that kept the buffer of an earlier role object has
-            // that buffer before its first configure: it maps at its next commit.
+            // that buffer before its first configure: it maps at its next commit. An X11 window
+            // is ready once X11 maps it, Yuna having managed it.
             let buffer = has_buffer(toplevel.wl_surface());
-            let configured = toplevel.surface.is_initial_configure_sent();
+            let configured = match &toplevel.shell {
+                Shell::Xdg(xdg) => xdg.is_initial_configure_sent(),
+                Shell::X11(x11) => self.x11.is_mapped(x11),
+            };
             let mapped = toplevel.window.is_some();
             let unmapped_wrongly = !mapped && buffer && configured && !toplevel.refused;
             if unmapped_wrongly || (mapped && (!buffer || toplevel.refused)) {
@@ -692,6 +868,20 @@ impl State {
                 ));
             }
         }
+        // The counts the caps read are the windows each client has mapped.
+        let mut counted: HashMap<WindowOwner, usize> = HashMap::new();
+        for toplevel in self.toplevels.values() {
+            if let (Some(_), Some(owner)) = (toplevel.window, &toplevel.owner) {
+                *counted.entry(owner.clone()).or_default() += 1;
+            }
+        }
+        if counted != self.window_counts {
+            return Err(format!(
+                "the windows counted per client, {:?}, are not those mapped, {counted:?}",
+                self.window_counts
+            ));
+        }
+        self.x11.check_menus()?;
         let given = (1..self.next_window_id).map(WindowId);
         let listed = self
             .outputs
@@ -716,7 +906,8 @@ impl State {
         let opened = self
             .toplevels
             .get(&root.id())
-            .is_some_and(|toplevel| toplevel.surface.is_initial_configure_sent());
+            .and_then(Toplevel::xdg)
+            .is_some_and(ToplevelSurface::is_initial_configure_sent);
         if opened {
             self.send_opening_configure(root);
         }
@@ -743,7 +934,8 @@ impl XdgShellHandler for State {
             return;
         }
         // The configure waits for the initial commit, where the client's limits are known.
-        self.toplevels.insert(id, Toplevel::new(surface));
+        self.toplevels
+            .insert(id, Toplevel::new(Shell::Xdg(surface)));
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
@@ -751,7 +943,8 @@ impl XdgShellHandler for State {
         let kept = self
             .toplevels
             .get(&surface.wl_surface().id())
-            .is_some_and(|toplevel| toplevel.surface.xdg_toplevel() == surface.xdg_toplevel());
+            .and_then(Toplevel::xdg)
+            .is_some_and(|kept| kept.xdg_toplevel() == surface.xdg_toplevel());
         if kept {
             self.toplevel_gone(surface.wl_surface());
         }

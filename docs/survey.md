@@ -135,6 +135,51 @@ that rests on it is reopened in an ADR.
     on smaller scales.
 - No measured comparison of compositors' power was found; only users' reports.
 
+## XWayland
+
+Read on 2026-11-14 for M1.8's design, in each project's source unless a document is named;
+Xwayland at its tags 24.1.15 and 26.0.99.904 (both 2026-11-10); the pinned nixpkgs has 24.1.14.
+
+- **Xwayland.** Rootless, it always draws at buffer scale 1 and learns each output's size and
+  position from `xdg_output`'s logical values only (`hw/xwayland/xwayland-output.c`): a compositor
+  sets X11's scale by what it reports. With `-wm`, it listens on its sockets only once a client
+  owns `WM_S0` (`xwayland.c`); `-initfd` is a socket accepted at once, for setup clients.
+  `-terminate <delay>` fires only when every client left has XFixes' disconnection mode set
+  (`dix/dispatch.c`). Without `-auth` it admits any process of the same user (`os/access.c`).
+  `xwayland-shell-v1` since 23.1. The `_XWAYLAND_GLOBAL_OUTPUT_SCALE` property is a draft merge
+  request (733), in no release.
+- **Mode emulation.** With `wp_viewporter`, a fullscreen client may set a smaller RandR or vidmode
+  mode; Xwayland gives its surface a viewport to the output's size and converts its pointer. 24.1
+  lists the output's current size, then common modes no larger; 26.1 lists the native mode first
+  (merge request 2095). A window gets its viewport only at the output's origin with exactly the
+  emulated size; the rectangles are in `_XWAYLAND_RANDR_EMU_MONITOR_RECTS`.
+- **KWin** (master, 2026-11-14): Xwayland on the first connection, `-terminate 10` since
+  2026-11-03; one scale for X11, the largest output's, through a per-client scale on Xwayland's
+  connection; Plasma writes `Xft.dpi` with `xrdb`. **Mutter** (main, 2026-11-13): on demand by
+  default; native scaling, non-experimental since 50, uses the ceiling of the largest scale.
+  **cosmic-comp** (2026-11-10): Smithay's `client_scale` and XSETTINGS, one scale. **Hyprland**
+  (2026-11-13): starts Xwayland at once; `force_zero_scaling` shows X11 at physical size.
+  **sway** and wlroots 0.20: lazy start. None corrects an X11 window's size per output.
+- **xwayland-satellite** 0.8.3 (2026-09-24, MPL-2.0, two maintainers, an async rewrite under way,
+  its issue 373): with mixed scales it gives X11 the smallest (`server/mod.rs`); supersampling is
+  its open pull request 452; no drag and drop from Wayland to X11 (pull request 534). Its issue
+  479 is a one-pixel rounding at 1.25. niri 25.08 holds the X11 sockets and spawns it on the first
+  connection.
+- **gamescope** (2026-11-12): a nested Xwayland whose one output is the game's resolution, scaled
+  by gamescope's own compositor (FSR, NIS, integer).
+- **Wine** (11.22) does not read `Xft.dpi`: its DPI is the registry's `LogPixels`, 96 by default;
+  under X11 it sets real RandR modes. Valve's Proton runs `winex11` by default and documents a
+  fullscreen upscaling of its own.
+- **Smithay's `xwayland` module** at Yuna's pin: 8,168 lines; spawns Xwayland at once, with no
+  `-initfd` and no on-demand start; takes `WM_S0` first; waits on X11 replies in its event
+  handling; three `unwrap`s an X11 client's messages reach (`xwm/mod.rs:2463`, `:2755`, `:2800`);
+  open issues 1209 (deadlock when Xwayland crashes), 1410 (no exit event), 1117 and 1562 (leaks).
+  Its `client_scale` rounds a surface's size to whole logical units before drawing
+  (`backend/renderer/utils/wayland.rs`).
+- No published figure of Xwayland's memory or start time was found: Yuna measures its own.
+- No compositor runs one Xwayland per seat or per security context; Xwayland's issue 1383 asks for
+  an unprivileged mode for sandboxes.
+
 ## Surviving a crash
 
 - KWin's wrapper keeps the Wayland socket and restarts KWin; Qt 6 reconnects with

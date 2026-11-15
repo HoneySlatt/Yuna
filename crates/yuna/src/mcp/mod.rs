@@ -1358,7 +1358,8 @@ impl Server {
                     cwd: cwd.map(PathBuf::from),
                 };
                 let socket = programs.socket_path(seat);
-                match programs.start(&handle, seat, &socket, start) {
+                let x11 = self.compositor.x11_display(seat);
+                match programs.start(&handle, seat, &socket, x11.as_ref(), start) {
                     Ok(program) => ToolResult::done(json!({
                         "program": tools::program_json(program)
                     })),

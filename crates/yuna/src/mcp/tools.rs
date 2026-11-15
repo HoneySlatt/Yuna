@@ -133,9 +133,9 @@ pub fn definitions() -> Value {
             "name": "spawn",
             "title": "Programs",
             "description": "Start a program on a seat, list a seat's programs, or stop one. A \
-                program gets its seat's Wayland socket, an environment without DISPLAY or \
-                D-Bus, and a log file of its output and errors, whose path the result gives; \
-                its windows open on its seat. Logs go when the seat closes.",
+                program gets its seat's Wayland socket and X display, an environment without \
+                Yuna's own DISPLAY or the user's D-Bus, and a log file of its output and errors, \
+                whose path the result gives; its windows open on its seat. Logs go when the seat closes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -157,13 +157,16 @@ pub fn definitions() -> Value {
         {
             "name": "windows",
             "title": "Windows",
-            "description": "List a seat's windows, in the order they opened: id, seat, \
-                application id (null when its client gave none), title, process id, output, \
+            "description": "List a seat's windows, in the order they opened: id, seat, shell \
+                (xdg for a Wayland program's window, x11 for an X11 program's), application id \
+                (an X11 window's WM_CLASS class; null when its client gave none), title, process \
+                id, output, \
                 workspace (null for an unnamed one), rect: the logical rectangle it is drawn at \
                 now, or where its output's last frame drew it when that frame was sampled \
                 later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests \
                 once its motion ends (null when hidden), motion_ends_ns: when its output's \
-                motion ends, on the clock's scale (null at rest), focus, floating, fullscreen. \
+                motion ends, on the clock's scale (null at rest), focus, floating, fullscreen, \
+                unresponsive: an X11 window asked to close that left its ping unanswered 5 s. \
                 With neither --animations nor --reduced-motion, rect is place and \
                 motion_ends_ns null. With colour, each window also gives colours: one \
                 entry for each of its surfaces that declared its colours through \
@@ -695,6 +698,7 @@ pub fn window_json(
     let mut described = json!({
         "id": window.id.0,
         "seat": window.seat.0,
+        "shell": window.shell.name(),
         "app_id": window.app_id,
         "title": window.title,
         "pid": window.pid,
@@ -706,6 +710,7 @@ pub fn window_json(
         "focused": window.focused,
         "floating": window.floating,
         "fullscreen": window.fullscreen,
+        "unresponsive": window.unresponsive,
     });
     if let Some(colours) = colours {
         described["colours"] = colours.iter().map(surface_colour_json).collect();
@@ -863,9 +868,9 @@ pub fn advance_length(by_ns: Option<u64>, by_ms: Option<f64>) -> Result<Duration
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OutputMode;
     use crate::colour::SurfaceRole;
     use crate::colour::description::{Description, Luminances, PG32UCDM, TransferFunction};
+    use crate::{OutputMode, WindowShell};
     use yuna_layout::SeatId;
     use yuna_layout::geometry::Rect;
 
@@ -1149,9 +1154,37 @@ mod tests {
     }
 
     #[test]
+    fn a_window_names_its_shell() {
+        let mut window = WindowDescription {
+            id: WindowId(4),
+            shell: WindowShell::X11,
+            app_id: Some("XTerm".to_owned()),
+            title: Some("xterm".to_owned()),
+            pid: Some(4242),
+            seat: SeatId(2),
+            output: None,
+            workspace: None,
+            rect: None,
+            place: None,
+            motion_ends: None,
+            focused: true,
+            floating: false,
+            fullscreen: false,
+            unresponsive: false,
+        };
+        let listed = window_json(&window, None);
+        assert_eq!(listed["shell"], json!("x11"));
+        assert_eq!(listed["app_id"], json!("XTerm"));
+        assert_eq!(listed["pid"], json!(4242));
+        window.shell = WindowShell::Xdg;
+        assert_eq!(window_json(&window, None)["shell"], json!("xdg"));
+    }
+
+    #[test]
     fn a_windows_colours_come_only_when_asked_with_unnamed_primaries_as_numbers() {
         let window = WindowDescription {
             id: WindowId(1),
+            shell: WindowShell::Xdg,
             app_id: None,
             title: None,
             pid: None,
@@ -1164,6 +1197,7 @@ mod tests {
             focused: false,
             floating: false,
             fullscreen: false,
+            unresponsive: false,
         };
         assert_eq!(window_json(&window, None).get("colours"), None);
         assert_eq!(window_json(&window, Some(&[]))["colours"], json!([]));

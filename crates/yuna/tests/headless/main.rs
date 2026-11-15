@@ -31,6 +31,12 @@ mod selection_client;
 mod text_input;
 mod vrr;
 mod window_cap;
+mod x11_client;
+mod x11_crash;
+mod x11_menus;
+mod x11_misbehaving;
+mod x11_windows;
+mod xwayland;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -144,6 +150,38 @@ fn open_and_commit(compositor: &mut Compositor, client: &mut Client, colour: u32
     client.commit(window);
     client.roundtrip(compositor);
     window
+}
+
+/// A client that leaves while another copy of its socket's descriptor exists, as in a process
+/// another test forked and has not yet run its program in, is seen gone at the next dispatch:
+/// the test client shuts its connection down rather than only closing it. Without that, stories
+/// that check a departure at once failed now and then while X11 stories started Xwayland.
+#[test]
+fn a_client_leaving_while_a_copy_of_its_socket_lives_is_seen_gone() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    open_and_commit(&mut compositor, &mut client, 0xff00_00ff);
+    run_armed_deadlines(&mut compositor);
+    assert_eq!(
+        compositor
+            .layout()
+            .arrange(OUTPUT)
+            .map(|placed| placed.len()),
+        Ok(1)
+    );
+    let copy = client.socket_copy();
+    drop(client);
+    compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("the compositor dispatches");
+    assert_eq!(
+        compositor
+            .layout()
+            .arrange(OUTPUT)
+            .map(|placed| placed.len()),
+        Ok(0)
+    );
+    drop(copy);
 }
 
 /// What changed in the counters between two readings, wake-ups aside.

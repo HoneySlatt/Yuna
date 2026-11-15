@@ -29,6 +29,7 @@ use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
 use crate::state::{OWNER_SEAT, State};
+use crate::xwayland::{DrawnX11Menu, X11Display, Xwayland, XwaylandConfig};
 
 /// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
 /// listens again.
@@ -55,11 +56,15 @@ pub struct Config {
     /// operation shows its result at once; `--animations` turns them on
     /// ([ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
     pub animations: Settings,
+    /// XWayland: each seat with a socket gets an X display, whose first X11 connection starts
+    /// Xwayland for it ([ADR-0067](../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+    /// Off with none, as in tests; `yuna --headless` and `yuna mcp` turn it on.
+    pub xwayland: Option<XwaylandConfig>,
 }
 
 impl Default for Config {
-    /// What `yuna --headless` runs: one default output, llvmpipe, real time, a socket, no
-    /// animation.
+    /// What `yuna --headless` runs, but for XWayland, which it turns on: one default output,
+    /// llvmpipe, real time, a socket, no animation.
     fn default() -> Config {
         Config {
             outputs: vec![OutputMode::default()],
@@ -71,6 +76,7 @@ impl Default for Config {
                 off: true,
                 ..Settings::default()
             },
+            xwayland: None,
         }
     }
 }
@@ -82,7 +88,8 @@ pub struct Counters {
     pub frames_drawn: u64,
     /// `wl_callback.done` events sent for frame callbacks.
     pub frame_callbacks: u64,
-    /// `xdg_toplevel` and `xdg_popup` configures sent.
+    /// `xdg_toplevel` and `xdg_popup` configures sent, and X11 windows' configures and states
+    /// set.
     pub configures: u64,
     /// `wl_surface.commit` requests received.
     pub commits: u64,
@@ -92,16 +99,40 @@ pub struct Counters {
     pub wakeups: u64,
 }
 
+/// The shell behind a window: what its client speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowShell {
+    /// A Wayland client's `xdg_toplevel`.
+    Xdg,
+    /// An X11 program's window, through its seat's Xwayland.
+    X11,
+}
+
+impl WindowShell {
+    /// Its name, as MCP gives it: `xdg` or `x11`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowShell::Xdg => "xdg",
+            WindowShell::X11 => "x11",
+        }
+    }
+}
+
 /// A window, as [`Compositor::windows`] describes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowDescription {
     /// Its id in the layout.
     pub id: WindowId,
-    /// The application id its client set (`xdg_toplevel.set_app_id`), if any.
+    /// The shell behind it.
+    pub shell: WindowShell,
+    /// The application id its client set (`xdg_toplevel.set_app_id`), or an X11 window's
+    /// `WM_CLASS` class, if any.
     pub app_id: Option<String>,
-    /// Its title (`xdg_toplevel.set_title`), if any.
+    /// Its title (`xdg_toplevel.set_title`, an X11 window's `_NET_WM_NAME` or `WM_NAME`), if any.
     pub title: Option<String>,
-    /// The process id of its client, as the kernel gives it for the client's socket.
+    /// The process id of its client, as the kernel gives it for the client's socket; for an X11
+    /// window, as X11 records its client's connection (XRes), else as the window says
+    /// (`_NET_WM_PID`), never Xwayland's.
     pub pid: Option<i32>,
     /// The seat whose workspaces hold it: its client's.
     pub seat: SeatId,
@@ -128,6 +159,10 @@ pub struct WindowDescription {
     pub floating: bool,
     /// Whether it is fullscreen.
     pub fullscreen: bool,
+    /// Whether it left a ping unanswered and has answered none since: an X11 window asked to
+    /// close, its program frozen ([`X11_PING_TIMEOUT`](crate::X11_PING_TIMEOUT)). Never true of
+    /// an xdg-shell window: Yuna pings none.
+    pub unresponsive: bool,
 }
 
 /// An output, as [`Compositor::output_descriptions`] describes it.
@@ -152,6 +187,8 @@ pub struct OutputDescription {
 /// Everything runs on the thread that created it: drive it with [`Compositor::dispatch`] and,
 /// with the manual clock, [`Compositor::advance`], or let [`Compositor::run_until`] run it.
 pub struct Compositor {
+    /// First, so that it drops first: its Xwaylands end while the display still serves them.
+    xwayland: Option<Xwayland>,
     event_loop: EventLoop<'static, State>,
     display: Display<State>,
     state: State,
@@ -164,7 +201,8 @@ pub struct Compositor {
 
 impl Compositor {
     /// Starts a compositor: its renderer, its globals, its outputs, and its socket if
-    /// `config.listen`. Each output's first frame is armed.
+    /// `config.listen`. Each output's first frame is armed. With XWayland on, the owner's seat
+    /// gets an X display when it has a socket, or a folder for its Xauthority file.
     pub fn new(config: Config) -> Result<Compositor, Error> {
         // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
         // starts.
@@ -230,7 +268,25 @@ impl Compositor {
             }
             None => None,
         };
+        let mut xwayland = config
+            .xwayland
+            .as_ref()
+            .and_then(|xwayland| Xwayland::new(xwayland, config.device));
+        if let Some(xwayland) = &mut xwayland {
+            // Beside the socket in XDG_RUNTIME_DIR, which the socket's creation required.
+            let folder = match (&socket_name, config.xwayland.as_ref()) {
+                (Some(name), _) => std::env::var_os("XDG_RUNTIME_DIR").map(|runtime| {
+                    crate::xwayland::folder_beside(&PathBuf::from(runtime).join(name))
+                }),
+                (None, Some(xwayland)) => xwayland.owner_display_folder.clone(),
+                (None, None) => None,
+            };
+            if let Some(folder) = folder {
+                xwayland.add_seat(OWNER_SEAT, &folder, &handle);
+            }
+        }
         Ok(Compositor {
+            xwayland,
             event_loop,
             display,
             state,
@@ -282,8 +338,9 @@ impl Compositor {
 
     /// Listens on a Wayland socket at `path` for agent seat `seat`: every client that connects
     /// through it belongs to that seat. The socket file and its lock are removed with the seat.
-    /// Refused for the owner's seat, a seat that does not exist or listens already, and a path
-    /// where a socket cannot be made.
+    /// With XWayland on, the seat gets an X display too, its Xauthority file in the folder
+    /// `<path>.x11`. Refused for the owner's seat, a seat that does not exist or listens already,
+    /// and a path where a socket cannot be made.
     pub fn listen_for_seat(&mut self, seat: SeatId, path: PathBuf) -> Result<(), Error> {
         if seat == OWNER_SEAT || self.state.seat(seat).is_none() {
             return Err(Error::Refused(format!("no agent seat {}", seat.0)));
@@ -321,15 +378,26 @@ impl Compositor {
             )
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         self.seat_sockets.insert(seat, token);
+        if let Some(xwayland) = &mut self.xwayland {
+            let folder = crate::xwayland::folder_beside(&path);
+            xwayland.add_seat(seat, &folder, &self.event_loop.handle());
+        }
         Ok(())
+    }
+
+    /// `seat`'s X display, while it has one: its number, its Xauthority file, and its
+    /// Xwayland's process id while one runs. None when XWayland is off, when Xwayland is not
+    /// found, and for a seat without a socket.
+    pub fn x11_display(&self, seat: SeatId) -> Option<X11Display> {
+        self.xwayland.as_ref()?.display(seat)
     }
 
     /// Removes agent seat `seat` ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)):
     /// releases the keys and buttons it holds and moves its focus off every surface; removes its
-    /// socket; ends its clients and frees them now, their windows closed; then removes its
-    /// outputs and its place in the layout, and disables its `wl_seat` global. Returns the
-    /// process ids of the clients it ended. Refused for the owner's seat and for a seat that does
-    /// not exist.
+    /// socket and its X display, ending its Xwayland; ends its clients and frees them now, their
+    /// windows closed; then removes its outputs and its place in the layout, and disables its
+    /// `wl_seat` global. Returns the process ids of the clients it ended. Refused for the owner's
+    /// seat and for a seat that does not exist.
     pub fn remove_seat(&mut self, seat: SeatId) -> Result<Vec<i32>, Error> {
         self.state.release_seat(seat)?;
         // The releases and the leaves reach the clients before their connections close.
@@ -339,6 +407,9 @@ impl Compositor {
         if let Some(token) = self.seat_sockets.remove(&seat) {
             // Dropping the source drops its socket, which removes its file and its lock.
             self.event_loop.handle().remove(token);
+        }
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.remove_seat(seat, &self.event_loop.handle());
         }
         let pids = self.state.end_seat_clients(seat);
         self.free_departed_clients();
@@ -437,12 +508,20 @@ impl Compositor {
         self.state.compose_text(seat, text)
     }
 
-    /// Runs one round of the event loop: waits up to `timeout` for a client, a connection or
-    /// the clock's timer (`None`: as long as it takes), handles what came, runs the deadlines due
-    /// by now, and sends the events written. With the manual clock, time does not move: only
-    /// the deadlines armed at its current time run, such as an idle output's refresh.
+    /// Runs one round of the event loop: waits up to `timeout` for a client, a connection, the
+    /// clock's timer or XWayland (`None`: as long as it takes), handles what came, runs the
+    /// deadlines due by now, and sends the events written. While X11 events wait from an earlier
+    /// round, which a round handles in a slice that ends before the next deadline, it does not
+    /// wait ([`MANAGER_SLICE`](crate::MANAGER_SLICE)). With the manual clock, time does not
+    /// move: only the deadlines armed at its current time run, such as an idle output's refresh.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.arm_timer()?;
+        // X11 events waiting from the last round are handled now, not after a sleep.
+        let timeout = if Xwayland::has_backlog(&self.state) {
+            Some(Duration::ZERO)
+        } else {
+            timeout
+        };
         self.event_loop
             .dispatch(timeout, &mut self.state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -451,6 +530,9 @@ impl Compositor {
             self.timer = None;
         }
         self.pause_and_resume_sockets()?;
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.handle_notes(&mut self.state, &self.event_loop.handle());
+        }
         if std::mem::take(&mut self.state.clients_readable) {
             self.display
                 .dispatch_clients(&mut self.state)
@@ -629,6 +711,21 @@ impl Compositor {
         self.state.describe_windows()
     }
 
+    /// Where `output`'s last frame drew each X11 override-redirect window, a menu or a tooltip,
+    /// in its physical pixels, and the window it was drawn with. For tests.
+    #[doc(hidden)]
+    pub fn drawn_x11_menus(&self, output: OutputId) -> Vec<DrawnX11Menu> {
+        self.state.describe_x11_menus(output)
+    }
+
+    /// Asks `window`'s client to close it, as a key binding would: an `xdg_toplevel` is sent
+    /// `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else its X11 client is ended
+    /// (`KillClient`). The window stays until its client closes it. Refused for a window the
+    /// layout does not hold.
+    pub fn close_window(&mut self, window: WindowId) -> Result<(), Error> {
+        self.state.close_window(window)
+    }
+
     /// The colours the surfaces of `window` declared through `color-management-v1`, at their
     /// last commit: its own surface's, its subsurfaces' and its popups'; those that declared
     /// none are left out, and an unknown window has none.
@@ -795,6 +892,9 @@ impl Compositor {
     /// others go on.
     pub(crate) fn flush(&mut self) {
         self.free_departed_clients();
+        if let Some(xwayland) = &mut self.xwayland {
+            xwayland.send_commands(&mut self.state);
+        }
         // Smithay's popup trees and grabs forget their destroyed popups.
         self.state.popups.cleanup();
         // Each output forgets the surfaces destroyed since, which it keeps to send `enter` once.
