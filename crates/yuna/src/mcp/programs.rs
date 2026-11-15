@@ -8,8 +8,9 @@
 //! `XAUTHORITY`, its seat's X display and cookie, when the seat has one
 //! ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md));
 //! and an `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor
-//! their sound server there. Nothing else: not Yuna's own `DISPLAY`, no
-//! `DBUS_SESSION_BUS_ADDRESS`. The agent's own variables come next and win, but for `YUNA_SEAT`,
+//! their sound server there; with a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that D-Bus's
+//! library does not launch a bus of its own through X11, which would hold the seat's Xwayland.
+//! Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own variables come next and win, but for `YUNA_SEAT`,
 //! its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
 //! through a pipe Yuna reads, to a log file the agent reads, bounded to [`LOG_LIMIT`].
 //!
@@ -586,6 +587,10 @@ pub fn program_environment(
     if let Some(x11) = x11 {
         environment.insert("DISPLAY".into(), x11.name().into());
         environment.insert("XAUTHORITY".into(), x11.xauthority.clone().into());
+        // Without a bus's address and with a DISPLAY, D-Bus's library launches a bus of its own
+        // through X11 (`dbus-launch --autolaunch`), the machine's, which stays connected to the
+        // seat's Xwayland and keeps it from ever stopping. `disabled:` says there is no bus.
+        environment.insert("DBUS_SESSION_BUS_ADDRESS".into(), "disabled:".into());
     }
     for (name, value) in added {
         environment.insert(name.into(), value.into());
@@ -849,6 +854,12 @@ mod tests {
         assert_eq!(
             environment[OsStr::new("XAUTHORITY")],
             "/run/user/1000/yuna-mcp-7/seat-2.x11/Xauthority"
+        );
+        // With a DISPLAY and no bus, D-Bus's library would launch a bus of its own through X11,
+        // which would hold the seat's Xwayland for ever.
+        assert_eq!(
+            environment[OsStr::new("DBUS_SESSION_BUS_ADDRESS")],
+            "disabled:"
         );
         // The agent's win, as for WAYLAND_DISPLAY.
         let added = BTreeMap::from([("DISPLAY".to_owned(), ":5".to_owned())]);

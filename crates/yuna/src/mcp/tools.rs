@@ -133,8 +133,8 @@ pub fn definitions() -> Value {
             "name": "spawn",
             "title": "Programs",
             "description": "Start a program on a seat, list a seat's programs, or stop one. A \
-                program gets its seat's Wayland socket, an environment without DISPLAY or \
-                D-Bus, and a log file of its output and errors, whose path the result gives; \
+                program gets its seat's Wayland socket and X display, an environment without \
+                Yuna's own DISPLAY or the user's D-Bus, and a log file of its output and errors, whose path the result gives; \
                 its windows open on its seat. Logs go when the seat closes.",
             "inputSchema": {
                 "type": "object",

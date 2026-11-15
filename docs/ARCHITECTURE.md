@@ -945,8 +945,10 @@ process that empties its environment and leaves its group and its parents is not
 A program gets an environment of its own: from Yuna's, only the variables that find its
 programs, libraries, locale and drivers (`programs::KEPT_VARIABLES`); `WAYLAND_DISPLAY`, its
 seat's socket's full path; `DISPLAY` and `XAUTHORITY`, its seat's X display and Xauthority
-file, when the seat has one; an empty `XDG_RUNTIME_DIR` of its own, where neither the user's
-session bus nor their sound server is found; then the agent's variables; then `YUNA_SEAT`, its
+file, when the seat has one, with `DBUS_SESSION_BUS_ADDRESS=disabled:`, since D-Bus's library
+would otherwise launch a bus of its own through X11 that holds the seat's Xwayland for ever; an
+empty `XDG_RUNTIME_DIR` of its own, where neither the user's session bus nor their sound server
+is found; then the agent's variables; then `YUNA_SEAT`, its
 seat's id, which the agent's cannot replace. It inherits no descriptor of
 Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
 log file. A log keeps 1 MiB; past it, the pipe is read 64 KiB every 100 ms and counted, so that a
