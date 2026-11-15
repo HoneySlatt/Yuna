@@ -19,6 +19,9 @@ What changed for users, newest first. Yuna has no release yet: everything below 
   scale is smaller. A fullscreen game that sets an output's mode through RandR keeps it, drawn
   pixel for pixel. `yuna mcp`'s `windows` gives each window's `shell`, `xdg` or `x11`, and an
   X11 window's class as its application id. Java programs need `_JAVA_AWT_WM_NONREPARENTING=1`.
+  Wine reads its prefix's `LogPixels`, not `Xft.dpi`: a Wine program is the right size at 1.5
+  once its prefix's DPI is 144 (96 × the scale); X11 programs that do not scale themselves, such
+  as xterm, are small on outputs at that scale.
 - X11 programs' menus and tooltips show where the program puts them, over their window and
   sliding with it, or alone over every window; a click reaches the pixel under the pointer, and
   the keyboard stays with the window. Dialogs open floating at their own size, over their

@@ -269,13 +269,16 @@ with games' VRR:
   `tests/applications.rs`, `tests/headless/x11_client.rs`, `tests/headless/xwayland.rs` and
   `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
   `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
-  would serve the tests, and the example could include it with `#[path]`.
+  would serve the tests, and the example could include it with `#[path]`. Paid in M1.12's audit.
 
 ## XWayland
 
 - An X11 application that does not scale itself (xterm, xeyes, Motif) is small on outputs at
   XWayland's scale: drawing it at one X11 pixel per logical unit needs a per-application rule
-  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). Wine's programs are
+  small the same way unless their prefix's DPI is 96 × S: Wine reads its registry's `LogPixels`,
+  not `Xft.dpi` (`wine reg add "HKCU\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 144`
+  at 1.5). Paid at Stage 2, with the configuration's rules per application.
 - No clipboard or drag and drop between X11 and Wayland programs until M1.11; between X11
   programs of one seat they work inside Xwayland
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
@@ -283,75 +286,94 @@ with games' VRR:
   key, until Stage 2.
 - In `yuna mcp`, the programs' reaping (`wait` on any child) may take an Xwayland's status before
   its pidfd does: a crash after `WM_S0` then counts as a clean end, and starts no pause. A crash
-  loop in `yuna mcp` restarts Xwayland at each new X11 connection.
+  loop in `yuna mcp` restarts Xwayland at each new X11 connection. Paid at M1.11, which reworks
+  what `yuna mcp` sees of its programs.
 - A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
   while an Xwayland with one small window runs, and keeps 22 MiB of it once Xwayland has ended
   ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. Whether that memory
-  is in use or freed and kept by the allocator is not known.
+  is in use or freed and kept by the allocator is not known. Looked at in M1.12's audit.
 - On llvmpipe, Xwayland runs without GLX: Mesa's GLX for Xwayland loads the machine's own drivers
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
-  node (checked on 2026-11-14 with the cards hidden, `glxinfo` on the GPU).
+  node (checked on 2026-11-14 with the cards hidden, `glxinfo` on the GPU). Stays for headless
+  agents on llvmpipe; the desktop at Stage 2 owns its display device and keeps GLX.
 - An X11 menu drawn with a window keeps its offset from that window as it was when the menu was
   placed, so that it slides with the window. If the window moves while the menu stays open, X11
   still has the menu at its own place: a click on the window where X11 has the menu goes to the
   root, as Xwayland picks the window under the pointer through X11's stacking. Toolkits close
-  their menus when their window moves.
+  their menus when their window moves. Paid at Stage 2, with interactive moves.
 - A menu over a fullscreen game in an emulated mode is placed by its offset in X11 pixels, not
-  scaled by the viewport Xwayland gives the game's surface.
+  scaled by the viewport Xwayland gives the game's surface. Paid at Stage 4, with games.
 - A menu drawn with no window enters no output (`wl_surface.enter`): Xwayland's surfaces have one
-  scale, which outputs do not change.
+  scale, which outputs do not change. Kept: nothing reads it for X11 yet; revisited at Stage 2.
 - A menu drawn with its window is drawn only on the outputs its window overlaps: one overflowing
-  onto the next output is cut there, as an xdg popup is.
+  onto the next output is cut there, as an xdg popup is. Paid at Stage 2, with xdg popups'
+  (Yuna's own scene, ADR-0039).
 - No reparenting (`xwayland/manager.rs`): Yuna draws no frames, so a window stays a child of the
   root. Java's AWT waits for a reparenting manager unless it runs with
-  `_JAVA_AWT_WM_NONREPARENTING=1`; its windows otherwise stay blank.
+  `_JAVA_AWT_WM_NONREPARENTING=1`; its windows otherwise stay blank. Decided with the desktop at
+  Stage 2: Yuna setting it for its programs, or reparenting.
 - An X11 window's size hints give its limits alone: its increments and base size (a terminal's
   cells) and its aspect are read and not followed, as tiling managers do; its window type gives
   only whether it is managed: a dialog, a splash or a utility window opens tiled unless it names
-  a parent through `WM_TRANSIENT_FOR`.
+  a parent through `WM_TRANSIENT_FOR`. Paid at Stage 2, with window rules.
 - `_NET_WM_SYNC_REQUEST` uses the basic counter alone: the extended one, which tells each frame
   drawn, is left. A window that never answers waits 100 ms at each resize, where KWin stops
-  syncing it after a timeout.
+  syncing it after a timeout. Paid at Stage 4, where games' frames are paced.
 - A ping carries `CurrentTime`, not the time of the event that asked to close, and its answer is
   matched by its window alone, so that any X11 client of the seat can answer another's ping and
-  clear its "unresponsive"; one ping waits at a time.
+  clear its "unresponsive"; one ping waits at a time. Kept: X11 isolates nothing within a seat
+  (ADR-0067); the timestamp is paid with `WM_TAKE_FOCUS`'s below.
 - `_NET_STARTUP_ID` is read when a window asks to be mapped, not when it changes later; X11's
   startup notification messages (`_NET_STARTUP_INFO`) are not read. X11 keeps its clients apart
   in nothing: another X11 client of the seat can read a window's startup id and use its token
-  first. Seats stay apart: a token activates its own seat's windows alone.
+  first. Seats stay apart: a token activates its own seat's windows alone. Startup messages are
+  read at Stage 2, with the launcher.
 - `WM_TAKE_FOCUS` is sent with `CurrentTime`, not the time of the event that moved the focus, as
-  ICCCM asks: a client that checks it may refuse the focus.
+  ICCCM asks: a client that checks it may refuse the focus. Paid at Stage 2, with real input
+  timestamps from libinput.
 - `_NET_WM_MOVERESIZE` is taken and does nothing: Yuna has no interactive move. A request to
   iconify or hide (`WM_CHANGE_STATE`, `_NET_WM_STATE_HIDDEN`) does nothing: Yuna minimises
-  nothing.
+  nothing. Paid at Stage 2, with interactive moves and minimising, if the owner wants them.
 - A managed window typed a menu, a notification or a tooltip, not override-redirect, is managed
-  as any window: tiled, unless it names a parent.
+  as any window: tiled, unless it names a parent. Paid at Stage 2, with window rules.
 - An X11 window's minimum size is honoured up to X11's 32,767 pixels: a window asking that much
   is configured to it, Xwayland draws no buffer so large, and it never shows. A client can make
-  such a window itself, without hints; Yuna does not bound X11 windows to its outputs.
+  such a window itself, without hints; Yuna does not bound X11 windows to its outputs. Looked at
+  in M1.12's audit.
 - Unmapped X11 windows are tracked without a bound per client: each holds up to about 192 KiB of
-  text, three titles of 64 KiB, twice, in its manager and in Yuna; Xwayland holds them too.
+  text, three titles of 64 KiB, twice, in its manager and in Yuna; Xwayland holds them too. A
+  client can so grow Yuna's memory: a bound per X11 client is to be added in M1.12's audit.
 - The orders in which a window and its surface pair, the serial before the surface's commit or
   after, around a map or an unmap, are not each forced by a test: the stories take the order
-  Xwayland gives.
+  Xwayland gives. Tests to write in M1.12's audit.
 - Telling the windows at each arrangement asks the layout for each window shown
   (`Layout::window`), whose lookup walks the workspaces, and an arrangement walks every window:
-  a thousand X11 windows opening one by one cost 7 ms of CPU a round in a release build, 90 ms in
-  an unoptimised one, where another seat's frames then come at about 30 Hz.
+  it is part of a flood's longest round
+  ([measured](measurements.md#m18--a-flood-of-x11-windows-and-menus-2026-11-15)). Paid at the opening
+  of Stage 2, when Yuna's core moves and the layout's lookups with it.
 - An X11 client's `_NET_ACTIVE_WINDOW` is taken as xdg-activation without a token: the window
   takes the focus only when its client has it already; a pager's request (source 2) is no better.
+  Revisited at Stage 2, with Hollow's taskbar.
 - An X11 window's place is cut to X11's 16-bit coordinates: with outputs past 32,767 X11 pixels
   from the root's origin, many outputs side by side at a large scale, a window there is told a
   place its pointer and Xwayland's emulated modes miss. An output whose logical position is not a
   whole unit is told to Xwayland rounded, so that its windows' X11 places may be a pixel off its
-  own.
+  own. Kept: no output layout so large is planned.
 - Commands to a manager go at the end of the round that made them; the X11 focus and a window's
   place reach Xwayland on its manager's connection, the keyboard's `enter` on its Wayland one, in
-  no set order between them.
+  no set order between them. Kept: no client found that depends on the order.
 - The area filter reads each texel 1/1024 past its centre, which holds for buffers up to about
   8,000 texels a side (`area_filter.frag`): past it, a sampler's rounding may take a texel's
   neighbour, a slight blur of one X11 window wider than 8,000 pixels below XWayland's scale.
+  Revisited with the Vulkan renderer (ADR-0063), which draws the filter again.
+- A `KeymapNotify` sent by an X11 client (`SendEvent`) stalls its seat's manager: x11rb 0.14
+  knows that event has no sequence number only without the sent bit (`buffer[0] ==
+  KEYMAP_NOTIFY_EVENT`, `x11rb-protocol` `connection/mod.rs`), so it reads two bytes the client
+  chose as one, loses its place among the replies, and the manager waits for ever. Yuna's loop
+  and the other seats go on; the seat's X11 windows no longer open. To pay before Stage 2: a
+  report to x11rb on the owner's go, or a wrapper of the manager's stream that clears the bit.
 - The X11 element declares no opaque region: the damage tracker draws what lies under an opaque
   X11 window too, the background and the windows below it, where a Wayland surface's opaque
   region would let it skip them; a whole frame costs up to that overdraw more on each output.
+  Paid with Yuna's own scene at the opening of Stage 2.

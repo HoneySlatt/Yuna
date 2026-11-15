@@ -47,8 +47,8 @@ Chosen while building M1.8, within ADR-0028's rule:
 
 ## Consequences
 
-- A flood of X11 windows opens more slowly: 1,000 windows took 3.6 to 3.9 s in a release build
-  alone, while the other windows kept about 60 frames a second.
+- A flood of X11 windows opens more slowly, while the other windows keep their frames
+  ([measurements](../measurements.md#m18--a-flood-of-x11-windows-and-menus-2026-11-15)).
 - `MAX_MENUS_PER_CLIENT`, `MANAGER_SLICE`, `X11_SYNC_TIMEOUT` and `X11_PING_TIMEOUT` hold these
   figures in the code; a change of one of them changes this ADR.
 - The layout's own lookups stay linear in its windows ([debt](../debt.md)).

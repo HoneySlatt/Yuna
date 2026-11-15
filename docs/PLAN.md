@@ -17,11 +17,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   to [ADR-0061](adr/0061-yunas-uses.md)).
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
-- [M1.8](#m18--xwayland) is in progress: its design was decided on 2026-11-14 (ADR-0066 to
-  ADR-0069). Built: the X11 surface element and its area filter; one Xwayland per seat, on
-  demand, behind a cookie; managed windows in the layout; menus, sync requests and pings, and the
-  bounds of ADR-0070. Next: the applications' tests (Qt on xcb, Wine) and the measures, then the
-  closing review.
+- [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070. Next: M1.9, on the
+  owner's go.
 
 ## Status
 
@@ -34,7 +31,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.5](#m15--agents-control) | An agent drives an application in Yuna through MCP, on its own seat | Done |
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
-| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | In progress |
+| [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Planned |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
@@ -115,6 +112,13 @@ milestone first needs it.
   fullscreen games through gamescope, Xwayland's emulated modes kept
   ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
   The clipboard and drag and drop between X11 and Wayland move to M1.11.
+- **Result.** Done on 2026-11-15, its closing review's findings fixed or written as debt: Yuna's
+  own X11 manager, one Xwayland per seat on demand, X11 windows and menus in the layout and the
+  motion, drawn pixel for pixel at 1.5 and area-filtered at 1, the bounds of ADR-0070
+  ([ADR-0070](adr/0070-bounds-on-what-one-x11-client-may-ask.md)); Qt on X11 equal to Qt on
+  Wayland at 1.5, Wine scaled by its `LogPixels`. Xwayland starts in 29 ms on llvmpipe, 76 ms on
+  the GPU, and takes 36 to 61 MiB; the area filter costs 0.18 ms a 4K frame on the GPU
+  ([measurements](measurements.md)). What is left is [debt](debt.md#xwayland).
 - **Done when.** An X11 test program and a Wine program run headless at 1.5, their captures sharp
   against reference images; an X11 window moved between outputs at 1.5 and 1 keeps its size on
   both; X11 windows slide, and menus with them, as Wayland's do; Xwayland starts on demand, stops

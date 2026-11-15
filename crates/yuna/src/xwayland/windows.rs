@@ -370,6 +370,17 @@ impl State {
 
     /// Xwayland `server` has ended: its windows close, and its commands go.
     pub(crate) fn x11_server_gone(&mut self, server: u64) {
+        // Its menus drawn alone leave the screen now: when Xwayland died in a busy round, its
+        // surfaces are destroyed later in the round, once its record, which would redraw them,
+        // is gone.
+        if self
+            .x11
+            .servers
+            .get(&server)
+            .is_some_and(|record| !record.shown_menus.is_empty())
+        {
+            self.x11_redraw(server);
+        }
         let Some(gone) = self.x11.servers.remove(&server) else {
             return;
         };
@@ -1226,11 +1237,13 @@ impl State {
             let (mut tiled, over) = shown.remove(&server).unwrap_or_default();
             tiled.sort_unstable();
             let on_top: Vec<Window> = tiled.into_iter().chain(over).collect();
+            // A set, so that sorting a thousand windows stays linear in them.
+            let shown_on_top: HashSet<Window> = on_top.iter().copied().collect();
             let mut below: Vec<Window> = record
                 .windows
                 .iter()
                 .filter(|(window, x11_window)| {
-                    x11_window.requested && x11_window.mapped && !on_top.contains(window)
+                    x11_window.requested && x11_window.mapped && !shown_on_top.contains(window)
                 })
                 .map(|(&window, _)| window)
                 .collect();

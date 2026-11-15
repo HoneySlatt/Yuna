@@ -4,6 +4,29 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.8 — A flood of X11 windows and menus (2026-11-15)
+
+What one X11 program flooding its seat costs the other windows (ADR-0070): the story
+`x11_misbehaving::five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame`, in a release
+build of branch `m1.8` after `f0a39dc` with the closing review's fixes, run alone under the
+agents' exclusive lock (`.delegation/m1.8-lead/01`, local). One X11 program maps 5,000 windows,
+another 5,000 override-redirect windows; a Wayland sentinel on the same seat asks a frame
+callback each frame. Load: no other process above 5 % of a core and the GPU 0 % busy before and
+after; the one-minute load average read 6.0, the release build that had just ended. Quiet.
+
+| What | Figure |
+|---|---|
+| 5,000 windows sent | 29 ms |
+| 1,000 open, the cap of one X11 client | 2.68 s |
+| 5,000 menus mapped, 64 shown, the cap | 5.43 s |
+| The sentinel's frames meanwhile | 354, the longest gap between two 43 ms |
+| The longest round of Yuna's loop | 8.6 ms of CPU |
+
+- Before ADR-0070's bounds, one round took up to 455 ms (the story's first runs, in a debug build,
+  without a proof kept).
+- CI runs the story in a debug build, where it checks only that the sentinel gets 4 callbacks a
+  second or more; the bound of 16 ms a round is checked in a release build alone, by hand.
+
 ## M1.8 — XWayland's start and memory, the area filter on the GPU (2026-11-15)
 
 Machine and Mesa as in M1.4's B4 below; Xwayland 24.1.14 from the development shell. Build:

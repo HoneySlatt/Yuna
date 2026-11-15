@@ -32,6 +32,7 @@ mod text_input;
 mod vrr;
 mod window_cap;
 mod x11_client;
+mod x11_crash;
 mod x11_menus;
 mod x11_misbehaving;
 mod x11_windows;

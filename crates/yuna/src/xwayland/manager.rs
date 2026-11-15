@@ -252,6 +252,20 @@ impl Commands {
     }
 }
 
+/// The next event read, none when none waits. An event x11rb cannot parse, which any X11 client
+/// can make up and send to the root, is logged and skipped: it must not end the manager, and its
+/// seat's every X11 program with it.
+fn next_event(connection: &RustConnection) -> Result<Option<Event>, ConnectionError> {
+    loop {
+        match connection.poll_for_event() {
+            Err(ConnectionError::ParseError(error)) => {
+                tracing::debug!(%error, "an X11 event that cannot be read, left");
+            }
+            read => return read,
+        }
+    }
+}
+
 /// Why the manager stopped: an X11 error, an I/O error, or what it found wrong.
 type Failure = Box<dyn std::error::Error + Send + Sync>;
 
@@ -728,7 +742,7 @@ impl<'a> Manager<'a> {
                 self.write_lists();
                 self.connection.flush()?;
                 let mut handled = false;
-                while let Some(event) = self.connection.poll_for_event()? {
+                while let Some(event) = next_event(self.connection)? {
                     handled = true;
                     if !self.event(event)? {
                         return Ok(());
@@ -759,6 +773,13 @@ impl<'a> Manager<'a> {
 
     /// Handles one X11 event.
     fn event(&mut self, event: Event) -> Result<GoOn, Failure> {
+        // Any X11 client may send any event to any window (`SendEvent`): the server marks it as
+        // sent. Only client messages are meant to come so; another sent event, a made-up
+        // `DestroyNotify` or `MapRequest` of another program's window, is taken as nothing.
+        if event.sent_event() && !matches!(event, Event::ClientMessage(_)) {
+            tracing::trace!(?event, "an event another X11 client made up, left");
+            return Ok(true);
+        }
         let go_on = match event {
             Event::CreateNotify(created) if created.parent == self.root => self.track(
                 created.window,
@@ -1260,11 +1281,12 @@ impl<'a> Manager<'a> {
             }
             Command::Focus(window) => self.focus(window)?,
             Command::Close(window) => {
-                let deletes = self
-                    .windows
-                    .get(&window)
-                    .is_some_and(|tracked| tracked.properties.protocols.delete_window);
-                if deletes {
+                // A window destroyed while the command was on its way: its id may already name
+                // another program's resource, which `KillClient` would end.
+                let Some(tracked) = self.windows.get(&window) else {
+                    return Ok(());
+                };
+                if tracked.properties.protocols.delete_window {
                     let message = ClientMessageEvent::new(
                         32,
                         window,

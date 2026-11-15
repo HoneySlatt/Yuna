@@ -1959,6 +1959,11 @@ fn a_pinged_window_that_closes_leaves_no_deadline() {
         None,
         "nothing is left armed"
     );
+    // Its windows closed with it (ADR-0067).
+    assert!(
+        seat.compositor.windows().is_empty(),
+        "a window of the crashed Xwayland is left"
+    );
 }
 
 #[test]

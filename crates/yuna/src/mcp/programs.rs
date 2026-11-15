@@ -8,10 +8,10 @@
 //! `XAUTHORITY`, its seat's X display and cookie, when the seat has one
 //! ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md));
 //! and an `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor
-//! their sound server there; with a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that D-Bus's
-//! library does not launch a bus of its own through X11, which would hold the seat's Xwayland.
-//! Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own variables come next and win, but for `YUNA_SEAT`,
-//! its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
+//! their sound server there; with a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that
+//! D-Bus's library does not launch a bus of its own through X11, which would hold the seat's
+//! Xwayland. Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own
+//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
 //! through a pipe Yuna reads, to a log file the agent reads, bounded to [`LOG_LIMIT`].
 //!
 //! Each program leads a process group of its own, which `stop` signals. Yuna is its programs'

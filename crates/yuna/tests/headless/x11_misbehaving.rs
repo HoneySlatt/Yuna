@@ -25,7 +25,8 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
-    EventMask, PropMode, StackMode, Window,
+    DESTROY_NOTIFY_EVENT, DestroyNotifyEvent, EventMask, KEYMAP_NOTIFY_EVENT, PropMode, StackMode,
+    UNMAP_NOTIFY_EVENT, UnmapNotifyEvent, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::yuna_layout::geometry::Rect;
@@ -494,6 +495,95 @@ fn messages_and_states_naming_atoms_never_interned_change_nothing() {
         .find(|listed| listed.seat == hostile.seat)
         .expect("the window stays");
     assert!(!window.fullscreen, "no message made it fullscreen");
+    hostile.end(vec![client]);
+}
+
+/// Every core event type, its bytes made up, sent to the root through `SendEvent`, as any X11
+/// client of the seat may: the manager, which the root's redirection makes receive them, takes
+/// each as nothing it trusts, and goes on serving, the same Xwayland, a window opened after them
+/// shown as any.
+#[test]
+fn made_up_events_of_every_type_leave_the_manager_serving() {
+    let mut hostile = Hostile::new("x11-made-up-events", at_1_5());
+    let client = hostile.client();
+    let spec = WindowSpec::named("target");
+    let (client, target, _) = open_window(&mut hostile.compositor, client, &spec);
+    let server = hostile
+        .compositor
+        .x11_display(hostile.seat)
+        .and_then(|display| display.server);
+    let (client, ()) = step(&mut hostile.compositor, client, move |client| {
+        let root = client.root;
+        // A linear congruential sequence: the same made-up bytes at each run.
+        let mut state: u32 = 0x1234_5678;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        };
+        // Every core event but `KeymapNotify`, which x11rb 0.14 misreads once sent (debt.md).
+        for event_type in (2..=34_u8).filter(|&event_type| event_type != KEYMAP_NOTIFY_EVENT) {
+            for _ in 0..4 {
+                let mut bytes = [0_u8; 32];
+                bytes.iter_mut().for_each(|byte| *byte = next());
+                bytes[0] = event_type;
+                client
+                    .connection
+                    .send_event(
+                        false,
+                        root,
+                        EventMask::SUBSTRUCTURE_REDIRECT
+                            | EventMask::SUBSTRUCTURE_NOTIFY
+                            | EventMask::STRUCTURE_NOTIFY
+                            | EventMask::PROPERTY_CHANGE,
+                        bytes,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        // Made up to name the program's own window, as if it were gone.
+        let redirect = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+        let destroyed = DestroyNotifyEvent {
+            response_type: DESTROY_NOTIFY_EVENT,
+            sequence: 0,
+            event: root,
+            window: target,
+        };
+        let unmapped = UnmapNotifyEvent {
+            response_type: UNMAP_NOTIFY_EVENT,
+            sequence: 0,
+            event: root,
+            window: target,
+            from_configure: false,
+        };
+        let fail = |e: x11rb::errors::ConnectionError| e.to_string();
+        client
+            .connection
+            .send_event(false, root, redirect, unmapped)
+            .map_err(fail)?;
+        client
+            .connection
+            .send_event(false, root, redirect, destroyed)
+            .map_err(fail)?;
+        client.sync()
+    });
+    hostile.pump_for(Duration::from_millis(300));
+    assert!(
+        hostile
+            .compositor
+            .windows()
+            .iter()
+            .any(|window| window.seat == hostile.seat && window.title.as_deref() == Some("target")),
+        "a made-up DestroyNotify closed the window"
+    );
+    let (client, _, _) = open_window(&mut hostile.compositor, client, &WindowSpec::named("after"));
+    assert_eq!(
+        hostile
+            .compositor
+            .x11_display(hostile.seat)
+            .and_then(|display| display.server),
+        server,
+        "the seat's Xwayland is the same"
+    );
     hostile.end(vec![client]);
 }
 
