@@ -52,17 +52,22 @@
         # What the applications' tests give each application, so that it draws the same on every
         # machine, on the CPU (crates/yuna/tests/applications.rs, ADR-0025). Its PATH, of the
         # store alone: a terminal, GTK 4's demo (in GTK's development output), Qt's QML runner,
-        # Vulkan's cube, mpv, whose surface declares its colours (ADR-0050), and `sleep` for the
-        # terminal. Kept off the shell's own PATH, so that GTK's development files never reach
-        # the shell's builds.
+        # Vulkan's cube, mpv, whose surface declares its colours (ADR-0050), Wine, whose own
+        # notepad runs on X11, and `sleep` and `env` for the terminal and the tests. Wine is the
+        # 64-bit build, all notepad needs: the WoW64 build, for 32-bit programs too, is 287 MB
+        # larger. Kept off the shell's own PATH, so that GTK's development files never reach the
+        # shell's builds.
         YUNA_APPLICATIONS_PATH = pkgs.lib.makeBinPath [
           pkgs.alacritty
           pkgs.gtk4.dev
           pkgs.qt6.qtdeclarative
           pkgs.vulkan-tools
           pkgs.mpv
+          pkgs.wine64Packages.stable
           pkgs.coreutils
         ];
+        # Yuna's own PATH in those tests: Xwayland alone, which it looks for there (ADR-0067).
+        YUNA_XWAYLAND_PATH = pkgs.lib.makeBinPath [ pkgs.xwayland ];
         # Mesa's Vulkan driver for the CPU, lavapipe, the only one Vulkan's loader is let load.
         YUNA_LAVAPIPE_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
         # DejaVu alone, and none of the machine's fonts or rules: nixpkgs' makeFontsConf would

@@ -42,3 +42,7 @@ test = true
 [[example]]
 name = "motion_time"
 test = true
+
+[[example]]
+name = "xwayland_time"
+test = true

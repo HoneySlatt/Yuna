@@ -4,6 +4,87 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.8 — XWayland's start and memory, the area filter on the GPU (2026-11-15)
+
+Machine and Mesa as in M1.4's B4 below; Xwayland 24.1.14 from the development shell. Build:
+release, of branch `m1.8` at `d1f8f46` with the applications' tests' change, before its X11
+menus (`ae57ce4`) were merged. One run of each, in order, under the agents' exclusive lock, outside
+`agent-headless`, whose sandbox hides other processes' GPU files; `yuna --headless` opens no
+display. `--gpu` drew on the render node, where Xwayland then draws with glamor. Commands, after
+`nix develop -c cargo build --release -p yuna --bin yuna --example xwayland_time`:
+
+```sh
+nix develop -c target/release/examples/xwayland_time [--gpu]
+nix develop -c target/release/examples/xwayland_time --area-filter [--gpu]
+```
+
+`xwayland_time` (`crates/yuna/examples/xwayland_time.rs`) runs `yuna --headless` on Yuna's
+default output, 3840 × 2160 at 240 Hz and scale 1.5. A start is an X11 program's wait, from its
+`connect` to the reply to its first request; *cold* is the first X11 program in a new Yuna, 30
+Yunas; *warm* is in one Yuna once the Xwayland before ended when idle, 30 times. Yuna's own
+figure is from Xwayland's spawn to its manager owning `WM_S0`, logged in whole milliseconds.
+
+The program reads, every 2 s, what the machine's other programs use: their processor time, the
+machine's busy time less the program's own and its descendants', Yuna and Xwayland among them;
+and their GPU time on the drawing engines, `gfx` and `compute`, from the DRM statistics of the
+8 other processes holding GPU files. A phase is disturbed when they used more than 2 cores or
+10 % of that GPU time on average. Every phase below is quiet by that rule; the other programs'
+GPU time was nil in each, their processor time is given.
+
+| XWayland's start | Drawing | Median | 90th percentile | Longest | Yuna's spawn to `WM_S0`: median, p90 | Other programs: cores on average, at most |
+|---|---|---|---|---|---|---|
+| Cold | llvmpipe | 28.63 ms | 29.56 ms | 31.70 ms | 24 ms, 25 ms | 0.15, 0.74 |
+| Warm | llvmpipe | 28.64 ms | 30.90 ms | 65.79 ms | 24 ms, 26 ms | 0.58, 5.76 |
+| Cold | GPU | 75.53 ms | 78.86 ms | 87.52 ms | 73 ms, 76 ms | 0.40, 3.13 |
+| Warm | GPU | 75.47 ms | 79.70 ms | 227.08 ms | 73 ms, 77 ms | 0.95, 11.50 |
+
+| Memory, one X11 window of 256 × 256 at rest | llvmpipe | GPU |
+|---|---|---|
+| Xwayland's PSS (its RSS) | 35.5 MiB (45.4 MiB) | 60.8 MiB (91.0 MiB) |
+| Yuna's RSS before the first X11 program | 130.9 MiB | 82.5 MiB |
+| Yuna's RSS with the window shown | 167.7 MiB | 83.3 MiB |
+| Yuna's RSS once Xwayland ended | 152.7 MiB | 83.5 MiB |
+| Other programs: cores on average, at most | 0.95, 2.71 | 0.19, 0.26 |
+
+With `--area-filter`, a fullscreen X11 window is filled with a new colour without pause, so
+that each frame draws it whole; a frame's time is Yuna's `took_us`, as the test's figure below,
+over 10 s after 3 s of warm-up, on 3840 × 2160 outputs at 60 Hz. The area filter's case has a
+second output at 1.5, which makes XWayland's scale 1.5. Yuna's and Xwayland's GPU time a frame
+are the kernel's, on the `gfx` engine.
+
+| What is drawn | Drawing | Frames in 10 s | A frame: median | 90th percentile | Longest | GPU a frame: Yuna, Xwayland | Other programs: cores |
+|---|---|---|---|---|---|---|---|
+| 5760 × 3240 to 3840 × 2160, area filter | GPU | 601 | 422 µs | 478 µs | 824 µs | 319 µs, 414 µs | 0.68, 3.44 |
+| 3840 × 2160 copied at 1.5 | GPU | 598 | 246 µs | 326 µs | 5,104 µs | 138 µs, 303 µs | 1.78, 5.20 |
+| 5760 × 3240 to 3840 × 2160, area filter | llvmpipe | 194 | 40,891 µs | 42,366 µs | 80,931 µs | | 1.00, 3.32 |
+| 3840 × 2160 copied at 1.5 | llvmpipe | 301 | 14,943 µs | 15,526 µs | 16,232 µs | | 0.87, 3.10 |
+
+- **A start costs an X11 program 29 ms on llvmpipe, 76 ms on the GPU**, by the medians, cold or
+  warm alike: each Xwayland starts afresh. Yuna's own figure, from Xwayland's spawn to its
+  manager owning `WM_S0`, is 24 and 73 ms of it; the other 2 to 5 ms run from the program's
+  connection to the spawn, and from `WM_S0` to the program's reply. On the GPU, Xwayland starts
+  glamor on the render node, which llvmpipe's shared memory spares it: the likely cause of the
+  difference, not isolated. The longest warm starts, 66 and 227 ms, came in the phases where
+  other programs once reached 5.8 and 11.5 cores over 2 s; that the two coincide is likely, not
+  checked.
+- **Xwayland holds 35 MiB on llvmpipe, 61 MiB on the GPU**, by its proportional set size, with
+  one small window; 45 and 91 MiB resident. A proportional set size divides shared pages among
+  the processes that map them: an earlier run beside other programs read 48 MiB on the GPU for
+  the same resident size. On llvmpipe, Yuna's resident set grows by 37 MiB while
+  Xwayland runs and keeps 22 MiB of it after Xwayland ends; on the GPU it grows by less than
+  1 MiB ([debt](debt.md#xwayland)).
+- **On the GPU, the area filter costs about 180 µs a frame more than the plain copy** at 4K:
+  422 µs against 246 µs by the median, 319 µs against 138 µs of Yuna's GPU time; 4 % of a
+  240 Hz period. Both drew every refresh at 60 Hz. ADR-0068's question, the filter's cost on the
+  GPU, is answered for this machine. The kernel's GPU time a frame was the same in the runs that
+  other programs disturbed: 319 µs and 137 µs.
+- **On llvmpipe, the program's frames cost more than the test's below**, 40.9 ms against 22.1 ms
+  for the area filter, most likely because Xwayland draws in shared memory there, and Yuna
+  uploads its 75 MB buffer into a texture at each frame, which the test, drawing a texture it
+  made once, does not; not isolated. The ratio to the copy, 2.7, is near the test's 3.3.
+- Earlier runs the same day, beside a game and other sessions' builds, are not kept: they gave
+  95 to 141 ms for a start on the GPU, and 1,096 µs against 775 µs for the area filter.
+
 ## M1.8 — The X11 element's area filter, on llvmpipe (2026-11-14)
 
 Machine as in M1.4's B4 below: Ryzen 7 5800X (16 threads), Linux 7.3.1, Mesa 26.2.6 from the
@@ -50,9 +131,8 @@ copy is 3840 × 2160 X11 pixels on an output at 1.5.
   over the whole output, 15,865 µs and 4,731 µs at 2560 × 1440, 6,701 µs copied, 1,543 µs for
   the background. It counts as disturbed: its load average was 5.11 over a minute, from the
   checks run just before it, though the processor was 98.9 % idle at its start.
-- **Not measured on the GPU**: no measurement program draws X11 windows yet (`frame_time` draws
-  Wayland clients), and tests never take the GPU. ADR-0068 asks the GPU's figure; it comes with
-  M1.8's X11 window manager.
+- **Not measured on the GPU here**: tests never take the GPU, and no measurement program drew X11
+  windows yet. `xwayland_time --area-filter` measures it since, in the section above.
 
 ## M1.7 — Motion (2026-11-14)
 

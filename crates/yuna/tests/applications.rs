@@ -19,6 +19,15 @@
 //! prefers for it. mpv then quits by its `q` key, and Yuna must rest
 //! ([ADR-0050](../../../docs/adr/0050-mpv-in-the-applications-tests.md)).
 //!
+//! X11 programs run through `yuna mcp` on agents' seats, whose programs get the seat's
+//! `DISPLAY`; Yuna finds Xwayland on the `PATH` the test gives it. Qt's `qml` on X11, at
+//! XWayland's scale 1.5, draws at a device pixel ratio of 1.5, and its capture is exactly what
+//! X11 holds of its window and what Qt draws on Wayland at 1.5; at 1, it is its own area average.
+//! Wine's notepad, from a fresh prefix at 144 dots per inch, draws its menu bar and scroll bar
+//! 1.5 times larger than at 96, and its capture is exactly what X11 holds of it. Each leaves, and
+//! Yuna rests once Xwayland has ended
+//! ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+//!
 //! SlimeEngine's examples run in ignored tests, which its weekly job runs: `window` draws its
 //! frames and leaves, `editor` rests with its window open, and an agent types and clicks in
 //! `interface` and checks it by capture, M1.5's done-when
@@ -26,17 +35,29 @@
 //!
 //! What makes an application draw again is pinned, so that only Yuna's behaviour decides the
 //! result. Yuna and each application get an environment of their own, nothing of the caller's:
-//! no `DISPLAY` and no D-Bus, so that they reach neither the user's desktop nor an accessibility
-//! bus; a `PATH` of the store alone; throwaway home and XDG folders, the system's XDG folders
-//! included, so that no settings of the machine or the user are read; DejaVu alone, through a
-//! fontconfig file that includes none of the machine's; Mesa on the CPU, lavapipe alone for
-//! Vulkan, without the machine's implicit layers; cursors that never blink; GTK's animations off.
+//! no `DISPLAY` but an agent's seat's, and no D-Bus, its start through X11 included, which Yuna
+//! disables for its programs, so that they reach neither the user's desktop nor an
+//! accessibility bus; a `PATH` of the store alone; throwaway home and XDG folders, the system's
+//! XDG folders included, so that no settings of the machine or the user are read; DejaVu alone,
+//! through a fontconfig file that includes none of the machine's; Mesa on the CPU, lavapipe
+//! alone for Vulkan, without the machine's implicit layers; cursors that never blink; GTK's
+//! animations off.
 //! What still reads the machine, measured with strace on NixOS: Mesa reads `/etc/drirc` where a
 //! machine has one, and lists `/dev/dri` without opening a device; Vulkan's loader reads the
 //! machine's list of layers and loads none; the fontconfig of Alacritty and Qt looks for two
 //! NixOS files in `/etc/fonts`, `local.conf` and `70-no-bitmaps-except-emoji.conf`; lavapipe, in
 //! mpv, opens `/dev/udmabuf`; mpv reads `/etc/localtime`, and looks for each of its libraries in
 //! the machine's `/run/opengl-driver/lib` first, where the machine measured has none of them.
+//! Qt on X11 reads `/etc/localtime` and the GPU's description in `/sys`, without opening a
+//! device. Wine reads `/etc/localtime`, `/etc/passwd`, `/etc/nsswitch.conf`, `/etc/hosts`,
+//! `/etc/host.conf`, `/etc/resolv.conf`, `/proc/net/dev`, the processor's description in `/sys`
+//! and the Vulkan loader's layer manifests in `/run/opengl-driver`, loading no layer; it asks
+//! the user's name through glibc's cache, `nscd`, on its local socket; a new prefix links the
+//! machine's serial ports as COM ports without opening them. Its drivers that open input and USB
+//! devices are off, and its print server is a socket that does not exist, so that it opens no
+//! network connection (checked with `strace -e trace=connect`). Each wineserver leaves a folder
+//! in `/tmp/.wine-<uid>`, Wine's own place, which the test removes once it has ended; a failed
+//! run leaves it there, with its empty lock.
 //!
 //! Every program comes from the development shell (`flake.nix`). Each process the test starts is
 //! killed if the test's thread ends first, so that a test killed or out of time leaves nothing.
@@ -49,7 +70,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, DirBuilder, File};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::net::{SocketAddr, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -63,6 +86,9 @@ use smithay::reexports::rustix::io::Errno;
 use smithay::reexports::rustix::process::{
     Pid, Signal, getppid, kill_process, set_parent_process_death_signal,
 };
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder};
+use x11rb::rust_connection::{DefaultStream, RustConnection};
 
 /// How long Yuna must do nothing: the rest window of the bar (ROADMAP's quality bar).
 const REST: Duration = Duration::from_secs(10);
@@ -332,6 +358,521 @@ fn mpv_declares(hdr: bool, options: &[&str], declared: &Value) -> Result<String,
          expected; it quit, then {rest}",
         shown.frames_drawn, shown.commits
     ))
+}
+
+/// The QML scene of the X11 test, written to its folder: on a plain background, a line one
+/// physical pixel thick across and one down at scale 1.5, two thirds of a unit, from a corner on
+/// even units, which fall on whole pixels; and text. Nothing in it moves, blinks or takes text.
+/// It logs its screen's device pixel ratio, which on X11 is its window's, read from `Xft.dpi`;
+/// on Wayland the window's own comes later, with `wp_fractional_scale_v1`. Ctrl+Q quits it.
+const SHARP_QML: &str = r##"import QtQuick
+import QtQuick.Window
+
+Window {
+    visible: true
+    title: "Yuna, sharp"
+    color: "#203040"
+    Component.onCompleted: console.log("device pixel ratio", Screen.devicePixelRatio)
+    Shortcut {
+        sequence: "Ctrl+Q"
+        onActivated: Qt.quit()
+    }
+    Rectangle { x: 20; y: 20; width: 200; height: 2 / 3; color: "white" }
+    Rectangle { x: 20; y: 20; width: 2 / 3; height: 100; color: "white" }
+    Text {
+        x: 30
+        y: 30
+        text: "Yuna draws X11 at 1.5"
+        color: "white"
+        font.pixelSize: 16
+        renderType: Text.NativeRendering
+    }
+}
+"##;
+/// [`SHARP_QML`]'s colours, and where its lines start at scale 1.5, in physical pixels from its
+/// window's corner, and how long they are.
+const SHARP_BACKGROUND: [u8; 3] = [0x20, 0x30, 0x40];
+const SHARP_LINE: [u8; 3] = [0xff, 0xff, 0xff];
+const SHARP_CORNER: u32 = 30;
+const SHARP_ACROSS: u32 = 300;
+const SHARP_DOWN: u32 = 150;
+/// The line Qt logs on X11 at XWayland's scale 1.5.
+const QML_AT_ONE_AND_A_HALF: &str = "qml: device pixel ratio 1.5";
+/// An agent's output at scale 1.5, 1280 × 720 logical units, and one at 1 of the same logical
+/// size, so that a window moved from one to the other keeps its size.
+const OUTPUT_AT_ONE_AND_A_HALF: (u32, u32, f64) = (1920, 1080, 1.5);
+const OUTPUT_AT_ONE: (u32, u32, f64) = (1280, 720, 1.0);
+
+/// Qt's `qml` on X11, on an agent's seat at 1.5, through MCP as an agent runs it: it reads
+/// `Xft.dpi` 144 and draws at a device pixel ratio of 1.5, and Yuna shows it pixel for pixel.
+/// Its capture at the physical size is what X11 holds of the window, exactly; its one-pixel
+/// lines are one physical pixel; and it equals the same scene drawn by Qt on Wayland at 1.5,
+/// through `wp_fractional_scale_v1`, on another seat. Moved to an output at 1 of the same logical
+/// size, it is drawn through the area filter: within a level of its logical capture at 1.5,
+/// which averages the same pixels (ADR-0068). Yuna rests with it open; typed Ctrl+Q, it quits,
+/// and Yuna rests again once Xwayland has ended.
+#[test]
+fn qml_on_x11_at_one_and_a_half_is_drawn_as_qml_on_wayland() {
+    let report = qml_on_x11().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+fn qml_on_x11() -> Result<String, String> {
+    let mut yuna = Yuna::start_mcp();
+    let scene = yuna.folder.join("sharp.qml");
+    fs::write(&scene, SHARP_QML).map_err(|error| format!("the scene: {error}"))?;
+    let scene = scene.to_str().ok_or("a path")?;
+    let reference_seat = yuna.create_seat_with(output_mode(OUTPUT_AT_ONE_AND_A_HALF))?;
+    let seat = yuna.create_seat_with(output_mode(OUTPUT_AT_ONE_AND_A_HALF))?;
+    let reference =
+        yuna.start_program(reference_seat, &["qml", scene], &qt_variables("wayland"))?;
+    let qml = yuna.start_program(seat, &["qml", scene], &qt_variables("xcb"))?;
+    let failure = |what: String| {
+        format!(
+            "qml on X11: {what}\n{}\nqml on Wayland's log: {}",
+            yuna.diagnosis(&qml.log),
+            reference.log.display()
+        )
+    };
+    yuna.agent_window(seat).map_err(failure)?;
+    yuna.agent_window(reference_seat).map_err(failure)?;
+    let shown = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let log = fs::read_to_string(&qml.log).unwrap_or_default();
+    if !log.contains(QML_AT_ONE_AND_A_HALF) {
+        return Err(failure(format!(
+            "Qt did not log \"{QML_AT_ONE_AND_A_HALF}\""
+        )));
+    }
+    let window = yuna.agent_window(seat).map_err(failure)?;
+    let reference_window = yuna.agent_window(reference_seat).map_err(failure)?;
+    if (&window["shell"], &reference_window["shell"]) != (&json!("x11"), &json!("xdg")) {
+        return Err(failure(format!(
+            "the windows are of shells {} and {}, not x11 and xdg",
+            window["shell"], reference_window["shell"]
+        )));
+    }
+    let size = |window: &Value| {
+        (
+            window["rect"]["width"].clone(),
+            window["rect"]["height"].clone(),
+        )
+    };
+    if size(&window) != size(&reference_window) {
+        return Err(failure(format!(
+            "on X11 its window is {}, on Wayland {}: they cannot be compared",
+            window["rect"], reference_window["rect"]
+        )));
+    }
+
+    let x11 = yuna.x11_window(seat).map_err(failure)?;
+    if x11.dpi != 144 {
+        return Err(failure(format!("X11 gives Xft.dpi {}, not 144", x11.dpi)));
+    }
+    let physical = |seat: u64, window: &Value| {
+        yuna.capture_image(json!({"seat": seat, "window": window["id"], "size": "physical"}))
+    };
+    let drawn = physical(seat, &window).map_err(failure)?;
+    let corner = yuna.corner_on_output(seat, &window).map_err(failure)?;
+    let drawn = drawn.window_part(corner, &x11.image).map_err(failure)?;
+    let mismatches = drawn.differences(&x11.image, 0);
+    if mismatches.count > 0 {
+        return Err(failure(format!(
+            "its capture at 1.5 is not what X11 holds of it: {mismatches}"
+        )));
+    }
+    sharp_lines(&drawn).map_err(failure)?;
+    let reference_drawn = physical(reference_seat, &reference_window).map_err(failure)?;
+    let reference_corner = yuna
+        .corner_on_output(reference_seat, &reference_window)
+        .map_err(failure)?;
+    let reference_drawn = reference_drawn
+        .window_part(reference_corner, &x11.image)
+        .map_err(failure)?;
+    let unlike_wayland = drawn.differences(&reference_drawn, 0);
+    if unlike_wayland.count > 0 {
+        return Err(failure(format!(
+            "its capture at 1.5 is not Qt's on Wayland: {unlike_wayland}"
+        )));
+    }
+    let logical = yuna
+        .capture_image(json!({"seat": seat, "window": window["id"]}))
+        .map_err(failure)?;
+    yuna.call("seat", json!({"action": "close", "seat": reference_seat}))
+        .map_err(failure)?;
+
+    let moved = yuna
+        .move_to_new_output(seat, &window, OUTPUT_AT_ONE)
+        .map_err(failure)?;
+    if size(&moved) != size(&window) {
+        return Err(failure(format!(
+            "moved to the output at 1, its window is {}, not {}'s size",
+            moved["rect"], window["rect"]
+        )));
+    }
+    let at_one = yuna
+        .capture_image(json!({"seat": seat, "window": window["id"]}))
+        .map_err(failure)?;
+    let unlike_its_average = at_one.image.differences(&logical.image, 1);
+    if unlike_its_average.count > 0 {
+        return Err(failure(format!(
+            "at 1, it is not its logical capture at 1.5 within a level: {unlike_its_average}"
+        )));
+    }
+    let open = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest with it open: {activity}")))?;
+    let at_one_difference = at_one.image.differences(&logical.image, 0);
+
+    yuna.call(
+        "keyboard",
+        json!({"action": "tap", "seat": seat, "keys": "ctrl+q"}),
+    )
+    .map_err(failure)?;
+    let ended = yuna.wait_for_end(seat, &qml).map_err(failure)?;
+    if ended["state"] != json!("exited") || ended["exit_code"] != json!(0) {
+        return Err(failure(format!("it did not end well: {ended}")));
+    }
+    yuna.wait_until_logged("Xwayland stopped", 1)
+        .map_err(failure)?;
+    yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let after = yuna.measure_rest().map_err(|activity| {
+        failure(format!("Yuna did not rest once Xwayland ended: {activity}"))
+    })?;
+    yuna.stop()?;
+    Ok(format!(
+        "qml on X11 at 1.5: quiet after {} frames drawn, {} commits; its window of {} × {} X11 \
+         pixels drawn as X11 holds it and as Qt draws it on Wayland, exactly; at 1, within a \
+         level of its average ({} pixels a level off); with it open, {open}; it quit by Ctrl+Q, \
+         Xwayland ended, then {after}",
+        shown.frames_drawn,
+        shown.commits,
+        x11.image.width,
+        x11.image.height,
+        at_one_difference.count
+    ))
+}
+
+/// Requires that [`SHARP_QML`]'s lines be one physical pixel, on the background on both sides,
+/// in `drawn`, its window's pixels at 1.5.
+fn sharp_lines(drawn: &Image) -> Result<(), String> {
+    let corner = SHARP_CORNER;
+    let colour = |on_a_line: bool| {
+        if on_a_line {
+            SHARP_LINE
+        } else {
+            SHARP_BACKGROUND
+        }
+    };
+    let mut expected = Vec::new();
+    // The line across, the row above it and the row below, which the line down crosses.
+    for x in 0..=corner + SHARP_ACROSS {
+        expected.push((x, corner - 1, SHARP_BACKGROUND));
+        let across = (corner..corner + SHARP_ACROSS).contains(&x);
+        expected.push((x, corner, colour(across)));
+        expected.push((x, corner + 1, colour(x == corner)));
+    }
+    // The line down, and the columns on its left and its right.
+    for y in corner + 1..=corner + SHARP_DOWN {
+        expected.push((corner - 1, y, SHARP_BACKGROUND));
+        expected.push((corner, y, colour(y < corner + SHARP_DOWN)));
+        expected.push((corner + 1, y, SHARP_BACKGROUND));
+    }
+    for (x, y, colour) in expected {
+        let found = drawn.at(x, y);
+        if found != colour {
+            return Err(format!(
+                "its lines are not one sharp pixel: ({x}, {y}) is {found:?}, not {colour:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Wine's own notepad on X11, Wine's X11 driver, through MCP as an agent runs it: one with a
+/// fresh prefix at 144 dots per inch on a seat at 1.5, one at 96 on a seat at 1 beside it, each
+/// prefix made before its first run. Both are tiled, so their windows' sizes are Yuna's; Wine's
+/// own scaling shows in what it draws inside: at 144, its menu bar's height and its scroll bar's
+/// width, which Wine scales from whole pixels at 96, are 1.5 times theirs at 96, rounded either
+/// way, from at least [`NOTEPAD_BAR_AT_96`] pixels. Yuna shows it pixel for pixel: its capture at
+/// the physical size is what X11 holds of the window, exactly. Yuna rests with both open; closed
+/// by Alt+F4, they leave, and Yuna rests again once both Xwaylands have ended. The folders their
+/// wineservers kept in `/tmp/.wine-<uid>` are then removed.
+#[test]
+fn wine_notepad_on_x11_scales_by_its_log_pixels_and_is_drawn_sharp() {
+    let report = notepad_on_x11().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+/// The fewest pixels a bar of notepad has at 96 dots per inch: Wine's are 17 to 19, so that 1.5
+/// times of them cannot pass by accident, as 1 against 1 would.
+const NOTEPAD_BAR_AT_96: u32 = 10;
+
+fn notepad_on_x11() -> Result<String, String> {
+    let mut yuna = Yuna::start_mcp();
+    let prefix_96 = yuna.folder.join("wine-96");
+    let prefix_144 = yuna.folder.join("wine-144");
+    let made = make_wine_prefixes(&yuna, &[(&prefix_96, 96), (&prefix_144, 144)])?;
+    let seat_96 = yuna.create_seat_with(output_mode(OUTPUT_AT_ONE))?;
+    let seat_144 = yuna.create_seat_with(output_mode(OUTPUT_AT_ONE_AND_A_HALF))?;
+    let command = ["wine", "notepad"];
+    let notepad_96 = yuna.start_program(seat_96, &command, &wine_variables(&prefix_96))?;
+    let notepad_144 = yuna.start_program(seat_144, &command, &wine_variables(&prefix_144))?;
+    let failure = |what: String| {
+        format!(
+            "notepad: {what}\n{}\nat 96 DPI, its log: {}",
+            yuna.diagnosis(&notepad_144.log),
+            notepad_96.log.display()
+        )
+    };
+    yuna.agent_window(seat_144).map_err(failure)?;
+    yuna.agent_window(seat_96).map_err(failure)?;
+    let shown = yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let window = yuna.agent_window(seat_144).map_err(failure)?;
+    for listed in [&window, &yuna.agent_window(seat_96).map_err(failure)?] {
+        if listed["shell"] != json!("x11") || listed["app_id"] != json!("notepad.exe") {
+            return Err(failure(format!(
+                "its window is not X11's notepad.exe: {listed}"
+            )));
+        }
+    }
+
+    let x11 = yuna.x11_window(seat_144).map_err(failure)?;
+    let parts = NotepadParts::of(&x11.image).map_err(failure)?;
+    let parts_96 =
+        NotepadParts::of(&yuna.x11_window(seat_96).map_err(failure)?.image).map_err(failure)?;
+    for (part, at_144, at_96) in [
+        ("menu bar's height", parts.menu_bar, parts_96.menu_bar),
+        ("scroll bar's width", parts.scroll_bar, parts_96.scroll_bar),
+    ] {
+        if at_96 < NOTEPAD_BAR_AT_96 || (f64::from(at_144) - 1.5 * f64::from(at_96)).abs() > 0.5 {
+            return Err(failure(format!(
+                "its {part} is {at_144} pixels at 144 DPI, {at_96} at 96: not 1.5 times, from \
+                 {NOTEPAD_BAR_AT_96} at least"
+            )));
+        }
+    }
+    let drawn = yuna
+        .capture_image(json!({"seat": seat_144, "window": window["id"], "size": "physical"}))
+        .map_err(failure)?;
+    let corner = yuna.corner_on_output(seat_144, &window).map_err(failure)?;
+    let drawn = drawn.window_part(corner, &x11.image).map_err(failure)?;
+    let mismatches = drawn.differences(&x11.image, 0);
+    if mismatches.count > 0 {
+        return Err(failure(format!(
+            "its capture at 1.5 is not what X11 holds of it: {mismatches}"
+        )));
+    }
+    let open = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest with it open: {activity}")))?;
+
+    for (seat, notepad) in [(seat_144, &notepad_144), (seat_96, &notepad_96)] {
+        yuna.call(
+            "keyboard",
+            json!({"action": "tap", "seat": seat, "keys": "alt+F4"}),
+        )
+        .map_err(failure)?;
+        let ended = yuna.wait_for_end(seat, notepad).map_err(failure)?;
+        if ended["state"] != json!("exited") || ended["exit_code"] != json!(0) {
+            return Err(failure(format!("it did not end well: {ended}")));
+        }
+    }
+    yuna.wait_until_logged("Xwayland stopped", 2)
+        .map_err(failure)?;
+    yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let after = yuna.measure_rest().map_err(|activity| {
+        failure(format!("Yuna did not rest once Xwayland ended: {activity}"))
+    })?;
+    for prefix in [&prefix_96, &prefix_144] {
+        remove_wineserver_folder(&yuna, prefix).map_err(failure)?;
+    }
+    yuna.stop()?;
+    Ok(format!(
+        "notepad on X11: both prefixes made in {:.1} s; quiet after {} frames drawn, {} \
+         commits; at 144 DPI, its menu bar {} pixels high against {} at 96, its scroll bar {} \
+         wide against {}; its window of {} × {} X11 pixels drawn as X11 holds it, exactly; with \
+         both open, {open}; closed by Alt+F4, both Xwaylands ended, then {after}",
+        made.as_secs_f64(),
+        shown.frames_drawn,
+        shown.commits,
+        parts.menu_bar,
+        parts_96.menu_bar,
+        parts.scroll_bar,
+        parts_96.scroll_bar,
+        x11.image.width,
+        x11.image.height,
+    ))
+}
+
+/// The parts of notepad's window that Wine sizes by its dots per inch, in X11 pixels, measured
+/// on its pixels: Wine draws them in flat colours.
+#[derive(Debug)]
+struct NotepadParts {
+    /// The rows of the menu bar's colour from the top, down the window's middle column, past
+    /// the menu's text.
+    menu_bar: u32,
+    /// The scroll bar's track across the window's middle row: the last run of one colour at
+    /// least 4 pixels long, before the window's right border.
+    scroll_bar: u32,
+}
+
+impl NotepadParts {
+    fn of(window: &Image) -> Result<NotepadParts, String> {
+        let middle_column: Vec<[u8; 3]> = (0..window.height)
+            .map(|y| window.at(window.width / 2, y))
+            .collect();
+        let middle_row: Vec<[u8; 3]> = (0..window.width)
+            .map(|x| window.at(x, window.height / 2))
+            .collect();
+        let column_runs = runs(&middle_column);
+        let menu_bar = match column_runs.as_slice() {
+            [menu_bar, _, ..] => *menu_bar,
+            _ => return Err(format!("no menu bar in {column_runs:?}")),
+        };
+        let scroll_bar = runs(&middle_row)
+            .into_iter()
+            .rev()
+            .find(|&run| run >= 4)
+            .ok_or("no scroll bar")?;
+        Ok(NotepadParts {
+            menu_bar,
+            scroll_bar,
+        })
+    }
+}
+
+/// The lengths of the runs of equal pixels in `pixels`, in order.
+fn runs(pixels: &[[u8; 3]]) -> Vec<u32> {
+    pixels
+        .chunk_by(|a, b| a == b)
+        .map(|run| u32::try_from(run.len()).expect("a run of an image's side"))
+        .collect()
+}
+
+/// Makes fresh Wine prefixes, each in its folder at its dots per inch, all at once, before any
+/// of their programs runs: the test runs Wine itself, with no display. Each prefix's registry
+/// says its dots per inch, `LogPixels`, Wine's X11 driver, and a caret that never blinks,
+/// `CursorBlinkRate` -1 as on Windows, so that notepad, once drawn, has no reason to draw
+/// again. Gives how long Wine took to make them, its wineserver's end not counted.
+fn make_wine_prefixes(yuna: &Yuna, prefixes: &[(&Path, u32)]) -> Result<Duration, String> {
+    let started = Instant::now();
+    let mut imports = Vec::new();
+    for &(prefix, dpi) in prefixes {
+        let registry = prefix.with_extension("reg");
+        fs::write(&registry, wine_registry(dpi))
+            .map_err(|error| format!("{}: {error}", registry.display()))?;
+        let mut command = wine_tool(yuna, prefix, "wine");
+        command.args(["reg", "import"]).arg(&registry);
+        imports.push(Application::start(
+            &format!("wine-prefix-{dpi}"),
+            yuna,
+            command,
+        ));
+    }
+    for import in &mut imports {
+        let status = import.wait(PATIENCE)?;
+        if !status.success() {
+            return Err(format!(
+                "Wine's reg import ended with {status}: {}",
+                import.log.display()
+            ));
+        }
+    }
+    let made = started.elapsed();
+    // Its wineserver writes the registry when it ends, 3 s after its last program: notepad
+    // then starts its own, with the seat's display.
+    for &(prefix, _) in prefixes {
+        wait_for_wineserver(yuna, prefix)?;
+    }
+    Ok(made)
+}
+
+/// Waits until `prefix`'s wineserver, if one runs, has ended.
+fn wait_for_wineserver(yuna: &Yuna, prefix: &Path) -> Result<(), String> {
+    let name = format!(
+        "wineserver-{}",
+        prefix.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let mut command = wine_tool(yuna, prefix, "wineserver");
+    command.arg("--wait");
+    let status = Application::start(&name, yuna, command).wait(PATIENCE)?;
+    if !status.success() {
+        return Err(format!("wineserver --wait ended with {status}"));
+    }
+    Ok(())
+}
+
+/// Removes the folder `prefix`'s wineservers kept beside the machine's own, once the last has
+/// ended: Wine names it after the prefix's device and inode, in hexadecimal, always in `/tmp`,
+/// and leaves its empty lock file in it. Anything else in it makes the removal fail.
+fn remove_wineserver_folder(yuna: &Yuna, prefix: &Path) -> Result<(), String> {
+    wait_for_wineserver(yuna, prefix)?;
+    let prefix = fs::metadata(prefix).map_err(|error| format!("{}: {error}", prefix.display()))?;
+    let folder = PathBuf::from(format!(
+        "/tmp/.wine-{}/server-{:x}-{:x}",
+        prefix.uid(),
+        prefix.dev(),
+        prefix.ino()
+    ));
+    let removed = |error: std::io::Error| format!("{}: {error}", folder.display());
+    match fs::remove_file(folder.join("lock")) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(removed(error)),
+        _ => {}
+    }
+    fs::remove_dir(&folder).map_err(removed)
+}
+
+/// The registry file that sets a prefix's dots per inch, its X11 driver and its caret.
+fn wine_registry(dpi: u32) -> String {
+    format!(
+        "REGEDIT4\n\n\
+         [HKEY_CURRENT_USER\\Control Panel\\Desktop]\n\
+         \"LogPixels\"=dword:{dpi:08x}\n\
+         \"CursorBlinkRate\"=\"-1\"\n\n\
+         [HKEY_CURRENT_USER\\Software\\Wine\\Drivers]\n\
+         \"Graphics\"=\"x11\"\n"
+    )
+}
+
+/// What Wine's programs get: their prefix; no Mono and no Gecko, which Wine would offer to
+/// download in a dialog; none of its drivers for input devices and USB, `winebus.sys` and
+/// `wineusb.sys`, which open the machine's `/dev/input`, `/dev/hidraw` and `/dev/bus/usb`
+/// read-write; a print server that does not exist, a socket beside the prefix, where CUPS's
+/// library would otherwise reach the machine's over TCP, `localhost:631`; no system bus, through
+/// which Wine would list the machine's disks; and none of its debugging lines but errors.
+fn wine_variables(prefix: &Path) -> Vec<(&'static str, String)> {
+    vec![
+        ("WINEPREFIX", prefix.to_string_lossy().into_owned()),
+        (
+            "CUPS_SERVER",
+            prefix.with_extension("cups").to_string_lossy().into_owned(),
+        ),
+        (
+            "WINEDLLOVERRIDES",
+            "mscoree,mshtml=;winebus.sys,wineusb.sys=d".to_owned(),
+        ),
+        ("DBUS_SYSTEM_BUS_ADDRESS", "disabled:".to_owned()),
+        ("WINEDEBUG", "fixme-all,warn-all".to_owned()),
+    ]
+}
+
+/// `program`, one of Wine's, run by the test itself on `prefix`, with the applications'
+/// environment and no display.
+fn wine_tool(yuna: &Yuna, prefix: &Path, program: &str) -> Command {
+    let mut command = Command::new(program);
+    command
+        .env_clear()
+        .envs(application_environment(&yuna.home()))
+        .envs(wine_variables(prefix))
+        .stdin(Stdio::null());
+    dies_with_test(&mut command);
+    command
+}
+
+/// An agent's output of `mode`, physical width, height and scale, at 60 Hz, as `seat create`
+/// takes it.
+fn output_mode((width, height, scale): (u32, u32, f64)) -> Value {
+    json!({"action": "create", "width": width, "height": height, "rate": 60, "scale": scale})
 }
 
 /// The folder of SlimeEngine's examples, built at the revision
@@ -643,15 +1184,25 @@ fn gtk4_demo(yuna: &Yuna) -> Command {
     command
 }
 
-/// Qt's QML runner on its Wayland platform and its OpenGL renderer, the default pinned.
+/// Qt's QML runner on its Wayland platform.
 fn qml(yuna: &Yuna) -> Command {
     let mut command = application(yuna, "qml");
+    command.envs(qt_variables("wayland"));
     command
-        .env("QT_QPA_PLATFORM", "wayland")
-        .env("QT_PLUGIN_PATH", shell_variable("YUNA_QT_PLUGINS"))
-        .env("QML_IMPORT_PATH", shell_variable("YUNA_QML_IMPORTS"))
-        .env("QSG_RHI_BACKEND", "opengl");
-    command
+}
+
+/// What Qt's QML runner needs on `platform`, `wayland` or X11's `xcb`: its plugins and QML's
+/// modules, since `qml` is not wrapped; its OpenGL renderer, the default, pinned; and its log on
+/// its standard error, which Qt would send to the machine's journal when that is not a
+/// terminal.
+fn qt_variables(platform: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("QT_QPA_PLATFORM", platform.to_owned()),
+        ("QT_PLUGIN_PATH", shell_variable("YUNA_QT_PLUGINS")),
+        ("QML_IMPORT_PATH", shell_variable("YUNA_QML_IMPORTS")),
+        ("QSG_RHI_BACKEND", "opengl".to_owned()),
+        ("QT_FORCE_STDERR_LOGGING", "1".to_owned()),
+    ]
 }
 
 /// `program`, to run in `yuna`, with an environment of its own: only what this file gives it.
@@ -873,9 +1424,10 @@ impl Yuna {
         command
             .args(mode)
             .args(["--output", &output])
-            // What it draws with, from the shell; a throwaway home, so that Mesa reads none of
-            // the user's settings.
+            // What it draws with, from the shell; Xwayland, for its seats' X11 programs; a
+            // throwaway home, so that Mesa reads none of the user's settings.
             .env_clear()
+            .env("PATH", shell_variable("YUNA_XWAYLAND_PATH"))
             .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH"))
             .env(
                 "__EGL_VENDOR_LIBRARY_FILENAMES",
@@ -1055,6 +1607,161 @@ impl Yuna {
                 return Err(format!("{region} never stood still"));
             }
         }
+    }
+
+    /// Captures through MCP with `arguments`, and gives the image decoded, with where it is on
+    /// its output. Its PNG is kept in Yuna's folder, which a failure keeps.
+    fn capture_image(&self, arguments: Value) -> Result<Capture, String> {
+        let captured = self.call("capture", arguments.clone())?;
+        let data = captured["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|content| content["type"] == json!("image"))
+            .and_then(|image| image["data"].as_str())
+            .ok_or_else(|| format!("no image in {captured}"))?;
+        let png = decode_base64(data)?;
+        let mapping = &captured["structuredContent"];
+        let file = format!("capture-{}-{}.png", arguments["seat"], mapping["capture"]);
+        fs::write(self.folder.join(&file), &png).map_err(|error| format!("{file}: {error}"))?;
+        let number = |name: &str| {
+            mapping[name]
+                .as_f64()
+                .ok_or_else(|| format!("no {name} in {mapping}"))
+        };
+        Ok(Capture {
+            image: Image::from_png(&png)?,
+            x: number("x")?,
+            y: number("y")?,
+            units_per_pixel: number("units_per_pixel")?,
+        })
+    }
+
+    /// `seat`'s X display, as its programs get it: `env`, started through `spawn`, prints it.
+    fn seat_display(&self, seat: u64) -> Result<SeatDisplay, String> {
+        let program = self.start_program(seat, &["env"], &[])?;
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            // Its log is whole once the program has ended and the log ends with a line's end.
+            let log = fs::read_to_string(&program.log).unwrap_or_default();
+            let variable = |name: &str| {
+                log.lines()
+                    .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+            };
+            if let (Some(display), Some(xauthority), true) = (
+                variable("DISPLAY"),
+                variable("XAUTHORITY"),
+                log.ends_with('\n'),
+            ) && self.listed_program(seat, &program)?["state"] != json!("running")
+            {
+                let number = display
+                    .strip_prefix(':')
+                    .and_then(|number| number.parse().ok())
+                    .ok_or_else(|| format!("DISPLAY is {display}, not :<number>"))?;
+                return Ok(SeatDisplay {
+                    number,
+                    cookie: cookie_of(Path::new(xauthority))?,
+                });
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "no DISPLAY and XAUTHORITY in {} s: {log}",
+                    PATIENCE.as_secs()
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// What X11 holds of `seat`'s one managed window, read as a program of that seat reads it,
+    /// through its display.
+    fn x11_window(&self, seat: u64) -> Result<X11Window, String> {
+        read_x11_window(&self.seat_display(seat)?)
+    }
+
+    /// `window`'s top-left corner, as `windows` gives it, on its output of `seat`, in logical
+    /// units: `windows` gives rectangles in the space all outputs share.
+    fn corner_on_output(&self, seat: u64, window: &Value) -> Result<(f64, f64), String> {
+        let listed = self.call("outputs", json!({"action": "list", "seat": seat}))?;
+        let output = listed["structuredContent"]["outputs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|output| output["id"] == window["output"])
+            .ok_or_else(|| format!("no output of {window}"))?;
+        let at = |of: &Value, axis: &str| {
+            of[axis]
+                .as_f64()
+                .ok_or_else(|| format!("no {axis} in {of}"))
+        };
+        Ok((
+            at(&window["rect"], "x")? - at(&output["logical"], "x")?,
+            at(&window["rect"], "y")? - at(&output["logical"], "y")?,
+        ))
+    }
+
+    /// Adds an output of `mode` to `seat`, shows a new workspace on it and moves `window` there;
+    /// gives the window once Yuna has gone quiet.
+    fn move_to_new_output(
+        &self,
+        seat: u64,
+        window: &Value,
+        (width, height, scale): (u32, u32, f64),
+    ) -> Result<Value, String> {
+        let added = self.call(
+            "outputs",
+            json!({
+                "action": "create", "seat": seat, "width": width, "height": height,
+                "rate": 60, "scale": scale,
+            }),
+        )?;
+        let output = &added["structuredContent"]["output"]["id"];
+        let workspace = "moved";
+        self.call(
+            "workspaces",
+            json!({"action": "create", "seat": seat, "name": workspace, "output": output}),
+        )?;
+        self.call(
+            "workspaces",
+            json!({"action": "focus", "seat": seat, "name": workspace}),
+        )?;
+        self.call(
+            "workspaces",
+            json!({
+                "action": "move_window", "seat": seat, "window": window["id"],
+                "workspace": workspace,
+            }),
+        )?;
+        self.wait_until_quiet(QUIET, PATIENCE)?;
+        let listed = self.call("windows", json!({"seat": seat}))?;
+        let moved = listed["structuredContent"]["windows"][0].clone();
+        if moved["output"] != *output || moved["rect"].is_null() {
+            return Err(format!(
+                "the window was not shown on output {output}: {moved}"
+            ));
+        }
+        Ok(moved)
+    }
+
+    /// Waits until Yuna's log holds `count` lines that contain `text`.
+    fn wait_until_logged(&self, text: &str, count: usize) -> Result<(), String> {
+        let deadline = Instant::now() + PATIENCE;
+        while self
+            .read_log()
+            .lines()
+            .filter(|line| line.contains(text))
+            .count()
+            < count
+        {
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "Yuna did not log \"{text}\" {count} times in {} s",
+                    PATIENCE.as_secs()
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+        Ok(())
     }
 
     /// Whether `seat`'s first window is still shown, placed on an output.
@@ -1345,4 +2052,321 @@ impl Drop for Application {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// An image of R, G, B pixels, row by row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Image {
+    width: u32,
+    height: u32,
+    pixels: Vec<[u8; 3]>,
+}
+
+impl Image {
+    /// A capture's PNG, as Yuna encodes it: 8-bit RGB.
+    fn from_png(png: &[u8]) -> Result<Image, String> {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .map_err(|error| format!("a capture's PNG: {error}"))?;
+        let mut bytes = vec![0; reader.output_buffer_size().ok_or("a PNG too large")?];
+        let info = reader
+            .next_frame(&mut bytes)
+            .map_err(|error| format!("a capture's pixels: {error}"))?;
+        if info.color_type != png::ColorType::Rgb || info.bit_depth != png::BitDepth::Eight {
+            return Err(format!(
+                "a capture's PNG is {:?} of {:?}, not 8-bit RGB",
+                info.color_type, info.bit_depth
+            ));
+        }
+        bytes.truncate(info.buffer_size());
+        Ok(Image {
+            width: info.width,
+            height: info.height,
+            pixels: bytes.as_chunks::<3>().0.to_vec(),
+        })
+    }
+
+    /// Pixel (`x`, `y`).
+    fn at(&self, x: u32, y: u32) -> [u8; 3] {
+        self.pixels[(y * self.width + x) as usize]
+    }
+
+    /// The part of this image `width` × `height` from (`left`, `top`), if it holds it all.
+    fn part(&self, left: u32, top: u32, width: u32, height: u32) -> Option<Image> {
+        if left + width > self.width || top + height > self.height {
+            return None;
+        }
+        let pixels = (top..top + height)
+            .flat_map(|y| (left..left + width).map(move |x| (x, y)))
+            .map(|(x, y)| self.at(x, y))
+            .collect();
+        Some(Image {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Where this image and `other` differ by more than `tolerance` in a channel.
+    fn differences(&self, other: &Image, tolerance: u8) -> Differences {
+        let mut differences = Differences {
+            sizes: ((self.width, self.height), (other.width, other.height)),
+            count: 0,
+            largest: 0,
+            first: None,
+        };
+        if differences.sizes.0 != differences.sizes.1 {
+            differences.count = self.pixels.len().max(other.pixels.len());
+            return differences;
+        }
+        for (index, (&ours, &theirs)) in self.pixels.iter().zip(&other.pixels).enumerate() {
+            let off = (0..3)
+                .map(|c| ours[c].abs_diff(theirs[c]))
+                .max()
+                .unwrap_or(0);
+            if off > tolerance {
+                differences.count += 1;
+                differences.largest = differences.largest.max(off);
+                let index = u32::try_from(index).expect("an image's pixels fit in u32");
+                differences.first.get_or_insert((
+                    index % self.width,
+                    index / self.width,
+                    ours,
+                    theirs,
+                ));
+            }
+        }
+        differences
+    }
+}
+
+/// How two images differ, as [`Image::differences`] counts it.
+#[derive(Debug)]
+struct Differences {
+    /// Both images' sizes: when they differ, every pixel counts as off.
+    sizes: ((u32, u32), (u32, u32)),
+    /// The pixels off by more than the tolerance in a channel.
+    count: usize,
+    /// The most a channel is off by.
+    largest: u8,
+    /// The first pixel off, row by row: its place, then its value in each image.
+    first: Option<(u32, u32, [u8; 3], [u8; 3])>,
+}
+
+impl fmt::Display for Differences {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ((width, height), (other_width, other_height)) = self.sizes;
+        if self.sizes.0 != self.sizes.1 {
+            return write!(
+                f,
+                "{width} × {height} pixels against {other_width} × {other_height}"
+            );
+        }
+        write!(
+            f,
+            "{} pixels of {width} × {height} off, by up to {}",
+            self.count, self.largest
+        )?;
+        if let Some((x, y, ours, theirs)) = self.first {
+            write!(f, "; the first at ({x}, {y}): {ours:?} against {theirs:?}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A capture's image and where it is on its output: its pixel (`px`, `py`) is the logical point
+/// (`x + px × units_per_pixel`, `y + py × units_per_pixel`).
+struct Capture {
+    image: Image,
+    x: f64,
+    y: f64,
+    units_per_pixel: f64,
+}
+
+impl Capture {
+    /// The pixels of a window whose corner is at `corner` on its output, in logical units, in
+    /// this capture at the output's physical size, of the size of `x11`, X11's image of it: at
+    /// XWayland's scale, X11's pixels are the output's, and the window's corner is on a whole
+    /// pixel.
+    fn window_part(&self, corner: (f64, f64), x11: &Image) -> Result<Image, String> {
+        let pixel = |unit: f64, origin: f64| {
+            let pixel = (unit - origin) / self.units_per_pixel;
+            if (pixel - pixel.round()).abs() > 1e-6 || pixel < 0.0 {
+                return Err(format!(
+                    "the window's corner is at {unit}, pixel {pixel} of a capture from {origin}"
+                ));
+            }
+            Ok(pixel.round() as u32)
+        };
+        let (left, top) = (pixel(corner.0, self.x)?, pixel(corner.1, self.y)?);
+        self.image
+            .part(left, top, x11.width, x11.height)
+            .ok_or_else(|| {
+                format!(
+                    "a capture of {} × {} holds no {} × {} window from ({left}, {top})",
+                    self.image.width, self.image.height, x11.width, x11.height
+                )
+            })
+    }
+}
+
+/// A seat's X display, as its programs get it: its number, and the cookie of its Xauthority.
+struct SeatDisplay {
+    number: u32,
+    cookie: Vec<u8>,
+}
+
+/// The cookie of the Xauthority file at `path`: its one entry's last field, after the family,
+/// the address, the display's number and the cookie's name, each but the family led by its
+/// length.
+fn cookie_of(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut at = 2;
+    let mut field = Vec::new();
+    for _ in 0..4 {
+        let length = bytes
+            .get(at..at + 2)
+            .map(|length| usize::from(u16::from_be_bytes([length[0], length[1]])))
+            .ok_or("a short Xauthority")?;
+        field = bytes
+            .get(at + 2..at + 2 + length)
+            .ok_or("a short Xauthority")?
+            .to_vec();
+        at += 2 + length;
+    }
+    Ok(field)
+}
+
+/// What X11 holds of a seat's one managed window: `Xft.dpi`, which Yuna sets, and the window's
+/// pixels.
+struct X11Window {
+    dpi: u32,
+    image: Image,
+}
+
+/// Connects to `display` as an X11 program of its seat does, through its abstract socket and
+/// with its cookie, and reads `Xft.dpi` and the one window of `_NET_CLIENT_LIST`, through
+/// `GetImage`. Disconnects before it returns.
+fn read_x11_window(display: &SeatDisplay) -> Result<X11Window, String> {
+    let x11 = |error: &dyn fmt::Display| format!("X11: {error}");
+    let address = SocketAddr::from_abstract_name(format!("/tmp/.X11-unix/X{}", display.number))
+        .map_err(|e| x11(&e))?;
+    let stream = UnixStream::connect_addr(&address).map_err(|e| x11(&e))?;
+    let (stream, _) = DefaultStream::from_unix_stream(stream).map_err(|e| x11(&e))?;
+    let connection = RustConnection::connect_to_stream_with_auth_info(
+        stream,
+        0,
+        b"MIT-MAGIC-COOKIE-1".to_vec(),
+        display.cookie.clone(),
+    )
+    .map_err(|e| x11(&e))?;
+    let root = connection.setup().roots[0].root;
+    let property = |name: AtomEnum, kind: AtomEnum| {
+        connection
+            .get_property(false, root, name, kind, 0, 1024)
+            .map_err(|e| x11(&e))?
+            .reply()
+            .map_err(|e| x11(&e))
+    };
+    let resources = property(AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING)?.value;
+    let dpi = String::from_utf8_lossy(&resources)
+        .lines()
+        .find_map(|line| line.strip_prefix("Xft.dpi:")?.trim().parse().ok())
+        .ok_or("no Xft.dpi in RESOURCE_MANAGER")?;
+    let client_list = connection
+        .intern_atom(true, b"_NET_CLIENT_LIST")
+        .map_err(|e| x11(&e))?
+        .reply()
+        .map_err(|e| x11(&e))?
+        .atom;
+    let windows: Vec<u32> = connection
+        .get_property(false, root, client_list, AtomEnum::WINDOW, 0, 64)
+        .map_err(|e| x11(&e))?
+        .reply()
+        .map_err(|e| x11(&e))?
+        .value32()
+        .ok_or("_NET_CLIENT_LIST is not of windows")?
+        .collect();
+    let [window] = windows[..] else {
+        return Err(format!("X11 manages {} windows, not one", windows.len()));
+    };
+    let geometry = connection
+        .get_geometry(window)
+        .map_err(|e| x11(&e))?
+        .reply()
+        .map_err(|e| x11(&e))?;
+    let image = connection
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            window,
+            0,
+            0,
+            geometry.width,
+            geometry.height,
+            !0,
+        )
+        .map_err(|e| x11(&e))?
+        .reply()
+        .map_err(|e| x11(&e))?;
+    // Xwayland's pixels of depth 24 or 32 are 32 bits, the least significant byte first: blue,
+    // green, red, then nothing or alpha.
+    let setup = connection.setup();
+    let bits = setup
+        .pixmap_formats
+        .iter()
+        .find(|format| format.depth == image.depth)
+        .map(|format| format.bits_per_pixel);
+    if bits != Some(32) || setup.image_byte_order != ImageOrder::LSB_FIRST {
+        return Err(format!(
+            "a window of depth {}, {bits:?} bits a pixel, {:?}: not what this test reads",
+            image.depth, setup.image_byte_order
+        ));
+    }
+    let (width, height) = (u32::from(geometry.width), u32::from(geometry.height));
+    if image.data.len() != (width * height * 4) as usize {
+        return Err(format!(
+            "GetImage gave {} bytes for {width} × {height} pixels",
+            image.data.len()
+        ));
+    }
+    Ok(X11Window {
+        dpi,
+        image: Image {
+            width,
+            height,
+            pixels: image
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&[blue, green, red, _]| [red, green, blue])
+                .collect(),
+        },
+    })
+}
+
+/// The bytes of base64 `text`, as RFC 4648 writes them, padded.
+fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Ok(c - b'A'),
+        b'a'..=b'z' => Ok(c - b'a' + 26),
+        b'0'..=b'9' => Ok(c - b'0' + 52),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err(format!("not base64: {c}")),
+    };
+    let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
+    for chunk in text.as_bytes().chunks(4) {
+        let digits = chunk
+            .iter()
+            .take_while(|&&c| c != b'=')
+            .map(|&c| value(c))
+            .collect::<Result<Vec<u8>, String>>()?;
+        if digits.len() < 2 {
+            return Err("base64 cut short".to_owned());
+        }
+        let n = digits.iter().fold(0u32, |n, &d| n << 6 | u32::from(d)) << (6 * (4 - digits.len()));
+        bytes.extend_from_slice(&n.to_be_bytes()[1..digits.len()]);
+    }
+    Ok(bytes)
 }

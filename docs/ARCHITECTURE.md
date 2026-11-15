@@ -1213,15 +1213,28 @@ own thread, both `took_us`.
   DejaVu alone (`YUNA_FONTS_CONF`); Mesa on the CPU, lavapipe alone for Vulkan, without the
   machine's layers; cursors that never blink; GTK's animations off; GTK's renderer and Qt's
   pinned. What still reads the machine is listed in the file's documentation. Every process it
-  starts dies with the test's thread. The test takes about 15 s. Through `yuna mcp`, as an agent
+  starts dies with the test's thread. The file takes about 45 s, its X11 tests the longest.
+  Through `yuna mcp`, as an agent
   drives it, `vkcube` paused by its space key rests with its window open. Two tests run mpv
   there, in Vulkan on lavapipe, on a picture it makes itself: an SDR one on an HDR output and a
   PQ one on an SDR output ([ADR-0050](adr/0050-mpv-in-the-applications-tests.md)). Once mpv
   and Yuna have gone quiet, each reads through `windows` the colours its surface declared, and
   requires values that only the description Yuna prefers for it gives: the HDR output's
   monitor volume as mpv's target, or the SDR output's gamma 2.2 and minimum luminance for a PQ
-  picture. mpv then quits by its `q` key, and Yuna must rest. SlimeEngine's examples,
-  built by the weekly job, run in ignored tests of the same file
+  picture. mpv then quits by its `q` key, and Yuna must rest. Two tests run X11 programs there,
+  which their agent's seat gives `DISPLAY`: Yuna finds Xwayland on the `PATH` the test gives it.
+  Qt's `qml` on X11, on a seat at 1.5, draws a scene of one-pixel lines and text at a device
+  pixel ratio of 1.5, read from `Xft.dpi` 144: its capture at the physical size must be exactly
+  what X11 holds of its window (`GetImage`), and the same scene drawn by Qt on Wayland at 1.5 on
+  another seat; moved to an output at 1, it must be within a level of its logical capture at
+  1.5, the average of the same pixels
+  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+  Wine's notepad, from fresh prefixes at 96 and 144 dots per inch on seats at 1 and 1.5, both
+  tiled, must draw its menu bar's height and its scroll bar's width 1.5 times larger at 144,
+  within half a pixel, and its capture must be exactly what X11 holds of it; Wine opens no
+  network connection, and the folders its wineservers keep in `/tmp/.wine-<uid>` are removed.
+  Each rests with its window open, leaves by its keys, and Yuna rests again once Xwayland has
+  ended. SlimeEngine's examples, built by the weekly job, run in ignored tests of the same file
   ([ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): `window` draws
   120 frames and leaves; `editor` rests with its window open; and M1.5's done-when, an agent
   that opens `interface` through MCP alone, clicks its text field, types `Grüße`, shows text

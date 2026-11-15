@@ -265,6 +265,11 @@ with games' VRR:
 - `agent_time.rs` keeps its own copies of what `examples/common/` now shares with `frame_time`
   and `motion_time` (its run folder, the vkcube environment, `percentile`); `motion_time` reads
   an output's mode with its own parser beside the program's private one.
+- Reading an Xauthority's cookie is written four times, `cookie_of` in
+  `tests/applications.rs`, `tests/headless/x11_client.rs`, `tests/headless/xwayland.rs` and
+  `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
+  `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
+  would serve the tests, and the example could include it with `#[path]`.
 
 ## XWayland
 
@@ -279,6 +284,10 @@ with games' VRR:
 - In `yuna mcp`, the programs' reaping (`wait` on any child) may take an Xwayland's status before
   its pidfd does: a crash after `WM_S0` then counts as a clean end, and starts no pause. A crash
   loop in `yuna mcp` restarts Xwayland at each new X11 connection.
+- A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
+  while an Xwayland with one small window runs, and keeps 22 MiB of it once Xwayland has ended
+  ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. Whether that memory
+  is in use or freed and kept by the allocator is not known.
 - On llvmpipe, Xwayland runs without GLX: Mesa's GLX for Xwayland loads the machine's own drivers
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
