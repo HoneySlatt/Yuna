@@ -129,7 +129,7 @@ milestone first needs it.
 ### M1.9 — The rivals measured
 
 - **Goal.** The bar's budgets set from facts.
-- **Delivers.** niri, Hyprland, KWin, dwl, mango and Umbriel measured at rest and in motion: wake-ups,
+- **Delivers.** dwl, sway, Hyprland, niri, mango, Umbriel, KWin, Mutter and cosmic-comp measured at rest and in motion: wake-ups,
   CPU and GPU time, memory, power, frames during scrolling and animations; headless where they allow
   it, on the owner's desktop by hand otherwise, after the owner's consent. A throwaway Vulkan
   prototype measured on every tier, the laptop's driver checked
