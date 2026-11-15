@@ -149,6 +149,38 @@ fn open_and_commit(compositor: &mut Compositor, client: &mut Client, colour: u32
     window
 }
 
+/// A client that leaves while another copy of its socket's descriptor exists, as in a process
+/// another test forked and has not yet run its program in, is seen gone at the next dispatch:
+/// the test client shuts its connection down rather than only closing it. Without that, stories
+/// that check a departure at once failed now and then while X11 stories started Xwayland.
+#[test]
+fn a_client_leaving_while_a_copy_of_its_socket_lives_is_seen_gone() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    open_and_commit(&mut compositor, &mut client, 0xff00_00ff);
+    run_armed_deadlines(&mut compositor);
+    assert_eq!(
+        compositor
+            .layout()
+            .arrange(OUTPUT)
+            .map(|placed| placed.len()),
+        Ok(1)
+    );
+    let copy = client.socket_copy();
+    drop(client);
+    compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("the compositor dispatches");
+    assert_eq!(
+        compositor
+            .layout()
+            .arrange(OUTPUT)
+            .map(|placed| placed.len()),
+        Ok(0)
+    );
+    drop(copy);
+}
+
 /// What changed in the counters between two readings, wake-ups aside.
 fn activity(before: Counters, after: Counters) -> (u64, u64, u64, u64) {
     (

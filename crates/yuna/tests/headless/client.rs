@@ -123,6 +123,17 @@ pub struct Client {
     connection: Connection,
     queue: EventQueue<ClientState>,
     pub state: ClientState,
+    /// Its end of the socket, kept to shut the connection down when it drops.
+    socket: std::os::unix::net::UnixStream,
+}
+
+impl Drop for Client {
+    /// Shuts the connection down, so that Yuna sees the client leave at its next dispatch. A
+    /// plain close would not end it while a process forked by another test of this one, between
+    /// its fork and its exec, holds a copy of every descriptor, this socket's included.
+    fn drop(&mut self) {
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// What the client's objects hold and received.
@@ -199,6 +210,7 @@ impl Client {
         compositor: &mut Compositor,
         stream: std::os::unix::net::UnixStream,
     ) -> Client {
+        let socket = stream.try_clone().expect("a copy of the client's socket");
         let connection = Connection::from_socket(stream).expect("a connection");
         let queue = connection.new_event_queue();
         connection.display().get_registry(&queue.handle(), ());
@@ -206,6 +218,7 @@ impl Client {
             connection,
             queue,
             state: ClientState::default(),
+            socket,
         };
         // Once for the globals, once for the events of the objects bound.
         client.roundtrip(compositor);
@@ -220,6 +233,14 @@ impl Client {
             "a global is missing"
         );
         client
+    }
+
+    /// A copy of its socket's descriptor, as a process forked by another test holds one between
+    /// its fork and its exec.
+    pub fn socket_copy(&self) -> std::os::unix::net::UnixStream {
+        self.socket
+            .try_clone()
+            .expect("a copy of the client's socket")
     }
 
     /// Sends what the client wrote, lets the compositor handle it, and reads every event, until
