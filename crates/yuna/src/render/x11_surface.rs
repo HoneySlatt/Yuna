@@ -43,7 +43,7 @@ use smithay::wayland::viewporter::ViewportCachedState;
 use yuna_layout::geometry::Rect;
 
 use super::{WindowElement, window_pixels};
-use crate::output::VirtualOutput;
+use crate::output::{VirtualOutput, to_i32};
 
 /// The area filter: a texture shader under Smithay's contract for custom texture shaders.
 const AREA_FILTER: &str = include_str!("area_filter.frag");
@@ -81,19 +81,45 @@ pub(crate) fn x11_window_element(
     alpha: f32,
     output: &VirtualOutput,
 ) -> Option<WindowElement> {
+    x11_element(renderer, surface, x11_scale, alpha, output, |size| {
+        place(size, geometry_offset, rect, x11_scale, output)
+    })
+}
+
+/// An override-redirect window's element on `output`, a menu's or a tooltip's, if any of it
+/// shows there: its surface's buffer, in X11 pixels, its top-left corner at `corner`, in the
+/// output's physical pixels, cut to the output, not to a window, at opacity `alpha`. Drawn as
+/// [`x11_window_element`] draws a window, with the same filters; none in the same cases.
+pub(crate) fn x11_menu_element(
+    renderer: &mut GlesRenderer,
+    surface: &WlSurface,
+    corner: Point<i32, Physical>,
+    x11_scale: f64,
+    alpha: f32,
+    output: &VirtualOutput,
+) -> Option<WindowElement> {
+    x11_element(renderer, surface, x11_scale, alpha, output, |size| {
+        place_at_corner(size, corner, x11_scale, output)
+    })
+}
+
+/// The element of `surface`, placed by `place_it` from its size in X11 pixels.
+fn x11_element(
+    renderer: &mut GlesRenderer,
+    surface: &WlSurface,
+    x11_scale: f64,
+    alpha: f32,
+    output: &VirtualOutput,
+    place_it: impl Fn(Size<i32, Buffer>) -> Option<Placement>,
+) -> Option<WindowElement> {
     let (texture, view) = surface_texture(renderer, surface, x11_scale)?;
     let element = match view {
-        None => X11SurfaceElement::new(
-            renderer,
-            texture,
-            geometry_offset,
-            rect,
-            x11_scale,
-            alpha,
-            output,
-        )?,
+        None => {
+            let placement = place_it(texture.texture.size())?;
+            X11SurfaceElement::whole(renderer, texture, placement, x11_scale, alpha, output)
+        }
         Some(view) => {
-            let placement = place(view.size, geometry_offset, rect, x11_scale, output)?;
+            let placement = place_it(view.size)?;
             let filter = view_filter(renderer, placement, view);
             X11SurfaceElement::assemble(texture, view.source, placement, alpha, filter)
         }
@@ -114,14 +140,101 @@ pub(crate) fn x11_surface_origin(
 ) -> Option<Point<f64, Logical>> {
     let size = x11_surface_size(surface, x11_scale)?;
     let placement = place(size, geometry_offset, rect, x11_scale, output)?;
+    Some(logical_corner(placement, output))
+}
+
+/// Where the surface of an override-redirect window drawn as [`x11_menu_element`] says has its
+/// top-left corner, in logical coordinates, as [`x11_surface_origin`] gives a window's. None
+/// when the surface has no buffer or shows nothing on `output`.
+pub(crate) fn x11_menu_origin(
+    surface: &WlSurface,
+    corner: Point<i32, Physical>,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Option<Point<f64, Logical>> {
+    let size = x11_surface_size(surface, x11_scale)?;
+    let placement = place_at_corner(size, corner, x11_scale, output)?;
+    Some(logical_corner(placement, output))
+}
+
+/// The whole surface of an override-redirect window drawn as [`x11_menu_element`] says, in the
+/// output's physical pixels, before it is cut to the output. None in the same cases as
+/// [`x11_menu_origin`].
+pub(crate) fn x11_menu_rect(
+    surface: &WlSurface,
+    corner: Point<i32, Physical>,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Option<Rectangle<i32, Physical>> {
+    let size = x11_surface_size(surface, x11_scale)?;
+    place_at_corner(size, corner, x11_scale, output).map(|placement| placement.buffer)
+}
+
+/// The top-left corner of `placement`'s whole surface, in logical coordinates.
+fn logical_corner(placement: Placement, output: &VirtualOutput) -> Point<f64, Logical> {
     let scale = output.mode.scale();
-    Some(
-        (
-            output.rect.x + f64::from(placement.buffer.loc.x) / scale,
-            output.rect.y + f64::from(placement.buffer.loc.y) / scale,
-        )
-            .into(),
+    (
+        output.rect.x + f64::from(placement.buffer.loc.x) / scale,
+        output.rect.y + f64::from(placement.buffer.loc.y) / scale,
     )
+        .into()
+}
+
+/// Where [`x11_window_element`] puts the top-left corner of an X11 window's surface on `output`,
+/// in its physical pixels: its rectangle's corner less its geometry's offset in the surface,
+/// `geometry_offset` X11 pixels, rounded up as the element rounds it. The menus drawn with the
+/// window are placed from it ([`x11_offset_on`]).
+pub(crate) fn x11_surface_corner(
+    geometry_offset: Point<i32, Buffer>,
+    rect: Rect,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Point<i32, Physical> {
+    window_pixels(rect, output).loc - offset_pixels(geometry_offset, x11_scale, output)
+}
+
+/// The point `offset` X11 pixels from `corner` on `output`, in its physical pixels: the offset
+/// × s / S, rounded to the nearest, exactly the offset at s = S.
+pub(crate) fn x11_offset_on(
+    corner: Point<i32, Physical>,
+    offset: (i32, i32),
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Point<i32, Physical> {
+    let in_pixels = x11_to_pixels(output.mode.scale(), x11_scale);
+    corner
+        + Point::from((
+            in_pixels(offset.0).round() as i32,
+            in_pixels(offset.1).round() as i32,
+        ))
+}
+
+/// X11 pixels in physical pixels of an output of scale `scale`: × s / S, exactly the same at
+/// s = S, where no rounding may move an edge.
+fn x11_to_pixels(scale: f64, x11_scale: f64) -> impl Fn(i32) -> f64 {
+    let same_scale = same_scale(scale, x11_scale);
+    move |x11: i32| {
+        if same_scale {
+            f64::from(x11)
+        } else {
+            f64::from(x11) * scale / x11_scale
+        }
+    }
+}
+
+/// A geometry's offset of `geometry_offset` X11 pixels in its surface, in physical pixels of
+/// `output`, rounded up: see [`x11_window_element`].
+fn offset_pixels(
+    geometry_offset: Point<i32, Buffer>,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Point<i32, Physical> {
+    let in_pixels = x11_to_pixels(output.mode.scale(), x11_scale);
+    (
+        in_pixels(geometry_offset.x).ceil() as i32,
+        in_pixels(geometry_offset.y).ceil() as i32,
+    )
+        .into()
 }
 
 /// The size of an X11 window's surface in X11 pixels, at XWayland's scale `x11_scale`: its
@@ -259,24 +372,18 @@ enum Filter {
 }
 
 impl X11SurfaceElement {
-    /// The element of `surface`, its whole buffer at its own size, placed on `output`, as
-    /// [`x11_window_element`] says; none when nothing of it shows.
-    fn new(
+    /// The element of `surface`, its whole buffer at its own size, at `placement` on `output`.
+    fn whole(
         renderer: &mut GlesRenderer,
         surface: SurfaceTexture,
-        geometry_offset: Point<i32, Buffer>,
-        rect: Rect,
+        placement: Placement,
         x11_scale: f64,
         alpha: f32,
         output: &VirtualOutput,
-    ) -> Option<X11SurfaceElement> {
-        let size = surface.texture.size();
-        let placement = place(size, geometry_offset, rect, x11_scale, output)?;
+    ) -> X11SurfaceElement {
         let filter = filter(renderer, output.mode.scale(), x11_scale);
-        let source = Rectangle::from_size(size.to_f64());
-        Some(X11SurfaceElement::assemble(
-            surface, source, placement, alpha, filter,
-        ))
+        let source = Rectangle::from_size(surface.texture.size().to_f64());
+        X11SurfaceElement::assemble(surface, source, placement, alpha, filter)
     }
 
     /// The element of `surface` showing `source` of its texture at `placement`.
@@ -325,22 +432,50 @@ fn place(
     x11_scale: f64,
     output: &VirtualOutput,
 ) -> Option<Placement> {
-    let scale = output.mode.scale();
-    let same_scale = same_scale(scale, x11_scale);
-    // At s = S an X11 pixel is a physical pixel, exactly: no rounding may move an edge.
-    let in_pixels = |x11: i32| -> f64 {
-        if same_scale {
-            f64::from(x11)
-        } else {
-            f64::from(x11) * scale / x11_scale
-        }
-    };
     let window = window_pixels(rect, output);
-    let offset: Point<i32, Physical> = (
-        in_pixels(geometry_offset.x).ceil() as i32,
-        in_pixels(geometry_offset.y).ceil() as i32,
+    place_in(
+        buffer_size,
+        geometry_offset,
+        window.loc,
+        window,
+        x11_scale,
+        output,
     )
-        .into();
+}
+
+/// Where a surface of `buffer_size` X11 pixels is drawn on `output` as [`x11_menu_element`]
+/// says: its top-left corner at `corner`, cut to the output. None when nothing of it shows.
+fn place_at_corner(
+    buffer_size: Size<i32, Buffer>,
+    corner: Point<i32, Physical>,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Option<Placement> {
+    let whole =
+        Rectangle::from_size((to_i32(output.mode.width()), to_i32(output.mode.height())).into());
+    place_in(
+        buffer_size,
+        Point::default(),
+        corner,
+        whole,
+        x11_scale,
+        output,
+    )
+}
+
+/// Where a surface of `buffer_size` X11 pixels is drawn on `output`: its geometry's corner,
+/// `geometry_offset` X11 pixels into it, at `corner`, cut to `cut`, all in the output's physical
+/// pixels.
+fn place_in(
+    buffer_size: Size<i32, Buffer>,
+    geometry_offset: Point<i32, Buffer>,
+    corner: Point<i32, Physical>,
+    cut: Rectangle<i32, Physical>,
+    x11_scale: f64,
+    output: &VirtualOutput,
+) -> Option<Placement> {
+    let in_pixels = x11_to_pixels(output.mode.scale(), x11_scale);
+    let offset = offset_pixels(geometry_offset, x11_scale, output);
     // From the geometry's corner to the far edge: the X11 pixels past the offset, rounded once.
     let past_corner =
         |side: i32, offset: i32| in_pixels(side.saturating_sub(offset)).round() as i32;
@@ -352,8 +487,8 @@ fn place(
     if size.w <= 0 || size.h <= 0 {
         return None;
     }
-    let buffer = Rectangle::new(window.loc - offset, size);
-    let shown = buffer.intersection(window)?;
+    let buffer = Rectangle::new(corner - offset, size);
+    let shown = buffer.intersection(cut)?;
     Some(Placement { buffer, shown })
 }
 
@@ -692,15 +827,23 @@ mod tests {
                 texture,
                 damage: DamageSnapshot::empty(),
             };
-            X11SurfaceElement::new(
-                &mut self.state.renderer,
-                surface,
+            place(
+                surface.texture.size(),
                 Point::default(),
                 rect,
                 x11_scale,
-                alpha,
                 &self.state.outputs[output],
             )
+            .map(|placement| {
+                X11SurfaceElement::whole(
+                    &mut self.state.renderer,
+                    surface,
+                    placement,
+                    x11_scale,
+                    alpha,
+                    &self.state.outputs[output],
+                )
+            })
         }
 
         /// Draws what changed of output `output` with `elements`, front to back.
@@ -1151,15 +1294,23 @@ mod tests {
             texture,
             damage: DamageSnapshot::empty(),
         };
-        let element = X11SurfaceElement::new(
-            &mut scene.state.renderer,
-            surface,
+        let element = place(
+            surface.texture.size(),
             (30, 15).into(),
             Rect::new(10.0, 10.0, 100.0, 80.0),
             1.5,
-            1.0,
             &scene.state.outputs[0],
         )
+        .map(|placement| {
+            X11SurfaceElement::whole(
+                &mut scene.state.renderer,
+                surface,
+                placement,
+                1.5,
+                1.0,
+                &scene.state.outputs[0],
+            )
+        })
         .expect("an element");
         let placement = element.placement;
         assert_eq!(
@@ -1316,15 +1467,23 @@ mod tests {
                 texture,
                 damage: damage.snapshot(),
             };
-            let element = X11SurfaceElement::new(
-                &mut scene.state.renderer,
-                surface,
+            let element = place(
+                surface.texture.size(),
                 Point::default(),
                 scene.state.outputs[output].rect,
                 1.5,
-                1.0,
                 &scene.state.outputs[output],
             )
+            .map(|placement| {
+                X11SurfaceElement::whole(
+                    &mut scene.state.renderer,
+                    surface,
+                    placement,
+                    1.5,
+                    1.0,
+                    &scene.state.outputs[output],
+                )
+            })
             .expect("an element");
             let scale = Scale::from(scene.state.outputs[output].mode.scale());
             let damaged: Vec<_> = element
@@ -1400,15 +1559,23 @@ mod tests {
             texture,
             damage: damage.snapshot(),
         };
-        X11SurfaceElement::new(
-            &mut scene.state.renderer,
-            surface,
+        place(
+            surface.texture.size(),
             Point::default(),
             scene.state.outputs[output].rect,
             x11_scale,
-            1.0,
             &scene.state.outputs[output],
         )
+        .map(|placement| {
+            X11SurfaceElement::whole(
+                &mut scene.state.renderer,
+                surface,
+                placement,
+                x11_scale,
+                1.0,
+                &scene.state.outputs[output],
+            )
+        })
         .expect("an element")
     }
 

@@ -21,17 +21,21 @@
 //! - **Paused**: after starts that fail in a row, the display waits before it is watched again
 //!   ([`pause_after`]); programs that connect meanwhile wait in the backlog.
 //!
-//! While it serves, its manager posts what X11 windows do, and Yuna's state makes windows of the
-//! layout of them (`windows.rs`), each paired with its Wayland surface through xwayland-shell-v1
-//! (`shell.rs`); what the state decides goes back to the manager as commands, at the round's
+//! While it serves, its manager posts what X11 windows do, handled in a slice of each round
+//! ([`MANAGER_SLICE`]), and Yuna's state makes windows of the layout of them (`windows.rs`),
+//! menus of its override-redirect windows (`menus.rs`), each paired with its Wayland surface
+//! through xwayland-shell-v1 (`shell.rs`), and waits on their sync requests and pings
+//! (`answers.rs`); what the state decides goes back to the manager as commands, at the round's
 //! end ([`Xwayland::send_commands`]).
 //!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
 //! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
 //! after Xwayland exits, Yuna holds two sockets per seat and nothing else: no process, no timer.
 
+mod answers;
 mod display;
 mod manager;
+mod menus;
 mod properties;
 mod server;
 mod shell;
@@ -57,12 +61,15 @@ use yuna_layout::SeatId;
 
 use crate::render::Device;
 use crate::state::State;
+pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
 use display::Display;
 pub use display::MAX_DISPLAYS;
 use manager::{Commands, ManagerEvent, Stop};
+pub(crate) use menus::ShownMenus;
+pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
 use server::End;
 pub(crate) use shell::{SURFACE_ROLE, shell_global};
-pub(crate) use windows::{X11Toplevel, X11Windows};
+pub(crate) use windows::{X11Client, X11Toplevel, X11Windows};
 
 /// How long Xwayland waits, by default, once its last X11 client has left, before it ends:
 /// `-terminate`'s delay, as KWin has it. A program started again within it finds Xwayland
@@ -77,6 +84,36 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// It closes it when it exits, its teardown taking milliseconds; an Xwayland still there after
 /// it lost its manager otherwise, to another client's `KillClient`.
 pub const MANAGER_GRACE: Duration = Duration::from_secs(5);
+
+/// How long Yuna handles its managers' events in one round of its loop, at most: a burst of
+/// thousands, a program opening its windows, never keeps its loop from its clients for long.
+/// Within it, the slice ends sooner, 1 ms before the earliest deadline armed when the round
+/// began, a frame most often, on the real clock.
+pub const MANAGER_SLICE: Duration = Duration::from_millis(8);
+
+/// How long before the clock's next deadline a slice of the managers' events ends: the round
+/// then reaches that deadline on time.
+const SLICE_MARGIN: Duration = Duration::from_millis(1);
+
+/// When this round's slice of the managers' events ends: [`MANAGER_SLICE`] from now, or
+/// [`SLICE_MARGIN`] before the earliest deadline armed now, a frame most often, if that comes
+/// first. A deadline the events arm meanwhile, an idle output's refresh at once after a window
+/// opens, does not end it: a burst would otherwise go one event a frame. On the manual clock,
+/// whose deadlines are not real time, the slice is [`MANAGER_SLICE`].
+fn manager_slice_end(state: &State) -> Instant {
+    let started = Instant::now();
+    let longest = started + MANAGER_SLICE;
+    if state.clock.mode() != crate::ClockMode::Real {
+        return longest;
+    }
+    let Some(deadline) = state.clock.next_deadline() else {
+        return longest;
+    };
+    let until = deadline
+        .saturating_sub(state.clock.now())
+        .saturating_sub(SLICE_MARGIN);
+    longest.min(started + until)
+}
 
 /// How long a failed start is remembered: the next failure within it is one more in a row.
 pub const FAILURE_MEMORY: Duration = Duration::from_secs(60);
@@ -173,6 +210,8 @@ pub(crate) struct Xwayland {
     next_server: u64,
     /// Whether `/tmp`'s refusal of a lock or a file socket was said: once.
     tmp_logged: bool,
+    /// Whether the managers' channels are read: not while their events wait in a backlog.
+    reading_managers: bool,
 }
 
 /// A seat's display and where it stands.
@@ -216,6 +255,8 @@ struct XServer {
     manager_stopped: bool,
     /// Its `-displayfd` and manager's sources.
     sources: Vec<RegistrationToken>,
+    /// Its manager's channel, among `sources`: paused while a backlog waits.
+    manager_events: Option<RegistrationToken>,
     /// The timer that ends it if it does not start, or exit, in time.
     overdue: Option<RegistrationToken>,
 }
@@ -230,6 +271,7 @@ impl XServer {
 
     /// Removes its sources but its pidfd's, and lets its manager's thread go.
     fn release(&mut self, handle: &LoopHandle<'static, State>) {
+        self.manager_events = None;
         for token in self.sources.drain(..).chain(self.overdue.take()) {
             handle.remove(token);
         }
@@ -275,6 +317,7 @@ impl Xwayland {
             servers: HashMap::new(),
             next_server: 1,
             tmp_logged: false,
+            reading_managers: true,
         })
     }
 
@@ -372,10 +415,27 @@ impl Xwayland {
         })
     }
 
-    /// Acts on what the event loop's sources noted in this round: starts, readiness, the
-    /// managers' events, ends.
+    /// Acts on what the event loop's sources noted, in order: starts, readiness, the managers'
+    /// events, ends. The managers' events take a slice of the round ([`manager_slice_end`]): the
+    /// notes past it wait, in order, for the next rounds, which come at once
+    /// ([`Xwayland::has_backlog`]), so that the deadlines due between, the frames first, run on
+    /// time. Meanwhile the managers' channels are not read: once one is full, its manager waits,
+    /// and X11's own buffers hold what comes.
     pub(crate) fn handle_notes(&mut self, state: &mut State, handle: &LoopHandle<'static, State>) {
-        for note in std::mem::take(&mut state.xwayland_notes) {
+        let slice_end = manager_slice_end(state);
+        let mut handled_one = false;
+        let mut notes = std::mem::take(&mut state.xwayland_notes).into_iter();
+        let mut backlog = Vec::new();
+        while let Some(note) = notes.next() {
+            if matches!(note, Note::Manager { .. }) {
+                // One at least, so that a backlog always moves.
+                if handled_one && Instant::now() >= slice_end {
+                    backlog.push(note);
+                    backlog.extend(notes.by_ref());
+                    break;
+                }
+                handled_one = true;
+            }
             match note {
                 Note::Connection(seat) => self.start(seat, state, handle),
                 Note::Displayed { server, number } => self.displayed(server, number, handle),
@@ -386,6 +446,36 @@ impl Xwayland {
                 Note::Overdue { server } => self.overdue(server, handle),
                 Note::Exited { server, end } => self.exited(server, end, state, handle),
                 Note::PauseEnded(seat) => self.watch(seat, handle),
+            }
+        }
+        // Those its sources noted meanwhile come after.
+        backlog.append(&mut state.xwayland_notes);
+        state.xwayland_notes = backlog;
+        self.read_managers(state.xwayland_notes.is_empty(), handle);
+    }
+
+    /// Whether notes wait from an earlier round: the loop must not sleep.
+    pub(crate) fn has_backlog(state: &State) -> bool {
+        !state.xwayland_notes.is_empty()
+    }
+
+    /// Reads the managers' channels, or stops reading them while a backlog waits.
+    fn read_managers(&mut self, read: bool, handle: &LoopHandle<'static, State>) {
+        if self.reading_managers == read {
+            return;
+        }
+        self.reading_managers = read;
+        for xserver in self.servers.values() {
+            let Some(token) = xserver.manager_events else {
+                continue;
+            };
+            let changed = if read {
+                handle.enable(&token)
+            } else {
+                handle.disable(&token)
+            };
+            if let Err(error) = changed {
+                tracing::warn!(%error, "a manager's channel cannot be paused or resumed");
             }
         }
     }
@@ -439,6 +529,7 @@ impl Xwayland {
             manager: None,
             manager_stopped: false,
             sources: Vec::new(),
+            manager_events: None,
             overdue: None,
         };
         tracing::info!(
@@ -484,8 +575,13 @@ impl Xwayland {
             "Xwayland is ready for its manager"
         );
         let (events, channel) = channel::sync_channel(manager::EVENT_QUEUE);
+        let reading = self.reading_managers;
         let started = listen_to_manager(channel, id, handle).and_then(|token| {
             xserver.sources.push(token);
+            xserver.manager_events = Some(token);
+            if !reading && let Err(error) = handle.disable(&token) {
+                tracing::warn!(%error, "a manager's channel cannot be paused");
+            }
             manager::start(xserver.seat, wm, xserver.scale, events)
                 .map_err(|error| format!("its manager's thread cannot start: {error}"))
         });

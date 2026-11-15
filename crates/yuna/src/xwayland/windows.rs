@@ -1,43 +1,22 @@
-//! X11 windows on Yuna's side: what each seat's X11 window manager posts (`manager.rs`), turned
-//! into windows of the layout as `xdg_toplevel`s are, and the layout's decisions turned back into
-//! the manager's commands
-//! ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md),
+//! X11 windows on Yuna's side: what each seat's X11 window manager posts (`manager.rs`) becomes
+//! windows of the layout, as `xdg_toplevel`s are, and the layout's decisions become the manager's
+//! commands ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md),
 //! [ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md),
 //! [ADR-0069](../../../../docs/adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
+//! A window's life, from its creation to its end, is told once, in
+//! [ARCHITECTURE](../../../../docs/ARCHITECTURE.md#an-x11-windows-life).
 //!
-//! An X11 window's life:
-//!
-//! 1. It is created: Yuna records it, its X11 client and its properties ([`X11Windows`]).
-//! 2. It asks to be mapped: a managed window, neither override-redirect nor a dock or a desktop,
-//!    is configured to the size [`Layout::size_on_open`](yuna_layout::Layout::size_on_open)
-//!    foretells, at its seat's active output, so that its first buffer has it, then mapped. A
-//!    dock or a desktop is mapped as it asks, and stays out of the layout.
-//! 3. Xwayland gives it a Wayland surface, and both sides a serial (xwayland-shell-v1,
-//!    `shell.rs`): the window and its surface are paired, in either order. A managed window
-//!    paired gets its record in [`State::toplevels`], [`Shell::X11`], beside xdg-shell's.
-//! 4. Mapped, paired and with a buffer, it opens in the layout as an `xdg_toplevel` does at its
-//!    first buffer (`shell.rs`): its limits from its size hints, in logical units, its parent
-//!    from `WM_TRANSIENT_FOR`, its size committed from its surface, less its frame extents. Its
-//!    X11 client, not Xwayland, counts against the cap on windows (ADR-0028).
-//! 5. At each arrangement it is told its place: an X11 rectangle of its place's corner times
-//!    XWayland's scale S, its size round(S × L) for the logical size L asked, widened by its
-//!    frame extents; its `_NET_WM_STATE`, fullscreen, maximised for full width, hidden for
-//!    suspended. A hidden window keeps its X11 place. A fullscreen window on an output whose mode
-//!    its client emulates gets that mode's rectangle, as Xwayland gives it, so that its surface
-//!    gets Xwayland's viewport (ADR-0069). Only what changed is sent.
-//! 6. The seat's keyboard on it gives it the X input focus (`manager.rs` follows its model).
-//! 7. Unmapped, it leaves the layout; destroyed, Yuna forgets it. Its surface's destruction, which
-//!    Xwayland does on unmapping, closes it too.
-//!
-//! Override-redirect windows, menus and tooltips, are recorded and paired, never shown yet.
-//!
-//! Commands wait in an outbox until the round's end, when the compositor passes them to each
-//! manager (`Compositor::flush`): Yuna's state never holds a manager, whose life is Xwayland's
-//! (`mod.rs`).
+//! [`X11Windows`] holds every Xwayland's windows as their manager described them. A managed window
+//! paired with its surface has its record in [`State::toplevels`], [`Shell::X11`], beside
+//! xdg-shell's. Commands wait in an outbox until the round's end, when the compositor passes them
+//! to each manager (`Compositor::flush`): Yuna's state never holds a manager, whose life is
+//! Xwayland's (`mod.rs`).
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Point};
 use x11rb::protocol::xproto::Window;
@@ -45,8 +24,11 @@ use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, SeatId, WindowId};
 use yuna_motion::Change;
 
+use super::answers::Waits;
 use super::manager::{Command, ManagerEvent, NetState, StateAction, StateChange};
+use super::menus::MenuPlace;
 use super::properties::{FrameExtents, Properties, SizeHints, Wishes, X11Rect};
+use crate::activation::TokenOrigin;
 use crate::input::window_of_surface;
 use crate::output::VirtualOutput;
 use crate::render::x11_surface_size;
@@ -86,56 +68,117 @@ impl X11Toplevel {
 /// Every Xwayland's X11 windows, and the commands that wait for their managers.
 #[derive(Debug, Default)]
 pub(crate) struct X11Windows {
-    servers: HashMap<u64, X11Server>,
+    pub(super) servers: HashMap<u64, X11Server>,
     /// Commands for the managers, passed on at the round's end.
     outbox: Vec<(u64, Command)>,
 }
 
 /// One Xwayland's windows.
 #[derive(Debug)]
-struct X11Server {
-    seat: SeatId,
+pub(super) struct X11Server {
+    pub(super) seat: SeatId,
     /// XWayland's scale, S, fixed for its life.
-    scale: f64,
-    windows: HashMap<Window, X11Window>,
+    pub(super) scale: f64,
+    pub(super) windows: HashMap<Window, X11Window>,
+    /// The window of each surface paired.
+    pub(super) surfaces: HashMap<ObjectId, Window>,
     /// The surfaces whose serial was committed before any window had it, by serial.
     waiting: HashMap<u64, WlSurface>,
+    /// The windows whose serial came before their surface committed it, by serial: thousands of
+    /// surfaces pairing at once find theirs without a walk of every window.
+    serials: HashMap<u64, Window>,
     /// The window last given the X input focus.
     focused: Option<Window>,
     /// The stacking last sent, bottom to top.
-    stacking: Vec<Window>,
+    pub(super) stacking: Vec<Window>,
+    /// The override-redirect windows mapped, bottom to top as X11 stacks them (`menus.rs`).
+    pub(super) menus: Vec<Window>,
+    /// Those of them shown, in the same order: what the frame loop and the pointer walk.
+    pub(super) shown_menus: Vec<Window>,
+    /// How many menus each X11 client has shown, for its cap.
+    pub(super) menus_shown_of: HashMap<u32, usize>,
+    /// The menus shown with each managed window.
+    pub(super) menus_with: HashMap<Window, Vec<Window>>,
     /// The X11 clients whose window past the cap on windows was said: once each.
     refusals_said: HashSet<u32>,
+    /// The X11 clients whose override-redirect window past their cap was said: once each.
+    pub(super) menu_refusals_said: HashSet<u32>,
 }
 
 /// One X11 window, as its manager described it.
 #[derive(Debug)]
-struct X11Window {
-    client: u32,
-    override_redirect: bool,
+pub(super) struct X11Window {
+    pub(super) client: u32,
+    pub(super) override_redirect: bool,
     /// Its process, as X11 knows its client's: none without XRes.
     pid: Option<i32>,
-    properties: Properties,
+    pub(super) properties: Properties,
     /// The serial Xwayland gave its surface, until the surface with it commits.
     serial: Option<u64>,
-    surface: Option<WlSurface>,
+    pub(super) surface: Option<WlSurface>,
     /// It asked to be mapped and Yuna mapped it; cleared when it is unmapped.
     requested: bool,
     /// X11 says it is mapped.
-    mapped: bool,
+    pub(super) mapped: bool,
     /// What it asked of `_NET_WM_STATE`, before it opened.
     wishes: Wishes,
+    /// Its rectangle as its client made it, and, for an override-redirect window, as its client
+    /// moves it: a managed window's own size until Yuna configures it.
+    pub(super) geometry: X11Rect,
     /// Its rectangle as Yuna last configured it.
-    told: Option<X11Rect>,
+    pub(super) told: Option<X11Rect>,
+    /// The logical size the layout last asked of it: 0 on an axis the window chooses itself,
+    /// whose requests are granted.
+    asked: Option<Size>,
     /// Its states as Yuna last set them.
     state: Option<NetState>,
     /// The size last given to the layout, in logical units.
     committed: Option<Size>,
+    /// Where it is drawn while it is an override-redirect window shown (`menus.rs`).
+    pub(super) menu: Option<MenuPlace>,
+    /// When its surface was last called back while it was a menu no output drew.
+    pub(super) menu_frame_sent: Option<Duration>,
+    /// The sync request and the ping it is waited for (`answers.rs`).
+    pub(super) waits: Waits,
+    /// The activation its `_NET_STARTUP_ID` carried when it asked to be mapped: a token Yuna
+    /// gave, judged when it opens.
+    activation: Option<TokenOrigin>,
+}
+
+impl X11Window {
+    /// Whether it is a managed window X11 maps, Yuna having mapped it when it asked.
+    pub(super) fn is_shown_managed(&self) -> bool {
+        self.requested && self.mapped
+    }
+
+    /// The size of its whole X11 window as it is: as Yuna last configured it, else as its client
+    /// made it.
+    fn own_size(&self) -> (u32, u32) {
+        let rect = self.told.unwrap_or(self.geometry);
+        (rect.width, rect.height)
+    }
+}
+
+impl X11Server {
+    /// Puts the shown menus in X11's stacking order again: one was shown, hidden or restacked.
+    pub(super) fn order_shown_menus(&mut self) {
+        let windows = &self.windows;
+        self.shown_menus = self
+            .menus
+            .iter()
+            .copied()
+            .filter(|menu| {
+                windows
+                    .get(menu)
+                    .is_some_and(|x11_window| x11_window.menu.is_some())
+            })
+            .collect();
+    }
 }
 
 impl X11Windows {
     /// Passes `command` to Xwayland `server`'s manager at the round's end.
-    fn send(&mut self, server: u64, command: Command) {
+    pub(super) fn send(&mut self, server: u64, command: Command) {
         self.outbox.push((server, command));
     }
 
@@ -184,8 +227,7 @@ impl X11Windows {
 
     /// Whether X11 maps it, Yuna having mapped it when it asked.
     pub(crate) fn is_mapped(&self, x11: &X11Toplevel) -> bool {
-        self.window(x11)
-            .is_some_and(|window| window.requested && window.mapped)
+        self.window(x11).is_some_and(X11Window::is_shown_managed)
     }
 
     /// Whether Xwayland `server` is known: from its start until it is gone.
@@ -195,14 +237,49 @@ impl X11Windows {
 }
 
 /// An X11 rectangle: a corner in X11 pixels and a logical size times XWayland's scale, the size
-/// round(S × L), widened by the window's frame extents, whose geometry starts past them.
-fn x11_rect(corner: (i32, i32), size: Size, scale: f64, extents: FrameExtents) -> X11Rect {
-    let side = |logical: f64| (logical * scale).round().max(1.0) as u32;
+/// round(S × L), widened by the window's frame extents, whose geometry starts past them. On an
+/// axis asked 0, which the layout leaves to the window, the window keeps `own`, the side of its
+/// whole X11 window as it is.
+fn x11_rect(
+    corner: (i32, i32),
+    size: Size,
+    scale: f64,
+    extents: FrameExtents,
+    own: (u32, u32),
+) -> X11Rect {
+    let side = |logical: f64, extent: u32, own: u32| {
+        if logical > 0.0 {
+            ((logical * scale).round().max(1.0) as u32).saturating_add(extent)
+        } else {
+            own
+        }
+    };
     X11Rect {
         x: corner.0.saturating_sub(to_i32(extents.left)),
         y: corner.1.saturating_sub(to_i32(extents.top)),
-        width: side(size.w).saturating_add(extents.left + extents.right),
-        height: side(size.h).saturating_add(extents.top + extents.bottom),
+        width: side(size.w, extents.left + extents.right, own.0),
+        height: side(size.h, extents.top + extents.bottom, own.1),
+    }
+}
+
+/// `answer` with each axis the layout leaves to the window, asked 0 in `asked`, taken from what
+/// its client asks, `requested`.
+fn grant_free_axes(answer: X11Rect, requested: X11Rect, asked: Option<Size>) -> X11Rect {
+    let Some(asked) = asked else {
+        return answer;
+    };
+    X11Rect {
+        width: if asked.w > 0.0 {
+            answer.width
+        } else {
+            requested.width
+        },
+        height: if asked.h > 0.0 {
+            answer.height
+        } else {
+            requested.height
+        },
+        ..answer
     }
 }
 
@@ -218,7 +295,7 @@ fn x11_point(point: (f64, f64), scale: f64) -> (i32, i32) {
 /// An output's top-left corner in X11 pixels, as Xwayland is told it: its logical position, in
 /// whole units, times XWayland's scale, rounded, as Smithay gives `xdg_output` to a client of
 /// that scale.
-fn x11_origin(output: &VirtualOutput, scale: f64) -> (i32, i32) {
+pub(super) fn x11_origin(output: &VirtualOutput, scale: f64) -> (i32, i32) {
     let origin = |logical: f64| (logical.round() * scale).round() as i32;
     (origin(output.rect.x), origin(output.rect.y))
 }
@@ -276,18 +353,32 @@ impl State {
                 seat,
                 scale,
                 windows: HashMap::new(),
+                surfaces: HashMap::new(),
                 waiting: HashMap::new(),
+                serials: HashMap::new(),
                 focused: None,
                 stacking: Vec::new(),
+                menus: Vec::new(),
+                shown_menus: Vec::new(),
+                menus_shown_of: HashMap::new(),
+                menus_with: HashMap::new(),
                 refusals_said: HashSet::new(),
+                menu_refusals_said: HashSet::new(),
             },
         );
     }
 
     /// Xwayland `server` has ended: its windows close, and its commands go.
     pub(crate) fn x11_server_gone(&mut self, server: u64) {
-        if self.x11.servers.remove(&server).is_none() {
+        let Some(gone) = self.x11.servers.remove(&server) else {
             return;
+        };
+        if gone
+            .windows
+            .values()
+            .any(|x11_window| x11_window.waits.waiting())
+        {
+            self.arm_x11_answers();
         }
         self.x11.outbox.retain(|(of, _)| *of != server);
         let roots: Vec<WlSurface> = self
@@ -312,6 +403,7 @@ impl State {
                 window,
                 client,
                 override_redirect,
+                geometry,
                 pid,
                 properties,
             } => {
@@ -328,9 +420,15 @@ impl State {
                             requested: false,
                             mapped: false,
                             wishes: Wishes::default(),
+                            geometry,
                             told: None,
+                            asked: None,
                             state: None,
                             committed: None,
+                            menu: None,
+                            menu_frame_sent: None,
+                            waits: Waits::default(),
+                            activation: None,
                         },
                     );
                 }
@@ -339,11 +437,22 @@ impl State {
                 self.x11_properties_changed(server, window, *properties);
             }
             ManagerEvent::MapRequest(window) => self.x11_map_request(server, window),
-            ManagerEvent::Mapped(window) => {
+            ManagerEvent::Mapped {
+                window,
+                override_redirect,
+            } => {
                 if let Some(record) = self.x11_window_mut(server, window) {
                     record.mapped = true;
+                    record.override_redirect |= override_redirect;
                 }
                 self.x11_reconcile(server, window);
+                self.x11_update_menu(server, window);
+            }
+            ManagerEvent::Configured { window, rect } => {
+                self.x11_menu_configured(server, window, rect);
+            }
+            ManagerEvent::Restacked { window, above } => {
+                self.x11_menu_restacked(server, window, above);
             }
             ManagerEvent::Unmapped(window) => self.x11_unmapped(server, window),
             ManagerEvent::Destroyed(window) => self.x11_destroyed(server, window),
@@ -351,35 +460,27 @@ impl State {
                 self.x11_configure_request(server, window, asked);
             }
             ManagerEvent::SurfaceSerial { window, serial } => {
-                let waiting = self
-                    .x11
-                    .servers
-                    .get_mut(&server)
-                    .and_then(|record| record.waiting.remove(&serial));
-                match waiting {
-                    Some(surface) => self.x11_pair(server, window, surface),
-                    None => {
-                        if let Some(record) = self.x11_window_mut(server, window) {
-                            record.serial = Some(serial);
-                        }
-                    }
-                }
+                self.x11_window_serial(server, window, serial);
             }
             ManagerEvent::StateRequest { window, change } => {
                 self.x11_state_request(server, window, change);
             }
             ManagerEvent::ActivateRequest(window) => self.x11_activate_request(server, window),
+            ManagerEvent::SyncCounter { window, value } => {
+                self.x11_sync_counter(server, window, value);
+            }
+            ManagerEvent::PingAnswered(window) => self.x11_ping_answered(server, window),
             // The phases of Xwayland's start and end, `mod.rs`'s.
             ManagerEvent::Ready | ManagerEvent::Stopped(_) => {}
         }
     }
 
-    fn x11_window_mut(&mut self, server: u64, window: Window) -> Option<&mut X11Window> {
+    pub(super) fn x11_window_mut(&mut self, server: u64, window: Window) -> Option<&mut X11Window> {
         self.x11.servers.get_mut(&server)?.windows.get_mut(&window)
     }
 
     /// The toplevel of `window`'s surface, if it has one.
-    fn x11_root(&self, server: u64, window: Window) -> Option<WlSurface> {
+    pub(super) fn x11_root(&self, server: u64, window: Window) -> Option<WlSurface> {
         let surface = self
             .x11
             .servers
@@ -394,9 +495,35 @@ impl State {
     }
 
     /// The window `window` is in the layout as, if it is.
-    fn x11_layout_window(&self, server: u64, window: Window) -> Option<WindowId> {
+    pub(super) fn x11_layout_window(&self, server: u64, window: Window) -> Option<WindowId> {
         let root = self.x11_root(server, window)?;
         self.toplevels.get(&root.id())?.window
+    }
+
+    /// Xwayland `server` says `window`'s surface has `serial`: the window is paired with the
+    /// surface that committed it already, or waits for it. A window Yuna does not know takes no
+    /// surface: the one waiting stays for its own window.
+    fn x11_window_serial(&mut self, server: u64, window: Window, serial: u64) {
+        let Some(record) = self.x11.servers.get_mut(&server) else {
+            return;
+        };
+        let Some(x11_window) = record.windows.get_mut(&window) else {
+            tracing::debug!(
+                window,
+                "the serial of an X11 window Yuna does not know is ignored"
+            );
+            return;
+        };
+        match record.waiting.remove(&serial) {
+            Some(surface) => self.x11_pair(server, window, surface),
+            None => {
+                // Its surface's serial before: that surface never committed it, and is gone.
+                if let Some(before) = x11_window.serial.replace(serial) {
+                    record.serials.remove(&before);
+                }
+                record.serials.insert(serial, window);
+            }
+        }
     }
 
     /// A surface of Xwayland `server` committed `serial`: it is paired with the window that has
@@ -405,12 +532,7 @@ impl State {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
         };
-        let window = record
-            .windows
-            .iter()
-            .find(|(_, window)| window.serial == Some(serial))
-            .map(|(&window, _)| window);
-        match window {
+        match record.serials.remove(&serial) {
             Some(window) => self.x11_pair(server, window, surface),
             None => {
                 record.waiting.insert(serial, surface);
@@ -420,25 +542,51 @@ impl State {
 
     /// An Xwayland's surface is gone: it no longer waits, nor is any window's.
     pub(crate) fn x11_surface_destroyed(&mut self, surface: &WlSurface) {
-        for record in self.x11.servers.values_mut() {
+        let mut unpaired = Vec::new();
+        for (&server, record) in &mut self.x11.servers {
             record.waiting.retain(|_, waiting| waiting != surface);
-            for window in record.windows.values_mut() {
-                if window.surface.as_ref() == Some(surface) {
-                    window.surface = None;
+            if let Some(window) = record.surfaces.remove(&surface.id()) {
+                if let Some(x11_window) = record.windows.get_mut(&window) {
+                    x11_window.surface = None;
                 }
+                unpaired.push((server, window));
             }
+        }
+        for (server, window) in unpaired {
+            self.x11_update_menu(server, window);
+            // Its window may leave the layout before its manager says it is unmapped: its
+            // menus go to the rules again now, not then.
+            self.x11_place_menus_of(server, window);
         }
     }
 
     /// `window` and `surface` have the same serial: they are paired, and a managed window gets
     /// its record of a window.
     fn x11_pair(&mut self, server: u64, window: Window, surface: WlSurface) {
-        let Some(record) = self.x11_window_mut(server, window) else {
+        let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
         };
-        record.serial = None;
-        record.surface = Some(surface);
+        let Some(x11_window) = record.windows.get_mut(&window) else {
+            return;
+        };
+        if let Some(serial) = x11_window.serial.take() {
+            record.serials.remove(&serial);
+        }
+        if let Some(before) = x11_window.surface.replace(surface.clone()) {
+            record.surfaces.remove(&before.id());
+        }
+        record.surfaces.insert(surface.id(), window);
         self.x11_reconcile(server, window);
+        self.x11_update_menu(server, window);
+    }
+
+    /// The window of Xwayland surface `surface`, once paired.
+    pub(super) fn x11_window_of_surface(&self, surface: &WlSurface) -> Option<(u64, Window)> {
+        let id = surface.id();
+        self.x11
+            .servers
+            .iter()
+            .find_map(|(&server, record)| Some((server, *record.surfaces.get(&id)?)))
     }
 
     /// Brings `window`'s record of a window in line with what is known of it: a managed window,
@@ -462,6 +610,9 @@ impl State {
         }
         let wishes = x11_window.wishes;
         let client = x11_window.client;
+        let activation = self
+            .x11_window_mut(server, window)
+            .and_then(|x11_window| x11_window.activation.take());
         self.toplevels.entry(surface.id()).or_insert_with(|| {
             let mut toplevel = Toplevel::new(Shell::X11(X11Toplevel {
                 server,
@@ -472,6 +623,7 @@ impl State {
             }));
             toplevel.wants_fullscreen = wishes.fullscreen;
             toplevel.wants_full_width = wishes.maximized;
+            toplevel.waiting_activation = activation;
             toplevel
         });
         self.x11_try_open(&surface);
@@ -558,7 +710,18 @@ impl State {
     pub(crate) fn x11_toplevel_committed(&mut self, root: &WlSurface, mapped: bool, buffer: bool) {
         match (mapped, buffer) {
             (true, true) => self.x11_update_window(root),
-            (true, false) => self.close(root),
+            (true, false) => {
+                self.close(root);
+                // It left the layout though X11 still maps it: its menus go to the rules again.
+                let x11 = self
+                    .toplevels
+                    .get(&root.id())
+                    .and_then(Toplevel::x11)
+                    .map(|x11| (x11.server, x11.window));
+                if let Some((server, window)) = x11 {
+                    self.x11_place_menus_of(server, window);
+                }
+            }
             (false, true) => self.x11_try_open(root),
             (false, false) => {}
         }
@@ -607,7 +770,15 @@ impl State {
         let Some(record) = self.x11_window_mut(server, window) else {
             return;
         };
+        let parent_changed = record.properties.transient_for != properties.transient_for;
+        let counter_changed = record.properties.sync_counter != properties.sync_counter;
         record.properties = properties;
+        if parent_changed {
+            self.x11_place_menu_again(server, window);
+        }
+        if counter_changed {
+            self.x11_sync_counter_changed(server, window);
+        }
         if let Some(root) = self.x11_root(server, window)
             && self
                 .toplevels
@@ -619,8 +790,9 @@ impl State {
     }
 
     /// `window` asks to be mapped. A managed window is first configured to the size it opens at,
-    /// at its seat's active output, so that its first buffer has it (ADR-0026); then it is
-    /// mapped. A dock or a desktop is mapped as it asks.
+    /// at its seat's active output, so that its first buffer has it (ADR-0026), keeping its own
+    /// size on an axis the layout leaves to it; then it is mapped. A dock or a desktop is mapped
+    /// as it asks.
     fn x11_map_request(&mut self, server: u64, window: Window) {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
@@ -633,10 +805,17 @@ impl State {
         x11_window.requested = true;
         let managed = x11_window.properties.window_type.is_managed();
         x11_window.wishes = x11_window.properties.wishes;
-        let (fullscreen, extents) = (
+        let (fullscreen, extents, own) = (
             x11_window.wishes.fullscreen,
             x11_window.properties.frame_extents,
+            x11_window.own_size(),
         );
+        let startup_id = x11_window.properties.startup_id.clone();
+        // Read when it asks to be mapped: a token Yuna gave makes its opening an activation.
+        let activation = startup_id.and_then(|token| self.take_activation_token(&token));
+        if let Some(x11_window) = self.x11_window_mut(server, window) {
+            x11_window.activation = activation;
+        }
         if managed {
             let options = self.x11_options(server, window, fullscreen);
             let size = self.layout.size_on_open(seat, &options);
@@ -649,17 +828,18 @@ impl State {
                     (rect.x, rect.y)
                 });
             match size {
-                Ok(size) if size.w > 0.0 && size.h > 0.0 => {
-                    let rect = x11_rect(x11_point(corner, scale), size, scale, extents);
+                Ok(size) => {
+                    let rect = x11_rect(x11_point(corner, scale), size, scale, extents, own);
                     if let Some(x11_window) = self.x11_window_mut(server, window) {
-                        x11_window.told = Some(rect);
+                        x11_window.asked = Some(size);
                     }
-                    self.x11.send(server, Command::Configure { window, rect });
+                    self.x11_configure(server, window, rect);
                     self.counters.configures += 1;
                 }
-                Ok(_) => {}
+                // Its client's values are checked before the layout sees them: a refusal is
+                // the layout's own, and the window keeps the place its client gave it.
                 Err(error) => {
-                    tracing::warn!(%error, "no size foretold for a new X11 window; letting it choose");
+                    tracing::debug!(%error, "no size foretold for a new X11 window; letting it choose");
                 }
             }
         }
@@ -676,39 +856,72 @@ impl State {
         if record.focused == Some(window) {
             record.focused = None;
         }
+        record.menus.retain(|&menu| menu != window);
         if let Some(x11_window) = record.windows.get_mut(&window) {
             x11_window.mapped = false;
             x11_window.requested = false;
             x11_window.state = None;
             x11_window.committed = None;
+            x11_window.asked = None;
+            // Its manager deletes `_NET_WM_STATE` at withdrawal; the property's own change may
+            // come after the window asks to be mapped again.
+            x11_window.properties.wishes = Wishes::default();
         }
         if let Some(root) = root {
             self.unmap(&root);
         }
+        self.x11_waits_end(server, window);
+        self.x11_update_menu(server, window);
+        self.x11_place_menus_of(server, window);
     }
 
     /// `window` is gone: Yuna forgets it, and its record of a window.
     fn x11_destroyed(&mut self, server: u64, window: Window) {
         let root = self.x11_root(server, window);
+        let shown = self
+            .x11
+            .servers
+            .get(&server)
+            .and_then(|record| record.windows.get(&window))
+            .is_some_and(|x11_window| x11_window.menu.is_some());
+        if shown {
+            self.x11_set_menu(server, window, None);
+        }
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
         };
-        record.windows.remove(&window);
+        let removed = record.windows.remove(&window);
+        if let Some(serial) = removed.as_ref().and_then(|x11_window| x11_window.serial) {
+            record.serials.remove(&serial);
+        }
+        let waited = removed
+            .as_ref()
+            .is_some_and(|x11_window| x11_window.waits.waiting());
+        record.surfaces.retain(|_, paired| *paired != window);
         record.stacking.retain(|&stacked| stacked != window);
+        record.menus.retain(|&menu| menu != window);
         if record.focused == Some(window) {
             record.focused = None;
         }
         if let Some(root) = root {
             self.toplevel_gone(&root);
         }
+        if shown {
+            self.x11_redraw(server);
+        }
+        if waited {
+            self.arm_x11_answers();
+        }
+        self.x11_place_menus_of(server, window);
     }
 
-    /// `window` asks to be moved or resized to `asked`. A window the layout holds is answered
-    /// with its place, which the layout decides, but a fullscreen window shown on an output asking
-    /// the rectangle Xwayland gives its client's emulated mode there: granted (ADR-0069). A
-    /// hidden fullscreen window is never moved. A window not in the layout is granted what it
-    /// asks.
-    fn x11_configure_request(&mut self, server: u64, window: Window, asked: X11Rect) {
+    /// `window` asks to be moved or resized to `requested`. A window that has not asked to be
+    /// mapped is granted it: no manager holds it yet. One that has is answered with the place Yuna
+    /// gave it, the one foretold until it opens, then its place in the layout, but on an axis the
+    /// layout leaves to it, where its request is granted; and a fullscreen window shown on an
+    /// output asking the rectangle Xwayland gives its client's emulated mode there is granted it
+    /// (ADR-0069). A hidden fullscreen window is never moved.
+    fn x11_configure_request(&mut self, server: u64, window: Window, requested: X11Rect) {
         let Some(scale) = self.x11.servers.get(&server).map(|record| record.scale) else {
             return;
         };
@@ -724,8 +937,14 @@ impl State {
         else {
             return;
         };
+        let given = grant_free_axes(
+            x11_window.told.unwrap_or(requested),
+            requested,
+            x11_window.asked,
+        );
         let answer = match in_layout {
-            None => asked,
+            _ if !x11_window.requested => requested,
+            None => given,
             Some((id, shown_on)) => {
                 let fullscreen = self.layout.window(id).is_some_and(|info| info.fullscreen);
                 let emulated = shown_on
@@ -734,21 +953,12 @@ impl State {
                         emulated_rect(&x11_window.properties, &self.outputs[index], scale)
                     });
                 match (fullscreen, emulated) {
-                    (true, Some(emulated)) if emulated == asked => asked,
-                    _ => x11_window.told.unwrap_or(asked),
+                    (true, Some(emulated)) if emulated == requested => requested,
+                    _ => given,
                 }
             }
         };
-        if let Some(x11_window) = self.x11_window_mut(server, window) {
-            x11_window.told = Some(answer);
-        }
-        self.x11.send(
-            server,
-            Command::Configure {
-                window,
-                rect: answer,
-            },
-        );
+        self.x11_configure(server, window, answer);
         self.counters.configures += 1;
     }
 
@@ -858,14 +1068,19 @@ impl State {
         shown_on: Option<OutputId>,
         owed: bool,
     ) {
-        let full_width = self
-            .toplevels
-            .get(&x11.surface.id())
-            .and_then(|toplevel| toplevel.window)
-            .and_then(|window| self.layout.window(window))
-            .is_some_and(|info| info.full_width);
         let Some(x11_window) = self.x11.window(x11) else {
             return;
+        };
+        // A hidden window keeps the state it was told: the layout's lookup walks the workspaces,
+        // which thousands of hidden windows at each arrangement would make quadratic.
+        let full_width = if told.hidden {
+            x11_window.state.is_some_and(|state| state.maximized)
+        } else {
+            self.toplevels
+                .get(&x11.surface.id())
+                .and_then(|toplevel| toplevel.window)
+                .and_then(|window| self.layout.window(window))
+                .is_some_and(|info| info.full_width)
         };
         let fullscreen_on = shown_on
             .filter(|_| told.fullscreen)
@@ -873,12 +1088,19 @@ impl State {
             .map(|index| &self.outputs[index]);
         let emulated = fullscreen_on
             .and_then(|output| emulated_rect(&x11_window.properties, output, x11.scale));
+        let own = x11_window.own_size();
         let placed = told.corner.zip(told.size).map(|(corner, size)| {
             let corner = match fullscreen_on {
                 Some(output) => x11_origin(output, x11.scale),
                 None => x11_point(corner, x11.scale),
             };
-            x11_rect(corner, size, x11.scale, x11_window.properties.frame_extents)
+            x11_rect(
+                corner,
+                size,
+                x11.scale,
+                x11_window.properties.frame_extents,
+                own,
+            )
         });
         let rect = if told.hidden {
             None
@@ -897,21 +1119,15 @@ impl State {
         };
         let set_state = Some(state) != x11_window.state || owed;
         if let Some(x11_window) = self.x11_window_mut(x11.server, x11.window) {
-            if let Some(rect) = configure {
-                x11_window.told = Some(rect);
-            }
             if set_state {
                 x11_window.state = Some(state);
             }
+            if placed.is_some() && !told.hidden {
+                x11_window.asked = told.size;
+            }
         }
         if let Some(rect) = configure {
-            self.x11.send(
-                x11.server,
-                Command::Configure {
-                    window: x11.window,
-                    rect,
-                },
-            );
+            self.x11_configure(x11.server, x11.window, rect);
         }
         if set_state {
             self.x11.send(
@@ -1032,6 +1248,7 @@ impl State {
     /// is ended (`manager.rs`).
     pub(crate) fn close_x11(&mut self, x11: &X11Toplevel) {
         self.x11.send(x11.server, Command::Close(x11.window));
+        self.x11_ping(x11.server, x11.window);
     }
 }
 
@@ -1057,6 +1274,9 @@ mod tests {
         bottom: 0,
     };
 
+    /// The window's own size, where no axis is left to it.
+    const NO_OWN: (u32, u32) = (0, 0);
+
     #[test]
     fn an_x11_rectangle_is_the_place_times_s_its_size_rounded() {
         // A tile of 1256 × 1408 at (16, 16), at S = 1.5: 1884 × 2112 at (24, 24).
@@ -1065,7 +1285,7 @@ mod tests {
             h: 1408.0,
         };
         assert_eq!(
-            x11_rect(x11_point((16.0, 16.0), 1.5), tile, 1.5, NO_EXTENTS),
+            x11_rect(x11_point((16.0, 16.0), 1.5), tile, 1.5, NO_EXTENTS, NO_OWN),
             X11Rect {
                 x: 24,
                 y: 24,
@@ -1075,7 +1295,7 @@ mod tests {
         );
         // 935 units at 1.5 are 1402.5 X11 pixels: rounded half away, 1403.
         let odd = Size { w: 935.0, h: 1.0 };
-        assert_eq!(x11_rect((0, 0), odd, 1.5, NO_EXTENTS).width, 1403);
+        assert_eq!(x11_rect((0, 0), odd, 1.5, NO_EXTENTS, NO_OWN).width, 1403);
         // A shadow of 26 left, 20 right, 23 top, 29 bottom widens the X11 window around the
         // place, which is the window's geometry.
         let extents = FrameExtents {
@@ -1089,7 +1309,8 @@ mod tests {
                 x11_point((100.0, 10.0), 1.0),
                 Size { w: 200.0, h: 100.0 },
                 1.0,
-                extents
+                extents,
+                NO_OWN
             ),
             X11Rect {
                 x: 74,
@@ -1098,6 +1319,57 @@ mod tests {
                 height: 152
             }
         );
+    }
+
+    #[test]
+    fn an_axis_asked_0_keeps_the_windows_own_side() {
+        // A floating window choosing its width, its height fixed at 100 units: 300 X11 pixels
+        // wide as it is, 150 tall at S = 1.5, shadow included.
+        let extents = FrameExtents {
+            left: 10,
+            right: 10,
+            top: 5,
+            bottom: 5,
+        };
+        let asked = Size { w: 0.0, h: 100.0 };
+        assert_eq!(
+            x11_rect((60, 30), asked, 1.5, extents, (300, 999)),
+            X11Rect {
+                x: 50,
+                y: 25,
+                width: 300,
+                height: 160
+            }
+        );
+        // Both axes its own: never the 1 × 1 a 0 would round to.
+        let free = x11_rect((0, 0), Size::default(), 1.5, NO_EXTENTS, (640, 480));
+        assert_eq!((free.width, free.height), (640, 480));
+    }
+
+    #[test]
+    fn a_request_is_granted_on_the_axes_left_to_the_window() {
+        let told = X11Rect {
+            x: 24,
+            y: 24,
+            width: 640,
+            height: 480,
+        };
+        let requested = X11Rect {
+            x: 5,
+            y: 5,
+            width: 800,
+            height: 600,
+        };
+        // Its width its own: granted; its height and its place the layout's.
+        let answer = grant_free_axes(told, requested, Some(Size { w: 0.0, h: 320.0 }));
+        assert_eq!(answer, X11Rect { width: 800, ..told });
+        // A tile chooses nothing; before any size is asked, nothing is granted either.
+        let tile = Size {
+            w: 936.0,
+            h: 1048.0,
+        };
+        assert_eq!(grant_free_axes(told, requested, Some(tile)), told);
+        assert_eq!(grant_free_axes(told, requested, None), told);
     }
 
     #[test]

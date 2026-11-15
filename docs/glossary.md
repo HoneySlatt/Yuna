@@ -84,6 +84,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Managed window**: an X11 window its manager places, as Yuna's layout does an `xdg_toplevel`:
   one that asks to be mapped, neither override-redirect nor a dock or a desktop
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- **Manager's slice**: the part of a round of Yuna's loop in which it handles its X11 managers'
+  events: until shortly before the next deadline, 8 ms at most; the rest wait for the next
+  rounds, which come at once.
 - **Manual clock**: the compositor's clock in tests, and in `yuna mcp --manual-clock`: it starts at
   the real monotonic time and moves only when a test, or an agent through the `clock` tool,
   advances it, running each deadline it passes, in order
@@ -91,6 +94,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   time.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
+- **Menu** (X11): an override-redirect window Yuna shows, a menu, a tooltip or a list: drawn with
+  the window the rules give it, just above it and sliding with it as a popup does, or, with none,
+  **alone**, at its own X11 position over every window
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
 - **Motion**: a value moving to a target on a spring or a curve, a function of time alone, held by
   `yuna-motion`; it ends when it can no longer move a pixel
   ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
@@ -145,9 +152,14 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   it the output shows, and scrolls to keep the focused column whole.
 - **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it
   to hidden windows, to clients whose `xdg_wm_base` version has it (6 and later).
+- **Sync request**: `_NET_WM_SYNC_REQUEST`, a value an X11 window is sent before a configure that
+  resizes it, which it sets in its sync counter once it drew the new size; meanwhile Xwayland
+  holds its commits, for 100 ms at most, so that its frame shows whole.
 - **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
   includes, reloaded live; its format is a public interface
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
+  unanswered 5 s; it stays until it answers one, never ended on a timer.
 - **Urgent**: said of a window that asked for the focus and did not get it, because its request
   came without a valid activation token or a fullscreen window held the screen; it stays urgent
   until it gets the focus or closes. Nothing shows it yet.

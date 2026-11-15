@@ -2,7 +2,8 @@
 
 - Status: Accepted; context corrected on 2026-11-12: the dwindle walk no longer recurses
   (commit `62568b3`, before this ADR), so its first point is wrong; the window caps stand for
-  the other reasons, linear walks at each commit and refresh, and memory
+  the other reasons, linear walks at each commit and refresh, and memory; extended to X11 by
+  [0070](0070-bounds-on-what-one-x11-client-may-ask.md)
 - Date: 2026-11-12
 
 ## Context

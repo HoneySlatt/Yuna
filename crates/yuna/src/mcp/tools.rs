@@ -165,7 +165,8 @@ pub fn definitions() -> Value {
                 now, or where its output's last frame drew it when that frame was sampled \
                 later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests \
                 once its motion ends (null when hidden), motion_ends_ns: when its output's \
-                motion ends, on the clock's scale (null at rest), focus, floating, fullscreen. \
+                motion ends, on the clock's scale (null at rest), focus, floating, fullscreen, \
+                unresponsive: an X11 window asked to close that left its ping unanswered 5 s. \
                 With neither --animations nor --reduced-motion, rect is place and \
                 motion_ends_ns null. With colour, each window also gives colours: one \
                 entry for each of its surfaces that declared its colours through \
@@ -709,6 +710,7 @@ pub fn window_json(
         "focused": window.focused,
         "floating": window.floating,
         "fullscreen": window.fullscreen,
+        "unresponsive": window.unresponsive,
     });
     if let Some(colours) = colours {
         described["colours"] = colours.iter().map(surface_colour_json).collect();
@@ -1168,6 +1170,7 @@ mod tests {
             focused: true,
             floating: false,
             fullscreen: false,
+            unresponsive: false,
         };
         let listed = window_json(&window, None);
         assert_eq!(listed["shell"], json!("x11"));
@@ -1194,6 +1197,7 @@ mod tests {
             focused: false,
             floating: false,
             fullscreen: false,
+            unresponsive: false,
         };
         assert_eq!(window_json(&window, None).get("colours"), None);
         assert_eq!(window_json(&window, Some(&[]))["colours"], json!([]));

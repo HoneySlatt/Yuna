@@ -84,6 +84,8 @@ pub(crate) struct State {
     pub toplevels: HashMap<ObjectId, Toplevel>,
     /// The surface of each window the layout holds.
     pub windows: HashMap<WindowId, ObjectId>,
+    /// How many windows the layout holds of each client, for its cap (`shell.rs`).
+    pub window_counts: HashMap<crate::shell::WindowOwner, usize>,
     /// The next window's id: ids increase and are never reused.
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
@@ -185,6 +187,7 @@ impl State {
             retired_globals: Vec::new(),
             toplevels: HashMap::new(),
             windows: HashMap::new(),
+            window_counts: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
             layout_change: Change::Animated,
@@ -361,6 +364,9 @@ impl CompositorHandler for State {
             self.toplevel_committed(&root, surface);
         } else if get_role(&root) == Some(XDG_POPUP_ROLE) {
             self.popup_committed(&root, surface);
+        } else if get_role(&root) == Some(crate::xwayland::SURFACE_ROLE) {
+            // An override-redirect window's: a menu or a tooltip.
+            self.x11_menu_committed(&root);
         }
     }
 

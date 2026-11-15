@@ -29,7 +29,7 @@ use crate::input::PointerDescription;
 use crate::output::OutputMode;
 use crate::render::Device;
 use crate::state::{OWNER_SEAT, State};
-use crate::xwayland::{X11Display, Xwayland, XwaylandConfig};
+use crate::xwayland::{DrawnX11Menu, X11Display, Xwayland, XwaylandConfig};
 
 /// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
 /// listens again.
@@ -159,6 +159,10 @@ pub struct WindowDescription {
     pub floating: bool,
     /// Whether it is fullscreen.
     pub fullscreen: bool,
+    /// Whether it left a ping unanswered and has answered none since: an X11 window asked to
+    /// close, its program frozen ([`X11_PING_TIMEOUT`](crate::X11_PING_TIMEOUT)). Never true of
+    /// an xdg-shell window: Yuna pings none.
+    pub unresponsive: bool,
 }
 
 /// An output, as [`Compositor::output_descriptions`] describes it.
@@ -506,10 +510,18 @@ impl Compositor {
 
     /// Runs one round of the event loop: waits up to `timeout` for a client, a connection, the
     /// clock's timer or XWayland (`None`: as long as it takes), handles what came, runs the
-    /// deadlines due by now, and sends the events written. With the manual clock, time does not
+    /// deadlines due by now, and sends the events written. While X11 events wait from an earlier
+    /// round, which a round handles in a slice that ends before the next deadline, it does not
+    /// wait ([`MANAGER_SLICE`](crate::MANAGER_SLICE)). With the manual clock, time does not
     /// move: only the deadlines armed at its current time run, such as an idle output's refresh.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.arm_timer()?;
+        // X11 events waiting from the last round are handled now, not after a sleep.
+        let timeout = if Xwayland::has_backlog(&self.state) {
+            Some(Duration::ZERO)
+        } else {
+            timeout
+        };
         self.event_loop
             .dispatch(timeout, &mut self.state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -697,6 +709,13 @@ impl Compositor {
     /// is drawn now, its place as last arranged, and when its output's motion ends.
     pub fn windows(&self) -> Vec<WindowDescription> {
         self.state.describe_windows()
+    }
+
+    /// Where `output`'s last frame drew each X11 override-redirect window, a menu or a tooltip,
+    /// in its physical pixels, and the window it was drawn with. For tests.
+    #[doc(hidden)]
+    pub fn drawn_x11_menus(&self, output: OutputId) -> Vec<DrawnX11Menu> {
+        self.state.describe_x11_menus(output)
     }
 
     /// Asks `window`'s client to close it, as a key binding would: an `xdg_toplevel` is sent

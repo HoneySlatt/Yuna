@@ -28,7 +28,10 @@ use crate::output::{VirtualOutput, to_i32};
 mod x11_surface;
 
 use x11_surface::X11SurfaceElement;
-pub(crate) use x11_surface::{x11_surface_origin, x11_surface_size, x11_window_element};
+pub(crate) use x11_surface::{
+    x11_menu_element, x11_menu_origin, x11_menu_rect, x11_offset_on, x11_surface_corner,
+    x11_surface_origin, x11_surface_size, x11_window_element,
+};
 
 /// The EGL device the renderer draws on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

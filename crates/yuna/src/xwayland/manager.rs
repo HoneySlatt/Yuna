@@ -23,15 +23,19 @@
 //! properties Yuna needs when the window appears and each time one changes, bounded
 //! (`properties.rs`), and posts them with what the window does to Yuna's loop, through a calloop
 //! channel, [`ManagerEvent`]: its creation, its asking to be mapped or configured, its mapping,
-//! unmapping and destruction, the serial that pairs it with its Wayland surface
-//! (`WL_SURFACE_SERIAL`, a client message Xwayland sends the manager), and the client messages
-//! it sends: `_NET_WM_STATE`, `_NET_ACTIVE_WINDOW`. Yuna decides, and its [`Command`]s come back
-//! through a channel the thread reads when its wake-up socket says so: map, configure, set the
-//! states, focus, close, restack. What follows from a decision by ICCCM and EWMH alone, the
-//! manager does itself: `WM_STATE`, `_NET_FRAME_EXTENTS`, `_NET_CLIENT_LIST`, the synthetic
-//! `ConfigureNotify` after a configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7), and whether
-//! a window is asked to close or its client is ended. `_NET_WM_MOVERESIZE` and `WM_CHANGE_STATE`
-//! are taken and logged: Yuna has no interactive move, and minimises nothing.
+//! unmapping and destruction, an override-redirect window's moves and place in X11's stacking,
+//! which the manager follows from the root's events, the serial that pairs it with its Wayland
+//! surface (`WL_SURFACE_SERIAL`, a client message Xwayland sends the manager; a client's copy is
+//! ignored), its sync counter's changes, and the client messages it sends: `_NET_WM_STATE`,
+//! `_NET_ACTIVE_WINDOW`, a ping's answer. Yuna decides, and its [`Command`]s come back through a
+//! channel the thread reads when its wake-up socket says so: map, configure with or without a
+//! sync request, let commits go, set the states, focus, close, ping, restack. What follows from a
+//! decision by ICCCM and EWMH alone, the manager does itself: `WM_STATE`, `_NET_FRAME_EXTENTS`,
+//! `_NET_CLIENT_LIST`, set once per batch of events and commands, the synthetic `ConfigureNotify`
+//! after a configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7), whether a window is asked to
+//! close or its client is ended, and at a withdrawal the deletion of `_NET_WM_STATE`, and of
+//! `_XWAYLAND_ALLOW_COMMITS` if a sync request held it. `_NET_WM_MOVERESIZE` and
+//! `WM_CHANGE_STATE` are taken and logged: Yuna has no interactive move, and minimises nothing.
 //!
 //! **No reparenting.** The manager never puts a window inside a frame of its own: Yuna draws no
 //! title bars ([ADR-0024](../../../../docs/adr/0024-no-title-bars.md)), so a frame would only
@@ -59,19 +63,22 @@ use x11rb::errors::{ConnectionError, ReplyError};
 use x11rb::protocol::Event;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::res::{self, ClientIdMask, ClientIdSpec, ConnectionExt as _};
+use x11rb::protocol::sync::{
+    self, Alarm, ConnectionExt as _, Counter, CreateAlarmAux, Int64, TESTTYPE, VALUETYPE,
+};
 use x11rb::protocol::xfixes::{ClientDisconnectFlags, ConnectionExt as _};
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigWindow,
     ConfigureNotifyEvent, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt as _,
-    CreateWindowAux, EventMask, InputFocus, PropMode, StackMode, Window, WindowClass,
+    CreateWindowAux, EventMask, InputFocus, Place, PropMode, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
 use yuna_layout::SeatId;
 
 use super::properties::{
-    self, MAX_EMULATED, MAX_LIST, MAX_TEXT_BYTES, Malformed, Properties, Protocols, Raw, TextTypes,
-    WindowType, Wishes, X11Rect,
+    self, MAX_EMULATED, MAX_LIST, MAX_STARTUP_ID_BYTES, MAX_TEXT_BYTES, Malformed, Properties,
+    Protocols, Raw, TextTypes, WindowType, Wishes, X11Rect,
 };
 
 /// How many of the manager's events wait for Yuna's loop before the thread waits in turn: X11's
@@ -85,6 +92,10 @@ const BASE_DPI: f64 = 96.0;
 const WITHDRAWN_STATE: u32 = 0;
 const NORMAL_STATE: u32 = 1;
 const ICONIC_STATE: u32 = 3;
+
+/// The bit of an event's type that says a client sent it with `SendEvent` (X11's protocol,
+/// section 10).
+const SENT_EVENT: u8 = 0x80;
 
 /// `_NET_WM_STATE`'s actions (EWMH, `_NET_WM_STATE`).
 const STATE_REMOVE: u32 = 0;
@@ -103,6 +114,8 @@ pub(crate) enum ManagerEvent {
         client: u32,
         /// Whether it is override-redirect: placed by its client, never managed.
         override_redirect: bool,
+        /// Its rectangle, as its client made it.
+        geometry: X11Rect,
         /// Its process, as X11's own record of its client's connection gives it (XRes): never
         /// Xwayland's, which is Yuna's own through the socket pair.
         pid: Option<i32>,
@@ -115,8 +128,20 @@ pub(crate) enum ManagerEvent {
     },
     /// It asks to be mapped: Yuna maps it, or not, with [`Command::Map`].
     MapRequest(Window),
-    /// It is mapped.
-    Mapped(Window),
+    /// It is mapped; override-redirect or not, as it is at that moment.
+    Mapped {
+        window: Window,
+        override_redirect: bool,
+    },
+    /// An override-redirect window moved or changed size: its rectangle now.
+    Configured { window: Window, rect: X11Rect },
+    /// A mapped override-redirect window's place in X11's stacking: just above `above`, the
+    /// mapped override-redirect window below it, or below every other one with none. Posted when
+    /// it is mapped and each time its client restacks it.
+    Restacked {
+        window: Window,
+        above: Option<Window>,
+    },
     /// It is unmapped: withdrawn by its client, or about to be destroyed.
     Unmapped(Window),
     /// It is gone, destroyed, or reparented away from the root.
@@ -130,6 +155,11 @@ pub(crate) enum ManagerEvent {
     StateRequest { window: Window, change: StateChange },
     /// Its client asks for it to be activated (`_NET_ACTIVE_WINDOW`).
     ActivateRequest(Window),
+    /// Its sync counter reached `value` (`_NET_WM_SYNC_REQUEST`): it drew the size the sync
+    /// request of that value came with, or a later one. Each change of the counter is posted.
+    SyncCounter { window: Window, value: u64 },
+    /// Its client answered a ping (`_NET_WM_PING`).
+    PingAnswered(Window),
     /// The thread ends, for this reason.
     Stopped(Stop),
 }
@@ -178,8 +208,18 @@ pub(crate) struct NetState {
 pub(crate) enum Command {
     /// Maps a window that asked to be, its `WM_STATE` Normal.
     Map(Window),
-    /// Moves and sizes a window, and tells it so with a synthetic `ConfigureNotify`.
-    Configure { window: Window, rect: X11Rect },
+    /// Moves and sizes a window, and tells it so with a synthetic `ConfigureNotify`. With
+    /// `sync`, a `_NET_WM_SYNC_REQUEST` of that value goes first, and Xwayland holds the window's
+    /// commits (`_XWAYLAND_ALLOW_COMMITS` 0) until [`Command::AllowCommits`].
+    Configure {
+        window: Window,
+        rect: X11Rect,
+        sync: Option<u64>,
+    },
+    /// Lets Xwayland commit a window's surface again, after a sync request.
+    AllowCommits(Window),
+    /// Pings a window (`_NET_WM_PING`); its answer comes as [`ManagerEvent::PingAnswered`].
+    Ping(Window),
     /// Sets the states a window is told.
     State { window: Window, state: NetState },
     /// Gives the X input focus to a window, as its model asks (ICCCM 4.1.7), and names it in
@@ -233,6 +273,9 @@ x11rb::atom_manager! {
         _NET_WM_NAME,
         _NET_WM_PID,
         _NET_WM_PING,
+        _NET_WM_SYNC_REQUEST,
+        _NET_WM_SYNC_REQUEST_COUNTER,
+        _NET_STARTUP_ID,
         _NET_WM_STATE,
         _NET_WM_STATE_FULLSCREEN,
         _NET_WM_STATE_MAXIMIZED_HORZ,
@@ -261,6 +304,7 @@ x11rb::atom_manager! {
         _MOTIF_WM_HINTS,
         _GTK_FRAME_EXTENTS,
         _XWAYLAND_RANDR_EMU_MONITOR_RECTS,
+        _XWAYLAND_ALLOW_COMMITS,
         _XSETTINGS_S0,
         _XSETTINGS_SETTINGS,
     }
@@ -443,13 +487,15 @@ fn supported(atoms: &Atoms) -> Vec<Atom> {
         atoms._NET_SUPPORTING_WM_CHECK,
         atoms._NET_WM_NAME,
         atoms._NET_WM_PID,
+        atoms._NET_WM_PING,
+        atoms._NET_WM_SYNC_REQUEST,
+        atoms._NET_WM_SYNC_REQUEST_COUNTER,
         atoms._NET_WM_STATE,
         atoms._NET_WM_STATE_FULLSCREEN,
         atoms._NET_WM_STATE_MAXIMIZED_HORZ,
         atoms._NET_WM_STATE_MAXIMIZED_VERT,
         atoms._NET_WM_STATE_HIDDEN,
         atoms._NET_ACTIVE_WINDOW,
-        atoms._NET_WM_MOVERESIZE,
         atoms._NET_CLIENT_LIST,
         atoms._NET_CLIENT_LIST_STACKING,
         atoms._NET_FRAME_EXTENTS,
@@ -498,10 +544,12 @@ enum Read {
     Pid,
     State,
     Emulated,
+    SyncCounter,
+    StartupId,
 }
 
 impl Read {
-    const ALL: [Read; 13] = [
+    const ALL: [Read; 15] = [
         Read::NetWmName,
         Read::WmName,
         Read::Class,
@@ -515,6 +563,8 @@ impl Read {
         Read::Pid,
         Read::State,
         Read::Emulated,
+        Read::SyncCounter,
+        Read::StartupId,
     ];
 
     fn atom(self, atoms: &Atoms) -> Atom {
@@ -532,6 +582,8 @@ impl Read {
             Read::Pid => atoms._NET_WM_PID,
             Read::State => atoms._NET_WM_STATE,
             Read::Emulated => atoms._XWAYLAND_RANDR_EMU_MONITOR_RECTS,
+            Read::SyncCounter => atoms._NET_WM_SYNC_REQUEST_COUNTER,
+            Read::StartupId => atoms._NET_STARTUP_ID,
         }
     }
 
@@ -547,6 +599,8 @@ impl Read {
             Read::FrameExtents => 4,
             Read::TransientFor | Read::Pid => 1,
             Read::Emulated => MAX_EMULATED * 4,
+            Read::SyncCounter => 2,
+            Read::StartupId => MAX_STARTUP_ID_BYTES / 4,
         }
     }
 }
@@ -565,6 +619,11 @@ struct Tracked {
     /// Whether a malformed property of it, or a title read as Latin-1 from `COMPOUND_TEXT`, was
     /// logged: once per window.
     logged: bool,
+    /// The alarm that reports its sync counter's changes, made at its first sync request, and
+    /// the counter it watches.
+    alarm: Option<(Alarm, Counter)>,
+    /// Whether its `_XWAYLAND_ALLOW_COMMITS` is 0: a sync request waits.
+    commits_held: bool,
 }
 
 /// The manager serving: its connection, what it follows, and where it posts.
@@ -579,6 +638,10 @@ struct Manager<'a> {
     resource_mask: u32,
     /// Whether Xwayland has XRes, which gives each client's process.
     xres: bool,
+    /// Whether Xwayland has XSync, through which a window's sync counter is watched.
+    sync: bool,
+    /// The window each sync alarm watches.
+    alarms: HashMap<Alarm, Window>,
     windows: HashMap<Window, Tracked>,
     /// The managed windows mapped, in the order they were: `_NET_CLIENT_LIST`.
     clients: Vec<Window>,
@@ -586,6 +649,11 @@ struct Manager<'a> {
     stacking: Vec<Window>,
     /// The order Yuna last stacked windows in, bottom to top.
     restacked: Vec<Window>,
+    /// X11's stacking of the root's children, bottom to top, as its events say: the manager's
+    /// own window and every window it follows.
+    order: Vec<Window>,
+    /// Whether `clients` or `stacking` changed since the root's lists were last set.
+    lists_changed: bool,
     events: &'a SyncSender<ManagerEvent>,
 }
 
@@ -611,6 +679,12 @@ impl<'a> Manager<'a> {
         if !xres {
             tracing::debug!("Xwayland has no XRes: X11 windows' processes come from _NET_WM_PID");
         }
+        let sync = connection
+            .extension_information(sync::X11_EXTENSION_NAME)?
+            .is_some();
+        if !sync {
+            tracing::info!("Xwayland has no XSync: X11 windows are resized without sync requests");
+        }
         Ok(Manager {
             connection,
             atoms,
@@ -618,10 +692,14 @@ impl<'a> Manager<'a> {
             own,
             resource_mask: setup.resource_id_mask,
             xres,
+            sync,
+            alarms: HashMap::new(),
             windows: HashMap::new(),
             clients: Vec::new(),
             stacking: Vec::new(),
             restacked: Vec::new(),
+            order: vec![own],
+            lists_changed: false,
             events,
         })
     }
@@ -647,6 +725,7 @@ impl<'a> Manager<'a> {
             // the queue read again, until a flush leaves nothing to handle. At the sleep, the
             // queue and the socket are both empty.
             loop {
+                self.write_lists();
                 self.connection.flush()?;
                 let mut handled = false;
                 while let Some(event) = self.connection.poll_for_event()? {
@@ -713,30 +792,41 @@ impl<'a> Manager<'a> {
             Event::MapNotify(mapped) => match self.windows.get_mut(&mapped.window) {
                 Some(tracked) if !tracked.mapped => {
                     tracked.mapped = true;
-                    self.post(ManagerEvent::Mapped(mapped.window))
+                    tracked.override_redirect = mapped.override_redirect;
+                    let window = mapped.window;
+                    self.post(ManagerEvent::Mapped {
+                        window,
+                        override_redirect: mapped.override_redirect,
+                    }) && self.post_place_in_stacking(window)
                 }
                 _ => true,
             },
             // A client withdrawing its window sends a synthetic one too (ICCCM 4.1.4): either
             // comes first, the other finds it unmapped.
             Event::UnmapNotify(unmapped) => self.unmapped(unmapped.window)?,
-            Event::ConfigureNotify(configured) => {
-                if let Some(tracked) = self.windows.get_mut(&configured.window) {
-                    tracked.geometry = X11Rect {
-                        x: i32::from(configured.x),
-                        y: i32::from(configured.y),
-                        width: u32::from(configured.width),
-                        height: u32::from(configured.height),
-                    };
-                    tracked.override_redirect = configured.override_redirect;
-                }
-                true
+            Event::ConfigureNotify(configured) => self.configured(&configured),
+            Event::CirculateNotify(circulated) => {
+                let window = circulated.window;
+                let above = match circulated.place {
+                    Place::ON_TOP => self.order.iter().rev().find(|&&w| w != window).copied(),
+                    _ => None,
+                };
+                self.restacked(window, above)
             }
             Event::ConfigureRequest(request) => self.configure_request(&request),
             Event::PropertyNotify(changed) => {
                 self.property_changed(changed.window, changed.atom)?
             }
             Event::ClientMessage(message) => self.client_message(&message),
+            Event::SyncAlarmNotify(alarm) => match self.alarms.get(&alarm.alarm) {
+                Some(&window) => {
+                    let value = alarm.counter_value;
+                    // A counter below 0 has reached no value Yuna sends.
+                    let value = (i64::from(value.hi) << 32 | i64::from(value.lo)).max(0) as u64;
+                    self.post(ManagerEvent::SyncCounter { window, value })
+                }
+                None => true,
+            },
             Event::Error(error) => {
                 // A request on a window its client destroyed meanwhile, most often.
                 tracing::debug!(?error, "an X11 request of the manager failed");
@@ -773,6 +863,8 @@ impl<'a> Manager<'a> {
             mapped: false,
             managed: false,
             logged: false,
+            alarm: None,
+            commits_held: false,
         };
         let pid = self.pid_of(window)?;
         for (read, raw) in self.read_all(window)? {
@@ -780,10 +872,13 @@ impl<'a> Manager<'a> {
         }
         let properties = Box::new(tracked.properties.clone());
         self.windows.insert(window, tracked);
+        // A window made or reparented to the root goes on top of its siblings.
+        self.order.push(window);
         Ok(self.post(ManagerEvent::Created {
             window,
             client: window & !self.resource_mask,
             override_redirect,
+            geometry,
             pid,
             properties,
         }))
@@ -791,14 +886,83 @@ impl<'a> Manager<'a> {
 
     /// Forgets a window gone from the root, and tells Yuna.
     fn forget(&mut self, window: Window) -> GoOn {
-        if self.windows.remove(&window).is_none() {
+        let Some(tracked) = self.windows.remove(&window) else {
             return true;
+        };
+        if let Some((alarm, _)) = tracked.alarm {
+            self.destroy_alarm(alarm);
         }
+        self.order.retain(|&stacked| stacked != window);
         self.unlist(window);
         self.post(ManagerEvent::Destroyed(window))
     }
 
-    /// A window was unmapped: a managed one is withdrawn (ICCCM 4.1.4) and leaves the lists.
+    /// A window moved, changed size or was restacked. An override-redirect window's new
+    /// rectangle goes to Yuna, which draws it where its client puts it; so does its new place in
+    /// the stacking once it is mapped. A managed window's place is Yuna's own already.
+    fn configured(&mut self, configured: &ConfigureNotifyEvent) -> GoOn {
+        let window = configured.window;
+        let Some(tracked) = self.windows.get_mut(&window) else {
+            return true;
+        };
+        let rect = X11Rect {
+            x: i32::from(configured.x),
+            y: i32::from(configured.y),
+            width: u32::from(configured.width),
+            height: u32::from(configured.height),
+        };
+        let moved = std::mem::replace(&mut tracked.geometry, rect) != rect;
+        tracked.override_redirect = configured.override_redirect;
+        let override_redirect = tracked.override_redirect;
+        let above = Some(configured.above_sibling).filter(|&sibling| sibling != x11rb::NONE);
+        if override_redirect && moved && !self.post(ManagerEvent::Configured { window, rect }) {
+            return false;
+        }
+        self.restacked(window, above)
+    }
+
+    /// `window` now lies just above `above` in X11's stacking, or at the bottom with none; a
+    /// sibling the manager does not follow puts it at the bottom. Yuna is told when it is a mapped
+    /// override-redirect window whose place changed.
+    fn restacked(&mut self, window: Window, above: Option<Window>) -> GoOn {
+        let Some(from) = self.order.iter().position(|&stacked| stacked == window) else {
+            return true;
+        };
+        self.order.remove(from);
+        let to = above
+            .and_then(|above| self.order.iter().position(|&stacked| stacked == above))
+            .map_or(0, |below| below + 1);
+        self.order.insert(to, window);
+        if from == to {
+            return true;
+        }
+        self.post_place_in_stacking(window)
+    }
+
+    /// Tells Yuna where `window`, if it is a mapped override-redirect window, lies among the
+    /// others: just above the first one mapped below it.
+    fn post_place_in_stacking(&self, window: Window) -> GoOn {
+        let is_menu = |window: &Window| {
+            self.windows
+                .get(window)
+                .is_some_and(|tracked| tracked.mapped && tracked.override_redirect)
+        };
+        if !is_menu(&window) {
+            return true;
+        }
+        let above = self
+            .order
+            .iter()
+            .take_while(|&&stacked| stacked != window)
+            .filter(|stacked| is_menu(stacked))
+            .last()
+            .copied();
+        self.post(ManagerEvent::Restacked { window, above })
+    }
+
+    /// A window was unmapped: a managed one is withdrawn (ICCCM 4.1.4) and leaves the lists. Its
+    /// `_NET_WM_STATE` goes, as EWMH asks of a manager at withdrawal: mapped again, the window
+    /// starts from what its client sets then, not from the states it had.
     fn unmapped(&mut self, window: Window) -> Result<GoOn, Failure> {
         let Some(tracked) = self.windows.get_mut(&window) else {
             return Ok(true);
@@ -815,6 +979,14 @@ impl<'a> Manager<'a> {
                 self.atoms.WM_STATE,
                 &[WITHDRAWN_STATE, x11rb::NONE],
             )?;
+            self.connection
+                .delete_property(window, self.atoms._NET_WM_STATE)?;
+            // Held for a sync request that will not be answered now: Xwayland reads it again
+            // when the window is mapped, and would never commit it.
+            if std::mem::take(&mut tracked.commits_held) {
+                self.connection
+                    .delete_property(window, self.atoms._XWAYLAND_ALLOW_COMMITS)?;
+            }
             self.unlist(window);
         }
         Ok(self.post(ManagerEvent::Unmapped(window)))
@@ -830,9 +1002,19 @@ impl<'a> Manager<'a> {
         }
     }
 
-    /// Sets the root's `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING`. Errors go to the event
-    /// queue: nothing waits for them.
-    fn publish_lists(&self) {
+    /// Marks the root's `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` changed: they are set
+    /// once the events and commands at hand are handled, so that a thousand windows mapped or
+    /// gone together set them once, not a thousand times.
+    fn publish_lists(&mut self) {
+        self.lists_changed = true;
+    }
+
+    /// Sets the root's lists of windows, if they changed. Errors go to the event queue: nothing
+    /// waits for them.
+    fn write_lists(&mut self) {
+        if !std::mem::take(&mut self.lists_changed) {
+            return;
+        }
         for (atom, list) in [
             (self.atoms._NET_CLIENT_LIST, &self.clients),
             (self.atoms._NET_CLIENT_LIST_STACKING, &self.stacking),
@@ -898,6 +1080,13 @@ impl<'a> Manager<'a> {
         };
         let raw = self.read_one(window, read)?;
         self.apply(window, &mut tracked, read, raw.as_ref());
+        // Another counter: the next sync request watches it from 0, as Yuna counts again.
+        if let Some((alarm, counter)) = tracked.alarm
+            && tracked.properties.sync_counter != Some(counter)
+        {
+            tracked.alarm = None;
+            self.destroy_alarm(alarm);
+        }
         let properties = Box::new(tracked.properties.clone());
         self.windows.insert(window, tracked);
         Ok(self.post(ManagerEvent::Properties { window, properties }))
@@ -912,8 +1101,25 @@ impl<'a> Manager<'a> {
             return true;
         }
         if message.type_ == atoms.WL_SURFACE_SERIAL {
+            // Xwayland delivers its own from within the server; a copy with SendEvent's bit came
+            // from a client, which could pair its window with another's surface.
+            if message.response_type & SENT_EVENT != 0 {
+                tracing::debug!(window, "a WL_SURFACE_SERIAL sent by a client is ignored");
+                return true;
+            }
             let serial = u64::from(data[0]) | (u64::from(data[1]) << 32);
             return self.post(ManagerEvent::SurfaceSerial { window, serial });
+        }
+        // A ping's answer comes back on the root, naming its window (EWMH, `_NET_WM_PING`).
+        if window == self.root
+            && message.type_ == atoms.WM_PROTOCOLS
+            && data[0] == atoms._NET_WM_PING
+        {
+            let pinged = data[2];
+            if self.windows.contains_key(&pinged) {
+                return self.post(ManagerEvent::PingAnswered(pinged));
+            }
+            return true;
         }
         if !self.windows.contains_key(&window) {
             return true;
@@ -963,6 +1169,13 @@ impl<'a> Manager<'a> {
         let atoms = &self.atoms;
         match command {
             Command::Map(window) => {
+                // Xwayland reads it when it makes the window's surface: a hold left from before
+                // would keep the window from ever showing.
+                if let Some(tracked) = self.windows.get_mut(&window)
+                    && std::mem::take(&mut tracked.commits_held)
+                {
+                    connection.delete_property(window, atoms._XWAYLAND_ALLOW_COMMITS)?;
+                }
                 connection.change_property32(
                     PropMode::REPLACE,
                     window,
@@ -988,8 +1201,44 @@ impl<'a> Manager<'a> {
                     }
                 }
             }
-            Command::Configure { window, rect } => configure(connection, window, rect)?,
+            Command::Configure { window, rect, sync } => {
+                if let Some(value) = sync {
+                    self.request_sync(window, value)?;
+                }
+                configure(connection, window, rect)?;
+            }
+            Command::AllowCommits(window) => {
+                if let Some(tracked) = self.windows.get_mut(&window)
+                    && std::mem::take(&mut tracked.commits_held)
+                {
+                    connection.change_property32(
+                        PropMode::REPLACE,
+                        window,
+                        atoms._XWAYLAND_ALLOW_COMMITS,
+                        AtomEnum::CARDINAL,
+                        &[1],
+                    )?;
+                }
+            }
+            Command::Ping(window) => {
+                let message = ClientMessageEvent::new(
+                    32,
+                    window,
+                    atoms.WM_PROTOCOLS,
+                    [atoms._NET_WM_PING, x11rb::CURRENT_TIME, window, 0, 0],
+                );
+                connection.send_event(false, window, EventMask::NO_EVENT, message)?;
+            }
             Command::State { window, state } => {
+                // A command sent before Yuna learnt of a withdrawal would set again the states
+                // the withdrawal deleted.
+                if !self
+                    .windows
+                    .get(&window)
+                    .is_some_and(|tracked| tracked.managed)
+                {
+                    return Ok(());
+                }
                 let mut names = Vec::new();
                 if state.fullscreen {
                     names.push(atoms._NET_WM_STATE_FULLSCREEN);
@@ -1064,6 +1313,80 @@ impl<'a> Manager<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Sends `window` a sync request of `value` (`_NET_WM_SYNC_REQUEST`), ahead of a configure,
+    /// and has Xwayland hold its commits until Yuna lets them go: then the frame drawn at the
+    /// new size shows whole. Its sync counter is watched by an alarm made at its first request,
+    /// which reports each change; the counter is set to 0 then, as KWin and Smithay set it, so
+    /// that Yuna's values, counted from 1, are ahead of it. Without XSync, without a counter, or
+    /// for a window the manager no longer sees mapped, which Yuna asked before it learnt of the
+    /// unmapping, the answer is posted at once: nothing waits, and nothing holds the commits of a
+    /// window mapped again.
+    fn request_sync(&mut self, window: Window, value: u64) -> Result<(), Failure> {
+        let connection = self.connection;
+        let atoms = &self.atoms;
+        let has_sync = self.sync;
+        let Some(tracked) = self.windows.get_mut(&window) else {
+            return Ok(());
+        };
+        let counter = tracked
+            .properties
+            .sync_counter
+            .filter(|_| has_sync && tracked.mapped && tracked.managed);
+        let Some(counter) = counter else {
+            self.post(ManagerEvent::SyncCounter { window, value });
+            return Ok(());
+        };
+        if tracked.alarm.is_none() {
+            connection.sync_set_counter(counter, Int64 { hi: 0, lo: 0 })?;
+            // Relative 1, delta 1, positive comparison: the alarm fires at each increase of the
+            // counter, as Smithay's (`xwayland/xwm/surface.rs`, MIT) does.
+            let alarm = connection.generate_id()?;
+            let one = Int64 { hi: 0, lo: 1 };
+            connection.sync_create_alarm(
+                alarm,
+                &CreateAlarmAux::new()
+                    .counter(counter)
+                    .value_type(VALUETYPE::RELATIVE)
+                    .value(one)
+                    .test_type(TESTTYPE::POSITIVE_COMPARISON)
+                    .delta(one)
+                    .events(1),
+            )?;
+            tracked.alarm = Some((alarm, counter));
+            self.alarms.insert(alarm, window);
+        }
+        tracked.commits_held = true;
+        connection.change_property32(
+            PropMode::REPLACE,
+            window,
+            atoms._XWAYLAND_ALLOW_COMMITS,
+            AtomEnum::CARDINAL,
+            &[0],
+        )?;
+        let message = ClientMessageEvent::new(
+            32,
+            window,
+            atoms.WM_PROTOCOLS,
+            [
+                atoms._NET_WM_SYNC_REQUEST,
+                x11rb::CURRENT_TIME,
+                value as u32,
+                (value >> 32) as u32,
+                0,
+            ],
+        );
+        connection.send_event(false, window, EventMask::NO_EVENT, message)?;
+        Ok(())
+    }
+
+    /// Destroys a sync alarm; an error, for a client gone, goes to the event queue.
+    fn destroy_alarm(&mut self, alarm: Alarm) {
+        self.alarms.remove(&alarm);
+        if let Err(error) = self.connection.sync_destroy_alarm(alarm) {
+            tracing::debug!(%error, "a sync alarm cannot be destroyed");
+        }
     }
 
     /// Gives the X input focus to `window` as its model asks (ICCCM 4.1.7): Passive and Locally
@@ -1170,8 +1493,8 @@ impl<'a> Manager<'a> {
     }
 
     /// Decodes `raw`, `read`'s value, into `tracked`'s properties; a property not set, or
-    /// malformed, leaves its field at its default. A malformed value, or a title read from
-    /// `COMPOUND_TEXT`, is logged once per window.
+    /// malformed, sets its field to its default, as if it were not set, whatever it held before.
+    /// A malformed value, or a title read from `COMPOUND_TEXT`, is logged once per window.
     fn apply(&self, window: Window, tracked: &mut Tracked, read: Read, raw: Option<&Reply>) {
         let unset = Reply {
             type_: 0,
@@ -1181,6 +1504,10 @@ impl<'a> Manager<'a> {
         };
         let raw = raw.unwrap_or(&unset).raw();
         let outcome = decode(&self.atoms, read, raw, &mut tracked.properties);
+        if outcome.is_err() {
+            // Decoding what is not set gives the default, and never fails.
+            let _ = decode(&self.atoms, read, unset.raw(), &mut tracked.properties);
+        }
         if std::mem::replace(&mut tracked.logged, true) {
             return;
         }
@@ -1208,7 +1535,8 @@ enum Decoding {
 }
 
 /// Decodes `raw`, `read`'s value, into its field of `properties`: the default when it is not
-/// set; left unchanged, and the reason given, when it is malformed.
+/// set; when it is malformed, the field is left as it was and the reason given (`apply` sets it
+/// to its default then).
 fn decode(
     atoms: &Atoms,
     read: Read,
@@ -1252,6 +1580,7 @@ fn decode(
                 delete_window: listed.contains(&atoms.WM_DELETE_WINDOW),
                 take_focus: listed.contains(&atoms.WM_TAKE_FOCUS),
                 ping: listed.contains(&atoms._NET_WM_PING),
+                sync_request: listed.contains(&atoms._NET_WM_SYNC_REQUEST),
             };
         }
         Read::TransientFor => {
@@ -1279,6 +1608,12 @@ fn decode(
         }
         Read::Emulated => {
             properties.emulated = properties::decode_emulated(raw, cardinal)?.unwrap_or_default();
+        }
+        Read::SyncCounter => {
+            properties.sync_counter = properties::decode_counter(raw, cardinal)?;
+        }
+        Read::StartupId => {
+            properties.startup_id = properties::decode_text(raw, types)?.map(|text| text.text);
         }
     }
     Ok(Decoding::Plain)

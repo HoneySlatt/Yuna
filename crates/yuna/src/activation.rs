@@ -141,6 +141,21 @@ impl State {
         self.mark_urgent(window);
     }
 
+    /// The activation `token` carries, if Yuna gave it and it was not used, taken out: a token
+    /// is used once. An X11 window's `_NET_STARTUP_ID` may name one (`xwayland/windows.rs`).
+    pub(crate) fn take_activation_token(&mut self, token: &str) -> Option<TokenOrigin> {
+        let token = XdgActivationToken::from(token.to_owned());
+        let origin = self
+            .xdg_activation_state
+            .data_for_token(&token)?
+            .user_data
+            .get::<TokenOrigin>()
+            .copied()
+            .unwrap_or(TokenOrigin::UNKNOWN);
+        self.xdg_activation_state.remove_token(&token);
+        Some(origin)
+    }
+
     /// Whether `window` is urgent: an activation of it was refused, or came without a valid
     /// token, and it has not had the seat's focus since.
     pub(crate) fn is_urgent(&self, window: WindowId) -> bool {

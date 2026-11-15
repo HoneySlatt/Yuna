@@ -36,7 +36,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029, 0050 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
 | [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Superseded by 0042 |
-| [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted; context corrected |
+| [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted; context corrected; extended by 0070 |
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0025, 0022; amended by 0043 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted; amends the ROADMAP |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023; amended by 0046 |
@@ -78,3 +78,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0067](0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md) | One XWayland per seat, on demand, behind a cookie | Accepted |
 | [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Accepted |
 | [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md) | Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept | Accepted |
+| [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted; extends 0028 |

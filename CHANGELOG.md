@@ -18,8 +18,17 @@ What changed for users, newest first. Yuna has no release yet: everything below 
   at the seat's largest scale and the right size on every output, averaged where an output's
   scale is smaller. A fullscreen game that sets an output's mode through RandR keeps it, drawn
   pixel for pixel. `yuna mcp`'s `windows` gives each window's `shell`, `xdg` or `x11`, and an
-  X11 window's class as its application id. Their menus and tooltips are not shown yet, and Java
-  programs need `_JAVA_AWT_WM_NONREPARENTING=1`.
+  X11 window's class as its application id. Java programs need `_JAVA_AWT_WM_NONREPARENTING=1`.
+- X11 programs' menus and tooltips show where the program puts them, over their window and
+  sliding with it, or alone over every window; a click reaches the pixel under the pointer, and
+  the keyboard stays with the window. Dialogs open floating at their own size, over their
+  window. A resized X11 window that takes `_NET_WM_SYNC_REQUEST` shows its new size whole, held
+  100 ms at most. A window asked to close that leaves its ping unanswered 5 s is marked
+  `unresponsive` in `yuna mcp`'s `windows`, never ended for it. A program started with an
+  activation token in its startup id is activated with it. A window mapped again starts without
+  the states it had. Huge or malformed properties, nonsense sizes, messages naming unknown atoms,
+  floods of thousands of windows and programs dying mid-request leave Yuna running, another
+  window's frames on time.
 
 - Animations, off by default in `yuna --headless` and `yuna mcp`, where each change still shows
   at once; `--animations` turns them on in both. The view slides along the strip of columns,

@@ -230,7 +230,16 @@ impl State {
                 .map(|(found, at)| (found, origin + at.to_f64()))
         };
         // What the output draws then, as its frames do (`frames.rs`): a window moving is where
-        // it is drawn, not at its place; a window scrolled out is not, nor its popups.
+        // it is drawn, not at its place; a window scrolled out is not, nor its popups. X11 menus
+        // over no window are over every window.
+        let menus = self.x11_shown_menus(output);
+        for lone in &menus.lone {
+            let origin =
+                render::x11_menu_origin(&lone.surface, lone.corner, lone.x11_scale, output);
+            if let Some(found) = origin.and_then(|origin| hit(&lone.surface, origin)) {
+                return Some(found);
+            }
+        }
         let frame = self.motion.frame(output.id, at);
         let shown = frame
             .windows
@@ -247,6 +256,23 @@ impl State {
             };
             let rect = drawn.rect;
             let corner = Point::<f64, Logical>::from((rect.x, rect.y));
+            // An X11 window's menus, topmost first, where the frame draws them, so that the
+            // pointer lands on the X11 pixel drawn under it, as on the window.
+            if let Some(x11) = toplevel.x11() {
+                let window_corner = render::x11_surface_corner(
+                    self.x11.geometry_offset(x11),
+                    rect,
+                    x11.scale,
+                    output,
+                );
+                for menu in menus.with(drawn.window) {
+                    let at = render::x11_offset_on(window_corner, menu.offset, x11.scale, output);
+                    let origin = render::x11_menu_origin(&menu.surface, at, x11.scale, output);
+                    if let Some(found) = origin.and_then(|origin| hit(&menu.surface, origin)) {
+                        return Some(found);
+                    }
+                }
+            }
             // Topmost first; a menu may overflow its window.
             for (popup, at) in PopupManager::popups_for_surface(toplevel.wl_surface()) {
                 let origin = corner + at.to_f64() - popup.geometry().loc.to_f64();

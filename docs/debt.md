@@ -283,8 +283,17 @@ with games' VRR:
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
   node (checked on 2026-11-14 with the cards hidden, `glxinfo` on the GPU).
-- Override-redirect windows, menus and tooltips, are recorded and paired with their surfaces, never
-  shown yet: M1.8's next step. Until then an X11 program's menus open unseen.
+- An X11 menu drawn with a window keeps its offset from that window as it was when the menu was
+  placed, so that it slides with the window. If the window moves while the menu stays open, X11
+  still has the menu at its own place: a click on the window where X11 has the menu goes to the
+  root, as Xwayland picks the window under the pointer through X11's stacking. Toolkits close
+  their menus when their window moves.
+- A menu over a fullscreen game in an emulated mode is placed by its offset in X11 pixels, not
+  scaled by the viewport Xwayland gives the game's surface.
+- A menu drawn with no window enters no output (`wl_surface.enter`): Xwayland's surfaces have one
+  scale, which outputs do not change.
+- A menu drawn with its window is drawn only on the outputs its window overlaps: one overflowing
+  onto the next output is cut there, as an xdg popup is.
 - No reparenting (`xwayland/manager.rs`): Yuna draws no frames, so a window stays a child of the
   root. Java's AWT waits for a reparenting manager unless it runs with
   `_JAVA_AWT_WM_NONREPARENTING=1`; its windows otherwise stay blank.
@@ -292,11 +301,35 @@ with games' VRR:
   cells) and its aspect are read and not followed, as tiling managers do; its window type gives
   only whether it is managed: a dialog, a splash or a utility window opens tiled unless it names
   a parent through `WM_TRANSIENT_FOR`.
-- `_NET_WM_SYNC_REQUEST` is not done yet: a resized X11 window's new buffer is drawn when it comes,
-  not held until it matches its size. No `_NET_WM_PING` is sent, so a frozen X11 program is not
-  noticed. `_NET_WM_MOVERESIZE` is taken and does nothing: Yuna has no interactive move. A request
-  to iconify or hide (`WM_CHANGE_STATE`, `_NET_WM_STATE_HIDDEN`) does nothing: Yuna minimises
+- `_NET_WM_SYNC_REQUEST` uses the basic counter alone: the extended one, which tells each frame
+  drawn, is left. A window that never answers waits 100 ms at each resize, where KWin stops
+  syncing it after a timeout.
+- A ping carries `CurrentTime`, not the time of the event that asked to close, and its answer is
+  matched by its window alone, so that any X11 client of the seat can answer another's ping and
+  clear its "unresponsive"; one ping waits at a time.
+- `_NET_STARTUP_ID` is read when a window asks to be mapped, not when it changes later; X11's
+  startup notification messages (`_NET_STARTUP_INFO`) are not read. X11 keeps its clients apart
+  in nothing: another X11 client of the seat can read a window's startup id and use its token
+  first. Seats stay apart: a token activates its own seat's windows alone.
+- `WM_TAKE_FOCUS` is sent with `CurrentTime`, not the time of the event that moved the focus, as
+  ICCCM asks: a client that checks it may refuse the focus.
+- `_NET_WM_MOVERESIZE` is taken and does nothing: Yuna has no interactive move. A request to
+  iconify or hide (`WM_CHANGE_STATE`, `_NET_WM_STATE_HIDDEN`) does nothing: Yuna minimises
   nothing.
+- A managed window typed a menu, a notification or a tooltip, not override-redirect, is managed
+  as any window: tiled, unless it names a parent.
+- An X11 window's minimum size is honoured up to X11's 32,767 pixels: a window asking that much
+  is configured to it, Xwayland draws no buffer so large, and it never shows. A client can make
+  such a window itself, without hints; Yuna does not bound X11 windows to its outputs.
+- Unmapped X11 windows are tracked without a bound per client: each holds up to about 192 KiB of
+  text, three titles of 64 KiB, twice, in its manager and in Yuna; Xwayland holds them too.
+- The orders in which a window and its surface pair, the serial before the surface's commit or
+  after, around a map or an unmap, are not each forced by a test: the stories take the order
+  Xwayland gives.
+- Telling the windows at each arrangement asks the layout for each window shown
+  (`Layout::window`), whose lookup walks the workspaces, and an arrangement walks every window:
+  a thousand X11 windows opening one by one cost 7 ms of CPU a round in a release build, 90 ms in
+  an unoptimised one, where another seat's frames then come at about 30 Hz.
 - An X11 client's `_NET_ACTIVE_WINDOW` is taken as xdg-activation without a token: the window
   takes the focus only when its client has it already; a pager's request (source 2) is no better.
 - An X11 window's place is cut to X11's 16-bit coordinates: with outputs past 32,767 X11 pixels

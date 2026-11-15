@@ -18,6 +18,10 @@ pub(crate) const MAX_TEXT_BYTES: u32 = 64 * 1024;
 /// specifications name about twenty, a client lists a few.
 pub(crate) const MAX_LIST: u32 = 64;
 
+/// The most bytes read from `_NET_STARTUP_ID`: a startup notification's id, or an
+/// xdg-activation token, is tens of bytes.
+pub(crate) const MAX_STARTUP_ID_BYTES: u32 = 1024;
+
 /// The most rectangles read from `_XWAYLAND_RANDR_EMU_MONITOR_RECTS`: Xwayland keeps 16 emulated
 /// modes per client (`XWL_CLIENT_MAX_EMULATED_MODES`).
 pub(crate) const MAX_EMULATED: u32 = 16;
@@ -69,6 +73,12 @@ pub(crate) struct Properties {
     pub wishes: Wishes,
     /// `_XWAYLAND_RANDR_EMU_MONITOR_RECTS`.
     pub emulated: Vec<X11Rect>,
+    /// `_NET_WM_SYNC_REQUEST_COUNTER`'s first counter, the basic one (EWMH): the XSync counter
+    /// the window sets once it drew the size a sync request came with.
+    pub sync_counter: Option<u32>,
+    /// `_NET_STARTUP_ID`: the startup notification its launcher gave it, which may be an
+    /// xdg-activation token.
+    pub startup_id: Option<String>,
 }
 
 impl Properties {
@@ -85,8 +95,10 @@ pub(crate) struct Protocols {
     pub delete_window: bool,
     /// `WM_TAKE_FOCUS`: it is told when it may take the focus (ICCCM 4.1.7).
     pub take_focus: bool,
-    /// `_NET_WM_PING`: it answers pings; Yuna sends none yet.
+    /// `_NET_WM_PING`: it answers pings, which Yuna sends when it asks it to close.
     pub ping: bool,
+    /// `_NET_WM_SYNC_REQUEST`: it says, through its sync counter, when it drew a new size.
+    pub sync_request: bool,
 }
 
 /// What a window's `_NET_WM_STATE` asks before it is mapped.
@@ -297,6 +309,19 @@ pub(crate) fn decode_window(raw: Raw<'_>, window: u32) -> Decoded<u32> {
         .filter(|words| raw.type_ == window && !words.is_empty())
         .ok_or(Malformed("WM_TRANSIENT_FOR not a WINDOW"))?;
     Ok(Some(words[0]).filter(|&window| window != 0))
+}
+
+/// `_NET_WM_SYNC_REQUEST_COUNTER`: one CARDINAL, the basic counter, or two, the basic and the
+/// extended one, which Yuna leaves; a counter of 0 is none.
+pub(crate) fn decode_counter(raw: Raw<'_>, cardinal: u32) -> Decoded<u32> {
+    if raw.is_unset() {
+        return Ok(None);
+    }
+    let words = raw
+        .words()
+        .filter(|words| raw.type_ == cardinal && !words.is_empty())
+        .ok_or(Malformed("_NET_WM_SYNC_REQUEST_COUNTER not a CARDINAL"))?;
+    Ok(Some(words[0]).filter(|&counter| counter != 0))
 }
 
 /// `_NET_WM_PID`, a process id; 0, or one beyond Linux's ids, is malformed.
@@ -700,5 +725,19 @@ mod tests {
         );
         // A 32-bit value cut in its middle is malformed, whatever its type.
         assert!(decode_pid(of32(CARDINAL, &[1, 2, 3]), CARDINAL).is_err());
+    }
+
+    #[test]
+    fn the_basic_sync_counter_is_the_first() {
+        assert_eq!(
+            decode_counter(of32(CARDINAL, &words_of(&[0x60_0003, 0x60_0004])), CARDINAL),
+            Ok(Some(0x60_0003))
+        );
+        assert_eq!(
+            decode_counter(of32(CARDINAL, &words_of(&[0])), CARDINAL),
+            Ok(None)
+        );
+        assert!(decode_counter(of32(CARDINAL, &[]), CARDINAL).is_err());
+        assert!(decode_counter(of32(33, &words_of(&[7])), CARDINAL).is_err());
     }
 }

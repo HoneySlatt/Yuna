@@ -27,6 +27,7 @@ use smithay::desktop::utils::bbox_from_surface_tree;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{Logical, Rectangle, Serial};
 use smithay::wayland::compositor::with_states;
@@ -43,7 +44,7 @@ use crate::activation::TokenOrigin;
 use crate::compositor::{WindowDescription, WindowShell};
 use crate::seats::seat_of_surface;
 use crate::state::{ClientState, State};
-use crate::xwayland::X11Toplevel;
+use crate::xwayland::{X11Client, X11Toplevel};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
 const SUSPENDED_SINCE: u32 = 6;
@@ -91,6 +92,16 @@ pub(crate) struct Toplevel {
     pub urgent: bool,
     /// The token of an activation asked before it was mapped: judged when it is.
     pub waiting_activation: Option<TokenOrigin>,
+    /// Whose window it counts as against the cap on windows, while it is mapped.
+    owner: Option<WindowOwner>,
+}
+
+/// Whose windows count together against [`MAX_WINDOWS_PER_CLIENT`]: an xdg-shell window's
+/// Wayland client's, or an X11 window's X11 client's, never Xwayland's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum WindowOwner {
+    Wayland(ClientId),
+    X11(X11Client),
 }
 
 /// The shell behind a window: what its client speaks.
@@ -117,6 +128,7 @@ impl Toplevel {
             configure_owed: false,
             urgent: false,
             waiting_activation: None,
+            owner: None,
         }
     }
 
@@ -367,6 +379,7 @@ impl State {
             }
         };
         let limits = (options.min_size, options.max_size);
+        let owner = self.owner_of(root);
         let window = WindowId(self.next_window_id);
         // On its client's seat: the one whose socket it came through (ADR-0035).
         if let Err(error) = self
@@ -383,10 +396,14 @@ impl State {
         }
         self.next_window_id += 1;
         self.windows.insert(window, root.id());
+        if let Some(owner) = &owner {
+            *self.window_counts.entry(owner.clone()).or_default() += 1;
+        }
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
         };
         toplevel.window = Some(window);
+        toplevel.owner = owner;
         toplevel.refused = false;
         toplevel.limits = limits;
         toplevel.geometry = geometry;
@@ -411,26 +428,29 @@ impl State {
         if self.windows.len() >= MAX_WINDOWS {
             return Some("the layout holds its most windows");
         }
+        // Counted as windows map and close: a window refused tries again at each commit, and
+        // thousands of them must not each walk every window.
+        let of_client = self
+            .owner_of(root)
+            .and_then(|owner| self.window_counts.get(&owner))
+            .copied()
+            .unwrap_or(0);
+        (of_client >= MAX_WINDOWS_PER_CLIENT).then_some("its client has its most windows")
+    }
+
+    /// Whose window the toplevel of `root` counts as: its X11 client's for an X11 window, else
+    /// its Wayland client's; none for a surface whose client is gone.
+    fn owner_of(&self, root: &WlSurface) -> Option<WindowOwner> {
         let x11 = self
             .toplevels
             .get(&root.id())
             .and_then(|toplevel| toplevel.x11().map(X11Toplevel::client));
-        let windows = self
-            .windows
-            .values()
-            .filter_map(|surface| self.toplevels.get(surface));
-        let of_client = match x11 {
-            Some(client) => windows
-                .filter(|toplevel| toplevel.x11().map(X11Toplevel::client) == Some(client))
-                .count(),
-            None => windows
-                .filter(|toplevel| {
-                    toplevel.xdg().is_some()
-                        && toplevel.wl_surface().id().same_client_as(&root.id())
-                })
-                .count(),
-        };
-        (of_client >= MAX_WINDOWS_PER_CLIENT).then_some("its client has its most windows")
+        match x11 {
+            Some(client) => Some(WindowOwner::X11(client)),
+            None => root
+                .client()
+                .map(|client| WindowOwner::Wayland(client.id())),
+        }
     }
 
     /// Refuses the toplevel of `root` a place in the layout, as the layout's own refusal does:
@@ -511,6 +531,14 @@ impl State {
             return;
         };
         let shown_on = toplevel.shown_on.take();
+        if let Some(owner) = toplevel.owner.take()
+            && let Some(count) = self.window_counts.get_mut(&owner)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.window_counts.remove(&owner);
+            }
+        }
         toplevel.limits = (Size::default(), Size::default());
         toplevel.geometry = Rectangle::default();
         toplevel.urgent = false;
@@ -689,6 +717,7 @@ impl State {
                     focused: self.layout.focused(info.seat) == Some(window),
                     floating: info.floating,
                     fullscreen: info.fullscreen,
+                    unresponsive: toplevel.x11().is_some_and(|x11| self.x11_unresponsive(x11)),
                 })
             })
             .collect();
@@ -777,8 +806,9 @@ impl State {
     /// it in the layout exactly while a live toplevel holds it; each output's workspaces hold
     /// only such windows; each toplevel Yuna keeps is alive and belongs to a client the display
     /// still serves; a toplevel with a window has a buffer the layout did not refuse, and a
-    /// configured toplevel, or an X11 window X11 maps, with such a buffer has a window. Says which
-    /// rule is broken.
+    /// configured toplevel, or an X11 window X11 maps, with such a buffer has a window; the windows
+    /// counted per client for the caps are those mapped; what is kept of X11 menus agrees with
+    /// them (`xwayland/menus.rs`). Says which rule is broken.
     pub(crate) fn check_windows(&self) -> Result<(), String> {
         let mut served = HashSet::new();
         self.display_handle
@@ -838,6 +868,20 @@ impl State {
                 ));
             }
         }
+        // The counts the caps read are the windows each client has mapped.
+        let mut counted: HashMap<WindowOwner, usize> = HashMap::new();
+        for toplevel in self.toplevels.values() {
+            if let (Some(_), Some(owner)) = (toplevel.window, &toplevel.owner) {
+                *counted.entry(owner.clone()).or_default() += 1;
+            }
+        }
+        if counted != self.window_counts {
+            return Err(format!(
+                "the windows counted per client, {:?}, are not those mapped, {counted:?}",
+                self.window_counts
+            ));
+        }
+        self.x11.check_menus()?;
         let given = (1..self.next_window_id).map(WindowId);
         let listed = self
             .outputs

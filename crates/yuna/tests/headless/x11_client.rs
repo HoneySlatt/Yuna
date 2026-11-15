@@ -7,7 +7,7 @@
 //! abstract socket, giving the seat's cookie itself: tests share one process, whose
 //! `XAUTHORITY` they cannot set.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
@@ -17,9 +17,11 @@ use std::time::{Duration, Instant};
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::ConnectionExt as _;
+use x11rb::protocol::sync::{ConnectionExt as _, Counter, Int64};
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
-    Gcontext, ImageFormat, ImageOrder, PropMode, Window, WindowClass,
+    Gcontext, ImageFormat, ImageOrder, PropMode, UNMAP_NOTIFY_EVENT, UnmapNotifyEvent, Window,
+    WindowClass,
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
@@ -42,6 +44,17 @@ x11rb::atom_manager! {
         _NET_WM_STATE_HIDDEN,
         _NET_ACTIVE_WINDOW,
         _NET_CLIENT_LIST,
+        _NET_WM_PING,
+        _NET_WM_SYNC_REQUEST,
+        _NET_WM_SYNC_REQUEST_COUNTER,
+        _NET_STARTUP_ID,
+        _NET_WM_WINDOW_TYPE,
+        _NET_WM_WINDOW_TYPE_DIALOG,
+        _NET_WM_WINDOW_TYPE_POPUP_MENU,
+        _NET_WM_WINDOW_TYPE_TOOLTIP,
+        _XWAYLAND_ALLOW_COMMITS,
+        WL_SURFACE_SERIAL,
+        WM_STATE,
     }
 }
 
@@ -78,6 +91,45 @@ impl Image {
         }
     }
 
+    /// A menu's pixels, unlike any window's of [`Image::sharp`] wherever it lies over one: green
+    /// and magenta lines every 40 and 30 pixels over a checkerboard of two-pixel columns.
+    pub(crate) fn menu(width: u32, height: u32) -> Image {
+        let pixels = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                if x % 40 == 3 {
+                    [0, 200, 60]
+                } else if y % 30 == 11 {
+                    [220, 0, 200]
+                } else if (x / 2 + y) % 2 == 0 {
+                    [250, 240, 120]
+                } else {
+                    [20, 30, 90]
+                }
+            })
+            .collect();
+        Image {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    /// The pixels of the rectangle of `width` × `height` at (`x`, `y`) of an image whose bytes
+    /// are `bytes`, R, G, B, row by row, `stride` pixels a row.
+    pub(crate) fn crop(
+        bytes: &[u8],
+        stride: u32,
+        (x, y, width, height): (u32, u32, u32, u32),
+    ) -> Vec<u8> {
+        let mut cropped = Vec::with_capacity((width * height * 3) as usize);
+        for row in y..y + height {
+            let start = ((row * stride + x) * 3) as usize;
+            cropped.extend_from_slice(&bytes[start..start + (width * 3) as usize]);
+        }
+        cropped
+    }
+
     pub(crate) fn at(&self, x: u32, y: u32) -> [u8; 3] {
         self.pixels[(y * self.width + x) as usize]
     }
@@ -95,6 +147,22 @@ pub(crate) struct WindowSpec {
     /// Its background, painted by X11 when it is exposed; none, and only what the client draws
     /// shows.
     pub background: Option<u32>,
+    /// Its place and size as made: x, y, width, height.
+    pub rect: (i16, i16, u16, u16),
+    /// Whether it is override-redirect, a menu or a tooltip: mapped by its client, no manager
+    /// asked.
+    pub override_redirect: bool,
+    /// The window it is a dialog of, its `WM_TRANSIENT_FOR`.
+    pub transient_for: Option<Window>,
+    /// Its `_NET_WM_WINDOW_TYPE`, one atom.
+    pub window_type: Option<u32>,
+    /// Its `_NET_STARTUP_ID`.
+    pub startup_id: Option<String>,
+    /// Whether it lists `_NET_WM_PING`: it answers pings ([`X11Client::answer_pings`]).
+    pub pings: bool,
+    /// Whether it lists `_NET_WM_SYNC_REQUEST`, with a counter of its own in
+    /// `_NET_WM_SYNC_REQUEST_COUNTER` ([`X11Client::counter_of`]).
+    pub syncs: bool,
 }
 
 impl WindowSpec {
@@ -105,6 +173,24 @@ impl WindowSpec {
             deletes: true,
             fullscreen: false,
             background: None,
+            rect: (0, 0, 640, 480),
+            override_redirect: false,
+            transient_for: None,
+            window_type: None,
+            startup_id: None,
+            pings: false,
+            syncs: false,
+        }
+    }
+
+    /// An override-redirect window of `width` × `height` at (`x`, `y`) on the root, painted
+    /// `background`: a menu or a tooltip.
+    pub(crate) fn menu(title: &str, x: i16, y: i16, width: u16, height: u16) -> WindowSpec {
+        WindowSpec {
+            rect: (x, y, width, height),
+            override_redirect: true,
+            deletes: false,
+            ..WindowSpec::named(title)
         }
     }
 }
@@ -128,6 +214,8 @@ pub(crate) struct X11Client {
     pub dpi: u32,
     events: VecDeque<Event>,
     gc: Option<Gcontext>,
+    /// The sync counter of each window made with one.
+    counters: HashMap<Window, Counter>,
 }
 
 /// The cookie of `display`'s Xauthority file: its one entry's last field.
@@ -196,6 +284,7 @@ impl X11Client {
             dpi,
             events: VecDeque::new(),
             gc: None,
+            counters: HashMap::new(),
         })
     }
 
@@ -218,31 +307,33 @@ impl X11Client {
         Ok(window)
     }
 
-    /// Makes a window as `spec` says, at 640 × 480 at (0, 0), its events selected, its
-    /// properties set, not mapped.
+    /// Makes a window as `spec` says, its events selected, its properties set, not mapped.
     pub(crate) fn create(&mut self, spec: &WindowSpec) -> Result<Window, String> {
         let connection = &self.connection;
         let window = connection.generate_id().map_err(|e| e.to_string())?;
-        let mut aux = CreateWindowAux::new().event_mask(
-            EventMask::STRUCTURE_NOTIFY
-                | EventMask::KEY_PRESS
-                | EventMask::BUTTON_PRESS
-                | EventMask::EXPOSURE
-                | EventMask::FOCUS_CHANGE
-                | EventMask::PROPERTY_CHANGE,
-        );
+        let mut aux = CreateWindowAux::new()
+            .event_mask(
+                EventMask::STRUCTURE_NOTIFY
+                    | EventMask::KEY_PRESS
+                    | EventMask::BUTTON_PRESS
+                    | EventMask::EXPOSURE
+                    | EventMask::FOCUS_CHANGE
+                    | EventMask::PROPERTY_CHANGE,
+            )
+            .override_redirect(u32::from(spec.override_redirect));
         if let Some(background) = spec.background {
             aux = aux.background_pixel(background);
         }
+        let (x, y, width, height) = spec.rect;
         connection
             .create_window(
                 x11rb::COPY_DEPTH_FROM_PARENT,
                 window,
                 self.root,
-                0,
-                0,
-                640,
-                480,
+                x,
+                y,
+                width,
+                height,
                 0,
                 WindowClass::INPUT_OUTPUT,
                 x11rb::COPY_FROM_PARENT,
@@ -279,20 +370,73 @@ impl X11Client {
                 class.as_bytes(),
             )
             .map_err(fail)?;
-        let protocols: &[u32] = if spec.deletes {
-            &[atoms.WM_DELETE_WINDOW]
-        } else {
-            &[]
-        };
+        let protocols: Vec<u32> = [
+            (spec.deletes, atoms.WM_DELETE_WINDOW),
+            (spec.pings, atoms._NET_WM_PING),
+            (spec.syncs, atoms._NET_WM_SYNC_REQUEST),
+        ]
+        .into_iter()
+        .filter_map(|(listed, atom)| listed.then_some(atom))
+        .collect();
         connection
             .change_property32(
                 PropMode::REPLACE,
                 window,
                 atoms.WM_PROTOCOLS,
                 AtomEnum::ATOM,
-                protocols,
+                &protocols,
             )
             .map_err(fail)?;
+        let mut counter_made = None;
+        if spec.syncs {
+            let counter = connection.generate_id().map_err(|e| e.to_string())?;
+            connection
+                .sync_create_counter(counter, Int64 { hi: 0, lo: 0 })
+                .map_err(fail)?;
+            connection
+                .change_property32(
+                    PropMode::REPLACE,
+                    window,
+                    atoms._NET_WM_SYNC_REQUEST_COUNTER,
+                    AtomEnum::CARDINAL,
+                    &[counter],
+                )
+                .map_err(fail)?;
+            counter_made = Some(counter);
+        }
+        if let Some(parent) = spec.transient_for {
+            connection
+                .change_property32(
+                    PropMode::REPLACE,
+                    window,
+                    AtomEnum::WM_TRANSIENT_FOR,
+                    AtomEnum::WINDOW,
+                    &[parent],
+                )
+                .map_err(fail)?;
+        }
+        if let Some(window_type) = spec.window_type {
+            connection
+                .change_property32(
+                    PropMode::REPLACE,
+                    window,
+                    atoms._NET_WM_WINDOW_TYPE,
+                    AtomEnum::ATOM,
+                    &[window_type],
+                )
+                .map_err(fail)?;
+        }
+        if let Some(startup_id) = &spec.startup_id {
+            connection
+                .change_property8(
+                    PropMode::REPLACE,
+                    window,
+                    atoms._NET_STARTUP_ID,
+                    atoms.UTF8_STRING,
+                    startup_id.as_bytes(),
+                )
+                .map_err(fail)?;
+        }
         connection
             .change_property32(
                 PropMode::REPLACE,
@@ -312,6 +456,9 @@ impl X11Client {
                     &[atoms._NET_WM_STATE_FULLSCREEN],
                 )
                 .map_err(fail)?;
+        }
+        if let Some(counter) = counter_made {
+            self.counters.insert(window, counter);
         }
         Ok(window)
     }
@@ -464,6 +611,122 @@ impl X11Client {
         self.sync()
     }
 
+    /// The values of `window`'s property `atom` in format 32, whatever its type; none when it is
+    /// not set.
+    pub(crate) fn property32(&self, window: Window, atom: u32) -> Result<Option<Vec<u32>>, String> {
+        let reply = self
+            .connection
+            .get_property(false, window, atom, AtomEnum::ANY, 0, 1024)
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())?;
+        Ok(reply.value32().map(Iterator::collect))
+    }
+
+    /// `window`'s `_XWAYLAND_ALLOW_COMMITS` as its manager set it: 0 while Xwayland holds its
+    /// commits, none when never set.
+    pub(crate) fn allow_commits(&self, window: Window) -> Result<Option<u32>, String> {
+        let values = self.property32(window, self.atoms._XWAYLAND_ALLOW_COMMITS)?;
+        Ok(values.and_then(|values| values.first().copied()))
+    }
+
+    /// The sync counter of `window`, made with [`WindowSpec::syncs`].
+    pub(crate) fn counter_of(&self, window: Window) -> Option<Counter> {
+        self.counters.get(&window).copied()
+    }
+
+    /// Sets `window`'s sync counter to `value`, as a client does once it drew the size a sync
+    /// request came with.
+    pub(crate) fn set_counter(&self, window: Window, value: u64) -> Result<(), String> {
+        let counter = self.counter_of(window).ok_or("no sync counter")?;
+        let value = Int64 {
+            hi: (value >> 32) as i32,
+            lo: value as u32,
+        };
+        self.connection
+            .sync_set_counter(counter, value)
+            .map_err(|e| e.to_string())?;
+        self.sync()
+    }
+
+    /// Sends a `WL_SURFACE_SERIAL` naming `window` and `serial` to the manager, as Xwayland does:
+    /// from a client, it carries `SendEvent`'s bit.
+    pub(crate) fn forge_serial(&self, window: Window, serial: u64) -> Result<(), String> {
+        let message = ClientMessageEvent::new(
+            32,
+            window,
+            self.atoms.WL_SURFACE_SERIAL,
+            [serial as u32, (serial >> 32) as u32, 0, 0, 0],
+        );
+        self.connection
+            .send_event(false, self.root, EventMask::SUBSTRUCTURE_REDIRECT, message)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Withdraws `window`, as ICCCM 4.1.4 says: it is unmapped, and a synthetic `UnmapNotify`
+    /// goes to the root.
+    pub(crate) fn withdraw(&self, window: Window) -> Result<(), String> {
+        self.connection
+            .unmap_window(window)
+            .map_err(|e| e.to_string())?;
+        let notify = UnmapNotifyEvent {
+            response_type: UNMAP_NOTIFY_EVENT,
+            sequence: 0,
+            event: self.root,
+            window,
+            from_configure: false,
+        };
+        self.connection
+            .send_event(
+                false,
+                self.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                notify,
+            )
+            .map_err(|e| e.to_string())?;
+        self.sync()
+    }
+
+    /// Answers every `_NET_WM_PING` that came, as EWMH says: the message back to the root.
+    /// Returns how many were answered.
+    pub(crate) fn answer_pings(&mut self) -> Result<usize, String> {
+        self.read_events()?;
+        let atoms = self.atoms;
+        let pings: Vec<ClientMessageEvent> = self
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ClientMessage(message)
+                    if message.type_ == atoms.WM_PROTOCOLS
+                        && message.data.as_data32()[0] == atoms._NET_WM_PING =>
+                {
+                    Some(*message)
+                }
+                _ => None,
+            })
+            .collect();
+        self.events.retain(|event| {
+            !matches!(event, Event::ClientMessage(message)
+                if message.type_ == atoms.WM_PROTOCOLS
+                    && message.data.as_data32()[0] == atoms._NET_WM_PING)
+        });
+        for ping in &pings {
+            let mut answer = *ping;
+            answer.window = self.root;
+            self.connection
+                .send_event(
+                    false,
+                    self.root,
+                    EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                    answer,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        self.sync()?;
+        Ok(pings.len())
+    }
+
     /// Sets the mode of the output at X11 position (`x`, `y`) to `width` × `height`, through
     /// RandR, as a game does: Xwayland emulates it for this client alone.
     pub(crate) fn set_mode(&self, x: i32, y: i32, width: u16, height: u16) -> Result<(), String> {
@@ -566,7 +829,18 @@ impl X11Client {
 /// the client back with what `work` returned. Fails the story if `work` failed or panicked.
 pub(crate) fn step<T: Send + 'static>(
     compositor: &mut Compositor,
+    client: X11Client,
+    work: impl FnOnce(&mut X11Client) -> Result<T, String> + Send + 'static,
+) -> (X11Client, T) {
+    step_pumping(compositor, client, crate::x11_windows::pump, work)
+}
+
+/// [`step`], the compositor's loop run by `pump` meanwhile: a story that holds the manual clock
+/// back runs it its own way.
+pub(crate) fn step_pumping<T: Send + 'static>(
+    compositor: &mut Compositor,
     mut client: X11Client,
+    mut pump: impl FnMut(&mut Compositor),
     work: impl FnOnce(&mut X11Client) -> Result<T, String> + Send + 'static,
 ) -> (X11Client, T) {
     let worker = thread::spawn(move || {
@@ -576,7 +850,7 @@ pub(crate) fn step<T: Send + 'static>(
     let deadline = Instant::now() + PATIENCE + Duration::from_secs(5);
     while !worker.is_finished() {
         assert!(Instant::now() < deadline, "an X11 step never ended");
-        crate::x11_windows::pump(compositor);
+        pump(compositor);
     }
     match worker.join() {
         Ok((client, Ok(value))) => (client, value),
