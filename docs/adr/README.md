@@ -71,7 +71,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003, 0015 |
 | [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010, 0058 |
 | [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005, 0010; point 8 reopened |
-| [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041 |
+| [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Accepted; amends 0004, 0012, 0057; supersedes 0041; narrowed by 0073 |
 | [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019, 0057; amended by 0065 |
 | [0065](0065-what-hollow-asks-of-yuna.md) | What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief | Accepted; amends 0064 |
 | [0066](0066-yunas-own-x11-window-manager-on-x11rb.md) | Yuna's own X11 window manager, on x11rb | Accepted |
@@ -79,3 +79,6 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Accepted |
 | [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md) | Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept | Accepted |
 | [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted; extends 0028 |
+| [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Accepted |
+| [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
+| [0073](0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md) | The Vulkan prototype answers only what no rival measures | Accepted; narrows 0063 |

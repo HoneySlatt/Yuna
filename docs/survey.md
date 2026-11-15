@@ -468,3 +468,46 @@ Read on 2026-11-14 in each project's source on its default branch:
 
 A stream's heavy work is OBS's own (scenes, encoding); a compositor's share is a copy. The usual
 remedy for a smooth stream is a cap on the game's frame rate, which leaves the GPU room.
+
+## The rivals measured
+
+Read on 2026-11-15 for [ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)
+to [ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md), in the
+sources of nixpkgs' versions (sway 1.12 on wlroots 0.20.2, dwl 0.9, mango 0.18.4, Hyprland 0.57.1
+on aquamarine 0.16.0, Umbriel `d171ccb`, niri 26.04, KWin 6.8.2, Mutter 51.0, cosmic-comp 1.11.0,
+gamescope 3.17.0) and on the web.
+
+- **Without a display.** wlroots' headless backend (`WLR_BACKENDS=headless`) serves sway, dwl,
+  mango and Umbriel; it draws `1000000 / refresh` milliseconds after each commit
+  (`backend/headless/output.c`), 4 ms at 240 Hz, with no grid of refreshes. Aquamarine's headless
+  output, Hyprland's, cannot allocate buffers alone: Hyprland needs a DRM session or a parent
+  compositor. KWin's `--virtual` keeps a synthetic vblank on a grid; Mutter's `--headless
+  --virtual-monitor` presents at the current time. niri's headless backend serves its own tests
+  only (60 Hz, unpaced); cosmic-comp has none. gamescope has `--backend headless`.
+- **Being driven.** `swaymsg`, `mmsg` (mango), `umbriel msg`, `hyprctl` (Lua configuration since
+  0.57), `niri msg action`, KWin's D-Bus and scripts. dwl has no IPC; Mutter alone has none for
+  windows, GNOME Shell drives it in its own process; cosmic-comp has its shortcuts.
+- **What each draws by default.** sway and dwl animate nothing. mango, Umbriel, Hyprland, niri,
+  KWin (desktop slide, open and close) and Mutter's default plugin (workspace switch 500 ms)
+  animate. Hyprland blurs, shadows and draws its own wallpaper; niri's default configuration
+  starts waybar; mango starts XWayland at launch.
+- **Counting frames.** wlroots, niri, KWin and Mutter draw for a commit that asks only a frame
+  callback. wlroots' `ext-image-copy-capture` asks a frame only when the output changed; its
+  wlr-screencopy always asks one. KWin logs each frame with `KWIN_LOG_PERFORMANCE_DATA`, Mutter a
+  rate each second with `CLUTTER_SHOW_FPS`. wlroots' headless and niri report a refresh of 0 in
+  `wp_presentation`.
+- **Prior measurements.** No controlled comparison of these compositors was found. wcbench
+  (github.com/grigio/wayland-compositor-bench, 2026-10-29) measures the logged-in session: PSS,
+  wake-ups, CPU and GPU time a frame, power from RAPL and the battery, three runs, no winner under
+  the noise; its one published run compares GNOME Shell and labwc on one laptop. Other figures
+  are users' reports (niri discussion 1522, mango issue 855, cosmic-comp issues 972 and 2692).
+- **Power.** amdgpu on Navi 21 gives `power1_average` only, in whole watts; the laptop's APU has
+  none. RAPL's `energy_uj` is readable by root only since 2020 (kernel commit 949dd0104c49); a
+  battery's `current_now` and `voltage_now` are readable by anyone.
+- **Upstream** on 2026-11-15 was one release ahead for Hyprland (0.57.2, which stops taking
+  realtime scheduling), mango (0.18.5), KWin (6.8.3) and Mutter (51.1).
+- **Vulkan.** `ash` 0.38.0 (2024-04-01, Vulkan 1.3.281; its main branch on 1.4.352); `vulkanalia`
+  0.35.0 (2026-02-15, Vulkan 1.4.338). RADV on GFX9, the laptop's GPU, reports Vulkan 1.4,
+  `VK_EXT_image_drm_format_modifier`, dmabuf import and export, external semaphores and fences
+  (Mesa 26.2.7's source); jay's note that modifiers fail on AMD before RX 5000 is unchecked on
+  that GPU. SteamOS's desktop mode is KDE Plasma (6.7.3 on 3.9, 2026-10-23).

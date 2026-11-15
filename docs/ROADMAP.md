@@ -139,6 +139,7 @@ it is met.
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 | XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
+| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)) |
 
 ### Open
 

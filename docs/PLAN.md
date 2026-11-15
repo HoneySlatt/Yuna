@@ -17,8 +17,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   to [ADR-0061](adr/0061-yunas-uses.md)).
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
-- [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070. Next: M1.9, on the
-  owner's go.
+- [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
+- [M1.9](#m19--the-rivals-measured) is in progress: its design is decided (ADR-0071 to ADR-0073).
 
 ## Status
 
@@ -32,7 +32,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
-| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Planned |
+| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | In progress |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
 | [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
@@ -129,14 +129,25 @@ milestone first needs it.
 ### M1.9 — The rivals measured
 
 - **Goal.** The bar's budgets set from facts.
-- **Delivers.** dwl, sway, Hyprland, niri, mango, Umbriel, KWin, Mutter and cosmic-comp measured at rest and in motion: wake-ups,
-  CPU and GPU time, memory, power, frames during scrolling and animations; headless where they allow
-  it, on the owner's desktop by hand otherwise, after the owner's consent. A throwaway Vulkan
-  prototype measured on every tier, the laptop's driver checked
-  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
-- **Done when.** Each has its figures in `docs/measurements.md`, with versions and dates, or a
-  written reason; the ROADMAP's budgets are set from them, in an ADR; the prototype's figures set the
-  frame's budgets.
+- **Design.** Decided with the owner on 2026-11-15: one bench outside the compositor; agents
+  measure costs, rest and memory headless; the owner runs a *tour* on the desktop, the laptop
+  and the Steam Deck, each rival on the real display, for missed frames, input to present and
+  watts, the GPU at `auto`; another tour at Stage 2's exit with Yuna
+  ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+  Memory and a frame's cost set against niri, Hyprland, Umbriel and KWin at equal work, as a
+  comparison the same day and the figure it gives
+  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). The Vulkan prototype
+  answers only what no rival measures, on `ash`, on a branch never merged
+  ([ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)).
+- **Delivers.** In phases: (A) the bench, `crates/yuna-bench`, with sway, KWin and Yuna headless;
+  (B) every rival's recipe and the headless figures; (C) the tour, and the owner's three tours
+  from steps written here; (D) the prototype on branch `prototype/vulkan`, beside A; (E) the
+  budgets in ADR-0074 and the ROADMAP.
+- **Done when.** Each rival, and gamescope for latency, has its figures in
+  `docs/measurements.md`, with versions, dates and the machine's state, or a written reason; the
+  ROADMAP's budgets are set from them in an ADR; the prototype's figures and the laptop's
+  display check are recorded.
+- **Status.** Design done; phases A and D started.
 
 ### M1.10 — Yuna for the owner's other projects
 
