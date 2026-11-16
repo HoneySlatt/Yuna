@@ -1,6 +1,6 @@
 # 0032. Input to present, read by mode
 
-- Status: Accepted; amends the [ROADMAP](../ROADMAP.md#budgets)'s budget "Input to present"
+- Status: Superseded by [0076](0076-input-to-present-read-by-mode.md)
 - Date: 2026-11-13
 
 ## Context

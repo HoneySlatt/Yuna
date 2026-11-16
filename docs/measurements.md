@@ -4,6 +4,222 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.9 — The rivals headless, at equal work (2026-11-16)
+
+The bench (`crates/yuna-bench`, [ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)),
+commit `627f160`, every recipe at equal work (effects, wallpaper and XWayland off), every scenario,
+three runs of each case in a random order (seed `1794809641392719660`), 189 cases from 06:14 UTC,
+none failed, none disturbed by other programs. Machine as in M1.4's B4: Ryzen 7 5800X, RX 6900 XT,
+Linux 7.3.1, Mesa 26.2.6, every compositor also loading nixpkgs' libgbm 26.1.3; the GPU's level `high`, as the owner set it. Every compositor on the
+render node, one output at 3840 × 2160, 240 Hz, scale 1.5, read back from the compositor. Versions:
+sway 1.12 on wlroots 0.20.2 (GLES2, and Vulkan as sway-vulkan), dwl 0.9, mango 0.18.4, Umbriel
+`d171ccb`, Hyprland 0.57.1 (inside a dwl parent counted outside its core, without realtime
+scheduling), KWin 6.8.2, Mutter 51.0, Yuna on Smithay's GLES. Command:
+
+```sh
+nix develop .#bench -c cargo run --release -p yuna-bench -- headless \
+  --compositor sway,sway-vulkan,kwin,yuna,dwl,mango,umbriel,hyprland,mutter \
+  --configuration equal-work --scenario rest,game,film,pacing,motion --runs 3
+```
+
+The lowest and highest of the three runs. wlroots' headless backend draws 4 ms after each commit,
+so its rivals run at up to 250 frames a second where the others hold 240: costs a second compare
+only within one pace; costs a frame, from exact counts, compare across.
+
+**A game**: mpv fullscreen, a 240-frame-a-second clip drawn with Vulkan on radv, 10 s; frames
+counted by mpv in the window itself.
+
+| Compositor | Frames a second | CPU a frame | GPU a frame | PSS |
+|---|---|---|---|---|
+| Yuna | 240 | 160–166 µs | 191–196 µs | 69.4–69.5 MiB |
+| Umbriel | 242 | 198–200 µs | 203–207 µs | 86.3–86.6 MiB |
+| Hyprland | 239 | 210–214 µs | 336–343 µs | 126 MiB |
+| KWin | 240 | 244–247 µs | 332–336 µs | 189–192 MiB |
+| Mutter | 240 | 248–249 µs | 289–292 µs | 91.6–91.7 MiB |
+| sway | 244 | 150–153 µs | 215–218 µs | 76.8–77.0 MiB |
+| sway on Vulkan | 242 | 169–170 µs | 290–296 µs | 62.3 MiB |
+| dwl | 244 | 150–152 µs | 215–217 µs | 70.5–70.6 MiB |
+| mango | 244 | 156–157 µs | 216–219 µs | 78.2–78.5 MiB |
+
+**At rest**, still windows, 60 s after 5 s: no compositor used GPU time, and those whose frames
+were counted drew none (Mutter's were not counted; those counted by capture, a lower bound, showed
+none). Wake-ups a second: Umbriel 10.1 (its timer for hidden windows), Hyprland 3.5 to 3.6, mango
+0.03; Yuna, sway, sway on Vulkan and dwl used no CPU time at all in the window, so none of their
+threads woke; KWin and Mutter used 0.07 to 0.15 ms in each, their wake-ups not all seen.
+
+Memory after the rest window, in MiB, the lowest and highest of the three runs, and its growth a
+window from 1 to 150 windows (the means' difference over 149; for Yuna and Hyprland, whose figures
+are near, the range over every pair of runs in brackets): the process's own (`Pss_Anon` +
+`Pss_File`); the clients' `wl_shm` buffers it holds mapped (`Pss_Shmem`); its GPU memory, the
+kernel's DRM `resident-vram` + `resident-gtt`. A window's size depends on each compositor's layout,
+which the series did not record.
+
+| Compositor | Process: 1 / 15 / 150 windows | A window | Clients' buffers at 15 | A window | GPU: 1 / 15 / 150 windows | A window |
+|---|---|---|---|---|---|---|
+| Yuna | 83.6–83.7 / 83.6–84.0 / 84.9–85.1 | 0.0087 (0.0075–0.0103) | 30.4 | 0.31 | 83.6 / 115.1 / 147.1 | 0.43 |
+| Umbriel | 102.1–102.4 / 102.5–102.8 / 105.5–105.7 | 0.0225 | 0 | 0 | 124.1 / 364.0 / 2,526.6 | 16.1 |
+| Hyprland | 131.7–131.9 / 131.8 / 132.7–132.9 | 0.0063 (0.0054–0.0079) | 0 | 0 | 427–429 / 1,159–1,161 / 772–774 | 2.31 |
+| KWin | 206.8–208.7 / 207.3–209.4 / 211.9–212.8 | 0.029 | 39.6 | 2.64 | 59.9 / 115.4 / 523.0 | 3.11 |
+| Mutter | 107.2–107.3 / 108.3 / 112.2 | 0.034 | 39.6 | 2.64 | 109.5 / 164.3 / 577.9 | 3.14 |
+| sway | 93.9–94.0 / 94.4–94.7 / 97.3–97.5 | 0.023 | 0 | 0 | 163.7 / 260.2 / 874.3 | 4.77 |
+| sway on Vulkan | 84.2 / 84.4–84.5 / 86.8 | 0.017 | 0 | 0 | 255.2 / 347.9 / 1,402.7 | 7.70 |
+| dwl | 85.4–85.5 / 86.9–87.2 / 89.4–89.5 | 0.027 | 0 | 0 | 164.0 / 196–200 / 633.9 | 3.15 |
+| mango | 94.6–94.8 / 95.6–96.0 / 100.3–100.5 | 0.038 | 0 | 0 | 757 / 1,482 / 3,785–3,896 | 20.7 |
+
+**Start**, from the compositor's start to the sign of its being ready (a log line, a D-Bus name or
+a reply, each recipe's own), polled every 50 ms, so accurate to about 50 ms and not one method
+across compositors; the lowest, median and highest of the series' 18 to 21 starts each: Yuna 61,
+71, 71 ms; dwl 76, 76, 126 ms; sway on Vulkan 101, 106, 111 ms; sway 86, 126, 127 ms; mango 121,
+131, 131 ms; Mutter 126, 192, 237 ms; Umbriel 186, 236, 287 ms; KWin 237, 247, 247 ms; Hyprland
+with its parent 321, 331, 336 ms.
+
+**Pacing**, `weston-presentation-shm` in a small window, 10 s: no presentation more than 1.5
+periods after the last, for any. Yuna, KWin, Mutter and Hyprland present at 4,166 µs (their p99
+4,166, 4,166, 4,212 to 4,223 and 4,218 to 4,235 µs); the wlroots rivals at 4,010 to 4,093 µs.
+
+**A film**, mpv playing a 24-frame-a-second clip, 10 s: every compositor showed its 240 frames,
+none dropped or delayed; 5 to 10 ms of CPU a second.
+
+**Motion**, the recipe's actions through its own commands, 8 actions: no comparison of frames
+across backends (ADR-0075); Yuna and Mutter take no outside command and were not run. Yuna's own
+motion is M1.7's, below.
+
+- **Yuna costs the least of the peers in a game**: 160 to 166 µs of CPU and 191 to 196 µs of GPU a
+  frame, against Umbriel's 198 to 200 and 203 to 207 µs, the next. Frames counted by mpv in the
+  window make a cost a frame comparable across backends; sway and dwl, the floor
+  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)), spend 150 µs of CPU and
+  215 µs of GPU a frame. sway costs the GPU more on Vulkan (290 µs) than on GLES (215 µs).
+- **Yuna's own memory is the least of the peers'**, 84 MiB at 15 windows against Umbriel's 102.5,
+  and so is its GPU memory's growth; its GPU memory at 15 windows is 0.3 MiB below KWin's, the
+  least of the peers', in every run. Its
+  proportional set size grows with its clients' buffers, which it keeps mapped until they are
+  replaced where the wlroots rivals release them once copied: 0.31 MiB a window, from code reading
+  and these figures, the mechanism not traced further.
+- These are headless figures, the costs the clock does not decide; frames missed on a real
+  display, input to present and watts come from the owner's tour at Stage 2's exit
+  ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
+
+**As shipped**, one run of each case from 10:21 UTC (commit `3943e48`, the same code), for context
+and never ranked: 18 of its 63 cases were disturbed by other programs, by more than 2 cores or
+10 % of the GPU, and are marked so in the run file. This run held the lock of the agents' service
+it was started from, not the one all agents share, so other agents' timed work was not held off. In the game, the undisturbed ones: Umbriel, its blur and
+shadows on, 248 µs of CPU and 169 µs of GPU a frame; Hyprland 224 and 348 µs; KWin 276 and 339 µs;
+dwl 165 and 208 µs; sway 182 and 211 µs. Mutter's game drew 38.5 frames a second as shipped, its
+cause not looked for. The run file is kept locally with the bench's others.
+
+## M1.9 — The Vulkan prototype, on the desktop and lavapipe (2026-11-16)
+
+The throwaway prototype of [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md),
+commit `86984e3` of branch `prototype/vulkan`, run from GitHub as the owner runs it
+([owner's runs](owner-runs.md#1-the-vulkan-prototype-on-the-laptop-and-the-steam-deck)), at
+3840 × 2160, under the agents' exclusive lock:
+`nix run 'github:HoneySlatt/Yuna/prototype/vulkan#vulkan-prototype' -- report --size 3840x2160`,
+on device 0, then with `VK_ICD_FILENAMES` on the shell's lavapipe. Machine as in M1.4's B4: RX 6900
+XT through RADV, the system's Mesa 26.2.6, Linux 7.3.1; the GPU's performance level `high`, sclk
+2,530 MHz, mclk 1,000 MHz, read and left as the owner set it. Microseconds: median / 99th
+percentile / longest.
+
+Other programs disturbed parts of both runs, by ADR-0060's rule, the prototype's own estimate: on
+RADV six of its eight timed parts, the 1920 × 1080 upload and every composition but the one window
+in 16-bit floats, others using 2.0 to 3.6 logical CPUs and at most 2.3 % of the GPU, so the load
+was the processor's and the GPU's timestamps were not contended; on lavapipe, which draws on the
+processor, three of ten, both staging uploads and the one window in 16-bit floats, whose 99th
+percentile below is about three times the other rows', its longest five times. The RADV CPU
+figures below come from disturbed parts. Neither run was
+repeated quiet.
+
+- **The driver**: both report Vulkan 1.4.354 and offer every extension asked (modifiers, dma-buf
+  import and export, foreign queues, sync files, timeline semaphores, host memory), but for
+  lavapipe's `VK_EXT_physical_device_drm`: it has no render node.
+- **Modifiers**: on RADV, every modifier offered is exported, imported into a second device and
+  sampled correctly: 7 for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32`, 6 for
+  `R16G16B16A16_SFLOAT`, DCC ones included; two DCC modifiers allow at most 2560 × 2560. lavapipe:
+  linear only.
+- **Explicit sync**: a semaphore and a fence exported as sync files while the client's work still
+  ran, imported into the second device and waited; a timeline semaphore. All pass on both.
+- **`wl_shm`'s path**: RADV refuses a memfd's pages as a host pointer
+  (`VK_ERROR_INVALID_EXTERNAL_HANDLE`) while anonymous memory imports: on AMD a `wl_shm` buffer
+  goes through a staging copy, from system memory over PCIe.
+
+| Upload of one `wl_shm` buffer | CPU | GPU |
+|---|---|---|
+| RADV, 1920 × 1080, staging | 342 / 416 / 433 | 319 / 395 / 405 |
+| RADV, 3840 × 2160, staging | 1,461 / 1,716 / 1,853 | 1,263 / 1,278 / 1,288 |
+| lavapipe, 3840 × 2160, staging | 1,650 / 2,297 / 2,944 | 1,962 / 2,437 / 3,056 |
+| lavapipe, 3840 × 2160, host pointer | 3.3 / 12.8 / 16.6 | 1,592 / 2,051 / 2,206 |
+
+- **The composition's floor**: windows as textured quads with rounded corners and a shadow,
+  sampled from imported dma-bufs, blended over a clear, 1,000 frames; CPU to record and submit,
+  GPU by timestamps.
+
+| Windows | Output | RADV: CPU | RADV: GPU | lavapipe: GPU |
+|---|---|---|---|---|
+| 1 | `R16G16B16A16_SFLOAT` | 6.4 / 25.8 / 65.0 | 71.1 / 71.4 / 74.3 | 12,276 / 42,151 / 69,128, disturbed |
+| 1 | `B8G8R8A8_UNORM` | 8.4 / 41.8 / 67.5 | 53.6 / 55.2 / 56.5 | 9,571 / 10,751 / 12,009 |
+| 15 | `R16G16B16A16_SFLOAT` | 11.7 / 36.0 / 60.6 | 74.8 / 86.4 / 110.6 | 12,462 / 13,713 / 14,127 |
+| 15 | `B8G8R8A8_UNORM` | 10.2 / 36.2 / 76.9 | 56.2 / 60.3 / 74.6 | 9,917 / 11,607 / 13,567 |
+
+- **A high-priority queue**: refused on RADV without privileges (`VK_ERROR_NOT_PERMITTED_KHR`) at
+  `HIGH` and `REALTIME`; lavapipe grants both.
+- On the desktop, a composition at 4K costs Vulkan about 56 µs of GPU in 8 bits and 75 µs in
+  16-bit floats, and 10 µs of CPU, whatever the number of windows up to 15: 1.3 to 1.8 % of a
+  240 Hz period. Yuna's current GLES path drew M1.4's two `vkcube` windows in 117 µs of GPU and
+  162 to 178 µs of CPU; the scenes differ, so this is the order of the gap, not its measure. A 4K
+  `wl_shm` upload costs 1.3 ms of GPU, 30 % of a period: the cost of clients that do not send
+  dma-bufs. On lavapipe a 4K composition takes 10 to 12 ms, more than a 240 Hz period.
+- The laptop and the Steam Deck, the owner's runs, follow.
+
+### The laptop (2026-11-16, the owner's run)
+
+The same commit, `report --device 0 --size 1920x1080`, run by the owner on the lowest tier, whose
+panel is 1600 × 900 (below): an upper bound for it. AMD
+Athlon Silver 3050U (2 logical CPUs, 3.2 GiB visible), Radeon Graphics "RAVEN2" through RADV,
+Mesa 26.1.5, Linux 7.1.5; the GPU's level `auto`. No timed part disturbed.
+
+- **The driver**: Vulkan 1.4.354, every extension asked but `VK_EXT_host_image_copy`.
+- **Modifiers**: every one offered imports into a second device and samples correctly, DCC ones
+  included: 10 for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32`, 9 for `R16G16B16A16_SFLOAT`.
+  jay's note that modifiers fail on AMD before RX 5000 does not hold for this GPU's rendering;
+  its display engine is checked by the owner's display check.
+- **Explicit sync**: all three checks pass, the sync files still pending at import.
+- **`wl_shm`**: the memfd's pages refused as a host pointer, as on the desktop; a 1920 × 1080
+  upload through staging costs 1,321 µs of CPU and 2,201 µs of GPU (medians), 13 % of a 60 Hz
+  period; 3840 × 2160, 8.9 ms of GPU.
+- **The composition's floor** at 1920 × 1080: 1 to 15 windows cost 1,089 to 1,199 µs of GPU in 8
+  bits and 1,362 to 1,430 µs in 16-bit floats (medians; 99th percentiles 1.18 to 2.43 ms), and 28 to
+  44 µs of CPU: 7 to 9 % of a 60 Hz period. The GPU's clock rose from 400 to 1,100 MHz during the
+  parts (`auto`), so the first frames ran slower.
+- **A high-priority queue**: refused, as on the desktop.
+
+### The laptop's display (2026-11-16, the owner's run)
+
+The [display check](owner-runs.md#2-the-laptops-display-through-a-vulkan-compositor): sway 1.12
+on wlroots 0.20.2's Vulkan renderer (`WLR_RENDERER=vulkan`), from a virtual terminal, on the
+laptop's panel, a Chimei Innolux eDP panel at 1600 × 900 and 60 Hz (40 Hz also offered), with
+`vkcube` and mpv's test pattern for about 3 min 20 s. The owner saw both smooth. wlroots drew
+with RADV "RAVEN2" (Mesa 26.1.5) and the panel showed its buffers allocated with a compressed
+modifier, `GFX9 64KB_S_X DCC` in `XR24`: the display engine scans out what Vulkan draws, DCC
+included. The only errors came as sway left the display. The second run, without modifiers
+(`WLR_DRM_NO_MODIFIERS=1`), did not start: its session was not the active one within 10 s; it
+was a fallback for modifiers failing, which they did not, and was not run again.
+
+### The Steam Deck (2026-11-16, the owner's run)
+
+The same commit and command, at 1920 × 1080 rather than the panel's 1280 × 800: an upper bound
+for the panel. AMD Custom APU 0932 (8 logical CPUs, 14.5 GiB), "VANGOGH" through RADV, Mesa
+26.2.0-devel, Linux 7.2.7-valve2, under NixOS; the GPU's level `auto`.
+
+- **The driver**: Vulkan 1.4.350, the same extensions as the desktop's.
+- **Modifiers**: 7, 7 and 6 offered, all imported and sampled correctly, DCC ones included.
+- **Explicit sync**: all three checks pass.
+- **`wl_shm`**: the memfd refused as a host pointer; a 1920 × 1080 upload through staging, 691 µs
+  of CPU and 247 µs of GPU; 3840 × 2160, 1,306 µs of GPU. The 1920 × 1080 part is marked
+  disturbed: one reading of the GPU, at 95 % busy over a part of 0.3 s, against the prototype's
+  own 21 %; another program is not established, the estimate being one reading.
+- **The composition's floor** at 1920 × 1080: 315 to 348 µs of GPU in 8 bits and 394 to 429 µs in
+  16-bit floats (medians), 12 to 34 µs of CPU: at most 4 % of a period at 90 Hz, the fastest the Deck's panels refresh.
+- **A high-priority queue**: refused.
+
 ## M1.8 — A flood of X11 windows and menus (2026-11-15)
 
 What one X11 program flooding its seat costs the other windows (ADR-0070): the story

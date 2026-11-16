@@ -1,14 +1,17 @@
 //! What the measures share: the run's folder, the fields of Yuna's log lines, and the CPU and GPU
-//! time read from `/proc`
+//! time read from `/proc`, by the readers of `yuna_bench`
 //! ([ADR-0030](../../../../docs/adr/0030-a-frames-gpu-time-from-the-kernel.md)).
 //! The `vkcube` clients that `frame_time` and `motion_time` start are in `vkcube.rs` beside it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
+
+use yuna_bench::drm;
+use yuna_bench::procfs::Proc;
 
 /// How long the clients draw before anything is measured.
 pub const WARM_UP: Duration = Duration::from_secs(3);
@@ -95,123 +98,56 @@ pub struct Usage {
 impl Usage {
     /// Reads what process `pid`, Yuna, and `clients` have used so far.
     pub fn take(pid: u32, clients: &[Child]) -> Result<Usage, String> {
+        let proc = Proc::system();
         let mut clients_threads = BTreeMap::new();
-        let mut clients_gpu = BTreeMap::new();
         for client in clients {
-            let client_threads = threads(client.id())?;
+            let client_threads = threads(&proc, client.id())?;
             clients_threads.extend(client_threads.into_iter().map(|(tid, (_, ns))| (tid, ns)));
-            add_engines(&mut clients_gpu, gpu_engines(client.id()));
         }
-        let (yuna_dmabufs, yuna_memfds) = buffer_files(pid);
+        let client_pids: Vec<u32> = clients.iter().map(Child::id).collect();
+        let (yuna_dmabufs, yuna_memfds) = buffer_files(&proc, pid);
         Ok(Usage {
             at: Instant::now(),
             pid,
-            yuna_threads: threads(pid)?,
-            yuna_gpu: gpu_engines(pid),
+            yuna_threads: threads(&proc, pid)?,
+            yuna_gpu: gpu_engines(&proc, &[pid]),
             clients_threads,
-            clients_gpu,
+            clients_gpu: gpu_engines(&proc, &client_pids),
             yuna_dmabufs,
             yuna_memfds,
         })
     }
 }
 
-/// Each thread of process `pid`: its name, and the CPU time it has used, in nanoseconds (the
-/// first field of `schedstat`).
-fn threads(pid: u32) -> Result<BTreeMap<u32, (String, u64)>, String> {
-    let tasks = PathBuf::from(format!("/proc/{pid}/task"));
-    let mut threads = BTreeMap::new();
-    for task in fs::read_dir(&tasks)
-        .map_err(|e| format!("{}: {e}", tasks.display()))?
-        .flatten()
-    {
-        let Some(tid) = task.file_name().to_str().and_then(|id| id.parse().ok()) else {
-            continue;
-        };
-        // A thread that ended between the listing and the read is left out.
-        let (Ok(name), Ok(schedstat)) = (
-            fs::read_to_string(task.path().join("comm")),
-            fs::read_to_string(task.path().join("schedstat")),
-        ) else {
-            continue;
-        };
-        let Some(ns) = schedstat
-            .split_whitespace()
-            .next()
-            .and_then(|ns| ns.parse().ok())
-        else {
-            continue;
-        };
-        threads.insert(tid, (name.trim_end().to_owned(), ns));
+/// Each thread of process `pid`: its name, and the CPU time it has used, in nanoseconds. A
+/// process that has ended has none: that is an error, as a measure of it would be empty.
+fn threads(proc: &Proc, pid: u32) -> Result<BTreeMap<u32, (String, u64)>, String> {
+    let threads = proc.threads(pid);
+    if threads.is_empty() {
+        return Err(format!("process {pid} has no thread to read: it has ended"));
     }
-    Ok(threads)
+    Ok(threads
+        .into_iter()
+        .map(|thread| (thread.tid, (thread.name, thread.cpu_ns)))
+        .collect())
 }
 
-/// The GPU's busy time for process `pid`, per engine, in nanoseconds: the `drm-engine-<engine>`
-/// keys of the kernel's DRM usage statistics, in the `fdinfo` of each DRM file it holds, each
-/// DRM client counted once however many files share it.
-pub fn gpu_engines(pid: u32) -> BTreeMap<String, u64> {
-    let mut engines = BTreeMap::new();
-    let mut seen_clients = Vec::new();
-    let Ok(files) = fs::read_dir(format!("/proc/{pid}/fd")) else {
-        return engines;
-    };
-    for file in files.flatten() {
-        let is_drm = fs::read_link(file.path()).is_ok_and(|target| target.starts_with("/dev/dri/"));
-        if !is_drm {
-            continue;
-        }
-        let fdinfo = format!("/proc/{pid}/fdinfo/{}", file.file_name().to_string_lossy());
-        let Ok(info) = fs::read_to_string(fdinfo) else {
-            continue;
-        };
-        let mut client = None;
-        let mut file_engines = HashMap::new();
-        for line in info.lines() {
-            let Some((key, value)) = line.split_once(':') else {
-                continue;
-            };
-            let value = value.trim();
-            if key == "drm-client-id" {
-                client = Some(value.to_owned());
-            } else if let Some(engine) = key.strip_prefix("drm-engine-")
-                && let Some(ns) = value.strip_suffix(" ns").and_then(|ns| ns.parse().ok())
-            {
-                file_engines.insert(engine.to_owned(), ns);
-            }
-        }
-        if let Some(client) = client {
-            if seen_clients.contains(&client) {
-                continue;
-            }
-            seen_clients.push(client);
-        }
-        add_engines(&mut engines, file_engines);
-    }
-    engines
-}
-
-fn add_engines(sum: &mut BTreeMap<String, u64>, more: impl IntoIterator<Item = (String, u64)>) {
-    for (engine, ns) in more {
-        *sum.entry(engine).or_default() += ns;
-    }
+/// The GPU's busy time for the processes `pids`, per engine, in nanoseconds, each DRM client
+/// counted once however many files or processes share it.
+fn gpu_engines(proc: &Proc, pids: &[u32]) -> BTreeMap<String, u64> {
+    drm::engines(&drm::drm_files(proc, pids))
 }
 
 /// How many of process `pid`'s open files are dma-bufs, and how many memfds: the buffers its
 /// clients share with it.
-fn buffer_files(pid: u32) -> (usize, usize) {
+fn buffer_files(proc: &Proc, pid: u32) -> (usize, usize) {
     let (mut dmabufs, mut memfds) = (0, 0);
-    if let Ok(files) = fs::read_dir(format!("/proc/{pid}/fd")) {
-        for file in files.flatten() {
-            let Ok(target) = fs::read_link(file.path()) else {
-                continue;
-            };
-            let target = target.to_string_lossy();
-            if target.starts_with("/dmabuf:") {
-                dmabufs += 1;
-            } else if target.starts_with("/memfd:") {
-                memfds += 1;
-            }
+    for (_, target) in proc.open_files(pid) {
+        let target = target.to_string_lossy();
+        if target.starts_with("/dmabuf:") {
+            dmabufs += 1;
+        } else if target.starts_with("/memfd:") {
+            memfds += 1;
         }
     }
     (dmabufs, memfds)

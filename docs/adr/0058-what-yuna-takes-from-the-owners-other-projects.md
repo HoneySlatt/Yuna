@@ -1,6 +1,6 @@
 # 0058. What Yuna takes from the owner's other projects
 
-- Status: Accepted; amends 0007, 0010, 0016, 0023, 0046; amended by 0061
+- Status: Accepted; amends [0007](0007-surviving-a-crash.md), [0010](0010-animations-and-effects.md), [0016](0016-the-rust-toolchain.md), [0023](0023-frames-presentation-and-the-clock.md), [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md); amended by [0061](0061-yunas-uses.md)
 - Date: 2026-11-14
 
 ## Context

@@ -4,6 +4,33 @@ How the code is organised now, for a developer who has never seen it. Decisions 
 are in [`adr/`](adr/README.md); the contracts of each item are in the code's documentation; what
 comes next is in [`PLAN.md`](PLAN.md).
 
+## In one page
+
+The parts, bottom up:
+
+- **The pure models**: [`yuna-layout`](#the-layout-model) decides where every window goes;
+  [`yuna-motion`](#motion) turns the layout's jumps into what each frame draws. Neither knows
+  Wayland, Smithay or a renderer.
+- **The headless compositor**, the `yuna` crate's library on Smithay: the
+  [protocols](#a-windows-life) and [XWayland](#xwayland) in front, the layout and the motion
+  behind, virtual [outputs](#outputs-added-and-removed) with their [clock](#time-and-deadlines),
+  drawn through Smithay's GLES renderer, on llvmpipe or the GPU's render node.
+- **The [MCP server](#the-mcp-server)** around it, for agents; the [program](#the-program),
+  `yuna --headless` and `yuna mcp`.
+- **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
+  Yuna included, from outside.
+
+The main flows:
+
+- **A client's commit** reaches the compositor, changes the layout, and the next
+  [frame](#a-frame) is drawn on damage ahead of its boundary, presented honestly, its feedback
+  sent.
+- **An agent's call** over MCP creates a [seat](#seats-and-input), starts a program, types,
+  clicks and [captures](#captures), on the agent's own seat only.
+- **A change of the layout** becomes [motion](#motion) sampled at each frame's presentation.
+- **An X11 program** connects to its seat's Xwayland, started on demand, managed by Yuna's own
+  [X11 window manager](#an-x11-windows-life).
+
 ## Parts
 
 One Cargo workspace; its crates live in `crates/`.
@@ -23,6 +50,11 @@ One Cargo workspace; its crates live in `crates/`.
   draws, and which windows are told they are visible
   ([ADR-0052](adr/0052-motion-in-a-pure-crate.md), [ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md));
   its crate documentation explains how. It holds no Wayland or Smithay object.
+- **`yuna-bench`** (`crates/yuna-bench`): the rivals' bench. It runs a compositor headless in a
+  sandbox of its own, the same scenarios with the same clients for each, and reads its costs
+  from outside ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md));
+  [The rivals' bench](#the-rivals-bench) below. It depends on nothing of `yuna`: it measures
+  Yuna as it measures the others.
 
 ## Dependencies
 
@@ -37,9 +69,22 @@ One Cargo workspace; its crates live in `crates/`.
   `yuna-motion`. rustix, which Smithay re-exports, makes its system calls: pipes, sockets,
   signals, `waitpid`, pidfds, `prctl`. Its tests use `wayland-client` and `wayland-protocols`'
   client side, staging protocols included, proptest, without its default features, `png` to
-  decode captures, and x11rb for their X11 clients.
+  decode captures, and x11rb for their X11 clients; its measuring examples read `/proc`, the
+  DRM statistics and the machine's load through `yuna-bench`'s library.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
+- `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients;
+  `wayland-protocols-misc`, for its virtual keyboard's `zwp_virtual_keyboard_v1`; `serde` and
+  `serde_json`, for its run file and mpv's IPC; rustix, already Smithay's, for CLOCK_MONOTONIC,
+  signals, the user's id, memfds and the kernel's socket diagnostics. At run time, from the bench
+  shell: the compositors of its nine recipes, sway (for sway and sway-vulkan), KWin, dwl and
+  mango (each also built without XWayland), Umbriel, Hyprland (through `start-hyprland`, inside a
+  dwl) and Mutter, and Yuna, which it builds from the workspace with `cargo`; their tools,
+  `swaymsg`, `dbus-send`, `wlr-randr`, `mmsg`, `umbriel`, `hyprctl` and `gdctl`; mpv, from the
+  applications' `PATH`, and weston's `weston-presentation-shm`, under coreutils' `stdbuf`, as
+  clients; Xwayland, which the rivals as shipped start; ffmpeg, for its clips; D-Bus's
+  `dbus-run-session` and `dbus-daemon`; coreutils' `env`, and bash; `git`, for the commit it
+  records; and the host's `systemd-run`, which makes each sandbox.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
@@ -1268,7 +1313,152 @@ own thread, both `took_us`.
 - `crates/yuna-motion/examples/motion_timing.rs`: what motion costs at an operation and at a frame:
   `Motion::update` after a focus move and after a column opened left of the focus, and
   `Motion::frame` while a motion runs, on strips of 100 and 1,000 windows.
+- `crates/yuna-bench`: the rivals' bench, [below](#the-rivals-bench); `flake.nix`'s `bench`
+  shell holds what it runs.
 - `deny.toml`: the dependency policy.
+
+## The rivals' bench
+
+`crates/yuna-bench` measures compositors from outside, the same way for each
+([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
+Its crate documentation gives each part's contract; how to run it is in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). A case is one compositor, one configuration, one
+scenario; each run of a case goes:
+
+1. **The sandbox.** `systemd-run --user --scope` makes a transient scope, a control group of its
+   own; `env -i` clears the environment and sets store paths and the run's own folders alone;
+   `dbus-run-session` gives a private session bus; the bench's `enter-core` moves the compositor
+   into a child group, `core`, then becomes it. The scope is the *stack*, `core` the *core*.
+   Each client runs in a scope of its own. No descriptor of the bench but its standard input,
+   output and error reaches them: it marks every other it inherited close-on-exec at its start.
+   A compositor that runs inside another, its *parent* (Hyprland), is started by the bench's
+   `parent` instead: it starts the parent in the stack, waits for its Wayland socket, starts the
+   compositor into `core`, connected to it, and stops the parent once the compositor has ended.
+2. **The recipe** (`recipes.rs`): the compositor's program, variables and configuration file,
+   written into the case's folder, as shipped or at equal work. Once the compositor is ready, the
+   recipe's setup runs (dwl's output mode, Hyprland's output), then the bench reads back the
+   output it made, which the run's file records. KWin's 240 Hz comes from its own output
+   configuration, which a first KWin writes and the bench edits.
+3. **Ready, then checked.** The Wayland socket and the recipe's own sign. Then, and again in
+   every scenario once its clients are up, the compositor's scope and each client's are checked:
+   the case is *refused*, and stopped, if a process holds `/dev/dri/card*` or an input device
+   (`/dev/input/*`, `/dev/uinput`, `/dev/hidraw*`), reaches a socket in the owner's runtime
+   folder, is connected to an X11 display served outside the sandbox, or names the owner's
+   runtime folder in its environment. Each window's readers check the same nodes again every
+   250 ms, and one found then refuses the case too. These checks detect; they do not prevent
+   (the known limits below).
+4. **The windows** (`scenarios.rs`). In each measured window, the control groups' `cpu.stat` at
+   its ends give exact CPU times; a reader every 250 ms keeps each thread's time and context
+   switches and each DRM client's engine times, so that those that end inside count up to their
+   last reading (`sampler.rs`). Wake-ups are a lower bound when the threads read account for less
+   than 90 % of the group's CPU time, or when that share is unknown: processes then lived and
+   ended between readings. A group whose `cpu.stat` counted no CPU time ran no thread, so woke
+   exactly 0 times. Another reader takes the machine's state each second (`machine.rs`). Memory
+   is read once the compositor is ready and after the cost window: each process's
+   `smaps_rollup`, and the DRM `fdinfo` of its GPU files. The run notes the core's threads under
+   a realtime policy.
+5. **The frames.** A cost a frame is given only from an exact count of the window's own frames:
+   KWin's frame log, which it writes in the cost window; Umbriel's count of its output's
+   commits, read at the cost window's ends; or, in `game`, mpv's frames shown, read over its
+   IPC, mpv being paced one frame for one of the compositor's. The others but Mutter are counted
+   by `ext-image-copy-capture` in a *frames window* apart, the scenario run again with the frame
+   counter, whose copies would weigh on the costs. That count is a lower bound: the counter asks
+   each frame after the last copy, so at a game's rate it misses frames. Mutter offers no capture
+   protocol: its frames are counted only by mpv in `game`. Yuna's cost window runs at its default
+   log level: its `frame drawn` lines would weigh on its costs. Each cost window records its
+   *achieved rate*, the frames a second the compositor really drew (`achieved_rate`), which the
+   run's file keeps; no ranking depends on it.
+6. **The stop**, as the recipe says, then `cgroup.kill` for what is left; KWin's frame log is
+   read once it has flushed it.
+
+`game` is the same scene everywhere: mpv, which asks fullscreen itself, plays a clip at 240
+frames a second as fast as the compositor takes them, drawing it with Vulkan on radv over the
+whole output. The bench refuses the case unless mpv reports itself fullscreen at the output's
+logical size, and fails it unless mpv's clip played during its warm-up. Its clips, `film`'s too,
+are long enough never to loop inside a window: mpv is not sought back to its start, which is one
+more chance for it to stall on Mutter (below).
+
+Each recipe, all on the render node at 3840 × 2160, 240 Hz, scale 1.5:
+
+| Recipe | Backend, its pace | Its output's mode | `motion` | Frames | Equal work turns off |
+|---|---|---|---|---|---|
+| sway, sway-vulkan | wlroots headless, GLES2 or Vulkan; wlroots' timer | its configuration's `output` | `swaymsg` | capture | its bar, swaybg, XWayland |
+| KWin | its virtual backend; the mode's rate | its output configuration | its D-Bus | its frame log | its default effects, XWayland |
+| Yuna | its headless backend, `--gpu`; the mode's rate | `--output` | none | capture | nothing: both are the same |
+| dwl | wlroots headless; wlroots' timer | wlr-randr, once ready | the bench's virtual keyboard | capture | XWayland: a build without it |
+| mango | wlroots headless, SceneFX; wlroots' timer | a `monitor_rule` | `mmsg` | capture | animations, rounded corners; XWayland: a build without it |
+| Umbriel | wlroots headless, its SceneFX fork; wlroots' timer | its configuration's output | `umbriel msg` | its commits | animations, blur, shadows, corners, its cheatsheet, XWayland |
+| Hyprland | Aquamarine's headless, inside a dwl; the mode's rate | `hyprctl output create headless`, a monitor rule | `hyprctl` | capture | animations, blur, shadows, corners, its wallpaper, XWayland, realtime scheduling |
+| Mutter | its headless backend; the mode's rate | `--virtual-monitor`; scale from its `monitors.xml` | none | mpv in `game` alone | animations, XWayland |
+
+niri and cosmic-comp have no recipe that runs: niri's headless backend serves its own tests
+only, and cosmic-comp has none. They are measured on the owner's tour alone, and the summary
+says so. The recipe of each gives its reasons, with its sources' lines.
+
+The run file holds every figure with its unit, the raw `fdinfo`, the machine's state each second,
+how each window's frames were counted, which figures are lower bounds, the lock the run held,
+and each still window's configured size and buffer. The bench writes it before its first case
+and again after each, through a temporary file flushed to the disk and a rename, with the time
+of the writing: a run cut short keeps every case it ran, whole.
+
+`yuna-bench report` turns run files into tables. It ranks only the runs of one day and one
+machine state ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)): the UTC day
+their run file started, one machine whole (processor, memory, GPU, VBIOS, firmware, kernel and
+Mesa) and one GPU performance level, those of the first file named. Other runs are shown on rows
+of their own, marked ‡, unranked, with why. It ranks a figure only where the runs' spreads do
+not overlap, among *equal work* runs that other programs did not disturb, and names a compositor
+all of whose runs were disturbed; it never ranks a lower bound. In `game` and `pacing`, whose
+client draws as fast as the compositor takes its frames, it ranks a cost a second only between
+compositors on the same pace, the recipe's: wlroots' headless timer, or the mode's rate. In
+`rest`, `motion` and `film`, where equal work draws only when something changes, it ranks them
+across every compositor. A cost a frame does not scale with the pace: it ranks across backends,
+between compositors whose frames were counted the same exact way, by mpv in `game` or by one
+compositor's own count; frame counts never rank. A figure of the stack ranks apart for a
+compositor whose stack holds its parent. Its memory at rest gives each compositor's core after
+`rest`'s cost window, at each count of still windows the files ran (1, 15 and 150 by default),
+and its growth a window from the fewest to the most: its own memory (`Pss_Anon` + `Pss_File`) and its GPU memory (`resident-vram` + `resident-gtt`) rank, and
+the clients' buffers it holds (`Pss_Shmem`) are shown, not ranked, since each layout gives the
+still windows sizes of its own. A run file written before the bench gave a group that ran
+nothing exactly 0 wake-ups is read under that rule. It ends with every rival of
+[ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
+measured or not, and those on the tour only.
+
+Known limits:
+
+- The sandbox detects; it does not prevent. No namespace keeps a rival from the owner's display,
+  devices, runtime folder or session bus: the rivals run as the owner's user, kept off them by
+  their configuration alone, a cleared environment and a runtime folder and bus of their own. A
+  rival that reached one would be seen at the next check, once ready, once its scenario's clients
+  are up, or by a window's readers every 250 ms for the device nodes, and its case refused; what
+  it did between two checks is not undone. To see which socket a socket is connected to, the
+  checks read the kernel's socket diagnostics (`sock_diag`). Without them, they see the sockets
+  bound in the owner's runtime folder, not those connected to one, and each case's run says so.
+- Frames counted by capture are lower bounds, and each copy of a 4K shm buffer costs the
+  compositor milliseconds.
+- wlroots' headless backend sends a frame event 4 ms after each commit: it counts whole
+  milliseconds, `1000000 / 240000` = 4 (`backend/headless/output.c:31` and `:76`). sway, dwl,
+  mango and Umbriel draw up to 250 frames a second for a 240 Hz mode, fewer as each frame takes
+  time to draw; the summary gives the rates their runs reached. KWin, Hyprland, Mutter and Yuna
+  draw at the mode's rate, 240 at most. Where the client paces the compositor, their costs a
+  second rank apart.
+- Yuna and Mutter have no actions for `motion`. Mutter takes no command for its windows from
+  outside: GNOME Shell drives them from inside Mutter's process, and is not measured.
+- Hyprland's parent is dwl, not sway: Aquamarine binds `xdg_wm_base` at version 6, which sway
+  1.12 offers at 5. Hyprland is started through its watchdog, `start-hyprland`, as its session
+  file does; started alone it shows a warning for 15 s. A Hyprland that `start-hyprland`
+  restarts, in its safe mode, fails the case. Hyprland 0.57.1 puts its main thread on `SCHED_RR`,
+  from rtkit: kept as shipped; at equal work its system bus is a socket that does not exist, so
+  it runs without, as 0.57.2 ships. The run notes the core's realtime threads. Its stack holds its
+  parent, which the summary says, and its figures of the stack rank apart.
+- dwl and mango have no switch for XWayland at run time: equal work runs nixpkgs' build of each
+  without it, the same code but XWayland's.
+- mpv, with `--untimed` and a FIFO swap chain, can stay at its first frames on Mutter, with or
+  without a seek. The bench then fails the case ("mpv's clip did not play in its warm-up")
+  rather than measure an empty scene; a run again may play.
+- Mutter's default plugin draws a plain colour with a vignette behind the windows, which no switch
+  removes; Umbriel as shipped shows its keybind cheatsheet throughout.
+- Umbriel's commits are read inside the cost window, at its ends: two answers of its IPC count in
+  its costs.
 
 ## Where to start reading
 

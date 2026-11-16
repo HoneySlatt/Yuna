@@ -10,10 +10,23 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Umbriel, a rival the bench measures, at the revision docs/survey.md read. Its source alone:
+    # the bench shell builds Umbriel's own package definition (nix/package.nix) with this nixpkgs,
+    # as its flake's `packages.default` does with its own, so that it draws with the bench's Mesa
+    # and adds no input of its own to the lock. Fetched only by the bench shell.
+    umbriel = {
+      url = "github:noctalia-dev/umbriel/d171ccb31628da65b1beee3221b37a2758d553b3";
+      flake = false;
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      nixpkgs,
+      rust-overlay,
+      umbriel,
+      ...
+    }:
     let
       # Linux only (ADR-0006); the machines the owner develops on are x86_64.
       system = "x86_64-linux";
@@ -21,15 +34,16 @@
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
       };
-    in
-    {
-      devShells.${system}.default = pkgs.mkShell {
+      # The default shell's settings, which the bench's shell extends.
+      shell = {
         packages = [
           (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
           # Licences, advisories and sources of the dependencies.
           pkgs.cargo-deny
           # Links between the Markdown files.
           pkgs.lychee
+          # Writes the ADRs' index and checks the changelog's fragments (scripts/).
+          pkgs.python3
           # Lists the Markdown files the link check reads.
           pkgs.git
           # The X server Yuna starts for X11 programs, found on PATH (ADR-0067).
@@ -93,6 +107,55 @@
           pkgs.vulkan-loader
           pkgs.fontconfig
         ];
+      };
+    in
+    {
+      devShells.${system} = {
+        default = pkgs.mkShell shell;
+
+        # The rivals' bench (crates/yuna-bench, CONTRIBUTING.md): the default shell, and the
+        # compositors and clients it runs, by their store paths. Kept out of the default shell, so
+        # that CI, which fetches that shell at every run, never fetches KWin and its Qt.
+        bench = pkgs.mkShell (
+          shell
+          // {
+            # sway's own binary, not nixpkgs' wrapper, which would add its own environment. Its
+            # shipped configuration, in etc/sway, draws no wallpaper.
+            YUNA_BENCH_SWAY = "${pkgs.sway-unwrapped}";
+            YUNA_BENCH_KWIN = "${pkgs.kdePackages.kwin}";
+            # dwl and mango as nixpkgs ships them, with XWayland, and built without it for the
+            # equal-work configuration: neither has a switch to turn it off at run time.
+            YUNA_BENCH_DWL = "${pkgs.dwl}";
+            YUNA_BENCH_DWL_NO_XWAYLAND = "${pkgs.dwl.override { enableXWayland = false; }}";
+            YUNA_BENCH_MANGO = "${pkgs.mango}";
+            YUNA_BENCH_MANGO_NO_XWAYLAND = "${pkgs.mango.override { enableXWayland = false; }}";
+            YUNA_BENCH_UMBRIEL = "${pkgs.callPackage "${umbriel}/nix/package.nix" {
+              rev = umbriel.shortRev;
+            }}";
+            YUNA_BENCH_HYPRLAND = "${pkgs.hyprland}";
+            YUNA_BENCH_MUTTER = "${pkgs.mutter}";
+            # Sets dwl's output to the bench's mode, through wlr-output-management, and reads the
+            # outputs of the compositors on wlroots.
+            YUNA_BENCH_WLR_RANDR = "${pkgs.wlr-randr}";
+            # weston-presentation-shm, the pacing scenario's client.
+            YUNA_BENCH_WESTON = "${pkgs.weston}";
+            # Makes the film scenario's clip.
+            YUNA_BENCH_FFMPEG = "${pkgs.ffmpeg-headless.bin}";
+            # dbus-run-session and dbus-daemon for each compositor's own session bus, dbus-send to
+            # drive KWin.
+            YUNA_BENCH_DBUS = "${pkgs.dbus}";
+            # The Mesa every compositor and client draws with: its EGL, GBM and Vulkan drivers.
+            YUNA_BENCH_MESA = "${pkgs.mesa}";
+            # The shell's LD_LIBRARY_PATH, libglvnd's EGL, for the compositors: `cargo run`
+            # puts its own folders before it in the bench's.
+            YUNA_BENCH_LIBRARY_PATH = shell.LD_LIBRARY_PATH;
+            YUNA_BENCH_XWAYLAND = "${pkgs.xwayland}";
+            # The shell and the commands a compositor's own children run: sway's bar runs a loop
+            # of `date` and `sleep` in `sh`.
+            YUNA_BENCH_COREUTILS = "${pkgs.coreutils}";
+            YUNA_BENCH_BASH = "${pkgs.bash}";
+          }
+        );
       };
     };
 }

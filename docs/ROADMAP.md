@@ -66,8 +66,9 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 
 - **High tier**: RX 6900 XT, Ryzen 7 5800X, ASUS PG32UCDM at 3840 × 2160 and 240 Hz, scale 1.5:
   4.17 ms a frame.
-- **Lowest tier**: the HP laptop, AMD Athlon Silver 3050U with Radeon Vega graphics and 4 GiB; its
-  display, storage and Vulkan driver are still to be read.
+- **Lowest tier**: the HP laptop, AMD Athlon Silver 3050U with Radeon Vega graphics and 4 GiB, a
+  1600 × 900 panel at 60 Hz; its Vulkan driver imports, synchronises and shows Vulkan's buffers
+  ([measurements](measurements.md)); its storage is still to be read.
 - **Steam Deck**, its desktop mode.
 - **CI**: the headless mode on a CPU renderer.
 
@@ -75,17 +76,19 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 
 ### Budgets
 
-Starting figures, tightened once the rivals are measured (Stage 1). A budget missed is debt until
-it is met.
+A budget set from the rivals is a comparison measured the same day and the figure it gave, checked
+until the rivals are measured again at the next stage's end
+([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). A budget missed is debt
+until it is met.
 
 | Budget | Figure | Measured by |
 |---|---|---|
 | At rest | 0 frames, 0 own wake-ups a second, 0 % of a core | every thread's context switches over 10 s, headless and on the desktop |
 | Motion | no missed frame at 240 Hz while scrolling, animating or switching workspaces | presentation feedback over scripted gestures, headless and on the owner's monitor |
-| Input to present | at a fixed rate, no commit presented after the first boundary it could reach, and end to end at the 99th percentile against gamescope and KWin; under VRR or tearing, one frame, 4.17 ms on the high tier ([ADR-0032](adr/0032-input-to-present-read-by-mode.md)) | input given through the compositor, presentation feedback and the frame log read |
-| A frame's cost | GPU and CPU time per frame, set from the rivals' at Stage 1 | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
+| Input to present | at a fixed rate, no commit presented after the first boundary it could reach, and end to end at the 99th percentile against gamescope and KWin; under VRR or tearing, one frame, 4.17 ms on the high tier ([ADR-0076](adr/0076-input-to-present-read-by-mode.md)) | input given through the compositor, presentation feedback and the frame log read |
+| A frame's cost | in a fullscreen game, CPU and GPU time a frame at most the best peer's at equal work, the same day: 198 µs and 203 µs on the high tier, Umbriel's on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)) | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
-| Memory | set from the rivals' at Stage 1 | resident memory at rest with 15 windows |
+| Memory | at rest, each at most the best peer's at equal work, the same day: the process's own 102.5 MiB with 15 windows and 0.0063 MiB a window; its GPU's 115.4 MiB and 2.31 MiB a window, on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); the process's growth a window missed, debt | the process's `Pss_Anon` + `Pss_File`, and the kernel's DRM resident memory, at rest with 1, 15 and 150 windows |
 | Start | from launch to the first frame, set from the rivals' at Stage 2 | the log's times |
 | A crash | back within 1 s; no window lost of an application that reconnects; the others reopened in place | a test that kills Yuna and counts the windows |
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |
@@ -96,6 +99,35 @@ it is met.
 | A tablet | set from KWin's, once a tablet is at hand | input to present of the pen; pressure and tilt passed on |
 | `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
 | An agent's output | full rate while its programs draw, nothing at rest; no input of an agent reaching the owner's seat | presentation feedback; a test that tries |
+
+### Architecture and stability scenarios
+
+Realistic change and failure scenarios that judge Yuna's core
+([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)); each a test from Stage 2 where
+practical, else a review of the code; their evidence in `docs/measurements.md` or the stage's
+audit.
+
+| Scenario | Acceptance criterion | Checked by |
+|---|---|---|
+| A game frozen 50 ms while an 8,000 Hz pointer moves | the game is not disconnected | a headless test, an agent's pointer |
+| One client sends 100,000 damage requests a second | the other clients' commits make their boundary | a headless test |
+| A client's GPU work is late at the deadline | its previous buffer is shown; Yuna never waits | a test with a fence held |
+| A column with three windows changes width | all three show their new size in one frame, or after the timeout | a headless test |
+| An output is unplugged while another changes mode | the change applies whole, or the old state stays | the KMS mock |
+| A reload asks a mode the kernel refuses | nothing changes; the error is shown | the KMS mock |
+| The GPU resets during a capture and a scanned-out game | Yuna recovers; the capture fails in a way the client can retry | the GPU lost on demand |
+| Suspend while locked, an HDR game fullscreen | the first frame after resume is the lock | a fake session |
+| Yuna crashes while locked | it comes back locked | a test that kills Yuna |
+| A system update, then a crash, and the new binary fails to start | the keeper starts the previous binary | a keeper test |
+| An older Yuna reads a newer state or configuration file | it keeps the fields it does not know | a format test |
+| A new protocol is added | one crate changes, and one line registers it | a review |
+| The KMS thread is run inline | the same test passes, deterministic, on the manual clock | the tests, both ways |
+| uwui panics while the share picker is open | the picker closes; frames continue | a test |
+| An agent's Yuna runs beside the owner's | it reads and writes nothing of the owner's state | a test |
+| A sandboxed client is connected when Yuna crashes | it reconnects through its security context | a test |
+| Ten times the windows, the outputs or the rate | queues and caches stay within their bounds; nothing grows without end | a soak test |
+| Ten agents' Yunas started together | each holds full rate while its programs draw; none grows without end | a headless test |
+| One agent's Yuna started | its first frame comes within its budget, set at M1.11 | the log's times |
 
 ### Without a figure
 
@@ -123,7 +155,7 @@ it is met.
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
 | Base | Smithay, left step by step, gone by the end of Stage 2 ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
-| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
+| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate, each in its own headless Yuna ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
@@ -135,10 +167,12 @@ it is met.
 | Motion | The layout jumps; a pure crate, `yuna-motion`, turns its jumps into springs that keep their velocity, sampled at each frame's presentation; off headless unless asked ([ADR-0052](adr/0052-motion-in-a-pure-crate.md) to [ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md), [ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | The other projects | Every protocol listed and tested; hidden games paced; Yuna 0.1 the owner's projects' test compositor; GPU resets survived; Nix modules in Yuna; fuzzing and crash reports ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
-| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 | XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
+| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
+| Stage 2's core | A queue of pending commits, one owner of the state, crates with checked dependencies, a table of tasks, output changes tested whole, one path for pause and loss, the lock kept through a restart, one input chain, a frame's identity, every public contract versioned, client identity from the connection ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)) |
 
 ### Open
 
@@ -148,6 +182,7 @@ it is met.
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
 | Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| The blending space and precision; Yuna's priority against a game; wayland-rs's buffer per client; the plane allocator | the opening of Stage 2, each on a measure ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)) |
 | Public release | the owner's go |
 
 ## 5. Stages
@@ -169,7 +204,7 @@ it is met.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
 - A throwaway Vulkan prototype, measured on every tier, the laptop's driver checked, to set the
-  frame's budgets ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
+  frame's budgets ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
 - Yuna for the owner's other projects
   ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): a Nix package, the
   virtual keyboard and pointer on agents' seats, what each project needs in
@@ -185,12 +220,14 @@ other projects can add Yuna to their shells and drive programs in it as they dri
 
 ### Stage 2 — The desktop → 0.2
 
-**Goal.** Yuna replaces Niri as the owner's daily compositor, without HDR yet, on a base of its
+**Goal.** Yuna replaces niri as the owner's daily compositor, without HDR yet, on a base of its
 own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 - First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
   its Vulkan renderer hosting uwui, on wayland-rs; WLCS run against it
-  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
+  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)); in crates with checked
+  dependencies, meeting the core's requirements from its first commit
+  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5 and the right size on every output.
@@ -224,8 +261,9 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   [client needs](client-needs.md)): the programs that capture told to the shell; a greeter mode
   under greetd; a new locker relieving a dead one.
 
-**Exit.** The owner uses Yuna for a week in place of Niri; the budgets of rest, motion, input and
-power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
+**Exit.** The owner uses Yuna for a week in place of niri; the budgets of rest, motion, input and
+power are met on the high tier and the laptop; the architecture and stability scenarios pass;
+Smithay is no longer in `Cargo.lock`.
 
 ### Stage 3 — Removed
 

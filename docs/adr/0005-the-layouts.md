@@ -1,6 +1,6 @@
 # 0005. The layouts: scrolling columns, dwindle, floating, special workspaces
 
-- Status: Accepted; amended by 0062
+- Status: Accepted; amended by [0062](0062-the-compositors-comfort-and-look.md)
 - Date: 2026-11-11
 
 ## Context

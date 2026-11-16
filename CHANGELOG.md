@@ -1,9 +1,13 @@
 # Changelog
 
 What changed for users, newest first. Yuna has no release yet: everything below comes with 0.1
-([ROADMAP](docs/ROADMAP.md)).
+([ROADMAP](docs/ROADMAP.md)). A change that users see adds a fragment to
+[`changelog.d/`](changelog.d/README.md); `scripts/changelog.py --merge` brings them here at each
+release.
 
-## Unreleased
+## [Unreleased]
+
+### Added
 
 - X11 programs can connect: each seat with a Wayland socket gets an X display of its own, and
   the first X11 program to connect starts Xwayland for it, found on `PATH`, behind the seat's

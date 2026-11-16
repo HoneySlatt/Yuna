@@ -1,6 +1,6 @@
 # 0061. Yuna's uses: creation, capture, games, HDR per display, development
 
-- Status: Accepted; amends 0007, 0010, 0058
+- Status: Accepted; amends [0007](0007-surviving-a-crash.md), [0010](0010-animations-and-effects.md), [0058](0058-what-yuna-takes-from-the-owners-other-projects.md)
 - Date: 2026-11-14
 
 ## Context

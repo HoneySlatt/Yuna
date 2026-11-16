@@ -17,8 +17,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   to [ADR-0061](adr/0061-yunas-uses.md)).
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
-- [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070. Next: M1.9, on the
-  owner's go.
+- [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
+- [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077. Next: M1.10,
+  on the owner's go.
+- The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 
 ## Status
 
@@ -32,7 +34,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
-| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Planned |
+| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
 | [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
@@ -129,14 +131,17 @@ milestone first needs it.
 ### M1.9 — The rivals measured
 
 - **Goal.** The bar's budgets set from facts.
-- **Delivers.** dwl, sway, Hyprland, niri, mango, Umbriel, KWin, Mutter and cosmic-comp measured at rest and in motion: wake-ups,
-  CPU and GPU time, memory, power, frames during scrolling and animations; headless where they allow
-  it, on the owner's desktop by hand otherwise, after the owner's consent. A throwaway Vulkan
-  prototype measured on every tier, the laptop's driver checked
-  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
-- **Done when.** Each has its figures in `docs/measurements.md`, with versions and dates, or a
-  written reason; the ROADMAP's budgets are set from them, in an ADR; the prototype's figures set the
-  frame's budgets.
+- **Result.** Done on 2026-11-16 (ADR-0072 to ADR-0077), its closing review's findings fixed or
+  written as debt: `crates/yuna-bench` runs nine rivals headless, each in a sandbox, and reads their
+  costs from outside; the series at equal work, 189 cases, none disturbed; the Vulkan prototype on
+  the desktop, lavapipe, the laptop and the Deck, the laptop's display checked
+  ([measurements](measurements.md)). In a fullscreen game Yuna costs 160 to 166 µs of CPU and 191
+  to 196 µs of GPU a frame, below every peer; its own and its GPU's memory are the peers' least,
+  the process's growth a window above Hyprland's ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md),
+  [debt](debt.md#architecture)). Frames, latency and watts on real displays, with Yuna, come at
+  Stage 2's exit ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md));
+  the tour's command waits on branch `m1.9-tour`. Stage 2's core is decided
+  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
 
 ### M1.10 — Yuna for the owner's other projects
 
@@ -167,7 +172,11 @@ milestone first needs it.
 
 - **Goal.** Stage 1 examined whole before 0.1.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
-  `v0.1.0` on the owner's go.
+  `v0.1.0` on the owner's go. For contributors: the X11 manager and the MCP server split into
+  smaller modules; a README that says what to read for each part; `SECURITY.md`; issue and pull
+  request templates holding the definition of done; a newcomer test, an agent new to Yuna making a
+  small change, its stumbles fixed; the chains of ADRs that amend one another (ADR-0001 to
+  ADR-0070) consolidated, one ADR read for each topic.
 
 ## Ideas
 

@@ -1,6 +1,6 @@
 # 0041. Vulkan decided on a measure
 
-- Status: Superseded by [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md); amended
+- Status: Superseded by [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md); amends
   [0012](0012-opengl-first.md) (how Vulkan is decided)
 - Date: 2026-11-13
 

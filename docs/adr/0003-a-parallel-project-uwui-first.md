@@ -1,6 +1,6 @@
 # 0003. A parallel project, uwui first on any conflict
 
-- Status: Accepted; amended by 0060
+- Status: Accepted; amended by [0060](0060-development-first-agents-in-their-own-yuna.md)
 - Date: 2026-11-11
 
 ## Context

@@ -1,15 +1,16 @@
-# Checks the Markdown files alone, their links and the length of those read at every session, for
-# a change of them that CI's job skips (ci.yml): `scripts/check.sh docs`, with lychee and git from
-# the flake's own nixpkgs, without building the development shell's toolchain. Actions are pinned
-# to commit SHAs, their release in a comment.
+# Checks the Markdown files alone, their links and the length of those read at every session, and
+# runs the documents' scripts and their tests, for a change of them that CI's job skips (ci.yml):
+# `scripts/check.sh docs`, with lychee, git and python3 from the flake's own nixpkgs, without
+# building the development shell's toolchain. Actions are pinned to commit SHAs, their release in
+# a comment.
 name: Docs
 
 on:
   push:
     branches: [main]
-    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh", "scripts/*.py"]
   pull_request:
-    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh", "scripts/*.py"]
 
 # A new push to the same branch cancels the run in progress.
 concurrency:
@@ -31,4 +32,4 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: nix shell --inputs-from . nixpkgs#lychee nixpkgs#git --command scripts/check.sh docs
+      - run: nix shell --inputs-from . nixpkgs#lychee nixpkgs#git nixpkgs#python3 --command scripts/check.sh docs
