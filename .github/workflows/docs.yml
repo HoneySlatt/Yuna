@@ -7,9 +7,9 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh", "scripts/adr-index.py", "scripts/changelog.py"]
   pull_request:
-    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh"]
+    paths: ["**.md", ".github/workflows/docs.yml", "scripts/check.sh", "scripts/adr-index.py", "scripts/changelog.py"]
 
 # A new push to the same branch cancels the run in progress.
 concurrency:
@@ -31,4 +31,4 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: nix shell --inputs-from . nixpkgs#lychee nixpkgs#git --command scripts/check.sh docs
+      - run: nix shell --inputs-from . nixpkgs#lychee nixpkgs#git nixpkgs#python3 --command scripts/check.sh docs

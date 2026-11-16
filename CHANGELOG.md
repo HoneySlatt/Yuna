@@ -1,7 +1,9 @@
 # Changelog
 
 What changed for users, newest first. Yuna has no release yet: everything below comes with 0.1
-([ROADMAP](docs/ROADMAP.md)).
+([ROADMAP](docs/ROADMAP.md)). A change that users see adds a fragment to
+[`changelog.d/`](changelog.d/README.md); `scripts/changelog.py --merge` brings them here at each
+release.
 
 ## Unreleased
 

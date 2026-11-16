@@ -1,6 +1,6 @@
 # 0064. What the best desktops taught Yuna
 
-- Status: Accepted; amends 0019, 0057; amended by
+- Status: Accepted; amends [0019](0019-the-layouts-behaviours.md), [0057](0057-what-yuna-does-and-what-the-shell-does.md); amended by
   [0065](0065-what-hollow-asks-of-yuna.md) (the sharing indicator, the dead locker)
 - Date: 2026-11-14
 

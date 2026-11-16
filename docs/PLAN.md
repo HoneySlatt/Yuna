@@ -138,7 +138,7 @@ milestone first needs it.
   comparison the same day and the figure it gives
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). The Vulkan prototype
   answers only what no rival measures, on `ash`, on a branch never merged
-  ([ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)).
+  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
 - **Delivers.** In phases: (A) the bench, `crates/yuna-bench`, with sway, KWin and Yuna headless;
   (B) every rival's recipe and the headless figures; (C) the tour, and the owner's three tours
   from steps written here; (D) the prototype on branch `prototype/vulkan`, beside A; (E) the
@@ -184,7 +184,8 @@ milestone first needs it.
   `v0.1.0` on the owner's go. For contributors: the X11 manager and the MCP server split into
   smaller modules; a README that says what to read for each part; `SECURITY.md`; issue and pull
   request templates holding the definition of done; a newcomer test, an agent new to Yuna making a
-  small change, its stumbles fixed.
+  small change, its stumbles fixed; the chains of ADRs that amend one another (ADR-0001 to
+  ADR-0070) consolidated, one ADR read for each topic.
 
 ## Ideas
 

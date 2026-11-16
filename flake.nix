@@ -42,6 +42,8 @@
           pkgs.cargo-deny
           # Links between the Markdown files.
           pkgs.lychee
+          # Writes the ADRs' index and checks the changelog's fragments (scripts/).
+          pkgs.python3
           # Lists the Markdown files the link check reads.
           pkgs.git
           # The X server Yuna starts for X11 programs, found on PATH (ADR-0067).

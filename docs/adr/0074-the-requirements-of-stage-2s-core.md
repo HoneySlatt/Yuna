@@ -1,6 +1,6 @@
 # 0074. The requirements of Stage 2's core
 
-- Status: Accepted; extends [0039](0039-leaving-smithay-step-by-step.md)
+- Status: Accepted
 - Date: 2026-11-16
 
 ## Context
@@ -211,7 +211,7 @@ crate never changes the core's state itself).
 ## Validation and reconsideration
 
 Evidence at the time: the rivals' sources read on 2026-11-16 (each item's paths in the survey),
-the prototype's figures of [ADR-0073](0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md),
+the prototype's figures of [ADR-0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md),
 today's code. The rivals' dates of rework are remembered, not read. Judged by the scenarios of the
 ROADMAP's bar: a game frozen 50 ms under an 8,000 Hz pointer is not ended; 100,000 damage requests
 a second from one client cost the others no boundary; a client's GPU work late at the deadline

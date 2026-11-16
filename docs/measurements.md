@@ -81,7 +81,7 @@ motion is M1.7's, below.
 
 ## M1.9 — The Vulkan prototype, on the desktop and lavapipe (2026-11-16)
 
-The throwaway prototype of [ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md),
+The throwaway prototype of [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md),
 commit `86984e3` of branch `prototype/vulkan`, run from GitHub as the owner runs it
 ([owner's runs](owner-runs.md#1-the-vulkan-prototype-on-the-laptop-and-the-steam-deck)), at
 3840 × 2160, under the agents' exclusive lock:

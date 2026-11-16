@@ -153,7 +153,7 @@ audit.
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
 | Base | Smithay, left step by step, gone by the end of Stage 2 ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
-| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
+| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate, each in its own headless Yuna ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
@@ -165,11 +165,11 @@ audit.
 | Motion | The layout jumps; a pure crate, `yuna-motion`, turns its jumps into springs that keep their velocity, sampled at each frame's presentation; off headless unless asked ([ADR-0052](adr/0052-motion-in-a-pure-crate.md) to [ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md), [ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | The other projects | Every protocol listed and tested; hidden games paced; Yuna 0.1 the owner's projects' test compositor; GPU resets survived; Nix modules in Yuna; fuzzing and crash reports ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
-| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 | XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
-| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)) |
+| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Stage 2's core | A queue of pending commits, one owner of the state, crates with checked dependencies, a table of tasks, output changes tested whole, one path for pause and loss, the lock kept through a restart, one input chain, a frame's identity, every public contract versioned, client identity from the connection ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)) |
 
 ### Open
@@ -202,7 +202,7 @@ audit.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
 - A throwaway Vulkan prototype, measured on every tier, the laptop's driver checked, to set the
-  frame's budgets ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
+  frame's budgets ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
 - Yuna for the owner's other projects
   ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): a Nix package, the
   virtual keyboard and pointer on agents' seats, what each project needs in
@@ -223,7 +223,7 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 - First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
   its Vulkan renderer hosting uwui, on wayland-rs; WLCS run against it
-  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)); in crates with checked
+  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)); in crates with checked
   dependencies, meeting the core's requirements from its first commit
   ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.

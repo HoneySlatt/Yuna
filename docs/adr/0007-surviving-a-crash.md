@@ -1,6 +1,6 @@
 # 0007. Surviving a crash
 
-- Status: Accepted; amended by 0058, 0061
+- Status: Accepted; amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md), [0061](0061-yunas-uses.md)
 - Date: 2026-11-11
 
 ## Context

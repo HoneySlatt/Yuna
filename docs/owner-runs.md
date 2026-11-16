@@ -2,7 +2,7 @@
 
 What M1.9 asks the owner to run by hand, on the owner's own machines, after the owner's go
 ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md),
-[ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)). Agents never run
+[ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)). Agents never run
 these: they take a display. Each run's files go back to the agent, which puts their figures in
 [`measurements.md`](measurements.md).
 

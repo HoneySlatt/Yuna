@@ -74,7 +74,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - The layout model holds no Wayland or Smithay object; it is tested alone
   ([ADR-0005](docs/adr/0005-the-layouts.md)).
 - The colour and HDR pipeline, the layout and the animations do not depend on the renderer; only
-  the final drawing is Vulkan ([ADR-0063](docs/adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
+  the final drawing is Vulkan ([ADR-0073](docs/adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
 - Everything runs headless; the DRM backend is one backend among others.
 - An agent's seat never reaches the owner's seat ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
 - One client's error never takes Yuna down; a configuration error never stops it
@@ -124,10 +124,11 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - Each fact has one home; other documents link to it:
   - the code's documentation: contracts, limits, figures;
   - `docs/ARCHITECTURE.md`: flows across parts;
-  - ADRs: why a decision was taken, what was rejected; only their status changes later;
+  - ADRs: why a decision was taken, what was rejected; only their status changes later; a
+    decision changed, even in part, is a new ADR that supersedes it and states it whole;
   - `docs/survey.md`: facts of the field, with their sources and dates;
   - `docs/PLAN.md`: status; `docs/debt.md`: known debt;
-  - `CHANGELOG.md`: what changed for users.
+  - `changelog.d/`: a fragment per change users see, gathered into `CHANGELOG.md` at a release.
 - A change that leaves a document wrong is not finished.
 
 ## Commits

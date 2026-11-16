@@ -472,7 +472,7 @@ remedy for a smooth stream is a cap on the game's frame rate, which leaves the G
 ## The rivals measured
 
 Read on 2026-11-15 for [ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)
-to [ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md), in the
+to [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md), in the
 sources of nixpkgs' versions (sway 1.12 on wlroots 0.20.2, dwl 0.9, mango 0.18.4, Hyprland 0.57.1
 on aquamarine 0.16.0, Umbriel `d171ccb`, niri 26.04, KWin 6.8.2, Mutter 51.0, cosmic-comp 1.11.0,
 gamescope 3.17.0) and on the web.

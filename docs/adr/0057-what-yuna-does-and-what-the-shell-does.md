@@ -1,6 +1,6 @@
 # 0057. What Yuna does itself, and what it leaves to the shell
 
-- Status: Accepted; amends 0004; amended by 0063, 0064 (brightness is Yuna's)
+- Status: Accepted; amends [0004](0004-the-compositor-alone-under-a-shell.md); amended by [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md), [0064](0064-what-the-best-desktops-taught-yuna.md) (brightness is Yuna's)
 - Date: 2026-11-14
 
 ## Context

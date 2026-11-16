@@ -33,6 +33,12 @@ check_documents() {
         fi
     done
     [ "$too_long" -eq 0 ]
+
+    # The ADRs' index is written from the ADRs, and each changelog fragment has its form
+    # (docs/adr/README.md, changelog.d/README.md); both on Python's standard library alone.
+    step "ADRs' index and changelog fragments"
+    python3 -I scripts/adr-index.py
+    python3 -I scripts/changelog.py
 }
 
 # `scripts/check.sh docs` runs those alone, for a change of Markdown files only: what the Docs

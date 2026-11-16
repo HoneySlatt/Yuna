@@ -1,6 +1,6 @@
 # 0063. Vulkan alone, and uwui for what Yuna draws and for Hollow
 
-- Status: Accepted; amends 0004, 0012, 0057; supersedes 0041; its prototype narrowed by [0073](0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)
+- Status: Superseded by [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)
 - Date: 2026-11-14
 
 ## Context
