@@ -77,7 +77,15 @@ motion is M1.7's, below.
   Umbriel's slope, a tenth of KWin's and Mutter's; its cause is not isolated (the `wl_shm`
   textures it keeps are the likely one). At 150 windows Yuna holds 146 MiB against Umbriel's 106.
 - These are headless figures, the costs the clock does not decide; frames missed on a real
-  display, input to present and watts come from the owner's tours.
+  display, input to present and watts come from the owner's tour at Stage 2's exit
+  ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
+
+**As shipped**, one run of each case from 10:21 UTC (commit `3943e48`, the same code), for context
+and never ranked: 19 of its cases were disturbed by other programs, by more than 2 cores or 10 % of
+the GPU, and are marked so in the run file. In the game, the undisturbed ones: Umbriel, its blur and
+shadows on, 248 µs of CPU and 169 µs of GPU a frame; Hyprland 224 and 348 µs; KWin 276 and 339 µs;
+dwl 165 and 208 µs; sway 182 and 211 µs. Mutter's game drew 38.5 frames a second as shipped, its
+cause not looked for. The run file is kept locally with the bench's others.
 
 ## M1.9 — The Vulkan prototype, on the desktop and lavapipe (2026-11-16)
 
