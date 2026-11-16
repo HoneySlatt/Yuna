@@ -4,7 +4,8 @@
 //!   of processes it starts is one control group, whose `cpu.stat` counts everything they ever
 //!   ran. A compositor's scope is delegated: the compositor's own process moves itself into a
 //!   child group, `core` ([`enter_core`]), before it runs, so that its descendants are there too,
-//!   and its session bus stays outside.
+//!   and its session bus stays outside. A compositor that runs inside another, its parent, is
+//!   started by [`run_parent`], which keeps the parent outside `core` too.
 //! - **An environment built from nothing** ([`compositor_environment`], [`client_environment`]):
 //!   `env -i` clears what `systemd-run` passes on, then the bench sets only store paths and the
 //!   run's own folders: its own `XDG_RUNTIME_DIR` and `XDG_*_HOME` under the run's folder, no
@@ -12,9 +13,10 @@
 //!   `DBUS_SESSION_BUS_ADDRESS` of the owner's.
 //! - **A private session bus**: `dbus-run-session` with a configuration of the bench's, which
 //!   listens in the run's runtime folder and activates no service of the machine's.
-//! - **Refusals** ([`check`]): if any process of the scope holds a `/dev/dri/card*` node open, is
-//!   bound or connected to a socket in the owner's runtime folder, or was started with a variable
-//!   naming that folder, the bench stops the compositor and measures nothing.
+//! - **Refusals** ([`check`]): if any process of the scope holds a `/dev/dri/card*` node or an
+//!   input device open ([`FORBIDDEN_NODES`]), is bound or connected to a socket in the owner's
+//!   runtime folder, or was started with a variable naming that folder, the bench stops the
+//!   compositor and measures nothing.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -24,6 +26,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
 
 use crate::cgroup::{self, Cgroup};
 use crate::procfs::Proc;
@@ -58,6 +62,22 @@ pub struct ShellPaths {
     pub sway: PathBuf,
     /// KWin's package.
     pub kwin: PathBuf,
+    /// dwl as nixpkgs ships it, with XWayland.
+    pub dwl: PathBuf,
+    /// dwl built without XWayland, for equal work.
+    pub dwl_no_xwayland: PathBuf,
+    /// mango as nixpkgs ships it, with XWayland.
+    pub mango: PathBuf,
+    /// mango built without XWayland, for equal work.
+    pub mango_no_xwayland: PathBuf,
+    /// Umbriel, at the revision the flake pins.
+    pub umbriel: PathBuf,
+    /// Hyprland's package.
+    pub hyprland: PathBuf,
+    /// Mutter's package.
+    pub mutter: PathBuf,
+    /// wlr-randr, a client of wlr-output-management.
+    pub wlr_randr: PathBuf,
     /// weston's package, for `weston-presentation-shm`.
     pub weston: PathBuf,
     /// ffmpeg's binaries.
@@ -102,6 +122,14 @@ impl ShellPaths {
         Ok(ShellPaths {
             sway: path("YUNA_BENCH_SWAY")?,
             kwin: path("YUNA_BENCH_KWIN")?,
+            dwl: path("YUNA_BENCH_DWL")?,
+            dwl_no_xwayland: path("YUNA_BENCH_DWL_NO_XWAYLAND")?,
+            mango: path("YUNA_BENCH_MANGO")?,
+            mango_no_xwayland: path("YUNA_BENCH_MANGO_NO_XWAYLAND")?,
+            umbriel: path("YUNA_BENCH_UMBRIEL")?,
+            hyprland: path("YUNA_BENCH_HYPRLAND")?,
+            mutter: path("YUNA_BENCH_MUTTER")?,
+            wlr_randr: path("YUNA_BENCH_WLR_RANDR")?,
             weston: path("YUNA_BENCH_WESTON")?,
             ffmpeg: path("YUNA_BENCH_FFMPEG")?,
             dbus: path("YUNA_BENCH_DBUS")?,
@@ -176,13 +204,21 @@ impl Owner {
 pub struct Folders {
     /// The case's folder: its logs and configuration.
     pub root: PathBuf,
+    /// A short path for its runtime folder, `/tmp/yb-<pid>-<n>`, which a compositor whose
+    /// sockets' paths would pass Unix's 108 bytes under the run's folder is given: a link to the
+    /// runtime folder, made with the compositor's start, removed at its end. Hyprland's instance
+    /// folder alone is 62 characters long.
+    pub short_runtime: PathBuf,
 }
 
 impl Folders {
     /// Makes `root` and its folders; the runtime folder is the user's alone, as Wayland asks.
     pub fn create(root: &Path) -> Result<Folders, String> {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let folders = Folders {
             root: root.to_owned(),
+            short_runtime: PathBuf::from(format!("/tmp/yb-{}-{made}", std::process::id())),
         };
         for folder in [
             folders.home(),
@@ -346,11 +382,48 @@ pub struct Launch {
     /// Whether it gets a private session bus and its own `core` group: a compositor does, a
     /// client does not.
     pub compositor: bool,
+    /// The compositor it runs inside, started first in the same sandbox, if it needs one.
+    pub parent: Option<Parent>,
+    /// Whether its standard input is a pipe the bench writes to; else it reads nothing.
+    pub input: bool,
+}
+
+/// A compositor that another runs inside, in the same sandbox: `yuna-bench parent` starts it
+/// first, outside `core`, so that its costs count in the stack alone, waits for its Wayland
+/// socket, then starts the compositor into `core`, connected to it, and stops it once the
+/// compositor has ended. Hyprland needs one: its headless backend cannot allocate buffers
+/// alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Parent {
+    /// Its program and arguments.
+    pub command: Vec<String>,
+    /// Its own variables, which the compositor does not get, beside the sandbox's.
+    pub variables: Vec<(String, String)>,
+    /// Its runtime folder, inside the compositor's: its sockets stay apart from the
+    /// compositor's. The Wayland socket it makes there is the compositor's `WAYLAND_DISPLAY`.
+    pub runtime: PathBuf,
+    /// Where its standard output and error go.
+    pub log: PathBuf,
+}
+
+/// What `yuna-bench parent` reads: the parent, and the compositor to start inside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParentLaunch {
+    /// The parent.
+    pub parent: Parent,
+    /// The compositor's program and arguments.
+    pub compositor: Vec<String>,
+}
+
+/// The file a launch with a parent writes its [`ParentLaunch`] to, in its folder.
+fn parent_launch_file(launch: &Launch) -> PathBuf {
+    launch.folder.join("parent-launch.json")
 }
 
 /// The command line that starts `launch`: `systemd-run` makes the scope, `env -i` clears what it
 /// passed on and sets `launch`'s environment alone; a compositor then gets its session bus, and
-/// moves into its `core` group through this program's `enter-core`.
+/// moves into its `core` group through this program's `enter-core`, or, inside a parent, is
+/// started by this program's `parent`, which reads the rest from the launch's file.
 pub fn command_line(
     launch: &Launch,
     shell: &ShellPaths,
@@ -390,6 +463,11 @@ pub fn command_line(
         ));
         line.push("--".to_owned());
         line.push(text(bench));
+        if launch.parent.is_some() {
+            line.push("parent".to_owned());
+            line.push(text(&parent_launch_file(launch)));
+            return line;
+        }
         line.push("enter-core".to_owned());
         line.push("--".to_owned());
     }
@@ -420,6 +498,15 @@ impl Sandboxed {
                 .ok_or("a compositor's environment names no XDG_RUNTIME_DIR")?;
             fs::write(&bus_conf, bus_configuration(&socket))
                 .map_err(|e| format!("{}: {e}", bus_conf.display()))?;
+            if let Some(parent) = &launch.parent {
+                let file = parent_launch_file(launch);
+                let text = serde_json::to_string_pretty(&ParentLaunch {
+                    parent: parent.clone(),
+                    compositor: launch.command.clone(),
+                })
+                .map_err(|e| e.to_string())?;
+                fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+            }
         }
         let line = command_line(launch, shell, bench, &bus_conf);
         let log =
@@ -427,7 +514,12 @@ impl Sandboxed {
         let mut child = Command::new(&line[0])
             .args(&line[1..])
             .current_dir(&launch.folder)
-            .stdin(Stdio::null())
+            // systemd-run, then env, become the program: the pipe reaches it.
+            .stdin(if launch.input {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(log.try_clone().map_err(|e| format!("a log: {e}"))?)
             .stderr(log)
             .spawn()
@@ -521,6 +613,89 @@ pub fn enter_core(command: &[String]) -> Result<(), String> {
     .map_err(|e| format!("cannot enter {}: {e}", core.folder().display()))?;
     let error = Command::new(program).args(arguments).exec();
     Err(format!("{program} does not start: {error}"))
+}
+
+/// `yuna-bench parent <file>`: starts the parent of `file`'s [`ParentLaunch`], waits for its
+/// Wayland socket, then starts the compositor through `enter-core`, connected to it; once the
+/// compositor has ended, stops the parent. Gives whether the compositor ended well. Run by the
+/// compositor's scope, after the session bus started: this process and the parent stay outside
+/// `core`.
+pub fn run_parent(file: &Path) -> Result<bool, String> {
+    let text = fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let launch: ParentLaunch =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    let parent = &launch.parent;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&parent.runtime)
+        .map_err(|e| format!("{}: {e}", parent.runtime.display()))?;
+    let log = File::create(&parent.log).map_err(|e| format!("{}: {e}", parent.log.display()))?;
+    let (program, arguments) = parent
+        .command
+        .split_first()
+        .ok_or("a parent needs a program")?;
+    let mut started = Command::new(program)
+        .args(arguments)
+        .envs(parent.variables.iter().map(|(key, value)| (key, value)))
+        .env("XDG_RUNTIME_DIR", &parent.runtime)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().map_err(|e| format!("a log: {e}"))?)
+        .stderr(log)
+        .spawn()
+        .map_err(|e| format!("{program} does not start: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let socket = loop {
+        if let Some(socket) = wayland_socket_in(&parent.runtime) {
+            break socket;
+        }
+        if let Ok(Some(status)) = started.try_wait() {
+            return Err(format!("the parent {program} ended with {status}"));
+        }
+        if Instant::now() > deadline {
+            let _ = started.kill();
+            let _ = started.wait();
+            return Err(format!("the parent {program} made no socket in 60 s"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let bench = std::env::current_exe().map_err(|e| format!("this program: {e}"))?;
+    let compositor = Command::new(bench)
+        .arg("enter-core")
+        .arg("--")
+        .args(&launch.compositor)
+        .env("WAYLAND_DISPLAY", &socket)
+        .stdin(Stdio::null())
+        .status();
+    let _ = signal(started.id(), rustix::process::Signal::TERM);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while started.try_wait().ok().flatten().is_none() {
+        if Instant::now() > deadline {
+            let _ = started.kill();
+            let _ = started.wait();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    compositor
+        .map(|status| status.success())
+        .map_err(|e| format!("the compositor does not start: {e}"))
+}
+
+/// The Wayland socket a compositor made in `runtime`, `wayland-<n>`, its lock left out.
+pub fn wayland_socket_in(runtime: &Path) -> Option<PathBuf> {
+    let mut sockets: Vec<PathBuf> = fs::read_dir(runtime)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("wayland-") && !name.ends_with(".lock"))
+        })
+        .collect();
+    sockets.sort();
+    sockets.into_iter().next()
 }
 
 /// The device nodes no sandboxed process may hold: the display's card nodes, which drive the
@@ -696,24 +871,7 @@ mod tests {
     use super::*;
 
     fn shell() -> ShellPaths {
-        let store = |name: &str| PathBuf::from(format!("/nix/store/aaaa-{name}"));
-        ShellPaths {
-            sway: store("sway-unwrapped-1.12"),
-            kwin: store("kwin-6.8.2"),
-            weston: store("weston-16.0.0"),
-            ffmpeg: store("ffmpeg-headless-9.0.2-bin"),
-            dbus: store("dbus-1.16.2"),
-            mesa: store("mesa-26.2.6"),
-            xwayland: store("xwayland-24.1.14"),
-            coreutils: store("coreutils-9.8"),
-            bash: store("bash-5.3"),
-            applications_path: "/nix/store/aaaa-vulkan-tools/bin:/nix/store/aaaa-mpv/bin"
-                .to_owned(),
-            fonts_conf: store("yuna-fonts.conf"),
-            xkb_config_root: store("xkeyboard-config/share/X11/xkb"),
-            library_path: "/nix/store/aaaa-libglvnd/lib".to_owned(),
-            egl_vendor: store("mesa-26.2.6/share/glvnd/egl_vendor.d/50_mesa.json"),
-        }
+        crate::testing::shell()
     }
 
     fn owner() -> Owner {
@@ -729,6 +887,7 @@ mod tests {
     fn the_sandboxs_environment_holds_none_of_the_owners() {
         let folders = Folders {
             root: PathBuf::from("/tmp/yuna-bench-1/sway-1"),
+            short_runtime: PathBuf::from("/tmp/yb-1-0"),
         };
         let variables = [("WLR_BACKENDS".to_owned(), "headless".to_owned())];
         let compositor =
@@ -770,6 +929,8 @@ mod tests {
             folder: PathBuf::from("/tmp/run"),
             log: PathBuf::from("/tmp/run/log"),
             compositor: true,
+            parent: None,
+            input: false,
         };
         let line = command_line(
             &launch,
@@ -796,6 +957,46 @@ mod tests {
         let line = command_line(&client, &shell(), Path::new("/bench"), Path::new("/x"));
         assert!(!line.contains(&"enter-core".to_owned()));
         assert!(!line.iter().any(|word| word.contains("dbus-run-session")));
+        // A compositor inside a parent is started by `parent`, which reads its launch's file.
+        let inside = Launch {
+            compositor: true,
+            parent: Some(Parent {
+                command: vec!["/nix/store/aaaa-dwl/bin/dwl".to_owned()],
+                variables: vec![("WLR_BACKENDS".to_owned(), "headless".to_owned())],
+                runtime: PathBuf::from("/tmp/run/runtime/parent"),
+                log: PathBuf::from("/tmp/run/parent.log"),
+            }),
+            ..client
+        };
+        let line = command_line(&inside, &shell(), Path::new("/bench"), Path::new("/x"));
+        assert!(!line.contains(&"enter-core".to_owned()));
+        assert!(line.iter().any(|word| word.contains("dbus-run-session")));
+        assert_eq!(
+            line[line.len() - 3..],
+            ["/bench", "parent", "/tmp/run/parent-launch.json"]
+        );
+    }
+
+    #[test]
+    fn a_parents_launch_is_read_back_as_written() {
+        let launch = ParentLaunch {
+            parent: Parent {
+                command: vec!["/nix/store/aaaa-dwl/bin/dwl".to_owned()],
+                variables: vec![("WLR_BACKENDS".to_owned(), "headless".to_owned())],
+                runtime: PathBuf::from("/tmp/run/runtime/parent"),
+                log: PathBuf::from("/tmp/run/parent.log"),
+            },
+            compositor: vec!["/nix/store/aaaa-hyprland/bin/start-hyprland".to_owned()],
+        };
+        let text = serde_json::to_string(&launch).unwrap();
+        assert_eq!(serde_json::from_str::<ParentLaunch>(&text).unwrap(), launch);
+        // Its Wayland socket is found by its name, its lock left out.
+        let runtime = crate::testing::folder("parent-socket");
+        assert_eq!(wayland_socket_in(&runtime), None);
+        fs::write(runtime.join("wayland-0.lock"), "").unwrap();
+        fs::write(runtime.join("wayland-0"), "").unwrap();
+        assert_eq!(wayland_socket_in(&runtime), Some(runtime.join("wayland-0")));
+        assert!(run_parent(&runtime.join("missing.json")).is_err());
     }
 
     #[test]
@@ -891,8 +1092,27 @@ mod tests {
         assert!(check(&Proc::at(&proc_root), &[&scope], &owner(), &sockets).is_empty());
     }
 
+    /// Set in the process that runs the close-on-exec test alone.
+    const ALONE: &str = "YUNA_BENCH_TEST_ALONE";
+
     #[test]
     fn a_child_holds_no_inherited_descriptor_above_2() {
+        // `close_inherited_on_exec` holds only in a process whose threads open no descriptor
+        // meanwhile, as the bench's own start: this test runs again alone in a process of its
+        // own, one test on one thread, not beside the others.
+        if std::env::var_os(ALONE).is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sandbox::tests::a_child_holds_no_inherited_descriptor_above_2",
+                    "--test-threads=1",
+                ])
+                .env(ALONE, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "the test alone failed: {status}");
+            return;
+        }
         // A descriptor opened without close-on-exec, as run.sh's lock is inherited.
         let folder = crate::testing::folder("inherited");
         let path = folder.join("lock");

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::lock;
 use crate::machine::MachineInfo;
-use crate::recipes::{Configuration, RECIPES};
+use crate::recipes::{self, Configuration};
 use crate::record::{Case, FORMAT, RunFile};
 use crate::report;
 use crate::sandbox::{self, RENDER_NODE, ShellPaths};
@@ -23,7 +23,8 @@ through the same scenarios with the same clients, and reads their costs from out
   yuna-bench report <file.json>...  print the summary of run files, in Markdown
 
 Options of headless (each list separated by commas):
-  --compositor <list>     sway, sway-vulkan, kwin, yuna (default: sway,kwin,yuna)
+  --compositor <list>     sway, sway-vulkan, kwin, yuna, dwl, mango, umbriel, hyprland, mutter
+                          (default: sway,kwin,yuna); niri and cosmic-comp run on the tour only
   --scenario <list>       rest, game, film, pacing, motion (default: all)
   --windows <list>        rest's still windows (default: 1,15,150)
   --configuration <list>  as-shipped, equal-work (default: both)
@@ -130,7 +131,10 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
         }
     }
     for name in &options.compositors {
-        if !RECIPES.iter().any(|recipe| recipe.name == name) {
+        if let Some(rival) = recipes::tour_only(name) {
+            return Err(format!("{name} runs on the tour only: {}", rival.why));
+        }
+        if recipes::recipe(name).is_none() {
             return Err(format!("no recipe {name:?}"));
         }
     }
@@ -259,8 +263,6 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
             .map_or(0, |d| d.as_nanos() as u64)
     });
     // In /tmp itself, not the shell's TMPDIR, which `nix develop` removes when it ends: the folder
-    // outlives the bench when it is kept, and its sockets' paths stay under Unix's 108 bytes.
-    // In /tmp itself, not the shell's TMPDIR, which `nix develop` removes when it ends: the folder
     // outlives the bench when it is kept, and its sockets' paths stay under Unix's 108 bytes. Made
     // fresh, the user's alone: an existing one is refused rather than reused.
     let started_s = started
@@ -380,7 +382,18 @@ pub fn main(arguments: &[String]) -> ExitCode {
                 .and_then(crate::still::run)
                 .map(|()| ExitCode::SUCCESS),
             [frames] if frames == "frames" => crate::capture::run().map(|()| ExitCode::SUCCESS),
-            _ => Err("client takes `still --windows <n>` or `frames`".to_owned()),
+            [keys] if keys == "keys" => crate::keys::run().map(|()| ExitCode::SUCCESS),
+            _ => Err("client takes `still --windows <n>`, `frames` or `keys`".to_owned()),
+        },
+        Some("parent") => match arguments.get(1..).unwrap_or_default() {
+            [file] => sandbox::run_parent(Path::new(file)).map(|ended_well| {
+                if ended_well {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
+            }),
+            _ => Err("parent takes <file>".to_owned()),
         },
         Some("enter-core") => match arguments.get(1).map(String::as_str) {
             Some("--") => sandbox::enter_core(&arguments[2..]).map(|()| ExitCode::SUCCESS),
@@ -428,7 +441,10 @@ mod tests {
         .unwrap();
         assert_eq!(options.compositors, ["sway", "yuna"]);
         assert_eq!(options.windows, [15]);
-        assert!(read(&["--compositor", "hyprland"]).is_err());
+        assert!(read(&["--compositor", "gamescope"]).is_err());
+        let tour_only = read(&["--compositor", "niri"]).unwrap_err();
+        assert!(tour_only.contains("tour only"), "{tour_only}");
+        assert!(read(&["--compositor", "dwl,hyprland,mutter"]).is_ok());
         assert!(read(&["--scenario", "sleep"]).is_err());
         assert!(read(&["--runs", "0"]).is_err());
         assert!(read(&["--windows", "0"]).is_err());

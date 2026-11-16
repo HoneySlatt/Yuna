@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use crate::cgroup::Cgroup;
 use crate::drm::{self, DrmFile};
 use crate::procfs::Proc;
+use crate::sandbox::FORBIDDEN_NODES;
 
 /// How often a window reads its processes: a thread that ends loses at most this much of its
 /// counts.
@@ -71,9 +72,10 @@ pub struct Sample {
     pub threads: BTreeMap<ThreadId, ThreadCounts>,
     /// Each DRM client's engines' busy times in nanoseconds, by [`DrmFile::client_key`].
     pub drm: BTreeMap<String, BTreeMap<String, u64>>,
-    /// The `/dev/dri/card*` nodes the processes held open, as `pid node`: a compositor that holds
-    /// one may reach the owner's display, and is refused (`sandbox`).
-    pub cards: Vec<String>,
+    /// The forbidden nodes the processes held open, each with its process: a card node, which
+    /// drives the owner's display, or an input device ([`FORBIDDEN_NODES`]). A case that holds
+    /// one is refused.
+    pub forbidden: Vec<(u32, String)>,
 }
 
 impl Sample {
@@ -99,8 +101,11 @@ impl Sample {
             }
             for (_, target) in proc.open_files(pid) {
                 let node = target.to_string_lossy();
-                if node.starts_with("/dev/dri/card") {
-                    sample.cards.push(format!("{pid} {node}"));
+                if FORBIDDEN_NODES
+                    .iter()
+                    .any(|forbidden| node.starts_with(forbidden))
+                {
+                    sample.forbidden.push((pid, node.into_owned()));
                 }
             }
         }
@@ -122,7 +127,7 @@ pub struct Window {
     live: BTreeSet<ThreadId>,
     drm_baseline: BTreeMap<String, BTreeMap<String, u64>>,
     drm_last: BTreeMap<String, BTreeMap<String, u64>>,
-    cards: BTreeSet<String>,
+    forbidden: BTreeSet<(u32, String)>,
     readings: usize,
 }
 
@@ -167,7 +172,7 @@ impl Window {
         for (client, engines) in sample.drm {
             self.drm_last.insert(client, engines);
         }
-        self.cards.extend(sample.cards);
+        self.forbidden.extend(sample.forbidden);
     }
 
     /// How many readings it holds.
@@ -222,9 +227,9 @@ impl Window {
         self.drm_last.len()
     }
 
-    /// The `/dev/dri/card*` nodes any reading found open, as `pid node`.
-    pub fn cards(&self) -> Vec<String> {
-        self.cards.iter().cloned().collect()
+    /// The forbidden nodes any reading found open, each with its process.
+    pub fn forbidden(&self) -> Vec<(u32, String)> {
+        self.forbidden.iter().cloned().collect()
     }
 }
 
@@ -281,12 +286,12 @@ impl Watch {
         }
     }
 
-    /// The `/dev/dri/card*` nodes found open so far, in any group.
-    pub fn cards(&self) -> Vec<String> {
+    /// The forbidden nodes found open so far, in any group, each with its process.
+    pub fn forbidden(&self) -> Vec<(u32, String)> {
         let windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
         windows
             .iter()
-            .flat_map(|(_, window)| window.cards())
+            .flat_map(|(_, window)| window.forbidden())
             .collect()
     }
 
@@ -311,6 +316,8 @@ pub fn drm_now(proc: &Proc, group: &Cgroup) -> Vec<DrmFile> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     fn thread(cpu_ns: u64, voluntary: u64, involuntary: u64) -> ThreadCounts {
@@ -367,6 +374,40 @@ mod tests {
         let total = window.total();
         assert_eq!(total.voluntary, 10 + 3);
         assert_eq!(total.cpu_ns, 40 + 10);
+    }
+
+    #[test]
+    fn a_reading_finds_every_forbidden_node_the_checks_refuse() {
+        let root = crate::testing::folder("sampler-forbidden");
+        fs::create_dir_all(root.join("10/fd")).unwrap();
+        fs::write(root.join("10/comm"), "compositor\n").unwrap();
+        for (fd, node) in [
+            ("3", "/dev/dri/renderD128"),
+            ("4", "/dev/dri/card1"),
+            ("5", "/dev/input/event3"),
+            ("6", "/dev/uinput"),
+            ("7", "/dev/hidraw0"),
+        ] {
+            std::os::unix::fs::symlink(node, root.join("10/fd").join(fd)).unwrap();
+        }
+        let sample = Sample::take(&Proc::at(&root), &[10]);
+        let nodes: Vec<&str> = sample
+            .forbidden
+            .iter()
+            .map(|(_, node)| node.as_str())
+            .collect();
+        assert_eq!(
+            nodes,
+            [
+                "/dev/dri/card1",
+                "/dev/input/event3",
+                "/dev/uinput",
+                "/dev/hidraw0"
+            ]
+        );
+        assert!(sample.forbidden.iter().all(|(pid, _)| *pid == 10));
+        let window = Window::start(sample);
+        assert_eq!(window.forbidden().len(), 4);
     }
 
     #[test]

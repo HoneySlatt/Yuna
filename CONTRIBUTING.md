@@ -35,8 +35,10 @@ The shell gives:
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
 
-A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths:
-sway, KWin, weston, ffmpeg and D-Bus, in `YUNA_BENCH_*` variables. CI never fetches it.
+A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths, in
+`YUNA_BENCH_*` variables: sway, KWin, dwl and mango (each also built without XWayland, for equal
+work), Umbriel (built from its source at the revision `flake.lock` pins, the flake's `umbriel`
+input), Hyprland, Mutter, wlr-randr, weston, ffmpeg and D-Bus. CI never fetches it.
 
 Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
 `yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
@@ -111,10 +113,12 @@ nix develop -c target/release/examples/xwayland_time --area-filter
 
 The rivals are measured with `crates/yuna-bench`
 ([ADR-0071](docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md),
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench)). It runs sway, KWin and Yuna
-headless on the GPU's render node, at 3840 × 2160, 240 Hz and scale 1.5, each in a sandbox of its
-own, through the same scenarios, and reads their costs from outside. It needs the bench shell and
-the user's systemd manager, which makes each sandbox (`systemd-run --user --scope`):
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench), where a table gives how each
+compositor runs). It runs sway, KWin, Yuna, dwl, mango, Umbriel, Hyprland and Mutter headless on
+the GPU's render node, at 3840 × 2160, 240 Hz and scale 1.5, each in a sandbox of its own,
+through the same scenarios, and reads their costs from outside. niri and cosmic-comp cannot run
+headless: they are measured on the owner's tour alone. It needs the bench shell and the user's
+systemd manager, which makes each sandbox (`systemd-run --user --scope`):
 
 ```sh
 nix develop .#bench -c cargo run --release -p yuna-bench -- headless --compositor sway --scenario rest
@@ -122,13 +126,14 @@ nix develop .#bench -c cargo run --release -p yuna-bench -- report target/yuna-b
 ```
 
 `headless` takes lists separated by commas: `--compositor` (`sway`, `sway-vulkan`, `kwin`,
-`yuna`), `--scenario` (`rest`, `game`, `film`, `pacing`, `motion`), `--windows` (`rest`'s, 1, 15
-and 150 by default) and `--configuration` (`as-shipped`, `equal-work`); `--runs` (3 by
-default), run in a random order whose seed it records, `--seed` to replay one. `--seconds` makes
-every measured window shorter, to try it: such figures are not comparable. With Yuna among
-the compositors, it builds it for release first. `rest` with 15 windows and `game`, for all three
-in both configurations, once, took 10 minutes; everything, three times, should take close to two
-hours, not measured yet. It writes `target/yuna-bench/run-<time>.json`, the run file, and its summary in
+`yuna`, `dwl`, `mango`, `umbriel`, `hyprland`, `mutter`; `sway,kwin,yuna` by default),
+`--scenario` (`rest`, `game`, `film`, `pacing`, `motion`), `--windows` (`rest`'s, 1, 15 and 150
+by default) and `--configuration` (`as-shipped`, `equal-work`); `--runs` (3 by default), run in a
+random order whose seed it records, `--seed` to replay one. `--seconds` makes every measured
+window shorter, to try it: such figures are not comparable. With Yuna among the compositors, it
+builds it for release first. `rest` with 15 windows, `game` and `motion`, once each for dwl,
+mango, Umbriel, Hyprland and Mutter at equal work, took 13 minutes on 2026-11-16; a whole run,
+every recipe, configuration and scenario three times, has not been timed. It writes `target/yuna-bench/run-<time>.json`, the run file, and its summary in
 Markdown beside it (`--out` for another folder); it keeps the run's folder of logs in
 `/tmp/yuna-bench-<pid>-<time>` when a case fails, or with `--keep`. It takes the agents' exclusive
 lock itself, waiting for any other exclusive run; under `run.sh --exclusive` it uses the lock its
@@ -136,7 +141,9 @@ parent holds; no descriptor it inherited reaches a compositor or a client. It re
 compositor or clients open a `/dev/dri/card*` node or an input device, or reach the owner's
 runtime folder or an X11 display outside their sandbox, and never runs anything on the owner's
 display. Killed outright, it leaves its sandboxes running until its next start
-kills them.
+kills them. The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw at about
+250 Hz for the 240 Hz mode: wlroots waits whole milliseconds between frames, 4 ms. The summary
+therefore ranks costs a second only between compositors whose achieved rates are within 1 %.
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`

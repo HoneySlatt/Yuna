@@ -14,6 +14,9 @@ publish.workspace = true
 # ext-image-copy-capture.
 wayland-client.workspace = true
 wayland-protocols.workspace = true
+# Already in Cargo.lock, through Smithay, MIT: `zwp_virtual_keyboard_v1`, through which the bench
+# types its keys into a compositor driven by its keys alone, dwl, in its own sandbox.
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 # The run's file, versioned JSON, and mpv's IPC.
 serde.workspace = true
 serde_json.workspace = true

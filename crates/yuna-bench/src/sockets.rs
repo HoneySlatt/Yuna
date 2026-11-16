@@ -8,7 +8,10 @@
 
 use std::collections::BTreeMap;
 
-use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketType, netlink, recv, sendto, socket};
+use rustix::net::{
+    AddressFamily, RecvFlags, SendFlags, SocketFlags, SocketType, netlink, recv, sendto,
+    socket_with,
+};
 
 /// Each Unix socket's path and peer, by its inode.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -84,9 +87,12 @@ const MESSAGE: usize = 16;
 
 /// Asks the kernel for every Unix socket, with its name and its peer.
 fn read_diagnostics() -> std::io::Result<SocketTable> {
-    let fd = socket(
+    // Close-on-exec, as every descriptor of the bench: a child the bench starts meanwhile, on
+    // another thread, must not inherit it.
+    let fd = socket_with(
         AddressFamily::NETLINK,
         SocketType::DGRAM,
+        SocketFlags::CLOEXEC,
         Some(netlink::SOCK_DIAG),
     )?;
     sendto(

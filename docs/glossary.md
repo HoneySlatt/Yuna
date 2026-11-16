@@ -2,6 +2,10 @@
 
 Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
+- **Achieved rate** (bench): the frames a second a compositor really drew in a cost window: its
+  own exact count, else in `pacing` the frames it presented, else the frames window's capture, a
+  lower bound. Costs a second are ranked only between compositors whose achieved rates are within
+  1 %: wlroots' headless backend draws at 250 Hz for a 240 Hz mode.
 - **Activation token**: a string a client asks Yuna for and hands on, a launcher to the program
   it starts, so that a window can be activated with it (`xdg-activation-v1`); valid only when
   asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s.
@@ -120,6 +124,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   decays to 0 on a spring ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **Override-redirect**: said of an X11 window its client places itself, past its manager:
   menus, tooltips, a drag's icon.
+- **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
+  stack, not the core: Hyprland's headless dwl, which lends it a render node.
 - **Pairing**: matching an X11 window with the Wayland surface Xwayland draws it into, through
   the serial `xwayland-shell-v1` gives both, in either order.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
@@ -176,6 +182,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
   includes, reloaded live; its format is a public interface
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
+  one after another ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+  A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.
 - **Urgent**: said of a window that asked for the focus and did not get it, because its request
@@ -184,6 +193,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Variant**: a named set of settings in the configuration, applied over it and switched on
   command, such as the shell's compact mode
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+- **Virtual keyboard** (bench): the bench's client that types key chords through
+  `zwp_virtual_keyboard_v1` into one compositor's sandboxed instance, for one driven by its keys
+  alone, dwl; its keys reach no other compositor.
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed

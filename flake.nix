@@ -10,10 +10,23 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Umbriel, a rival the bench measures, at the revision docs/survey.md read. Its source alone:
+    # the bench shell builds Umbriel's own package definition (nix/package.nix) with this nixpkgs,
+    # as its flake's `packages.default` does with its own, so that it draws with the bench's Mesa
+    # and adds no input of its own to the lock. Fetched only by the bench shell.
+    umbriel = {
+      url = "github:noctalia-dev/umbriel/d171ccb31628da65b1beee3221b37a2758d553b3";
+      flake = false;
+    };
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      nixpkgs,
+      rust-overlay,
+      umbriel,
+      ...
+    }:
     let
       # Linux only (ADR-0006); the machines the owner develops on are x86_64.
       system = "x86_64-linux";
@@ -108,6 +121,20 @@
             # shipped configuration, in etc/sway, draws no wallpaper.
             YUNA_BENCH_SWAY = "${pkgs.sway-unwrapped}";
             YUNA_BENCH_KWIN = "${pkgs.kdePackages.kwin}";
+            # dwl and mango as nixpkgs ships them, with XWayland, and built without it for the
+            # equal-work configuration: neither has a switch to turn it off at run time.
+            YUNA_BENCH_DWL = "${pkgs.dwl}";
+            YUNA_BENCH_DWL_NO_XWAYLAND = "${pkgs.dwl.override { enableXWayland = false; }}";
+            YUNA_BENCH_MANGO = "${pkgs.mango}";
+            YUNA_BENCH_MANGO_NO_XWAYLAND = "${pkgs.mango.override { enableXWayland = false; }}";
+            YUNA_BENCH_UMBRIEL = "${pkgs.callPackage "${umbriel}/nix/package.nix" {
+              rev = umbriel.shortRev;
+            }}";
+            YUNA_BENCH_HYPRLAND = "${pkgs.hyprland}";
+            YUNA_BENCH_MUTTER = "${pkgs.mutter}";
+            # Sets dwl's output to the bench's mode, through wlr-output-management, and reads the
+            # outputs of the compositors on wlroots.
+            YUNA_BENCH_WLR_RANDR = "${pkgs.wlr-randr}";
             # weston-presentation-shm, the pacing scenario's client.
             YUNA_BENCH_WESTON = "${pkgs.weston}";
             # Makes the film scenario's clip.

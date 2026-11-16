@@ -8,18 +8,22 @@
 //!   each of its frames is one the compositor shows. [`Durations::window`] measured after
 //!   [`Durations::warm_up`]: CPU and GPU a frame, its frames counted by mpv in the window itself.
 //! - `film`: mpv fullscreen playing a clip the bench makes, 3840 × 2160 at 24 frames a second;
-//!   its dropped and delayed frames from its own counters, over its IPC.
+//!   its dropped and delayed frames from its own counters, over its IPC. Both clips are long
+//!   enough never to loop inside a window ([`Clip::seconds`]).
 //! - `pacing`: `weston-presentation-shm` in its small window; its presentation log.
 //! - `motion`: 5 still windows, the recipe's actions once each, each once the last settled, after
-//!   a round to warm up.
+//!   a round to warm up. A compositor driven by its keys alone gets the bench's virtual keyboard
+//!   (`keys`), a client of its own.
 //!
 //! A window's figures are its costs over its length, exact. A cost a frame is given only where
-//! the window's own frames were counted exactly in it: by KWin's frame log, or by mpv in `game`.
-//! A compositor counted by `ext-image-copy-capture` is counted in a second window apart, the same
-//! scenario again, so that the copies never weigh on the costs; that count is a lower bound,
-//! since the counter misses frames that come faster than its copies, and no cost a frame comes
-//! from it. Frames counted headless compare only between compositors on the same backend
-//! (ADR-0071).
+//! the window's own frames were counted exactly in it: by KWin's frame log, by Umbriel's count of
+//! its commits, or by mpv in `game`. A compositor counted by `ext-image-copy-capture` is counted
+//! in a second window apart, the same scenario again, so that the copies never weigh on the
+//! costs; that count is a lower bound, since the counter misses frames that come faster than its
+//! copies, and no cost a frame comes from it. Mutter's are counted by mpv alone. Frames counted
+//! headless compare only between compositors on the same backend (ADR-0071). Each cost window
+//! records the rate the compositor really drew at ([`achieved_rate`]), by which its costs a
+//! second compare.
 //!
 //! Before any window, once its clients are up, every scenario checks the sandbox: the
 //! compositor's scope and each client's (`sandbox::check`). A case that breaks its rules, or whose
@@ -27,6 +31,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -39,7 +44,7 @@ use crate::drm;
 use crate::logs;
 use crate::machine::{DRAWING_ENGINES, MachineWatch};
 use crate::procfs::{self, Proc};
-use crate::recipes::{self, Action, Configuration, Frames, Plan, Prepared, Ready, Recipe};
+use crate::recipes::{self, Action, Configuration, Frames, Output, Plan, Prepared, Ready, Recipe};
 use crate::record::{
     self, Case, CaseRun, ClientUsage, CompositorInfo, Figure, Figures, Memory, MemorySum, Phase,
     ProcessMemory, RawFdinfo,
@@ -167,6 +172,8 @@ struct Running {
     wayland_display: String,
     sway_socket: Option<PathBuf>,
     output: Option<String>,
+    /// The short link to its runtime folder it was given, if it was: removed at its stop.
+    runtime_link: Option<PathBuf>,
 }
 
 impl Running {
@@ -308,6 +315,12 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         return run;
     }
     run.memory.push(memory(bench, &running, "ready"));
+    // Hyprland 0.57.1 asks for SCHED_RR on its main thread (src/init/initHelpers.cpp).
+    let realtime_at_ready = realtime_threads(bench, &running);
+    run.notes.push(format!(
+        "the core's threads under a realtime policy, at ready: {}",
+        listed(&realtime_at_ready)
+    ));
     let measured = match case.scenario.as_str() {
         "rest" => rest(bench, &running, case.windows.unwrap_or(1), &mut run),
         "game" => game(bench, &running, &mut run),
@@ -316,6 +329,13 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         "motion" => motion(bench, &running, &mut run),
         other => Err(Stop::Failed(format!("no scenario {other}"))),
     };
+    let realtime_at_end = realtime_threads(bench, &running);
+    if realtime_at_end != realtime_at_ready {
+        run.notes.push(format!(
+            "the core's threads under a realtime policy, at the end: {}",
+            listed(&realtime_at_end)
+        ));
+    }
     run.stopped = Some(stop_compositor(bench, &mut running));
     if let Some(measured) = record_outcome(&mut run, measured) {
         let output = finish_frames(recipe, &running, measured, &mut run);
@@ -333,6 +353,41 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         })
         .flatten();
     run
+}
+
+/// The threads of the compositor's core under a realtime policy, as `Hyprland's Hyprland:
+/// SCHED_RR, priority 1`, `× 2` after those that are several.
+fn realtime_threads(bench: &Bench, running: &Running) -> Vec<String> {
+    let mut threads: BTreeMap<String, usize> = BTreeMap::new();
+    for pid in running.sandboxed.core().processes() {
+        let process = bench.proc.name(pid).unwrap_or_default();
+        for (thread, scheduling) in bench.proc.scheduling(pid) {
+            if procfs::REALTIME_POLICIES.contains(&scheduling.policy) {
+                *threads
+                    .entry(format!(
+                        "{process}'s {thread}: {}, priority {}",
+                        scheduling.policy, scheduling.priority
+                    ))
+                    .or_default() += 1;
+            }
+        }
+    }
+    threads
+        .into_iter()
+        .map(|(thread, count)| match count {
+            1 => thread,
+            count => format!("{thread} × {count}"),
+        })
+        .collect()
+}
+
+/// `items` in a sentence; `none` when there are none.
+fn listed(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_owned()
+    } else {
+        items.join("; ")
+    }
 }
 
 /// Starts `recipe` in `configuration`, in a sandbox of its own under the run's folder, and waits
@@ -357,6 +412,10 @@ fn start_compositor(
         }
         fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     }
+    if let Some(link) = &plan.runtime_link {
+        std::os::unix::fs::symlink(folders.runtime(), link)
+            .map_err(|e| format!("{}: {e}", link.display()))?;
+    }
     let mut command = vec![plan.program.to_string_lossy().into_owned()];
     command.extend(plan.arguments.iter().cloned());
     let launch = Launch {
@@ -366,6 +425,8 @@ fn start_compositor(
         folder: folders.root.clone(),
         log: folders.root.join("compositor.log"),
         compositor: true,
+        parent: plan.parent.clone(),
+        input: false,
     };
     let started = Instant::now();
     let sandboxed = Sandboxed::start(&launch, &bench.shell, &bench.program)?;
@@ -376,18 +437,29 @@ fn start_compositor(
         wayland_display: String::new(),
         sway_socket: None,
         output: None,
+        runtime_link: plan.runtime_link.clone(),
     };
-    if let Err(error) = wait_ready(bench, &mut running) {
-        let stopped = stop_compositor(bench, &mut running);
-        let log = running.log();
-        let tail: Vec<&str> = log.lines().rev().take(15).collect();
-        return Err(format!(
-            "{} was not ready: {error}; it {stopped}; its log ends:\n{}",
-            recipe.name,
-            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
-        ));
+    let ready = wait_ready(bench, &mut running).and_then(|()| {
+        let ready_after = started.elapsed();
+        for action in recipe.setup {
+            send(&bench.shell, &running, None, *action)?;
+        }
+        running.output = wait_output(bench, &running)?;
+        Ok(ready_after)
+    });
+    match ready {
+        Ok(ready_after) => Ok((running, plan, ready_after)),
+        Err(error) => {
+            let stopped = stop_compositor(bench, &mut running);
+            let log = running.log();
+            let tail: Vec<&str> = log.lines().rev().take(15).collect();
+            Err(format!(
+                "{} was not ready: {error}; it {stopped}; its log ends:\n{}",
+                recipe.name,
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            ))
+        }
     }
-    Ok((running, plan, started.elapsed()))
 }
 
 /// Waits until the compositor's Wayland socket is there and its recipe says it is ready.
@@ -406,14 +478,12 @@ fn wait_ready(bench: &Bench, running: &mut Running) -> Result<(), String> {
                     .sway_socket
                     .as_ref()
                     .and_then(|ipc| sway_output(&bench.shell, ipc))
-                    .map(|output| running.output = Some(output))
                     .is_some()
             }
             Ready::BusName(name) => bus_has(&bench.shell, &running.bus(), name),
-            Ready::Line(prefix) => {
-                let log = running.log();
-                running.output = logs::yuna_output(&log);
-                log.lines().any(|line| line.starts_with(prefix))
+            Ready::Line(prefix) => running.log().lines().any(|line| line.starts_with(prefix)),
+            Ready::Answers(action) => {
+                socket.is_some() && send(&bench.shell, running, None, action).is_ok()
             }
         };
         if ready && let Some(socket) = socket {
@@ -427,12 +497,102 @@ fn wait_ready(bench: &Bench, running: &mut Running) -> Result<(), String> {
     }
 }
 
+/// What reading a compositor's output gave.
+enum Reading {
+    /// The output, as `3840x2160@240.000,1.5`.
+    Found(String),
+    /// Not there yet, and why.
+    NotYet(String),
+    /// Read once the case has ended, from the compositor's frame log.
+    Later,
+}
+
+/// The output the compositor made, read back as its recipe says once its setup is done; waits
+/// up to 15 s for one it makes after it is ready, then fails.
+fn wait_output(bench: &Bench, running: &Running) -> Result<Option<String>, String> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match read_output(bench, running) {
+            Reading::Found(output) => return Ok(Some(output)),
+            Reading::Later => return Ok(None),
+            Reading::NotYet(why) if Instant::now() > deadline => {
+                return Err(format!("its output: {why}"));
+            }
+            Reading::NotYet(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+/// Reads the output the compositor made, once.
+fn read_output(bench: &Bench, running: &Running) -> Reading {
+    let shell = &bench.shell;
+    let answer = |action: Action| -> Result<String, String> {
+        let output = output_within(tool(shell, running, action)?, TOOL_PATIENCE)?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let found = |output: Option<String>, what: &str| match output {
+        Some(output) => Reading::Found(output),
+        None => Reading::NotYet(format!("{what} lists no such output")),
+    };
+    match running.recipe.output {
+        Output::Swaymsg => found(
+            running
+                .sway_socket
+                .as_ref()
+                .and_then(|ipc| sway_output(shell, ipc)),
+            "swaymsg",
+        ),
+        Output::YunaLog => found(logs::yuna_output(&running.log()), "its log"),
+        Output::KwinLog => Reading::Later,
+        Output::WlrRandr => match answer(Action::WlrRandr(&["--json"])) {
+            Ok(text) => found(logs::wlr_randr_output(&text, "HEADLESS-1"), "wlr-randr"),
+            Err(error) => Reading::NotYet(error),
+        },
+        Output::Umbriel => match answer(Action::Umbriel(&["outputs", "--json"])) {
+            Ok(text) => found(logs::umbriel_output(&text, "HEADLESS-1"), "umbriel outputs"),
+            Err(error) => Reading::NotYet(error),
+        },
+        Output::Hyprctl => match answer(Action::Hyprctl(&["-j", "monitors", "all"])) {
+            Ok(text) => found(
+                logs::hyprctl_output(&text, "HEADLESS-1"),
+                "hyprctl monitors",
+            ),
+            Err(error) => Reading::NotYet(error),
+        },
+        Output::Gdctl => {
+            let mut command = Command::new(shell.mutter.join("bin/gdctl"));
+            command.arg("show").env_clear().env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={}", running.bus().display()),
+            );
+            match output_within(command, TOOL_PATIENCE) {
+                Ok(output) => found(
+                    logs::gdctl_output(&String::from_utf8_lossy(&output.stdout)),
+                    "gdctl show",
+                ),
+                Err(error) => Reading::NotYet(error),
+            }
+        }
+    }
+}
+
+/// Umbriel's count of its output's commits now, from `umbriel outputs --json`.
+fn umbriel_commits(bench: &Bench, running: &Running) -> Option<u64> {
+    let command = tool(
+        &bench.shell,
+        running,
+        Action::Umbriel(&["outputs", "--json"]),
+    )
+    .ok()?;
+    let output = output_within(command, TOOL_PATIENCE).ok()?;
+    logs::umbriel_commits(&String::from_utf8_lossy(&output.stdout), "HEADLESS-1")
+}
+
 /// The name of the Wayland socket in `runtime`.
 fn wayland_socket(runtime: &Path) -> Option<String> {
-    let path = file_in(runtime, "wayland-", "")?;
-    path.file_name()?
+    sandbox::wayland_socket_in(runtime)?
+        .file_name()?
         .to_str()
-        .filter(|name| !name.ends_with(".lock"))
         .map(str::to_owned)
 }
 
@@ -456,15 +616,13 @@ fn file_in(folder: &Path, prefix: &str, suffix: &str) -> Option<PathBuf> {
 
 /// sway's output, as `swaymsg -t get_outputs` reports it, once it is active.
 fn sway_output(shell: &ShellPaths, ipc: &Path) -> Option<String> {
-    let output = Command::new(shell.sway.join("bin/swaymsg"))
+    let mut command = Command::new(shell.sway.join("bin/swaymsg"));
+    command
         .arg("-s")
         .arg(ipc)
         .args(["-r", "-t", "get_outputs"])
-        .env_clear()
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+        .env_clear();
+    let output = output_within(command, TOOL_PATIENCE).ok()?;
     let outputs: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let headless = outputs
         .as_array()?
@@ -482,7 +640,8 @@ fn sway_output(shell: &ShellPaths, ipc: &Path) -> Option<String> {
 
 /// Whether `name` is owned on the bus at `bus`.
 fn bus_has(shell: &ShellPaths, bus: &Path, name: &str) -> bool {
-    Command::new(shell.dbus.join("bin/dbus-send"))
+    let mut command = Command::new(shell.dbus.join("bin/dbus-send"));
+    command
         .arg(format!("--bus=unix:path={}", bus.display()))
         .args([
             "--print-reply",
@@ -491,36 +650,159 @@ fn bus_has(shell: &ShellPaths, bus: &Path, name: &str) -> bool {
             "org.freedesktop.DBus.NameHasOwner",
         ])
         .arg(format!("string:{name}"))
-        .env_clear()
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+        .env_clear();
+    output_within(command, TOOL_PATIENCE)
         .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("boolean true"))
 }
 
-/// Sends `action` to the compositor.
-fn send(shell: &ShellPaths, running: &Running, action: Action) -> Result<(), String> {
-    let output = match action {
-        Action::Sway(command) => {
-            let ipc = running.sway_socket.as_ref().ok_or("no sway socket")?;
-            Command::new(shell.sway.join("bin/swaymsg"))
-                .arg("-s")
-                .arg(ipc)
-                .arg(command)
-                .env_clear()
-                .stdin(Stdio::null())
-                .output()
+/// The longest one of a compositor's own tools may take to answer.
+const TOOL_PATIENCE: Duration = Duration::from_secs(10);
+
+/// Runs `command`, its standard input closed, and gives what it wrote once it has ended; kills
+/// it if it has not within `patience`, so that a tool that hangs never stops the bench.
+fn output_within(mut command: Command, patience: Duration) -> Result<std::process::Output, String> {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{program}: {e}"))?;
+    // Read apart, so that a tool that writes much never blocks on a full pipe.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + patience;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!(
+                    "{program} gave no answer in {} s",
+                    patience.as_secs()
+                ));
+            }
+            Err(error) => break Err(format!("{program}: {error}")),
         }
-        Action::KwinBus(method, arguments) => Command::new(shell.dbus.join("bin/dbus-send"))
-            .arg(format!("--bus=unix:path={}", running.bus().display()))
-            .args(["--print-reply", "--dest=org.kde.KWin", "/KWin"])
-            .arg(format!("org.kde.KWin.{method}"))
-            .args(arguments)
-            .env_clear()
-            .stdin(Stdio::null())
-            .output(),
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    Ok(std::process::Output {
+        status: status?,
+        stdout,
+        stderr,
+    })
+}
+
+/// Reads `pipe` to its end on a thread of its own.
+fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
+/// The command that runs `action`'s tool against the compositor of `running`, its environment
+/// cleared but for the socket it needs, which is in the case's runtime folder; an error for keys,
+/// which no tool types.
+fn tool(shell: &ShellPaths, running: &Running, action: Action) -> Result<Command, String> {
+    tool_at(
+        shell,
+        &Reach {
+            folders: &running.folders,
+            sway_socket: running.sway_socket.as_deref(),
+            runtime_link: running.runtime_link.as_deref(),
+        },
+        action,
+    )
+}
+
+/// Where a compositor's tools reach it: its folders, and the sockets the bench found or made.
+struct Reach<'a> {
+    folders: &'a Folders,
+    sway_socket: Option<&'a Path>,
+    runtime_link: Option<&'a Path>,
+}
+
+/// The command of [`tool`] for the compositor `reach` finds.
+fn tool_at(shell: &ShellPaths, reach: &Reach, action: Action) -> Result<Command, String> {
+    let runtime = reach.folders.runtime();
+    let socket = |prefix: &str, suffix: &str| {
+        file_in(&runtime, prefix, suffix)
+            .ok_or_else(|| format!("no {prefix}*{suffix} socket in the runtime folder"))
+    };
+    let cleared = |program: PathBuf| {
+        let mut command = Command::new(program);
+        command.env_clear();
+        command
+    };
+    let mut command;
+    match action {
+        Action::Sway(words) => {
+            let ipc = reach.sway_socket.ok_or("no sway socket")?;
+            command = cleared(shell.sway.join("bin/swaymsg"));
+            command.arg("-s").arg(ipc).arg(words);
+        }
+        Action::KwinBus(method, arguments) => {
+            command = cleared(shell.dbus.join("bin/dbus-send"));
+            command
+                .arg(format!("--bus=unix:path={}", reach.folders.bus().display()))
+                .args(["--print-reply", "--dest=org.kde.KWin", "/KWin"])
+                .arg(format!("org.kde.KWin.{method}"))
+                .args(arguments);
+        }
+        Action::Mmsg(arguments) => {
+            command = cleared(shell.mango.join("bin/mmsg"));
+            command
+                .args(arguments)
+                .env("MANGO_INSTANCE_SIGNATURE", socket("mango-", ".sock")?);
+        }
+        Action::Umbriel(arguments) => {
+            command = cleared(shell.umbriel.join("bin/umbriel"));
+            command
+                .args(arguments)
+                .env("UMBRIEL_SOCKET", socket("umbriel-", ".sock")?);
+        }
+        // Its instances are the folders of `$XDG_RUNTIME_DIR/hypr`: the case's one alone,
+        // through the short link Hyprland was given.
+        Action::Hyprctl(arguments) => {
+            command = cleared(shell.hyprland.join("bin/hyprctl"));
+            command
+                .args(["--instance", "0"])
+                .args(arguments)
+                .env("XDG_RUNTIME_DIR", reach.runtime_link.unwrap_or(&runtime));
+        }
+        Action::WlrRandr(arguments) => {
+            let name = wayland_socket(&runtime).ok_or("no Wayland socket")?;
+            command = cleared(shell.wlr_randr.join("bin/wlr-randr"));
+            command
+                .args(arguments)
+                .env("WAYLAND_DISPLAY", runtime.join(name));
+        }
+        Action::Keys(_) => return Err("keys are typed by the keyboard client".to_owned()),
     }
-    .map_err(|e| format!("{action:?}: {e}"))?;
+    Ok(command)
+}
+
+/// Sends `action` to the compositor: through its own tool, or for keys, through `keyboard`.
+fn send(
+    shell: &ShellPaths,
+    running: &Running,
+    keyboard: Option<&mut Keyboard>,
+    action: Action,
+) -> Result<(), String> {
+    if let Action::Keys(chord) = action {
+        return keyboard
+            .ok_or("keys need the keyboard client")?
+            .type_chord(&chord.text());
+    }
+    let output = output_within(tool(shell, running, action)?, TOOL_PATIENCE)
+        .map_err(|e| format!("{action:?}: {e}"))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -546,13 +828,16 @@ fn compositor_pid(bench: &Bench, running: &Running) -> Option<u32> {
 /// Stops the compositor as its recipe says, then waits for its sandbox to empty; says how.
 fn stop_compositor(bench: &Bench, running: &mut Running) -> String {
     let asked = match running.recipe.stop {
-        Some(action) => send(&bench.shell, running, action),
+        Some(action) => send(&bench.shell, running, None, action),
         None => match compositor_pid(bench, running) {
             Some(pid) => sandbox::signal(pid, Signal::TERM).map_err(|e| e.to_string()),
             None => Err("no compositor process left".to_owned()),
         },
     };
     let ended = running.sandboxed.wait_or_kill(Duration::from_secs(10));
+    if let Some(link) = running.runtime_link.take() {
+        let _ = fs::remove_file(link);
+    }
     match asked {
         Ok(()) => ended,
         // `swaymsg exit` finds no answer: sway has gone before it could send one.
@@ -599,13 +884,15 @@ fn compositor_info(bench: &Bench, running: &Running, plan: &Plan) -> CompositorI
     }
 }
 
-/// Starts a client of `command` in a scope of its own, beside the compositor.
+/// Starts a client of `command` in a scope of its own, beside the compositor; with `input`, its
+/// standard input is a pipe the bench writes to.
 fn start_client(
     bench: &mut Bench,
     running: &Running,
     name: &str,
     command: Vec<String>,
     path: &str,
+    input: bool,
 ) -> Result<Client, String> {
     let launch = Launch {
         unit: bench.unit(name),
@@ -619,6 +906,8 @@ fn start_client(
         folder: running.folders.root.clone(),
         log: running.folders.root.join(format!("{name}.log")),
         compositor: false,
+        parent: None,
+        input,
     };
     let sandboxed = Sandboxed::start(&launch, &bench.shell, &bench.program)?;
     Ok(Client {
@@ -660,7 +949,7 @@ fn still_client(bench: &mut Bench, running: &Running, windows: u32) -> Result<Cl
         "--windows".to_owned(),
         windows.to_string(),
     ];
-    let mut client = start_client(bench, running, "still", command, "")?;
+    let mut client = start_client(bench, running, "still", command, "", false)?;
     wait_for_line(&mut client, "ready")?;
     Ok(client)
 }
@@ -672,10 +961,70 @@ fn frame_counter(bench: &mut Bench, running: &Running) -> Result<Client, String>
         "client".to_owned(),
         "frames".to_owned(),
     ];
-    let mut client = start_client(bench, running, "frames", command, "")?;
+    let mut client = start_client(bench, running, "frames", command, "", false)?;
     wait_for_line(&mut client, "session")?;
     std::thread::sleep(bench.durations.counter_lead);
     Ok(client)
+}
+
+/// The bench's keyboard, `yuna-bench client keys`, as the bench types into it: the pipe to its
+/// standard input and its log, where it says each chord was handled.
+struct Keyboard {
+    input: std::process::ChildStdin,
+    log: PathBuf,
+    sent: u64,
+}
+
+impl Keyboard {
+    /// Starts the keyboard in a scope of its own, connected to the compositor; gives it as a
+    /// client, measured and checked as any other, and as the bench types into it.
+    fn start(bench: &mut Bench, running: &Running) -> Result<(Client, Keyboard), String> {
+        let command = vec![
+            bench.program.to_string_lossy().into_owned(),
+            "client".to_owned(),
+            "keys".to_owned(),
+        ];
+        let mut client = start_client(bench, running, "keys", command, "", true)?;
+        wait_for_line(&mut client, "ready")?;
+        let input = client
+            .sandboxed
+            .child
+            .stdin
+            .take()
+            .ok_or("the keyboard's standard input is not a pipe")?;
+        let log = client.sandboxed.log.clone();
+        Ok((
+            client,
+            Keyboard {
+                input,
+                log,
+                sent: 0,
+            },
+        ))
+    }
+
+    /// Types `chord`, then waits until the keyboard says the compositor handled it.
+    fn type_chord(&mut self, chord: &str) -> Result<(), String> {
+        writeln!(self.input, "{chord}")
+            .and_then(|()| self.input.flush())
+            .map_err(|e| format!("the keyboard: {e}"))?;
+        self.sent += 1;
+        let handled = format!("sent {}", self.sent);
+        let deadline = Instant::now() + TOOL_PATIENCE;
+        loop {
+            let log = fs::read_to_string(&self.log).unwrap_or_default();
+            if log.lines().any(|line| line == handled) {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "the keyboard never said {handled:?}: {}",
+                    log.trim()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 /// Sleeps `length`: a window in which the bench does nothing.
@@ -687,7 +1036,8 @@ fn idle(length: Duration) -> impl FnMut() -> Result<(), String> {
 }
 
 /// Measures one window named `name` while `activity` runs: the compositor's core and stack,
-/// each client apart, the machine; refuses it if any process held a card node meanwhile.
+/// each client apart, the machine; refuses it if any process held a forbidden node meanwhile,
+/// whatever the activity's own end.
 fn measure(
     bench: &Bench,
     running: &Running,
@@ -729,19 +1079,23 @@ fn measure(
     let to_ns = monotonic_ns();
     let length = started.elapsed();
     let cpu_after: Vec<_> = groups.iter().map(|(_, group)| group.cpu()).collect();
-    let cards = watch.cards();
+    let forbidden = watch.forbidden();
     let windows = watch.finish(&bench.proc, &groups);
     let load = machine.finish();
     raw.extend(fdinfo_raw("end"));
-    done?;
-    if !cards.is_empty() {
+    // A refusal first: a sandbox that broke its rules is the case's story, not the error it led
+    // its activity into.
+    if !forbidden.is_empty() {
         return Err(Stop::Refused(
-            cards
+            forbidden
                 .iter()
-                .map(|card| format!("during the {name} window, process {card} was held open"))
+                .map(|(pid, node)| {
+                    format!("during the {name} window, process {pid} held {node} open")
+                })
                 .collect(),
         ));
     }
+    done?;
     let mut usages = windows.iter().zip(cpu_before.iter().zip(&cpu_after)).map(
         |((name, window), (before, after))| (name.clone(), record::usage(*before, *after, window)),
     );
@@ -778,6 +1132,9 @@ fn measure(
 struct Windows {
     cost: Measured,
     frames: Option<(Measured, Option<u64>)>,
+    /// The frames the compositor counted itself in the cost window, read at its ends: Umbriel's
+    /// commits.
+    own_count: Option<u64>,
     /// The frames the client counted itself in each window, in order, where the client's frames
     /// are the compositor's: mpv's in `game`.
     client_frames: Vec<Option<f64>>,
@@ -793,12 +1150,29 @@ fn cost_and_frames(
     run: &mut CaseRun,
 ) -> Result<Windows, Stop> {
     refuse_if_broken(bench, running, clients)?;
-    let cost = measure(bench, running, clients, "cost", activity)?;
+    let mut own_count = None;
+    let cost = if running.recipe.frames == Frames::UmbrielCommits {
+        // Read inside the window, at its very ends: two answers of Umbriel's in its costs.
+        let bench = &*bench;
+        let mut counted = || {
+            let before = umbriel_commits(bench, running);
+            let done = activity();
+            let after = umbriel_commits(bench, running);
+            own_count = before
+                .zip(after)
+                .map(|(before, after)| after.saturating_sub(before));
+            done
+        };
+        measure(bench, running, clients, "cost", &mut counted)?
+    } else {
+        measure(bench, running, clients, "cost", activity)?
+    };
     run.memory.push(memory(bench, running, "after"));
     if running.recipe.frames != Frames::Capture {
         return Ok(Windows {
             cost,
             frames: None,
+            own_count,
             client_frames: Vec::new(),
         });
     }
@@ -814,6 +1188,7 @@ fn cost_and_frames(
     Ok(Windows {
         cost,
         frames: Some((frames, count)),
+        own_count,
         client_frames: Vec::new(),
     })
 }
@@ -846,8 +1221,23 @@ pub struct Clip {
     pub size: &'static str,
     /// Its frames a second.
     pub fps: u32,
-    /// Its length: longer than a warm-up and a window, so that it never loops in one.
-    pub seconds: u32,
+}
+
+impl Clip {
+    /// Its length in seconds: as long as mpv may play before its last window ends, so that it
+    /// never loops inside one. That is the wait for its window to be fullscreen, the warm-up,
+    /// the cost window, the frame counter's lead and the frames window, at up to 1.1 times the
+    /// clip's rate: wlroots' headless backend takes `game`'s frames at 250 a second. mpv is not
+    /// sought back instead: sought, mpv with `--untimed` and a FIFO swap chain stops at its first
+    /// frame on Mutter 51.0.
+    pub fn seconds(durations: &Durations) -> u32 {
+        let played = FULLSCREEN_PATIENCE
+            + durations.warm_up
+            + durations.window
+            + durations.counter_lead
+            + durations.window;
+        (played.as_secs_f64() * 1.1).ceil() as u32
+    }
 }
 
 /// The film: 3840 × 2160 at 24 frames a second.
@@ -855,7 +1245,6 @@ pub const FILM: Clip = Clip {
     name: "film",
     size: "3840x2160",
     fps: 24,
-    seconds: 15,
 };
 
 /// The game's scene: 1920 × 1080 at 240 frames a second, which mpv decodes on the CPU faster than
@@ -864,8 +1253,10 @@ pub const GAME: Clip = Clip {
     name: "game",
     size: "1920x1080",
     fps: 240,
-    seconds: 20,
 };
+
+/// The longest mpv's window may take to be fullscreen at the output's size.
+const FULLSCREEN_PATIENCE: Duration = Duration::from_secs(15);
 
 /// Makes `clip` into the run's folder, once a run.
 pub fn make_clip(bench: &mut Bench, clip: Clip) -> Result<PathBuf, String> {
@@ -886,7 +1277,7 @@ pub fn make_clip(bench: &mut Bench, clip: Clip) -> Result<PathBuf, String> {
             "-i",
         ])
         .arg(format!("testsrc2=size={}:rate={}", clip.size, clip.fps))
-        .args(["-t", &clip.seconds.to_string()])
+        .args(["-t", &Clip::seconds(&bench.durations).to_string()])
         .args([
             "-c:v",
             "libx264",
@@ -934,7 +1325,7 @@ fn mpv_client(
     command.extend(extra.iter().map(|option| (*option).to_owned()));
     command.push(clip.to_string_lossy().into_owned());
     let path = bench.shell.applications_path.clone();
-    let mut client = start_client(bench, running, "mpv", command, &path)?;
+    let mut client = start_client(bench, running, "mpv", command, &path, false)?;
     let deadline = Instant::now() + PATIENCE;
     while logs::mpv_value(socket, "pid").is_err() {
         if let Some(status) = client.sandboxed.ended() {
@@ -954,11 +1345,18 @@ fn mpv_client(
 
 /// Waits until mpv's window is fullscreen at the output's logical size, as mpv sees it: the
 /// compositor told it fullscreen, and its size divided by its scale is the output's. Refuses the
-/// case if it never is: the scene would not be the scenario's.
-fn wait_fullscreen(socket: &Path, run: &mut CaseRun) -> Result<(), Stop> {
+/// case if it never is: the scene would not be the scenario's. An mpv that ended meanwhile fails
+/// the case.
+fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result<(), Stop> {
     let (logical_width, logical_height) = recipes::output_logical_size();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + FULLSCREEN_PATIENCE;
     loop {
+        if let Some(status) = mpv.sandboxed.ended() {
+            return Err(Stop::Failed(format!(
+                "mpv ended with {status} before its window was fullscreen: {}",
+                mpv.log().unwrap_or_default().trim()
+            )));
+        }
         let fullscreen = logs::mpv_value(socket, "fullscreen").ok();
         let size = logs::mpv_value(socket, "osd-dimensions").ok();
         let scale = logs::mpv_property(socket, "display-hidpi-scale")
@@ -995,6 +1393,31 @@ fn wait_fullscreen(socket: &Path, run: &mut CaseRun) -> Result<(), Stop> {
             )]));
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Lets mpv play for `length`, and fails the case if its clip did not: a stalled mpv is no scene
+/// to measure. mpv with `--untimed` and a FIFO swap chain sometimes stays at its first frames on
+/// Mutter 51.0: four of the bench's six starts of `game` there on 2026-11-16.
+fn warm_up(socket: &Path, length: Duration) -> Result<(), Stop> {
+    let position = || logs::mpv_property(socket, "time-pos").ok().flatten();
+    let before = position();
+    std::thread::sleep(length);
+    played(before, position(), length).map_err(Stop::Failed)
+}
+
+/// Whether mpv's position moved from `before` to `after` by half of `length` at least: its clip
+/// played, at its own rate or near it.
+fn played(before: Option<f64>, after: Option<f64>, length: Duration) -> Result<(), String> {
+    let moved = after.zip(before).map(|(after, before)| after - before);
+    match moved {
+        Some(moved) if moved >= length.as_secs_f64() / 2.0 => Ok(()),
+        _ => Err(format!(
+            "mpv's clip did not play in its {} s of warm-up: its position went from {} to {}",
+            length.as_secs_f64(),
+            before.map_or("unknown".to_owned(), |s| format!("{s:.3} s")),
+            after.map_or("unknown".to_owned(), |s| format!("{s:.3} s")),
+        )),
     }
 }
 
@@ -1038,7 +1461,7 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
     let socket = running.folders.runtime().join("mpv.sock");
     // Every frame decoded is shown, as soon as the compositor takes it: a FIFO swap chain paces
     // mpv by the compositor's frames, as a game's.
-    let client = mpv_client(
+    let mut client = mpv_client(
         bench,
         running,
         &clip,
@@ -1046,8 +1469,8 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
         &socket,
     )?;
     let windows = (|| {
-        wait_fullscreen(&socket, run)?;
-        std::thread::sleep(bench.durations.warm_up);
+        wait_fullscreen(&socket, &mut client, run)?;
+        warm_up(&socket, bench.durations.warm_up)?;
         run.notes.push(format!(
             "game: mpv fullscreen, --untimed, a FIFO swap chain, drawing with Vulkan on radv a \
              {}-frame-a-second clip of {}, decoded on the CPU",
@@ -1072,10 +1495,10 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
 fn film(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windows, Stop> {
     let clip = make_clip(bench, FILM)?;
     let socket = running.folders.runtime().join("mpv.sock");
-    let client = mpv_client(bench, running, &clip, &[], &socket)?;
+    let mut client = mpv_client(bench, running, &clip, &[], &socket)?;
     let windows = (|| {
-        wait_fullscreen(&socket, run)?;
-        std::thread::sleep(bench.durations.warm_up);
+        wait_fullscreen(&socket, &mut client, run)?;
+        warm_up(&socket, bench.durations.warm_up)?;
         run.notes.push(
             "film: mpv fullscreen, software decoding (--hwdec=no), drawn with Vulkan on radv \
              (--vo=gpu-next)"
@@ -1135,7 +1558,7 @@ fn pacing(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
             .to_string_lossy()
             .into_owned(),
     ];
-    let client = start_client(bench, running, "presentation", command, "")?;
+    let client = start_client(bench, running, "presentation", command, "", false)?;
     std::thread::sleep(bench.durations.warm_up);
     let window = bench.durations.window;
     let log = client.sandboxed.log.clone();
@@ -1191,32 +1614,55 @@ fn pacing(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
 
 fn motion(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windows, Stop> {
     let still = still_client(bench, running, MOTION_WINDOWS)?;
-    std::thread::sleep(bench.durations.settle);
     let actions = running.recipe.actions;
+    // A compositor driven by its keys alone gets the bench's keyboard, a client of its own.
+    let typed = actions
+        .iter()
+        .any(|action| matches!(action, Action::Keys(_)));
+    let (keys, mut keyboard) = if typed {
+        match Keyboard::start(bench, running) {
+            Ok((client, keyboard)) => (Some(client), Some(keyboard)),
+            Err(error) => {
+                still.stop(Signal::TERM);
+                return Err(Stop::Failed(error));
+            }
+        }
+    } else {
+        (None, None)
+    };
+    std::thread::sleep(bench.durations.settle);
     let settle = bench.durations.action;
     let shell = bench.shell.clone();
-    let round = || -> Result<(), String> {
+    let mut round = || -> Result<(), String> {
         for action in actions {
-            send(&shell, running, *action)?;
+            send(&shell, running, keyboard.as_mut(), *action)?;
             std::thread::sleep(settle);
         }
         Ok(())
     };
     // A round to warm up: each action's first run loads what it needs.
-    let warmed = round();
-    if let Err(error) = warmed {
-        still.stop(Signal::TERM);
-        return Err(Stop::Failed(error));
-    }
-    run.notes.push(format!(
-        "motion: {} actions, {} ms after each: {:?}",
-        actions.len(),
-        settle.as_millis(),
-        actions
-    ));
-    let mut activity = round;
-    let windows = cost_and_frames(bench, running, &[&still], &mut activity, run);
+    let windows = match round() {
+        Ok(()) => {
+            run.notes.push(format!(
+                "motion: {} actions, {} ms after each: {}",
+                actions.len(),
+                settle.as_millis(),
+                actions
+                    .iter()
+                    .map(|action| action.text())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            let mut clients = vec![&still];
+            clients.extend(keys.as_ref());
+            cost_and_frames(bench, running, &clients, &mut round, run)
+        }
+        Err(error) => Err(Stop::Failed(error)),
+    };
     still.stop(Signal::TERM);
+    if let Some(keys) = keys {
+        keys.stop(Signal::TERM);
+    }
     windows
 }
 
@@ -1243,6 +1689,7 @@ fn finish_frames(
     let Windows {
         mut cost,
         frames,
+        own_count,
         client_frames,
     } = windows;
     let kwin_frames = |marks: &Marks, output: &mut Option<String>| -> Option<u64> {
@@ -1257,12 +1704,23 @@ fn finish_frames(
         }
         Some(frames)
     };
-    let own = (recipe.frames == Frames::KwinLog)
-        .then(|| kwin_frames(&cost.marks, &mut output))
-        .flatten();
+    // The compositor's own exact count of the cost window, where it keeps one.
+    let (own, own_by) = match recipe.frames {
+        Frames::KwinLog => (
+            kwin_frames(&cost.marks, &mut output),
+            "KWin's frame log, in this window",
+        ),
+        Frames::UmbrielCommits => (
+            own_count,
+            "Umbriel's count of its output's commits, read at this window's ends",
+        ),
+        Frames::Capture | Frames::None(_) => (None, ""),
+    };
+    let counts_itself = matches!(recipe.frames, Frames::KwinLog | Frames::UmbrielCommits);
+    let mpv_by = "mpv's frames shown in this window: its position and drops, over its IPC";
     let count = match client_frames.first() {
         // The client's frames are the compositor's: mpv in `game`, paced one for one.
-        Some(shown) => {
+        Some(Some(shown)) => {
             if let Some(own) = own {
                 cost.phase.figures.insert(
                     "compositor_frames".to_owned(),
@@ -1270,22 +1728,44 @@ fn finish_frames(
                 );
             }
             Some(Count {
-                frames: *shown,
-                by: "mpv's frames shown in this window: its position and drops, over its IPC"
-                    .to_owned(),
-                exact: shown.is_some(),
+                frames: Some(*shown),
+                by: mpv_by.to_owned(),
+                exact: true,
             })
         }
-        None if recipe.frames == Frames::KwinLog => Some(Count {
+        Some(None) => {
+            run.notes.push(
+                "mpv's count of the cost window is missing: one of its readings failed, or its \
+                 clip looped"
+                    .to_owned(),
+            );
+            match own {
+                Some(own) => {
+                    run.notes.push(format!(
+                        "the cost window's frames are the compositor's own count instead:                          {own_by}"
+                    ));
+                    Some(Count {
+                        frames: Some(own as f64),
+                        by: own_by.to_owned(),
+                        exact: true,
+                    })
+                }
+                None => Some(Count {
+                    frames: None,
+                    by: mpv_by.to_owned(),
+                    exact: false,
+                }),
+            }
+        }
+        None if counts_itself => Some(Count {
             frames: own.map(|own| own as f64),
-            by: "KWin's frame log, in this window".to_owned(),
+            by: own_by.to_owned(),
             exact: own.is_some(),
         }),
         None => None,
     };
     derive(&mut cost.phase, count);
-    run.phases.push(cost.phase);
-    if let Some((mut counted, captured)) = frames {
+    let counted = frames.map(|(mut counted, captured)| {
         derive(
             &mut counted.phase,
             Some(Count {
@@ -1302,7 +1782,12 @@ fn finish_frames(
                 .figures
                 .insert("client_frames".to_owned(), Figure::new(*shown, "count"));
         }
-        run.phases.push(counted.phase);
+        counted.phase
+    });
+    achieved_rate(&mut cost.phase, counted.as_ref());
+    run.phases.push(cost.phase);
+    if let Some(counted) = counted {
+        run.phases.push(counted);
         run.notes.push(
             "frames counted by capture in a window apart, a lower bound: no cost a frame comes \
              from them"
@@ -1310,6 +1795,38 @@ fn finish_frames(
         );
     }
     output
+}
+
+/// Records in the cost window the rate the compositor really drew at, `achieved_frames_per_s`,
+/// which its costs a second compare by: its own exact count; else, in `pacing`, the frames it
+/// presented to the client, each one in the log; else the frames window's, a lower bound.
+/// wlroots' headless backend draws at 250 Hz for a 240 Hz mode ([`recipes::WLROOTS_HEADLESS_HZ`]),
+/// 4 % more frames a second than a backend that keeps 240.
+pub fn achieved_rate(cost: &mut Phase, frames: Option<&Phase>) {
+    let rate = |phase: &Phase| {
+        let value = phase.figures.get("frames_per_s")?.value?;
+        Some((
+            value,
+            phase.lower_bounds.iter().any(|key| key == "frames_per_s"),
+        ))
+    };
+    let presented = || {
+        let seconds = cost.seconds.value.filter(|seconds| *seconds > 0.0)?;
+        Some((cost.figures.get("presented")?.value? / seconds, false))
+    };
+    let achieved = rate(cost)
+        .filter(|(_, lower_bound)| !lower_bound)
+        .or_else(presented)
+        .or_else(|| frames.and_then(rate));
+    if let Some((value, lower_bound)) = achieved {
+        cost.figures.insert(
+            "achieved_frames_per_s".to_owned(),
+            Figure::new(Some(value), "per_s"),
+        );
+        if lower_bound {
+            cost.lower_bounds.push("achieved_frames_per_s".to_owned());
+        }
+    }
 }
 
 /// A figure in ms a second from `ns` over `seconds`.
@@ -1586,7 +2103,7 @@ mod tests {
     fn a_refusal_is_recorded_as_one_and_a_failure_as_one() {
         let mut run = CaseRun::default();
         let refused: Result<(), Stop> = Err(Stop::Refused(vec![
-            "during the cost window, process 10 /dev/dri/card1 was held open".to_owned(),
+            "during the cost window, process 10 held /dev/dri/card1 open".to_owned(),
         ]));
         assert_eq!(record_outcome(&mut run, refused), None);
         assert_eq!(run.refused.len(), 1);
@@ -1640,6 +2157,143 @@ mod tests {
         assert_eq!(phase.figures["frames"].value, None);
         assert!(!phase.figures.contains_key("core_cpu_per_frame"));
         assert_eq!(phase.frames_counted_by, None);
+    }
+
+    #[test]
+    fn the_achieved_rate_is_the_exact_count_then_the_presented_then_the_captured() {
+        let with = |figures: &[(&str, f64)], lower_bounds: &[&str]| Phase {
+            name: "cost".to_owned(),
+            seconds: Figure::new(Some(10.0), "s"),
+            figures: figures
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), Figure::new(Some(*value), "per_s")))
+                .collect(),
+            lower_bounds: lower_bounds.iter().map(|key| (*key).to_owned()).collect(),
+            ..Default::default()
+        };
+        // An exact count of its own: KWin at 240 Hz.
+        let mut cost = with(&[("frames_per_s", 240.0)], &[]);
+        achieved_rate(&mut cost, None);
+        assert_eq!(cost.figures["achieved_frames_per_s"].value, Some(240.0));
+        assert!(cost.lower_bounds.is_empty());
+        // pacing on wlroots: the frames presented, not the capture's lower bound.
+        let captured = with(&[("frames_per_s", 231.0)], &["frames_per_s"]);
+        let mut cost = with(&[("presented", 2_495.0)], &[]);
+        achieved_rate(&mut cost, Some(&captured));
+        assert_eq!(cost.figures["achieved_frames_per_s"].value, Some(249.5));
+        // rest on wlroots: the frames window's capture, a lower bound.
+        let mut cost = with(&[], &[]);
+        achieved_rate(&mut cost, Some(&captured));
+        assert_eq!(cost.figures["achieved_frames_per_s"].value, Some(231.0));
+        assert_eq!(cost.lower_bounds, ["achieved_frames_per_s"]);
+        // Mutter at rest: no count at all, no rate.
+        let mut cost = with(&[], &[]);
+        achieved_rate(&mut cost, None);
+        assert!(!cost.figures.contains_key("achieved_frames_per_s"));
+    }
+
+    #[test]
+    fn each_tool_reaches_the_compositor_of_the_case_alone() {
+        let root = crate::testing::folder("tools");
+        let folders = Folders::create(&root).unwrap();
+        for socket in [
+            "wayland-1",
+            "wayland-1.lock",
+            "mango-42.sock",
+            "umbriel-wayland-1.sock",
+        ] {
+            fs::write(folders.runtime().join(socket), "").unwrap();
+        }
+        let shell = crate::testing::shell();
+        let link = PathBuf::from("/tmp/yb-1-0");
+        let reach = Reach {
+            folders: &folders,
+            sway_socket: None,
+            runtime_link: Some(&link),
+        };
+        let line = |action: Action| {
+            let command = tool_at(&shell, &reach, action).unwrap();
+            let words: Vec<String> = std::iter::once(command.get_program())
+                .chain(command.get_args())
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            let variables: Vec<(String, String)> = command
+                .get_envs()
+                .map(|(key, value)| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value
+                            .map(|v| v.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+            (words.join(" "), variables)
+        };
+        let runtime = folders.runtime().to_string_lossy().into_owned();
+        assert_eq!(
+            line(Action::Mmsg(&["dispatch", "view,2,0"])),
+            (
+                "/nix/store/aaaa-mango-0.18.4/bin/mmsg dispatch view,2,0".to_owned(),
+                vec![(
+                    "MANGO_INSTANCE_SIGNATURE".to_owned(),
+                    format!("{runtime}/mango-42.sock")
+                )]
+            )
+        );
+        assert_eq!(
+            line(Action::Umbriel(&["msg", "workspace-switch", "2"])).1,
+            [(
+                "UMBRIEL_SOCKET".to_owned(),
+                format!("{runtime}/umbriel-wayland-1.sock")
+            )]
+        );
+        assert_eq!(
+            line(Action::Hyprctl(&[
+                "dispatch",
+                "hl.dsp.focus({ workspace = 2 })"
+            ])),
+            (
+                "/nix/store/aaaa-hyprland-0.57.1/bin/hyprctl --instance 0 dispatch \
+                 hl.dsp.focus({ workspace = 2 })"
+                    .to_owned(),
+                vec![("XDG_RUNTIME_DIR".to_owned(), "/tmp/yb-1-0".to_owned())]
+            )
+        );
+        let (words, variables) = line(Action::WlrRandr(&["--json"]));
+        assert_eq!(
+            words,
+            "/nix/store/aaaa-wlr-randr-0.5.0/bin/wlr-randr --json"
+        );
+        assert_eq!(
+            variables,
+            [("WAYLAND_DISPLAY".to_owned(), format!("{runtime}/wayland-1"))]
+        );
+        // Every tool starts from an empty environment: none of the bench's own reaches it.
+        let command = tool_at(&shell, &reach, Action::WlrRandr(&[])).unwrap();
+        assert!(format!("{command:?}").starts_with("env -i"), "{command:?}");
+        // Keys are no tool's; sway's command needs its socket.
+        assert!(tool_at(&shell, &reach, Action::Sway("exit")).is_err());
+        assert!(tool_at(&shell, &reach, recipes::recipe("dwl").unwrap().actions[0]).is_err());
+    }
+
+    #[test]
+    fn a_clip_that_did_not_play_in_its_warm_up_fails_the_case() {
+        let warm_up = Duration::from_secs(3);
+        assert!(played(Some(0.2), Some(3.3), warm_up).is_ok());
+        // Stalled at its first frame, as on Mutter: 0.013 s, then 0.013 s.
+        let stalled = played(Some(0.013), Some(0.013), warm_up).unwrap_err();
+        assert!(stalled.contains("from 0.013 s to 0.013 s"), "{stalled}");
+        assert!(played(None, Some(3.0), warm_up).is_err());
+        assert!(played(Some(1.0), None, warm_up).is_err());
+    }
+
+    #[test]
+    fn a_clip_outlasts_every_window_mpv_plays_it_in() {
+        // 15 s to be fullscreen, 3 s of warm-up, two windows of 10 s, the counter's 2 s.
+        assert_eq!(Clip::seconds(&Durations::STANDARD), 44);
+        // Longer windows, to try the bench, make a longer clip.
+        assert_eq!(Clip::seconds(&Durations::with_windows(25.0)), 77);
     }
 
     #[test]

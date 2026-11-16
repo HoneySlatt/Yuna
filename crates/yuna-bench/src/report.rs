@@ -5,13 +5,19 @@
 //! A cost is ranked only where the difference is larger than the runs' spread: two compositors
 //! whose ranges of runs overlap share a rank, and nothing is ranked with fewer than two runs of
 //! each. Only *equal work* runs that other programs did not disturb are ranked; the rest are
-//! shown, unranked. A lower bound is never ranked. A cost a frame is ranked only between
-//! compositors on the same backend whose frames were counted the same way (ADR-0071); frames
-//! themselves are never ranked.
+//! shown, unranked, and a compositor left out so is named. A lower bound is never ranked. A cost
+//! a second is ranked only between compositors that drew at the same rate, within 1 %
+//! ([`same_rate`]): wlroots' headless backend draws at 250 Hz for a 240 Hz mode, 4 % more frames
+//! than one that keeps 240. A cost a frame is ranked only between compositors on the same backend
+//! whose frames were counted the same way (ADR-0071); frames themselves are never ranked.
+//!
+//! The summary ends with every rival of ADR-0071: those the files measured, those they did not,
+//! and those that run on the owner's tour only, with why.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use crate::recipes;
 use crate::record::{CaseRun, FORMAT, RunFile};
 
 /// Reads a run file, refusing another format than this bench's.
@@ -43,8 +49,10 @@ enum Source {
 enum Rank {
     /// Never: frames, and the clients' own figures.
     No,
-    /// Across every compositor: a cost a second, a count of drops, a memory.
-    Cost,
+    /// Only between compositors that drew at the same rate: a cost a second.
+    PerSecond,
+    /// Across every compositor: a count of drops, a memory.
+    Total,
     /// Only between compositors on the same backend whose frames were counted the same way.
     PerFrame,
 }
@@ -61,7 +69,15 @@ const fn cost(title: &'static str, key: &'static str) -> Column {
     Column {
         title,
         source: Source::Cost(key),
-        rank: Rank::Cost,
+        rank: Rank::PerSecond,
+    }
+}
+
+const fn total(title: &'static str, key: &'static str) -> Column {
+    Column {
+        title,
+        source: Source::Cost(key),
+        rank: Rank::Total,
     }
 }
 
@@ -92,12 +108,12 @@ const fn frames(title: &'static str, key: &'static str) -> Column {
 const PSS_CORE: Column = Column {
     title: "PSS after, core (MiB)",
     source: Source::Pss(true),
-    rank: Rank::Cost,
+    rank: Rank::Total,
 };
 const PSS_STACK: Column = Column {
     title: "PSS after, stack (MiB)",
     source: Source::Pss(false),
-    rank: Rank::Cost,
+    rank: Rank::Total,
 };
 
 /// Each scenario's columns.
@@ -127,8 +143,8 @@ fn columns(scenario: &str) -> Vec<Column> {
         "film" => vec![
             frames("Frames a second", "frames_per_s"),
             shown("mpv's frames shown", "mpv_shown"),
-            cost("mpv's frames dropped", "mpv_frame_drop_count"),
-            cost("mpv's frames delayed", "mpv_vo_delayed_frame_count"),
+            total("mpv's frames dropped", "mpv_frame_drop_count"),
+            total("mpv's frames delayed", "mpv_vo_delayed_frame_count"),
             cost("CPU, core (ms/s)", "core_cpu"),
             cost("GPU, core (ms/s)", "core_gpu"),
             per_frame("CPU a frame, core (µs)", "core_cpu_per_frame"),
@@ -198,43 +214,91 @@ fn counted_by(runs: &[&CaseRun]) -> Option<String> {
     })
 }
 
+/// A compositor's name and its runs' values in one column.
+type Values = (String, Vec<f64>);
+
+/// Whether two windows drew at the same rate, as costs a second compare: within 1 % of the
+/// higher, or both under one frame a second, where neither draws on a refresh's pace.
+pub fn same_rate(a: f64, b: f64) -> bool {
+    (a < 1.0 && b < 1.0) || (a - b).abs() <= 0.01 * a.max(b)
+}
+
+/// The rate a run drew at in its cost window, `achieved_frames_per_s`.
+fn achieved_rate(run: &CaseRun) -> Option<f64> {
+    run.phases
+        .iter()
+        .find(|phase| phase.name == "cost")?
+        .figures
+        .get("achieved_frames_per_s")?
+        .value
+}
+
 /// The ranking of `column` among a scenario's `groups`, by compositor and configuration, as the
 /// summary writes it: over *equal work* runs not disturbed alone, lower bounds left out, a cost a
-/// frame only within one backend and one way of counting frames.
+/// second only between compositors at the same rate, a cost a frame only within one backend and
+/// one way of counting frames.
 fn ranking(column: &Column, groups: &BTreeMap<(String, String), Vec<&CaseRun>>) -> String {
-    let mut sets: BTreeMap<String, Vec<(String, Vec<f64>)>> = BTreeMap::new();
+    // Each set is ranked apart, with the rate or the backend it holds, and its groups' values.
+    let mut sets: BTreeMap<String, Vec<Values>> = BTreeMap::new();
+    let mut rates: Vec<(String, Option<f64>, Vec<f64>)> = Vec::new();
     let mut bounds = Vec::new();
+    let mut all_disturbed = Vec::new();
     for ((compositor, configuration), runs) in groups {
         if configuration != "equal-work" {
             continue;
         }
-        let values: Vec<Value> = runs
+        let quiet: Vec<&&CaseRun> = runs
             .iter()
             .filter(|run| run.disturbed == Some(false))
-            .filter_map(|run| value(run, column))
             .collect();
+        let values: Vec<Value> = quiet.iter().filter_map(|run| value(run, column)).collect();
         if values.is_empty() {
+            if quiet.is_empty() && runs.iter().any(|run| value(run, column).is_some()) {
+                all_disturbed.push(compositor.clone());
+            }
             continue;
         }
         if values.iter().any(|value| value.lower_bound) {
             bounds.push(compositor.clone());
             continue;
         }
-        let set = match column.rank {
-            Rank::PerFrame => format!(
-                "{}, frames counted by {}",
-                runs.iter()
-                    .find_map(|run| run.compositor.as_ref())
-                    .map_or("?", |info| info.backend.as_str()),
-                counted_by(runs).unwrap_or_else(|| "?".to_owned())
-            ),
-            _ => String::new(),
-        };
-        sets.entry(set)
-            .or_default()
-            .push((compositor.clone(), values.iter().map(|v| v.value).collect()));
+        let values: Vec<f64> = values.iter().map(|v| v.value).collect();
+        match column.rank {
+            Rank::PerSecond => {
+                let measured: Vec<f64> =
+                    quiet.iter().filter_map(|run| achieved_rate(run)).collect();
+                let rate = (measured.len() == quiet.len())
+                    .then(|| measured.iter().sum::<f64>() / measured.len() as f64);
+                rates.push((compositor.clone(), rate, values));
+            }
+            Rank::PerFrame => {
+                let set = format!(
+                    "on {}, frames counted by {}",
+                    runs.iter()
+                        .find_map(|run| run.compositor.as_ref())
+                        .map_or("?", |info| info.backend.as_str()),
+                    counted_by(runs).unwrap_or_else(|| "?".to_owned())
+                );
+                sets.entry(set)
+                    .or_default()
+                    .push((compositor.clone(), values));
+            }
+            Rank::Total | Rank::No => sets
+                .entry(String::new())
+                .or_default()
+                .push((compositor.clone(), values)),
+        }
     }
-    let line = |groups: &[(String, Vec<f64>)]| match ranks(groups) {
+    let mut unknown_rate = Vec::new();
+    if column.rank == Rank::PerSecond {
+        let (known, unknown): (Vec<_>, Vec<_>) =
+            rates.into_iter().partition(|(_, rate, _)| rate.is_some());
+        unknown_rate = unknown.into_iter().map(|(name, _, _)| name).collect();
+        for (rate, members) in rate_sets(known) {
+            sets.insert(rate, members);
+        }
+    }
+    let line = |groups: &[Values]| match ranks(groups) {
         Ok(tiers) => tiers
             .iter()
             .map(|tier| tier.join(" = "))
@@ -249,9 +313,25 @@ fn ranking(column: &Column, groups: &BTreeMap<(String, String), Vec<&CaseRun>>) 
         Rank::PerFrame => sets
             .iter()
             .filter(|(_, set)| set.len() >= 2)
-            .map(|(name, set)| format!("on {name}: {}", line(set)))
+            .map(|(name, set)| format!("{name}: {}", line(set)))
             .collect::<Vec<_>>()
             .join("; "),
+        Rank::PerSecond if sets.len() > 1 => {
+            let mut parts: Vec<String> = sets
+                .iter()
+                .filter(|(_, set)| set.len() >= 2)
+                .map(|(rate, set)| format!("{rate}: {}", line(set)))
+                .collect();
+            let alone: Vec<String> = sets
+                .iter()
+                .filter(|(_, set)| set.len() < 2)
+                .map(|(rate, set)| format!("{} ({rate})", set[0].0))
+                .collect();
+            if !alone.is_empty() {
+                parts.push(format!("alone at its rate: {}", alone.join(", ")));
+            }
+            parts.join("; ")
+        }
         _ => match sets.values().next() {
             Some(set) => line(set),
             None => "no ranking: no quiet equal-work run".to_owned(),
@@ -260,7 +340,45 @@ fn ranking(column: &Column, groups: &BTreeMap<(String, String), Vec<&CaseRun>>) 
     if !bounds.is_empty() {
         let _ = write!(text, "; unranked, lower bounds: {}", bounds.join(", "));
     }
+    if !unknown_rate.is_empty() {
+        let _ = write!(
+            text,
+            "; unranked, the rate it drew at unknown: {}",
+            unknown_rate.join(", ")
+        );
+    }
+    if !all_disturbed.is_empty() {
+        let _ = write!(
+            text,
+            "; left out, every equal-work run disturbed: {}",
+            all_disturbed.join(", ")
+        );
+    }
     text
+}
+
+/// `groups` with their rates, in sets of the same rate ([`same_rate`] with the set's lowest),
+/// each named by its rate: `at 240 frames a second`.
+fn rate_sets(mut groups: Vec<(String, Option<f64>, Vec<f64>)>) -> Vec<(String, Vec<Values>)> {
+    groups.sort_by(|a, b| a.1.unwrap_or(0.0).total_cmp(&b.1.unwrap_or(0.0)));
+    let mut sets: Vec<(f64, Vec<Values>)> = Vec::new();
+    for (name, rate, values) in groups {
+        let rate = rate.unwrap_or(0.0);
+        match sets.last_mut() {
+            Some((lowest, members)) if same_rate(*lowest, rate) => members.push((name, values)),
+            _ => sets.push((rate, vec![(name, values)])),
+        }
+    }
+    sets.into_iter()
+        .map(|(lowest, members)| {
+            let name = if lowest < 1.0 {
+                "under one frame a second".to_owned()
+            } else {
+                format!("at {} frames a second", number(lowest))
+            };
+            (name, members)
+        })
+        .collect()
 }
 
 /// A number as `docs/measurements.md` writes them: three figures or so, thousands apart.
@@ -442,7 +560,7 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
             };
             let backend = info
                 .map(|info| info.backend.as_str())
-                .or_else(|| crate::recipes::recipe(compositor).map(|recipe| recipe.backend));
+                .or_else(|| recipes::recipe(compositor).map(|recipe| recipe.backend));
             let _ = write!(
                 out,
                 "| {name}{} | {configuration} | {} | {}{}{} |",
@@ -511,9 +629,57 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
         }
         out.push('\n');
     }
+    out.push_str(&rivals(&runs));
     out.push_str(
         "† Other programs disturbed a run: more than 2 cores or 10 % of the GPU's drawing on \
          average.\n",
+    );
+    out
+}
+
+/// The summary's closing section: every rival of ADR-0071, measured in `runs` or not, those that
+/// run on the tour only and why, the scenarios a recipe cannot run, and why the rivals on
+/// wlroots draw at 250 Hz.
+fn rivals(runs: &[&CaseRun]) -> String {
+    let ran: BTreeSet<&str> = runs
+        .iter()
+        .map(|run| run.case.compositor.as_str())
+        .collect();
+    let (measured, not_run): (Vec<&str>, Vec<&str>) = recipes::ADR_0071_RIVALS
+        .iter()
+        .filter(|rival| recipes::tour_only(rival).is_none())
+        .partition(|rival| ran.contains(*rival));
+    let none = |names: &[&str]| {
+        if names.is_empty() {
+            "none".to_owned()
+        } else {
+            names.join(", ")
+        }
+    };
+    let mut out = String::from("## Every rival of ADR-0071\n\n");
+    let _ = writeln!(out, "- Measured in these files: {}.", none(&measured));
+    let _ = writeln!(out, "- Not run in these files: {}.", none(&not_run));
+    for rival in &recipes::TOUR_ONLY {
+        let _ = writeln!(out, "- {}: tour only: {}.", rival.name, rival.why);
+    }
+    for recipe in &recipes::RECIPES {
+        if let Some(why) = recipe.no_actions {
+            let _ = writeln!(out, "- {}: `motion` not run: {why}.", recipe.name);
+        }
+    }
+    let wlroots: Vec<&str> = recipes::RECIPES
+        .iter()
+        .filter(|recipe| recipe.backend == "wlroots-headless")
+        .map(|recipe| recipe.name)
+        .collect();
+    let _ = writeln!(
+        out,
+        "- The rivals on wlroots' headless backend ({}) draw at about {} frames a second for a \
+         240 Hz mode: the backend waits whole milliseconds between frames, 1000000 / 240000 = \
+         4 ms (wlroots 0.20.2, backend/headless/output.c:31). Costs a second are ranked only \
+         between compositors whose achieved rates are within 1 %.\n",
+        wlroots.join(", "),
+        number(recipes::WLROOTS_HEADLESS_HZ)
     );
     out
 }
@@ -603,6 +769,23 @@ mod tests {
         lower_bound: bool,
         disturbed: Option<bool>,
     ) -> CaseRun {
+        at_rate(
+            (compositor, configuration, backend),
+            (key, value),
+            240.0,
+            lower_bound,
+            disturbed,
+        )
+    }
+
+    /// A run as [`run`] makes it, drawn at `rate` frames a second.
+    fn at_rate(
+        (compositor, configuration, backend): (&str, &str, &str),
+        (key, value): (&str, f64),
+        rate: f64,
+        lower_bound: bool,
+        disturbed: Option<bool>,
+    ) -> CaseRun {
         let mut phase = crate::record::Phase {
             name: "cost".to_owned(),
             frames_counted_by: Some("mpv".to_owned()),
@@ -611,6 +794,10 @@ mod tests {
         phase.figures.insert(
             key.to_owned(),
             crate::record::Figure::new(Some(value), "us"),
+        );
+        phase.figures.insert(
+            "achieved_frames_per_s".to_owned(),
+            crate::record::Figure::new(Some(rate), "per_s"),
         );
         if lower_bound {
             phase.lower_bounds.push(key.to_owned());
@@ -719,6 +906,170 @@ mod tests {
     }
 
     #[test]
+    fn costs_a_second_rank_only_between_compositors_at_the_same_rate() {
+        let quiet = Some(false);
+        let runs = [
+            at_rate(
+                ("kwin", "equal-work", "k"),
+                ("core_cpu", 3.0),
+                240.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("kwin", "equal-work", "k"),
+                ("core_cpu", 3.1),
+                239.9,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("yuna", "equal-work", "y"),
+                ("core_cpu", 2.0),
+                240.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("yuna", "equal-work", "y"),
+                ("core_cpu", 2.1),
+                240.1,
+                false,
+                quiet,
+            ),
+            // wlroots' headless backend: 250 Hz for 240.
+            at_rate(
+                ("sway", "equal-work", "w"),
+                ("core_cpu", 1.0),
+                249.6,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("sway", "equal-work", "w"),
+                ("core_cpu", 1.1),
+                249.8,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("dwl", "equal-work", "w"),
+                ("core_cpu", 0.5),
+                249.9,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("dwl", "equal-work", "w"),
+                ("core_cpu", 0.6),
+                250.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("hyprland", "equal-work", "a"),
+                ("core_cpu", 4.0),
+                120.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("hyprland", "equal-work", "a"),
+                ("core_cpu", 4.1),
+                120.0,
+                false,
+                quiet,
+            ),
+        ];
+        let column = cost("CPU", "core_cpu");
+        assert_eq!(
+            ranking(&column, &grouped(&runs)),
+            "at 240 frames a second: yuna < kwin; at 250 frames a second: dwl < sway; alone at \
+             its rate: hyprland (at 120 frames a second)"
+        );
+        // A memory is no cost a second: every compositor ranks together.
+        let memory = total("Memory", "core_cpu");
+        assert_eq!(
+            ranking(&memory, &grouped(&runs)),
+            "dwl < sway < yuna < kwin < hyprland"
+        );
+        // At rest, under one frame a second, the rates are no pace: all rank together.
+        let rest = [
+            at_rate(
+                ("sway", "equal-work", "w"),
+                ("core_cpu", 1.0),
+                0.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("sway", "equal-work", "w"),
+                ("core_cpu", 1.1),
+                0.2,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("kwin", "equal-work", "k"),
+                ("core_cpu", 3.0),
+                0.0,
+                false,
+                quiet,
+            ),
+            at_rate(
+                ("kwin", "equal-work", "k"),
+                ("core_cpu", 3.1),
+                0.0,
+                false,
+                quiet,
+            ),
+        ];
+        assert_eq!(ranking(&column, &grouped(&rest)), "sway < kwin");
+    }
+
+    #[test]
+    fn a_compositor_without_a_quiet_run_or_a_rate_is_named_not_dropped() {
+        let quiet = Some(false);
+        let mut mutter = run(("mutter", "equal-work", "m"), "core_cpu", 0.1, false, quiet);
+        mutter.phases[0].figures.remove("achieved_frames_per_s");
+        let runs = [
+            run(("sway", "equal-work", "w"), "core_cpu", 1.0, false, quiet),
+            run(("sway", "equal-work", "w"), "core_cpu", 1.1, false, quiet),
+            run(("kwin", "equal-work", "k"), "core_cpu", 3.0, false, quiet),
+            run(("kwin", "equal-work", "k"), "core_cpu", 3.1, false, quiet),
+            run(
+                ("yuna", "equal-work", "y"),
+                "core_cpu",
+                0.5,
+                false,
+                Some(true),
+            ),
+            run(
+                ("yuna", "equal-work", "y"),
+                "core_cpu",
+                0.6,
+                false,
+                Some(true),
+            ),
+            mutter.clone(),
+            mutter,
+        ];
+        assert_eq!(
+            ranking(&cost("CPU", "core_cpu"), &grouped(&runs)),
+            "sway < kwin; unranked, the rate it drew at unknown: mutter; left out, every \
+             equal-work run disturbed: yuna"
+        );
+    }
+
+    #[test]
+    fn rates_within_one_percent_are_the_same() {
+        assert!(same_rate(240.0, 242.0));
+        assert!(!same_rate(240.0, 249.6));
+        assert!(same_rate(0.0, 0.4));
+        assert!(!same_rate(0.0, 1.2));
+    }
+
+    #[test]
     fn costs_a_frame_rank_only_within_a_backend_and_a_way_of_counting() {
         let quiet = Some(false);
         let mut runs = vec![
@@ -794,6 +1145,19 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("refused: process 10 (sway) holds /dev/dri/card1 open"));
+        // Every rival of ADR-0071 is listed: those run, those not, those on the tour only.
+        assert!(
+            text.contains("- Measured in these files: sway, kwin."),
+            "{text}"
+        );
+        assert!(
+            text.contains("- Not run in these files: dwl, hyprland, mango, umbriel, mutter."),
+            "{text}"
+        );
+        assert!(text.contains("- niri: tour only: "), "{text}");
+        assert!(text.contains("- cosmic-comp: tour only: "), "{text}");
+        assert!(text.contains("- mutter: `motion` not run: "), "{text}");
+        assert!(text.contains("(sway, sway-vulkan, dwl, mango, umbriel) draw at about 250 frames"));
     }
 
     #[test]

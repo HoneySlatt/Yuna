@@ -84,6 +84,28 @@ impl Proc {
         threads
     }
 
+    /// The scheduling of each thread of process `pid`: its name, its policy and its realtime
+    /// priority, from its `stat`.
+    pub fn scheduling(&self, pid: u32) -> Vec<(String, Scheduling)> {
+        let tasks = self.path(pid, "task");
+        let mut threads: Vec<(u32, String, Scheduling)> = fs::read_dir(&tasks)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|task| {
+                let tid = task.file_name().to_str()?.parse().ok()?;
+                let name = fs::read_to_string(task.path().join("comm")).ok()?;
+                let stat = fs::read_to_string(task.path().join("stat")).ok()?;
+                Some((tid, name.trim_end().to_owned(), parse_scheduling(&stat)?))
+            })
+            .collect();
+        threads.sort_by_key(|(tid, _, _)| *tid);
+        threads
+            .into_iter()
+            .map(|(_, name, scheduling)| (name, scheduling))
+            .collect()
+    }
+
     /// Process `pid`'s name.
     pub fn name(&self, pid: u32) -> Option<String> {
         fs::read_to_string(self.path(pid, "comm"))
@@ -217,6 +239,39 @@ pub fn parse_stat(stat: &str) -> Option<(u32, u64)> {
     Some((parent, ticks))
 }
 
+/// The realtime policies: a thread under one runs before every thread under the others.
+pub const REALTIME_POLICIES: [&str; 3] = ["SCHED_FIFO", "SCHED_RR", "SCHED_DEADLINE"];
+
+/// A thread's scheduling: its policy and its realtime priority, 0 but under a realtime policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Scheduling {
+    /// Its policy, `SCHED_OTHER`, `SCHED_RR`, …
+    pub policy: &'static str,
+    /// Its realtime priority, 1 to 99 under `SCHED_FIFO` and `SCHED_RR`.
+    pub priority: u32,
+}
+
+/// A thread's scheduling from its `stat`: `rt_priority` and `policy`, fields 40 and 41
+/// (proc_pid_stat(5)), counted after the last `)`, which ends its name.
+pub fn parse_scheduling(stat: &str) -> Option<Scheduling> {
+    let fields: Vec<&str> = stat
+        .get(stat.rfind(')')? + 1..)?
+        .split_whitespace()
+        .collect();
+    // After the name comes the state, field 3: field n is at n - 3.
+    let priority = fields.get(37)?.parse().ok()?;
+    let policy = match fields.get(38)?.parse::<u32>().ok()? {
+        0 => "SCHED_OTHER",
+        1 => "SCHED_FIFO",
+        2 => "SCHED_RR",
+        3 => "SCHED_BATCH",
+        5 => "SCHED_IDLE",
+        6 => "SCHED_DEADLINE",
+        _ => "unknown",
+    };
+    Some(Scheduling { policy, priority })
+}
+
 /// The value of the line `key:  <n> kB` of `text`, such as `smaps_rollup`'s, in KiB.
 pub fn parse_kib(text: &str, key: &str) -> Option<u64> {
     text.lines().find_map(|line| {
@@ -263,6 +318,33 @@ mod tests {
                     1 0 1000 1000000 100 18446744073709551615";
         assert_eq!(parse_stat(stat), Some((4200, 35)));
         assert_eq!(parse_stat("4242 (cut"), None);
+    }
+
+    #[test]
+    fn stat_gives_the_threads_policy_and_realtime_priority() {
+        // As Linux writes a SCHED_RR thread of priority 1's `stat`: 52 fields.
+        let fields: Vec<String> = (3..=52)
+            .map(|field| match field {
+                3 => "S".to_owned(),
+                40 => "1".to_owned(),
+                41 => "2".to_owned(),
+                _ => "0".to_owned(),
+            })
+            .collect();
+        let stat = format!("4242 (Hyprland (main)) {}", fields.join(" "));
+        assert_eq!(
+            parse_scheduling(&stat),
+            Some(Scheduling {
+                policy: "SCHED_RR",
+                priority: 1
+            })
+        );
+        let other = stat.replace(" 1 2 ", " 0 0 ");
+        assert_eq!(
+            parse_scheduling(&other).map(|s| s.policy),
+            Some("SCHED_OTHER")
+        );
+        assert_eq!(parse_scheduling("4242 (cut) S 1 2"), None);
     }
 
     #[test]

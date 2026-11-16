@@ -19,7 +19,8 @@
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "umbriel": "umbriel"
       }
     },
     "rust-overlay": {
@@ -39,6 +40,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "umbriel": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794061439,
+        "narHash": "sha256-UZtda8jQaBHtF8hM9hMpW4355MwGTbghdOkF02r1WCU=",
+        "owner": "noctalia-dev",
+        "repo": "umbriel",
+        "rev": "d171ccb31628da65b1beee3221b37a2758d553b3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "noctalia-dev",
+        "repo": "umbriel",
+        "rev": "d171ccb31628da65b1beee3221b37a2758d553b3",
         "type": "github"
       }
     }

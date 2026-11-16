@@ -59,6 +59,113 @@ pub fn yuna_output(log: &str) -> Option<String> {
     ))
 }
 
+/// An output as the run's file writes it: `3840x2160@240.000,1.5`.
+fn output_text(width: u64, height: u64, hertz: f64, scale: f64) -> String {
+    format!("{width}x{height}@{hertz:.3},{scale}")
+}
+
+/// The output `name` of `wlr-randr --json`, enabled, at its current mode.
+pub fn wlr_randr_output(json: &str, name: &str) -> Option<String> {
+    let outputs: serde_json::Value = serde_json::from_str(json).ok()?;
+    let output = outputs
+        .as_array()?
+        .iter()
+        .find(|output| output["name"] == name && output["enabled"] == true)?;
+    let mode = output["modes"]
+        .as_array()?
+        .iter()
+        .find(|mode| mode["current"] == true)?;
+    Some(output_text(
+        mode["width"].as_u64()?,
+        mode["height"].as_u64()?,
+        mode["refresh"].as_f64()?,
+        output["scale"].as_f64()?,
+    ))
+}
+
+/// The outputs of `umbriel outputs --json`: its reply's `ok`, or the reply itself.
+fn umbriel_outputs(json: &str) -> Option<Vec<serde_json::Value>> {
+    let reply: serde_json::Value = serde_json::from_str(json).ok()?;
+    let outputs = if reply.get("ok").is_some() {
+        &reply["ok"]
+    } else {
+        &reply
+    };
+    outputs.as_array().cloned()
+}
+
+/// The output `name` of `umbriel outputs --json`, enabled, at its current mode.
+pub fn umbriel_output(json: &str, name: &str) -> Option<String> {
+    let outputs = umbriel_outputs(json)?;
+    let output = outputs
+        .iter()
+        .find(|output| output["name"] == name && output["enabled"] == true)?;
+    let mode = output["modes"]
+        .as_array()?
+        .iter()
+        .find(|mode| mode["current"] == true)?;
+    Some(output_text(
+        mode["width"].as_u64()?,
+        mode["height"].as_u64()?,
+        mode["refresh_mhz"].as_f64()? / 1000.0,
+        output["scale"].as_f64()?,
+    ))
+}
+
+/// The commits Umbriel counted on output `name` so far, from `umbriel outputs --json`: each
+/// frame it drew or scanned out (`direct_scanout.commits`, docs/user/ipc.md).
+pub fn umbriel_commits(json: &str, name: &str) -> Option<u64> {
+    umbriel_outputs(json)?
+        .iter()
+        .find(|output| output["name"] == name)?["direct_scanout"]["commits"]
+        .as_u64()
+}
+
+/// The monitor `name` of `hyprctl -j monitors all`, enabled, and every other monitor and
+/// whether it is disabled: `3840x2160@240.000,1.5; WAYLAND-1 disabled`.
+pub fn hyprctl_output(json: &str, name: &str) -> Option<String> {
+    let monitors: serde_json::Value = serde_json::from_str(json).ok()?;
+    let monitors = monitors.as_array()?;
+    let monitor = monitors
+        .iter()
+        .find(|monitor| monitor["name"] == name && monitor["disabled"] == false)?;
+    let mut text = output_text(
+        monitor["width"].as_u64()?,
+        monitor["height"].as_u64()?,
+        monitor["refreshRate"].as_f64()?,
+        monitor["scale"].as_f64()?,
+    );
+    for other in monitors.iter().filter(|other| other["name"] != name) {
+        let state = if other["disabled"] == true {
+            "disabled"
+        } else {
+            "enabled"
+        };
+        text.push_str(&format!(
+            "; {} {state}",
+            other["name"].as_str().unwrap_or("?")
+        ));
+    }
+    Some(text)
+}
+
+/// The first monitor of `gdctl show`, its current mode and its logical monitor's scale:
+/// `3840x2160@240.000,1.5`.
+pub fn gdctl_output(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    // Each line is a tree's branch: `├──`, `└──` and `│` before its text.
+    let bare = |line: &str| {
+        line.trim_start_matches(|c: char| c.is_whitespace() || "│├└─".contains(c))
+            .to_owned()
+    };
+    let current = lines.iter().position(|line| bare(line) == "Current mode")?;
+    let mode = bare(lines.get(current + 1)?);
+    let scale = lines
+        .iter()
+        .find_map(|line| bare(line).strip_prefix("Scale: ").map(str::to_owned))?;
+    Some(format!("{mode},{scale}"))
+}
+
 /// The frame counter's frames in `[from_ns, to_ns]`: its `frame <ns>` lines.
 pub fn counted_frames(log: &str, from_ns: u64, to_ns: u64) -> u64 {
     log.lines()
@@ -122,11 +229,18 @@ pub fn mpv_property(socket: &Path, name: &str) -> Result<Option<f64>, String> {
 /// Reads property `name` of the mpv whose IPC socket is `socket`, as mpv gives it; `null` when
 /// it is unavailable.
 pub fn mpv_value(socket: &Path, name: &str) -> Result<serde_json::Value, String> {
+    let reply = mpv_command(socket, serde_json::json!(["get_property", name]))?;
+    Ok(reply["data"].clone())
+}
+
+/// Sends `command` to the mpv whose IPC socket is `socket`, and gives its reply; an error when
+/// mpv says the command failed.
+pub fn mpv_command(socket: &Path, command: serde_json::Value) -> Result<serde_json::Value, String> {
     let mut stream = UnixStream::connect(socket).map_err(|e| format!("mpv's IPC: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| format!("mpv's IPC: {e}"))?;
-    let request = serde_json::json!({"command": ["get_property", name], "request_id": 1});
+    let request = serde_json::json!({"command": command, "request_id": 1});
     writeln!(stream, "{request}").map_err(|e| format!("mpv's IPC: {e}"))?;
     for line in BufReader::new(stream).lines() {
         let line = line.map_err(|e| format!("mpv's IPC: {e}"))?;
@@ -134,7 +248,11 @@ pub fn mpv_value(socket: &Path, name: &str) -> Result<serde_json::Value, String>
             serde_json::from_str(&line).map_err(|e| format!("mpv's IPC: {e}"))?;
         // Events come on the same socket; the reply carries the request's id.
         if reply["request_id"] == 1 {
-            return Ok(reply["data"].clone());
+            // A property mpv does not have yet is `null` data, not a failure.
+            return match reply["error"].as_str() {
+                Some("success") | Some("property unavailable") | None => Ok(reply),
+                Some(error) => Err(format!("mpv: {command}: {error}")),
+            };
         }
     }
     Err("mpv's IPC closed without a reply".to_owned())
@@ -186,6 +304,98 @@ mod tests {
             Some("3840x2160@240.000,1.5")
         );
         assert_eq!(yuna_output(log), None);
+    }
+
+    #[test]
+    fn wlr_randrs_output_is_read_at_its_current_mode() {
+        // As wlr-randr 0.5.0 printed dwl's output once the bench set its mode (abridged).
+        let json = r#"[{"name": "HEADLESS-1", "description": "Headless output 1",
+            "enabled": true, "modes": [{"width": 3840, "height": 2160, "refresh": 240.000000,
+            "preferred": false, "current": true}], "position": {"x": 0, "y": 0},
+            "transform": "normal", "scale": 1.500000, "adaptive_sync": false}]"#;
+        assert_eq!(
+            wlr_randr_output(json, "HEADLESS-1").as_deref(),
+            Some("3840x2160@240.000,1.5")
+        );
+        assert_eq!(wlr_randr_output(json, "HEADLESS-2"), None);
+        // A disabled output, or one without a current mode, is not the bench's yet.
+        let disabled = json.replace("\"enabled\": true", "\"enabled\": false");
+        assert_eq!(wlr_randr_output(&disabled, "HEADLESS-1"), None);
+        let no_mode = json.replace("\"current\": true", "\"current\": false");
+        assert_eq!(wlr_randr_output(&no_mode, "HEADLESS-1"), None);
+        assert_eq!(wlr_randr_output("not json", "HEADLESS-1"), None);
+    }
+
+    #[test]
+    fn umbriels_output_and_commits_are_read() {
+        // As `umbriel outputs --json` printed it at rest (abridged).
+        let json = r#"[{"active_workspace":"HEADLESS-1:1","direct_scanout":{"active":false,
+            "commit_seq":3,"commits":3,"reason":"composited","scanout_commits":0,"window":null},
+            "enabled":true,"logical_size":{"height":1440,"width":2560},"modes":[{"current":true,
+            "height":2160,"preferred":false,"refresh_mhz":240000,"width":3840}],
+            "name":"HEADLESS-1","powered":true,"scale":1.5}]"#;
+        assert_eq!(
+            umbriel_output(json, "HEADLESS-1").as_deref(),
+            Some("3840x2160@240.000,1.5")
+        );
+        assert_eq!(umbriel_commits(json, "HEADLESS-1"), Some(3));
+        // The same in an IPC reply's `ok`; no count while the output is off.
+        let reply = format!("{{\"ok\": {json}}}");
+        assert_eq!(umbriel_commits(&reply, "HEADLESS-1"), Some(3));
+        let off = json.replace(
+            r#""direct_scanout":{"active":false,
+            "commit_seq":3,"commits":3,"reason":"composited","scanout_commits":0,"window":null}"#,
+            r#""direct_scanout":null"#,
+        );
+        assert_eq!(umbriel_commits(&off, "HEADLESS-1"), None);
+        assert_eq!(umbriel_output(json, "DP-1"), None);
+    }
+
+    #[test]
+    fn hyprlands_headless_monitor_is_read_with_its_parents_disabled() {
+        // As `hyprctl -j monitors all` printed it (abridged): the window on its parent, and the
+        // output the bench made.
+        let json = r#"[{"id": 0, "name": "WAYLAND-1", "width": 1280, "height": 720,
+            "refreshRate": 60.00000, "scale": 2, "disabled": true,
+            "hardwareDetails": {"backend": "wayland"}},
+            {"id": 1, "name": "HEADLESS-1", "width": 3840, "height": 2160,
+            "refreshRate": 240.00000, "scale": 1.5, "disabled": false,
+            "hardwareDetails": {"backend": "headless"}}]"#;
+        assert_eq!(
+            hyprctl_output(json, "HEADLESS-1").as_deref(),
+            Some("3840x2160@240.000,1.5; WAYLAND-1 disabled")
+        );
+        let both = json.replace("\"disabled\": true", "\"disabled\": false");
+        assert_eq!(
+            hyprctl_output(&both, "HEADLESS-1").as_deref(),
+            Some("3840x2160@240.000,1.5; WAYLAND-1 enabled")
+        );
+        assert_eq!(hyprctl_output(json, "FALLBACK"), None);
+    }
+
+    #[test]
+    fn gdctls_current_mode_and_scale_are_read() {
+        // As Mutter 51.0's `gdctl show` printed its virtual monitor at the bench's scale.
+        let shown = "Monitors:\n\
+                     └──Monitor Meta-0 (MetaVendor)\n\
+                     \u{20}  ├──Vendor: MetaVendor\n\
+                     \u{20}  ├──Product: MetaVirtualMonitor\n\
+                     \u{20}  ├──Serial: 0x00\n\
+                     \u{20}  ├──Current mode\n\
+                     \u{20}  │   └──3840x2160@240.000\n\
+                     \u{20}  └──Preferences\n\
+                     \u{20}      └──Backlight: None\n\
+                     \n\
+                     Logical monitors:\n\
+                     └──Logical monitor #1\n\
+                     \u{20}  ├──Position: (0, 0)\n\
+                     \u{20}  ├──Scale: 1.5\n\
+                     \u{20}  ├──Transform: normal\n";
+        assert_eq!(
+            gdctl_output(shown).as_deref(),
+            Some("3840x2160@240.000,1.5")
+        );
+        assert_eq!(gdctl_output("Monitors:\n"), None);
     }
 
     #[test]

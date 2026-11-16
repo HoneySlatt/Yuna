@@ -79,7 +79,7 @@ pub struct RunFile {
 /// A case: one compositor, one of its configurations, one scenario.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Case {
-    /// The recipe's name: `sway`, `sway-vulkan`, `kwin`, `yuna`.
+    /// The recipe's name: `sway`, `kwin`, `dwl`, … (`recipes::RECIPES`).
     pub compositor: String,
     /// `as-shipped` or `equal-work`.
     pub configuration: String,
@@ -213,7 +213,8 @@ pub struct Usage {
     /// that lived between two readings are missed: see `wakeups_lower_bound`.
     pub wakeups: Figure,
     /// Whether `wakeups` and `preemptions` are lower bounds: the threads sampled account for
-    /// less than [`COVERAGE`] of the group's CPU time, so processes escaped the readings.
+    /// less than [`COVERAGE`] of the group's CPU time, so processes escaped the readings, or
+    /// that share is unknown, its `cpu.stat` unread or nil.
     pub wakeups_lower_bound: bool,
     /// Involuntary context switches: its preemptions.
     pub preemptions: Figure,
@@ -349,7 +350,8 @@ pub fn usage(before: Option<CpuStat>, after: Option<CpuStat>, window: &Window) -
         threads_cpu: Figure::new(seen.then_some(total.cpu_ns as f64), "ns"),
         threads_coverage,
         wakeups: counted(total.voluntary),
-        wakeups_lower_bound: threads_coverage.is_some_and(|share| share < COVERAGE),
+        // Exact only where the threads are known to account for the group's time.
+        wakeups_lower_bound: threads_coverage.is_none_or(|share| share < COVERAGE),
         preemptions: counted(total.involuntary),
         threads: kinds.into_values().collect(),
         gpu: window
@@ -447,6 +449,9 @@ mod tests {
         };
         let exact = super::usage(Some(before), Some(covered), &window);
         assert!(!exact.wakeups_lower_bound, "{:?}", exact.threads_coverage);
+        // Without the group's time, or with none, the share is unknown: not exact.
+        assert!(super::usage(None, Some(after), &window).wakeups_lower_bound);
+        assert!(super::usage(Some(before), Some(before), &window).wakeups_lower_bound);
         // A window that saw no thread knows no wake-up.
         let empty = Window::start(Sample::default());
         let unseen = super::usage(Some(before), Some(after), &empty);
