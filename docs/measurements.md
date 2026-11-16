@@ -44,20 +44,21 @@ counted by mpv in the window itself.
 **At rest**, still windows, 60 s after 5 s: no compositor used GPU time, and those whose frames
 were counted drew none (Mutter's were not counted; those counted by capture, a lower bound, showed
 none). Wake-ups a second: Umbriel 10.1 (its timer for hidden windows), Hyprland 3.5 to 3.6, mango
-0.03; Yuna and the others used no CPU time at all in the window, so none of their threads woke.
+0.03; Yuna, sway, sway on Vulkan and dwl used no CPU time at all in the window, so none of their
+threads woke; KWin and Mutter used 0.07 to 0.15 ms in each, their wake-ups not all seen.
 
 Memory after the rest window, in MiB, the lowest and highest of the three runs, and its growth a
 window from 1 to 150 windows (the means' difference over 149; for Yuna and Hyprland, whose figures
-are near, the range over every pair of runs): the process's own (`Pss_Anon` +
+are near, the range over every pair of runs in brackets): the process's own (`Pss_Anon` +
 `Pss_File`); the clients' `wl_shm` buffers it holds mapped (`Pss_Shmem`); its GPU memory, the
 kernel's DRM `resident-vram` + `resident-gtt`. A window's size depends on each compositor's layout,
 which the series did not record.
 
 | Compositor | Process: 1 / 15 / 150 windows | A window | Clients' buffers at 15 | A window | GPU: 1 / 15 / 150 windows | A window |
 |---|---|---|---|---|---|---|
-| Yuna | 83.6–83.7 / 83.6–84.0 / 84.9–85.1 | 0.0075–0.0103 | 30.4 | 0.31 | 83.6 / 115.1 / 147.1 | 0.43 |
+| Yuna | 83.6–83.7 / 83.6–84.0 / 84.9–85.1 | 0.0087 (0.0075–0.0103) | 30.4 | 0.31 | 83.6 / 115.1 / 147.1 | 0.43 |
 | Umbriel | 102.1–102.4 / 102.5–102.8 / 105.5–105.7 | 0.0225 | 0 | 0 | 124.1 / 364.0 / 2,526.6 | 16.1 |
-| Hyprland | 131.7–131.9 / 131.8 / 132.7–132.9 | 0.0054–0.0079 | 0 | 0 | 427–429 / 1,159–1,161 / 772–774 | 2.31 |
+| Hyprland | 131.7–131.9 / 131.8 / 132.7–132.9 | 0.0063 (0.0054–0.0079) | 0 | 0 | 427–429 / 1,159–1,161 / 772–774 | 2.31 |
 | KWin | 206.8–208.7 / 207.3–209.4 / 211.9–212.8 | 0.029 | 39.6 | 2.64 | 59.9 / 115.4 / 523.0 | 3.11 |
 | Mutter | 107.2–107.3 / 108.3 / 112.2 | 0.034 | 39.6 | 2.64 | 109.5 / 164.3 / 577.9 | 3.14 |
 | sway | 93.9–94.0 / 94.4–94.7 / 97.3–97.5 | 0.023 | 0 | 0 | 163.7 / 260.2 / 874.3 | 4.77 |
@@ -80,7 +81,7 @@ periods after the last, for any. Yuna, KWin, Mutter and Hyprland present at 4,16
 none dropped or delayed; 5 to 10 ms of CPU a second.
 
 **Motion**, the recipe's actions through its own commands, 8 actions: no comparison of frames
-across backends (ADR-0071); Yuna and Mutter take no outside command and were not run. Yuna's own
+across backends (ADR-0075); Yuna and Mutter take no outside command and were not run. Yuna's own
 motion is M1.7's, below.
 
 - **Yuna costs the least of the peers in a game**: 160 to 166 µs of CPU and 191 to 196 µs of GPU a
@@ -89,7 +90,8 @@ motion is M1.7's, below.
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)), spend 150 µs of CPU and
   215 µs of GPU a frame. sway costs the GPU more on Vulkan (290 µs) than on GLES (215 µs).
 - **Yuna's own memory is the least of the peers'**, 84 MiB at 15 windows against Umbriel's 102.5,
-  and so is its GPU memory's growth; its GPU memory at 15 windows equals KWin's, the least. Its
+  and so is its GPU memory's growth; its GPU memory at 15 windows is 0.3 MiB below KWin's, the
+  least of the peers', in every run. Its
   proportional set size grows with its clients' buffers, which it keeps mapped until they are
   replaced where the wlroots rivals release them once copied: 0.31 MiB a window, from code reading
   and these figures, the mechanism not traced further.
@@ -122,7 +124,8 @@ RADV six of its eight timed parts, the 1920 × 1080 upload and every composition
 in 16-bit floats, others using 2.0 to 3.6 logical CPUs and at most 2.3 % of the GPU, so the load
 was the processor's and the GPU's timestamps were not contended; on lavapipe, which draws on the
 processor, three of ten, both staging uploads and the one window in 16-bit floats, whose 99th
-percentile and longest frame below are about three times the other rows'. Neither run was
+percentile below is about three times the other rows', its longest five times. The RADV CPU
+figures below come from disturbed parts. Neither run was
 repeated quiet.
 
 - **The driver**: both report Vulkan 1.4.354 and offer every extension asked (modifiers, dma-buf

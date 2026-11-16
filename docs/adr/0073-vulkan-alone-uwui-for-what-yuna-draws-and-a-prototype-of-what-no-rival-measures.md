@@ -27,7 +27,7 @@ reports modifiers failing on AMD before RX 5000, which Mesa's source contradicts
 
 ## Decision
 
-The owner chose, on 2026-11-14 and 2026-11-15:
+The owner chose, on 2026-11-14 and 2026-11-15; this ADR states the rule whole on 2026-11-16:
 
 - **Yuna draws with Vulkan alone**, with no GLES fallback. Yuna's own Vulkan renderer comes at
   Stage 2's opening, with its own core and scene

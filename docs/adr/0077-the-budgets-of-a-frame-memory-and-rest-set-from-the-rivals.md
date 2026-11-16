@@ -28,15 +28,16 @@ Two facts of that series shape the budgets:
 - **Memory is two things.** A compositor's process holds its own memory, and may hold its
   clients' `wl_shm` buffers mapped: wlroots' rivals release a buffer once they have copied it,
   Yuna keeps it until the client replaces it, so its proportional set size grows with the clients'
-  buffers (`Pss_Shmem`) and not with its own (`Pss_Anon` and `Pss_File`). Its GPU memory, which
+  buffers (`Pss_Shmem`), and only slightly with its own (`Pss_Anon` and `Pss_File`). Its GPU memory, which
   the process's figures leave out, is system memory on the laptop and the Deck; at 15 windows it
-  ranged from 115 MiB (KWin) to 1,159 MiB (Hyprland).
+  ranged among the peers from 115 MiB (KWin) to 1,159 MiB (Hyprland).
 
 ## Decision
 
 The owner chose the method in ADR-0072, and on 2026-11-16 that memory counts the process and its
 GPU apart; this ADR applies them to the figures of 2026-11-16, on the high tier. Each figure is
-the best peer's lowest run.
+the best peer's lowest run, and each growth a window the difference of the means of its
+three runs at 1 and at 150 windows.
 
 - **A frame's cost**: in the game scenario (mpv fullscreen at 240 frames a second, Vulkan on radv,
   its frames counted by mpv), Yuna's CPU and GPU time a frame are at most the best peer's at equal
@@ -44,11 +45,12 @@ the best peer's lowest run.
   and 191 to 196 µs: met. The floor, sway's and dwl's: 150 µs and 215 µs.
 - **The process's memory** (`Pss_Anon` + `Pss_File`) at rest with 15 still windows, and its growth
   a window from 1 to 150, at most the best peer's: **102.5 MiB**, Umbriel's, and **0.0063 MiB a
-  window**, Hyprland's. Yuna: 83.6 to 84.0 MiB, met; 0.0075 to 0.0103 MiB a window, met within the
-  runs' spread (Hyprland's 0.0054 to 0.0079), which ADR-0072 does not rank.
+  window**, Hyprland's. Yuna: 83.6 to 84.0 MiB, met; 0.0087 MiB a window, missed, debt: each of its
+  nine pairs of runs is above the figure, though the bench cannot tell its range (0.0075 to
+  0.0103) from Hyprland's (0.0054 to 0.0079).
 - **The GPU's memory** (the kernel's DRM `resident-vram` + `resident-gtt`) at rest with 15
   windows, and its growth a window, at most the best peer's: **115.4 MiB**, KWin's, and **2.31 MiB
-  a window**, Hyprland's. Yuna: 115.1 MiB, met by a margin within the runs' noise; 0.43 MiB a
+  a window**, Hyprland's. Yuna: 115.1 MiB, met, 0.3 MiB below and the same in every run; 0.43 MiB a
   window, met.
 - **The clients' buffers a compositor holds** (`Pss_Shmem`) are recorded beside, not a budget:
   Yuna 30.4 MiB at 15 windows and 0.31 MiB a window; the wlroots rivals, Umbriel and Hyprland
@@ -71,8 +73,8 @@ the best peer's lowest run.
 
 - **The best of all the rivals** (dwl's 150 µs of CPU, sway on Vulkan's 84 MiB): rejected by
   ADR-0072.
-- **One total of the process and the GPU**: one figure, Yuna's far below the peers' (199 MiB
-  against Umbriel's 467), but a difference would not say where it comes from.
+- **One total of the process and the GPU**: one figure, Yuna's below the peers' (199 MiB against
+  KWin's 323, the lowest), but a difference would not say where it comes from.
 - **The process's proportional set size whole**, as first written: Yuna would miss it for the
   clients' buffers it keeps, and the GPU's memory, larger than the process's for most rivals,
   would be left out.
@@ -83,7 +85,8 @@ the best peer's lowest run.
 
 - The ROADMAP's budgets of a frame's cost and memory carry their rule and these figures; the
   figures change at each stage's end, when the rivals are measured again the same day.
-- Debt: the clients' buffers Yuna keeps ([debt](../debt.md#architecture)).
+- Debt: the process's growth a window, and the clients' buffers Yuna keeps
+  ([debt](../debt.md#architecture)).
 - A window's size depends on each compositor's layout, which the series did not record: growth a
   window compares windows of different sizes, within each rival's own layout.
 - Umbriel as shipped, its blur and shadows on, drew a game frame in 169 µs of GPU, below its
