@@ -218,7 +218,7 @@ other projects can add Yuna to their shells and drive programs in it as they dri
 
 ### Stage 2 — The desktop → 0.2
 
-**Goal.** Yuna replaces Umbriel as the owner's daily compositor, without HDR yet, on a base of its
+**Goal.** Yuna replaces niri as the owner's daily compositor, without HDR yet, on a base of its
 own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 - First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
@@ -259,7 +259,7 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   [client needs](client-needs.md)): the programs that capture told to the shell; a greeter mode
   under greetd; a new locker relieving a dead one.
 
-**Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
+**Exit.** The owner uses Yuna for a week in place of niri; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; the architecture and stability scenarios pass;
 Smithay is no longer in `Cargo.lock`.
 
