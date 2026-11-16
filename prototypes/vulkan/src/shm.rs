@@ -9,7 +9,9 @@ use std::time::Instant;
 use ash::vk;
 
 use crate::dmabuf::image_info;
-use crate::gpu::{Failure, Gpu, Recorder, Scope, buffer_to_host, image_barrier, texel_copy};
+use crate::gpu::{
+    BoundBuffer, Failure, Gpu, Recorder, Scope, buffer_to_host, image_barrier, texel_copy,
+};
 use crate::json::Json;
 use crate::load::{LoadMonitor, LoadWindow};
 use crate::outcome::Check;
@@ -33,6 +35,67 @@ pub struct Figures {
     /// From the upload's start until the fence says the image is ready.
     pub wall: Option<Summary>,
     pub pixels: Check,
+    /// The memory the GPU copies from: the staging buffer's, or the imported pages'.
+    pub source_memory: MemoryType,
+}
+
+/// A memory type the driver offers, and its heap.
+pub struct MemoryType {
+    pub index: u32,
+    pub properties: vk::MemoryPropertyFlags,
+    pub heap_index: u32,
+    pub heap_flags: vk::MemoryHeapFlags,
+    pub heap_bytes: u64,
+}
+
+impl MemoryType {
+    fn of(gpu: &Gpu<'_>, index: u32) -> Self {
+        let memory_type = gpu.memory.memory_types[index as usize];
+        let heap = gpu.memory.memory_heaps[memory_type.heap_index as usize];
+        Self {
+            index,
+            properties: memory_type.property_flags,
+            heap_index: memory_type.heap_index,
+            heap_flags: heap.flags,
+            heap_bytes: heap.size,
+        }
+    }
+
+    fn to_json(&self) -> Json {
+        let names = |text: String| {
+            Json::Array(
+                text.split(" | ")
+                    .filter(|name| !name.is_empty())
+                    .map(Json::text)
+                    .collect(),
+            )
+        };
+        Json::Object(vec![
+            ("type_index", Json::Integer(i64::from(self.index))),
+            ("property_flags", names(format!("{:?}", self.properties))),
+            ("heap_index", Json::Integer(i64::from(self.heap_index))),
+            ("heap_flags", names(format!("{:?}", self.heap_flags))),
+            ("heap_bytes", Json::Integer(self.heap_bytes as i64)),
+        ])
+    }
+
+    fn describe(&self) -> String {
+        let flags = |text: String| {
+            if text.is_empty() {
+                "no flags".to_owned()
+            } else {
+                text
+            }
+        };
+        format!(
+            "type {}, {}; heap {}, {}, {:.1} GiB",
+            self.index,
+            flags(format!("{:?}", self.properties)),
+            self.heap_index,
+            flags(format!("{:?}", self.heap_flags)),
+            self.heap_bytes as f64 / f64::from(1u32 << 30)
+        )
+    }
 }
 
 pub enum PathResult {
@@ -71,7 +134,7 @@ pub fn run(gpu: &Gpu<'_>, load: &LoadMonitor, windows: &mut Vec<LoadWindow>) -> 
             };
             fill_argb(client.as_mut_slice(), width, height);
 
-            eprintln!("vulkan-prototype: wl_shm: {width}x{height} through a staging buffer");
+            progress!("wl_shm: {width}x{height} through a staging buffer");
             let start = load.mark();
             let staging = match upload_through_staging(gpu, &client, width, height) {
                 Ok(figures) => {
@@ -84,7 +147,7 @@ pub fn run(gpu: &Gpu<'_>, load: &LoadMonitor, windows: &mut Vec<LoadWindow>) -> 
             let host_pointer = if gpu.host_memory.is_none() {
                 PathResult::Skipped("VK_EXT_external_memory_host is not offered".to_owned())
             } else {
-                eprintln!("vulkan-prototype: wl_shm: {width}x{height} through its pages imported");
+                progress!("wl_shm: {width}x{height} through its pages imported");
                 let start = load.mark();
                 match upload_from_host_pointer(gpu, &client, width, height) {
                     Ok(figures) => {
@@ -283,7 +346,7 @@ impl Upload {
         client: &[u8],
     ) -> Result<String, Failure> {
         let bytes = self.width as usize * self.height as usize * 4;
-        let (buffer, mapped) = scope.bound_buffer(
+        let BoundBuffer { buffer, mapped, .. } = scope.bound_buffer(
             gpu,
             bytes as u64,
             vk::BufferUsageFlags::TRANSFER_DST,
@@ -350,13 +413,19 @@ struct Times {
     wall: Vec<f64>,
 }
 
-fn figures(import_us: Option<f64>, times: Times, pixels: Check) -> Figures {
+fn figures(
+    import_us: Option<f64>,
+    times: Times,
+    pixels: Check,
+    source_memory: MemoryType,
+) -> Figures {
     Figures {
         import_us,
         cpu: Summary::of(&times.cpu),
         gpu: Summary::of(&times.gpu),
         wall: Summary::of(&times.wall),
         pixels,
+        source_memory,
     }
 }
 
@@ -369,7 +438,11 @@ fn upload_through_staging(
     let mut scope = Scope::new(gpu);
     let upload = Upload::new(gpu, &mut scope, width, height)?;
     let bytes = width as usize * height as usize * 4;
-    let (staging, mapped) = scope.bound_buffer(
+    let BoundBuffer {
+        buffer: staging,
+        mapped,
+        memory_type,
+    } = scope.bound_buffer(
         gpu,
         bytes as u64,
         vk::BufferUsageFlags::TRANSFER_SRC,
@@ -385,7 +458,12 @@ fn upload_through_staging(
         staging_bytes.copy_from_slice(pixels);
     })?;
     let check = Check::from_result(upload.check(gpu, &mut scope, client.as_slice()));
-    Ok(figures(None, times, check))
+    Ok(figures(
+        None,
+        times,
+        check,
+        MemoryType::of(gpu, memory_type),
+    ))
 }
 
 fn upload_from_host_pointer(
@@ -422,8 +500,8 @@ fn upload_from_host_pointer(
     let mut scope = Scope::new(gpu);
     let upload = Upload::new(gpu, &mut scope, width, height)?;
     let started = Instant::now();
-    let buffer = match import_pages(gpu, &mut scope, client) {
-        Ok(buffer) => buffer,
+    let (buffer, memory_type) = match import_pages(gpu, &mut scope, client) {
+        Ok(imported) => imported,
         Err(failure) => return Err(compare_with_anonymous_memory(gpu, client.len(), failure)),
     };
     let import_us = started.elapsed().as_secs_f64() * 1e6;
@@ -431,27 +509,52 @@ fn upload_from_host_pointer(
     let times = upload.measure(gpu, &scope, buffer, || {})?;
     let check = Check::from_result(upload.check(gpu, &mut scope, client.as_slice()));
     drop(scope);
-    Ok(figures(Some(import_us), times, check))
+    Ok(figures(
+        Some(import_us),
+        times,
+        check,
+        MemoryType::of(gpu, memory_type),
+    ))
 }
 
-/// Imports `pages` as a buffer the GPU copies from, with `VK_EXT_external_memory_host`. The
-/// buffer's memory lives in `scope`, which must end before the mapping does.
+/// Imports `pages` as a buffer the GPU copies from, with `VK_EXT_external_memory_host`; returns
+/// it with the memory type it took. The buffer's memory lives in `scope`, which must end before
+/// the mapping does.
 fn import_pages(
     gpu: &Gpu<'_>,
     scope: &mut Scope<'_>,
     pages: &Mapping,
-) -> Result<vk::Buffer, Failure> {
+) -> Result<(vk::Buffer, u32), Failure> {
     let Some(host_memory) = &gpu.host_memory else {
         return Err(Failure::other(
             "import",
             "VK_EXT_external_memory_host is not enabled",
         ));
     };
+    // Vulkan takes only a pointer and a size that are multiples of the driver's alignment; mmap
+    // aligns to a page, which a driver may exceed. Checked before any call, never imported
+    // misaligned.
+    let alignment = host_pointer_alignment(gpu).unwrap_or(0);
+    let address = pages.as_ptr() as usize as u64;
+    if alignment == 0
+        || !address.is_multiple_of(alignment)
+        || !(pages.len() as u64).is_multiple_of(alignment)
+    {
+        return Err(Failure::other(
+            "check the pages' alignment",
+            format!(
+                "the mapping at {address:#x}, {} bytes long, is not aligned to \
+                 minImportedHostPointerAlignment, {alignment} bytes",
+                pages.len()
+            ),
+        ));
+    }
     let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
     let pointer = pages.as_ptr().cast::<std::ffi::c_void>();
     let mut pointer_properties = vk::MemoryHostPointerPropertiesEXT::default();
     // SAFETY: the device has external_memory_host enabled; the pointer is the start of a live
-    // mapping, page-aligned by mmap, which the call only inspects.
+    // mapping whose address and length are multiples of minImportedHostPointerAlignment,
+    // checked above, and the call only inspects it.
     unsafe {
         (host_memory.fp().get_memory_host_pointer_properties_ext)(
             gpu.device.handle(),
@@ -501,11 +604,12 @@ fn import_pages(
             .push_next(&mut import),
         "import the pages",
     )?;
-    // SAFETY: the memory imports the mapping, as large as the buffer needs, of a type it allows;
-    // the caller keeps the mapping alive longer than the scope that frees the memory.
+    // SAFETY: the memory imports the mapping, aligned as the driver asks (checked above), as
+    // large as the buffer needs, of a type it allows; the caller keeps the mapping alive longer
+    // than the scope that frees the memory.
     unsafe { gpu.device.bind_buffer_memory(buffer, memory, 0) }
         .map_err(|result| Failure::vulkan("bind the pages", result))?;
-    Ok(buffer)
+    Ok((buffer, memory_type))
 }
 
 /// When a client's memfd cannot be imported, whether anonymous memory of the same size can: it
@@ -561,6 +665,7 @@ fn path_json(result: &PathResult) -> Json {
             ("gpu_us", summary_json(figures.gpu)),
             ("wall_us", summary_json(figures.wall)),
             ("pixels", figures.pixels.to_json()),
+            ("source_memory", figures.source_memory.to_json()),
         ]),
         PathResult::Failed(failure) => Check::Failed(failure.clone()).to_json(),
         PathResult::Skipped(reason) => Check::Skipped(reason.clone()).to_json(),
@@ -599,6 +704,28 @@ pub fn to_markdown(results: &[ShmResult], out: &mut String) {
                 PathResult::Skipped(reason) => out.push_str(&format!(
                     "| {size} | {name} | skipped: {reason} | | | | |\n"
                 )),
+            }
+        }
+    }
+    let measured = results.iter().any(|result| {
+        matches!(result.staging, PathResult::Measured(_))
+            || matches!(result.host_pointer, PathResult::Measured(_))
+    });
+    if measured {
+        out.push_str("\nThe memory the GPU copied from:\n\n");
+    }
+    for result in results {
+        for (name, path) in [
+            ("staging", &result.staging),
+            ("host pointer", &result.host_pointer),
+        ] {
+            if let PathResult::Measured(figures) = path {
+                out.push_str(&format!(
+                    "- {}x{}, {name}: {}\n",
+                    result.width,
+                    result.height,
+                    figures.source_memory.describe()
+                ));
             }
         }
     }

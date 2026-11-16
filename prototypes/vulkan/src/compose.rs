@@ -12,7 +12,9 @@ use std::time::Instant;
 use ash::vk;
 
 use crate::dmabuf::{self, PatternWriter, image_info, view_info};
-use crate::gpu::{Failure, Gpu, Recorder, Scope, buffer_to_host, image_barrier, texel_copy};
+use crate::gpu::{
+    BoundBuffer, Failure, Gpu, Recorder, Scope, buffer_to_host, image_barrier, texel_copy,
+};
 use crate::json::Json;
 use crate::load::{LoadMonitor, LoadWindow};
 use crate::modifiers::{acquire, release};
@@ -298,7 +300,7 @@ pub fn run(
             let (window_size, client_modifiers, outcome) = match &scene {
                 Ok((windows_drawn, modifiers)) => {
                     let scene_name = format!("{count} window{}", if count == 1 { "" } else { "s" });
-                    eprintln!("vulkan-prototype: composition: {scene_name} into {name}");
+                    progress!("composition: {scene_name} into {name}");
                     let start = load.mark();
                     let outcome = measure(
                         compositor,
@@ -513,7 +515,7 @@ fn check_window_centres(
     } else {
         4
     };
-    let (buffer, mapped) = scope.bound_buffer(
+    let BoundBuffer { buffer, mapped, .. } = scope.bound_buffer(
         gpu,
         pixel_bytes * windows.len() as u64,
         vk::BufferUsageFlags::TRANSFER_DST,

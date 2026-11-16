@@ -2,12 +2,20 @@
 //! ADR-0060 asks of every timed measure, and the machine's own facts.
 //!
 //! A thread reads the counters each second; each timed part also reads them at its start and its
-//! end. Other programs' CPU is the machine's busy time less the prototype's own (`/proc/stat`
-//! less `/proc/self/stat`), exact over a part. Their GPU is an estimate: amdgpu's
-//! `gpu_busy_percent`, read after the part's start, less the prototype's own share of the GPU
-//! over the part, from the DRM usage the kernel reports in `/proc/self/fdinfo`. A part is
-//! disturbed when others used more than 2 logical CPUs or 10 % of the GPU on average. A part
-//! that measured nothing has no window.
+//! end. Both figures are estimates:
+//!
+//! - Other programs' CPU is the machine's busy time less the prototype's own, `/proc/stat` less
+//!   `/proc/self/stat`. Both count in ticks of 10 ms (USER_HZ), each field rounded down: the six
+//!   busy fields and the prototype's two make the difference wrong by less than 8 ticks, 0.08 s
+//!   of CPU time over the part, before the kernel's own sampling of what runs at each tick.
+//!   Each window states that bound in logical CPUs: 0.4 over a 0.2 s part, 0.006 over 13 s.
+//! - Other programs' GPU is amdgpu's `gpu_busy_percent`, the graphics engine's activity, read
+//!   after the part's start: at its end and once each second during it, so once or twice for a
+//!   part shorter than a second. Less the prototype's own share of the graphics engine over the
+//!   part, from the kernel's `drm-engine-gfx` in `/proc/self/fdinfo`.
+//!
+//! A part is disturbed when others used more than 2 logical CPUs or 10 % of the GPU on average.
+//! A part that measured nothing has no window.
 
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +28,9 @@ use crate::json::Json;
 
 const OTHERS_CORES_LIMIT: f64 = 2.0;
 const OTHERS_GPU_PERCENT_LIMIT: f64 = 10.0;
+/// The most the rounding of the CPU counters can shift others' busy time, in ticks: six fields
+/// of `/proc/stat`'s busy time and two of `/proc/self/stat`, each rounded down to a tick.
+const CPU_ROUNDING_TICKS: f64 = 8.0;
 
 /// The files of the GPU the prototype runs on: its sysfs folder and its render node.
 pub struct GpuFiles {
@@ -105,8 +116,9 @@ fn parse_own_stat(text: &str) -> Option<u64> {
     Some(utime + stime)
 }
 
-/// Every engine's time of the prototype's DRM clients on the GPU's render node, from the
-/// kernel's `drm-engine-*` lines, each client counted once.
+/// The graphics engine's time of the prototype's DRM clients on the GPU's render node, from the
+/// kernel's `drm-engine-gfx` lines, each client counted once: the engine `gpu_busy_percent`
+/// measures, and the one the prototype's universal queue runs on.
 fn own_gpu_ns(gpu: &GpuFiles) -> u64 {
     let Ok(entries) = fs::read_dir("/proc/self/fd") else {
         return 0;
@@ -122,21 +134,22 @@ fn own_gpu_ns(gpu: &GpuFiles) -> u64 {
         else {
             continue;
         };
-        let (client, engines) = parse_fdinfo(&info);
+        let (client, graphics_ns) = parse_fdinfo(&info);
         if let Some(client) = client {
             if clients.contains(&client) {
                 continue;
             }
             clients.push(client);
         }
-        total += engines;
+        total += graphics_ns;
     }
     total
 }
 
+/// A DRM client's id and its graphics engine's time in nanoseconds.
 fn parse_fdinfo(text: &str) -> (Option<u64>, u64) {
     let mut client = None;
-    let mut engines = 0;
+    let mut graphics_ns = 0;
     for line in text.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
@@ -144,16 +157,15 @@ fn parse_fdinfo(text: &str) -> (Option<u64>, u64) {
         let value = value.trim();
         if key == "drm-client-id" {
             client = value.parse().ok();
-        } else if key.starts_with("drm-engine-")
-            && !key.starts_with("drm-engine-capacity-")
+        } else if key == "drm-engine-gfx"
             && let Some(ns) = value
                 .strip_suffix(" ns")
                 .and_then(|ns| ns.trim().parse::<u64>().ok())
         {
-            engines += ns;
+            graphics_ns += ns;
         }
     }
-    (client, engines)
+    (client, graphics_ns)
 }
 
 /// The clock marked current in `pp_dpm_sclk` or `pp_dpm_mclk`: "1: 2530Mhz *".
@@ -246,8 +258,13 @@ pub struct LoadWindow {
     pub name: String,
     pub seconds: f64,
     pub others_cores: Option<f64>,
+    /// How far the counters' rounding may put `others_cores` off, in logical CPUs.
+    pub others_cores_error: Option<f64>,
     pub own_cores: Option<f64>,
     pub gpu_busy_percent: Option<f64>,
+    /// How many readings of `gpu_busy_percent` the part's mean took: its end's, and one each
+    /// second during it.
+    pub gpu_readings: usize,
     pub own_gpu_percent: Option<f64>,
     pub others_gpu_percent: Option<f64>,
     pub performance_levels: Vec<String>,
@@ -272,7 +289,9 @@ impl LoadWindow {
             return Self::empty(name);
         };
         let seconds = last.at.duration_since(first.at).as_secs_f64();
-        let cores = |from: &Sample, to: &Sample| -> Option<(f64, f64)> {
+        // Others' and the prototype's logical CPUs, and the rounding's bound, all in ticks
+        // divided by the ticks each CPU lived through.
+        let cores = |from: &Sample, to: &Sample| -> Option<(f64, f64, f64)> {
             let (busy_from, total_from, cpus) = from.cpu?;
             let (busy_to, total_to, _) = to.cpu?;
             let own = to.own_ticks?.checked_sub(from.own_ticks?)? as f64;
@@ -284,6 +303,7 @@ impl LoadWindow {
             Some((
                 ((busy - own) / elapsed_per_cpu).max(0.0),
                 own / elapsed_per_cpu,
+                CPU_ROUNDING_TICKS / elapsed_per_cpu,
             ))
         };
         let window_cores = cores(first, last);
@@ -321,19 +341,21 @@ impl LoadWindow {
             .windows(2)
             .map(|pair| SecondRead {
                 seconds_since_start: pair[1].at.duration_since(first.at).as_secs_f64(),
-                others_cores: cores(&pair[0], &pair[1]).map(|(others, _)| others),
+                others_cores: cores(&pair[0], &pair[1]).map(|(others, _, _)| others),
                 gpu_busy_percent: pair[1].gpu_busy_percent,
                 sclk_mhz: pair[1].sclk_mhz,
                 mclk_mhz: pair[1].mclk_mhz,
             })
             .collect();
-        let others_cores = window_cores.map(|(others, _)| others);
+        let others_cores = window_cores.map(|(others, _, _)| others);
         Self {
             name,
             seconds,
             others_cores,
-            own_cores: window_cores.map(|(_, own)| own),
+            others_cores_error: window_cores.map(|(_, _, error)| error),
+            own_cores: window_cores.map(|(_, own, _)| own),
             gpu_busy_percent,
+            gpu_readings: busy.len(),
             own_gpu_percent,
             others_gpu_percent,
             performance_levels,
@@ -360,8 +382,10 @@ impl LoadWindow {
             name,
             seconds: 0.0,
             others_cores: None,
+            others_cores_error: None,
             own_cores: None,
             gpu_busy_percent: None,
+            gpu_readings: 0,
             own_gpu_percent: None,
             others_gpu_percent: None,
             performance_levels: Vec::new(),
@@ -387,9 +411,14 @@ impl LoadWindow {
             ("part", Json::text(&self.name)),
             ("seconds", Json::Number(self.seconds)),
             ("others_logical_cpus", number(self.others_cores)),
+            (
+                "others_logical_cpus_rounding_bound",
+                number(self.others_cores_error),
+            ),
             ("own_logical_cpus", number(self.own_cores)),
             ("gpu_busy_percent", number(self.gpu_busy_percent)),
-            ("own_gpu_percent", number(self.own_gpu_percent)),
+            ("gpu_busy_readings", Json::Integer(self.gpu_readings as i64)),
+            ("own_gfx_percent", number(self.own_gpu_percent)),
             ("others_gpu_percent", number(self.others_gpu_percent)),
             (
                 "power_dpm_force_performance_level",
@@ -425,14 +454,17 @@ impl LoadWindow {
 
 pub fn to_markdown(windows: &[LoadWindow], out: &mut String) {
     out.push_str(&format!(
-        "Other programs' load during each timed part (ADR-0060). Their CPU is exact; their GPU is \
-         `gpu_busy_percent`, sampled each second, less the prototype's own share from the \
-         kernel's DRM usage, an estimate. Disturbed: others above {OTHERS_CORES_LIMIT} logical \
-         CPUs or {OTHERS_GPU_PERCENT_LIMIT} % of the GPU on average.\n\n"
+        "Other programs' load during each timed part (ADR-0060), an estimate. Their CPU comes \
+         from counters in 10 ms ticks; ± is how far the counters' rounding may put it off. Their \
+         GPU is `gpu_busy_percent`, the graphics engine's activity, averaged over its readings \
+         (the part's end and one each second, so one or two for a part shorter than a second), \
+         less the prototype's own share of the graphics engine (`drm-engine-gfx`). Disturbed: others \
+         above {OTHERS_CORES_LIMIT} logical CPUs or {OTHERS_GPU_PERCENT_LIMIT} % of the GPU on \
+         average.\n\n"
     ));
     out.push_str(
-        "| Part | Seconds | Others' CPUs | Own CPUs | GPU busy % | Own GPU % | Others' GPU % | Level | sclk MHz | mclk MHz | Disturbed |\n\
-         |---|---|---|---|---|---|---|---|---|---|---|\n",
+        "| Part | Seconds | Others' CPUs | ± | Own CPUs | GPU busy % | Readings | Own gfx % | Others' GPU % | Level | sclk MHz | mclk MHz | Disturbed |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let number =
         |value: Option<f64>| value.map_or_else(|| "-".to_owned(), |value| format!("{value:.2}"));
@@ -450,12 +482,14 @@ pub fn to_markdown(windows: &[LoadWindow], out: &mut String) {
     };
     for window in windows {
         out.push_str(&format!(
-            "| {} | {:.1} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {:.1} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             window.name,
             window.seconds,
             number(window.others_cores),
+            number(window.others_cores_error),
             number(window.own_cores),
             number(window.gpu_busy_percent),
+            window.gpu_readings,
             number(window.own_gpu_percent),
             number(window.others_gpu_percent),
             if window.performance_levels.is_empty() {
@@ -549,7 +583,7 @@ mod tests {
         let own = "42 (a (b) c) R 1 2 3 4 5 6 7 8 9 10 70 30 0 0";
         assert_eq!(parse_own_stat(own), Some(100));
         let fdinfo = "drm-client-id:\t7\ndrm-engine-gfx:\t1500 ns\ndrm-engine-compute:\t500 ns\ndrm-engine-capacity-gfx:\t2\n";
-        assert_eq!(parse_fdinfo(fdinfo), (Some(7), 2000));
+        assert_eq!(parse_fdinfo(fdinfo), (Some(7), 1500));
         assert_eq!(
             current_clock("0: 500Mhz \n1: 2530Mhz *\n2: 2660Mhz \n"),
             Some(2530)

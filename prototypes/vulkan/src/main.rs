@@ -6,6 +6,16 @@
 //! It opens no display and no surface: only the render node, through Vulkan. A throwaway, kept
 //! on its own branch until Stage 2's renderer lands.
 
+/// Writes one line to standard error, after the program's name. A closed or broken standard
+/// error is ignored: progress and messages are not the report, which goes to standard output
+/// and its JSON file.
+macro_rules! progress {
+    ($($argument:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "vulkan-prototype: {}", format_args!($($argument)*));
+    }};
+}
+
 mod compose;
 mod dmabuf;
 mod driver;
@@ -44,7 +54,10 @@ Usage:
 ";
 
 /// The version of the JSON file, raised when its fields change meaning.
-const REPORT_FORMAT: i64 = 1;
+// 2: the prototype's own GPU share is the graphics engine's alone (`own_gfx_percent`); each
+// load window states the CPU estimate's bound and its GPU readings; `wl_shm`'s paths name their
+// source memory.
+const REPORT_FORMAT: i64 = 2;
 
 /// How long the prototype idles before the timed parts, to read others' load alone.
 const BASELINE: Duration = Duration::from_secs(2);
@@ -65,14 +78,17 @@ enum Command {
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
     match parse(&arguments) {
-        Ok(Command::Help) => {
-            print!("{USAGE}");
-            ExitCode::SUCCESS
-        }
+        Ok(Command::Help) => match print_out(USAGE) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                progress!("cannot print the usage: {error}");
+                ExitCode::FAILURE
+            }
+        },
         Ok(Command::Devices) => devices(),
         Ok(Command::Report(options)) => report(&options, &arguments),
         Err(message) => {
-            eprintln!("vulkan-prototype: {message}\n\n{USAGE}");
+            progress!("{message}\n\n{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -134,32 +150,48 @@ fn devices() -> ExitCode {
     let vulkan = match Vulkan::new(false) {
         Ok(vulkan) => vulkan,
         Err(failure) => {
-            eprintln!("vulkan-prototype: {}", failure.describe());
+            progress!("{}", failure.describe());
             return ExitCode::FAILURE;
         }
     };
     let physicals = match vulkan.physical_devices() {
         Ok(physicals) => physicals,
         Err(failure) => {
-            eprintln!("vulkan-prototype: {}", failure.describe());
+            progress!("{}", failure.describe());
             return ExitCode::FAILURE;
         }
     };
+    let mut list = String::new();
     if physicals.is_empty() {
-        println!("No Vulkan device: the loader found no driver.");
+        list.push_str("No Vulkan device: the loader found no driver.\n");
     }
     for (index, &physical) in physicals.iter().enumerate() {
         let info = driver::read(&vulkan, physical);
-        println!(
-            "{index}: {} ({}), Vulkan {}, {} {}",
+        list.push_str(&format!(
+            "{index}: {} ({}), Vulkan {}, {} {}\n",
             info.device_name,
             info.device_type,
             gpu::version_text(info.api_version),
             info.driver_name.as_deref().unwrap_or("unknown driver"),
             info.driver_info.as_deref().unwrap_or(""),
-        );
+        ));
     }
-    ExitCode::SUCCESS
+    match print_out(&list) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            progress!("cannot print the devices: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Writes `text` to standard output. A broken one, a pipe whose reader left, is an error the
+/// caller reports, where `print!` would panic. A descriptor 1 closed at start the standard
+/// library has already reopened on /dev/null, as it does 0 and 2, so output goes nowhere then.
+fn print_out(text: &str) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()
 }
 
 /// A part that ran, or why it did not.
@@ -212,7 +244,7 @@ fn run_on_two_devices(
         }
     };
 
-    eprintln!("vulkan-prototype: part 2, formats and modifiers");
+    progress!("part 2, formats and modifiers");
     let modifiers = if client.modifiers.is_none() || !client.dma_buf || client.memory_fd.is_none() {
         Part::Skipped(
             "the device does not offer VK_EXT_image_drm_format_modifier, VK_EXT_external_memory_dma_buf \
@@ -226,21 +258,21 @@ fn run_on_two_devices(
         }
     };
 
-    eprintln!("vulkan-prototype: part 3, explicit sync");
+    progress!("part 3, explicit sync");
     let sync = Part::Done(sync::run(&client, &compositor));
 
-    eprintln!(
-        "vulkan-prototype: reading others' load for {} s before the timed parts",
+    progress!(
+        "reading others' load for {} s before the timed parts",
         BASELINE.as_secs()
     );
     let start = load.mark();
     std::thread::sleep(BASELINE);
     load_windows.push(load.window("before the timed parts, the prototype idle", start));
 
-    eprintln!("vulkan-prototype: part 4, wl_shm's path");
+    progress!("part 4, wl_shm's path");
     let shm = Part::Done(shm::run(&compositor, load, load_windows));
 
-    eprintln!("vulkan-prototype: part 5, the composition's floor");
+    progress!("part 5, the composition's floor");
     let composition = match &modifiers {
         Part::Done(results) => {
             let working = modifiers::working_modifiers(results, ash::vk::Format::B8G8R8A8_UNORM);
@@ -273,20 +305,20 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
     let vulkan = match Vulkan::new(options.validate) {
         Ok(vulkan) => vulkan,
         Err(failure) => {
-            eprintln!("vulkan-prototype: {}", failure.describe());
+            progress!("{}", failure.describe());
             return ExitCode::FAILURE;
         }
     };
     let physicals = match vulkan.physical_devices() {
         Ok(physicals) => physicals,
         Err(failure) => {
-            eprintln!("vulkan-prototype: {}", failure.describe());
+            progress!("{}", failure.describe());
             return ExitCode::FAILURE;
         }
     };
     let Some(&physical) = physicals.get(options.device) else {
-        eprintln!(
-            "vulkan-prototype: there is no device {} ({} found); `vulkan-prototype devices` lists them",
+        progress!(
+            "there is no device {} ({} found); `vulkan-prototype devices` lists them",
             options.device,
             physicals.len()
         );
@@ -294,7 +326,7 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
     };
 
     let machine = Machine::read();
-    eprintln!("vulkan-prototype: part 1, the driver");
+    progress!("part 1, the driver");
     let driver = driver::read(&vulkan, physical);
     let load = LoadMonitor::start(
         driver
@@ -303,7 +335,7 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
     );
     let mut load_windows = Vec::new();
     let parts = run_on_two_devices(&vulkan, physical, options, &load, &mut load_windows);
-    eprintln!("vulkan-prototype: part 6, priority");
+    progress!("part 6, priority");
     let priority = priority::run(&vulkan, physical);
     drop(load);
     let validation = vulkan.validation_messages();
@@ -314,18 +346,7 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
         options,
         validating: vulkan.validating(),
     };
-    print!(
-        "{}",
-        markdown(
-            &header,
-            &machine,
-            &driver,
-            &parts,
-            &priority,
-            &load_windows,
-            &validation
-        )
-    );
+    // The JSON file first: it is kept whatever becomes of standard output.
     let json = report_json(
         &header,
         &machine,
@@ -336,24 +357,34 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
         &validation,
     );
     match write_atomically(&options.json, json.to_pretty_string().as_bytes()) {
-        Ok(()) => eprintln!(
-            "vulkan-prototype: the JSON report is in {}",
-            options.json.display()
-        ),
+        Ok(()) => progress!("the JSON report is in {}", options.json.display()),
         Err(error) => {
-            eprintln!(
-                "vulkan-prototype: cannot write {}: {error}",
-                options.json.display()
-            );
+            progress!("cannot write {}: {error}", options.json.display());
             return ExitCode::FAILURE;
         }
+    }
+    let text = markdown(
+        &header,
+        &machine,
+        &driver,
+        &parts,
+        &priority,
+        &load_windows,
+        &validation,
+    );
+    if let Err(error) = print_out(&text) {
+        progress!(
+            "cannot print the Markdown report ({error}); the JSON report is in {}",
+            options.json.display()
+        );
+        return ExitCode::FAILURE;
     }
     let findings = validation
         .iter()
         .filter(|message| is_finding(message))
         .count();
     if options.validate && findings > 0 {
-        eprintln!("vulkan-prototype: the validation layer reported {findings} kinds of message");
+        progress!("the validation layer reported {findings} kinds of message");
         return ExitCode::from(3);
     }
     ExitCode::SUCCESS

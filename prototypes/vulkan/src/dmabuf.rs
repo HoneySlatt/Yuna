@@ -230,7 +230,9 @@ pub fn export_pattern(
         .map_err(at_offered)?;
     let mut export = vk::ExportMemoryAllocateInfo::default()
         .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-    let memory = bind_dedicated(client, scope, image, u32::MAX, &mut export).map_err(at_offered)?;
+    let memory =
+        allocate_dedicated(client, scope, image, u32::MAX, &mut export).map_err(at_offered)?;
+    bind_image(client, image, memory).map_err(at_offered)?;
 
     let mut chosen = vk::ImageDrmFormatModifierPropertiesEXT::default();
     // SAFETY: the image was made with DRM_FORMAT_MODIFIER_EXT tiling on this device, which has
@@ -384,21 +386,24 @@ pub fn import(
     let mut import = vk::ImportMemoryFdInfoKHR::default()
         .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
         .fd(exported.fd.as_raw_fd());
-    bind_dedicated(
+    let memory = allocate_dedicated(
         compositor,
         scope,
         image,
         fd_properties.memory_type_bits,
         &mut import,
     )?;
-    // A successful import owns the descriptor: Vulkan closes it with the memory.
+    // The allocation succeeded, so it owns the descriptor and closes it with the memory: given
+    // up here, before anything else can fail, no path closes it a second time. Had it failed,
+    // the descriptor would still be ours, closed when `exported` drops.
     let _ = exported.fd.into_raw_fd();
+    bind_image(compositor, image, memory)?;
     Ok(image)
 }
 
 /// Allocates dedicated memory for `image`, of a type both it and `allowed` take, with `extra`
-/// (an export or an import) chained, and binds it.
-fn bind_dedicated<T: vk::ExtendsMemoryAllocateInfo>(
+/// (an export or an import) chained. The caller binds it.
+fn allocate_dedicated<T: vk::ExtendsMemoryAllocateInfo>(
     gpu: &Gpu<'_>,
     scope: &mut Scope<'_>,
     image: vk::Image,
@@ -415,19 +420,22 @@ fn bind_dedicated<T: vk::ExtendsMemoryAllocateInfo>(
         )
         .ok_or_else(|| Failure::other("allocate the image's memory", "no memory type fits"))?;
     let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
-    let memory = scope.memory(
+    scope.memory(
         &vk::MemoryAllocateInfo::default()
             .allocation_size(requirements.size)
             .memory_type_index(memory_type)
             .push_next(&mut dedicated)
             .push_next(extra),
         "allocate the image's memory",
-    )?;
-    // SAFETY: the memory is dedicated to this image, of a type it allows, and as large as it
-    // needs.
+    )
+}
+
+/// Binds `memory`, which `allocate_dedicated` made for `image`, to it.
+fn bind_image(gpu: &Gpu<'_>, image: vk::Image, memory: vk::DeviceMemory) -> Result<(), Failure> {
+    // SAFETY: the memory is dedicated to this image, of a type it allows, as large as it needs,
+    // and bound to nothing yet.
     unsafe { gpu.device.bind_image_memory(image, memory, 0) }
-        .map_err(|result| Failure::vulkan("bind the image's memory", result))?;
-    Ok(memory)
+        .map_err(|result| Failure::vulkan("bind the image's memory", result))
 }
 
 /// The number of memory planes `modifier` has for `format`, as the driver lists it.

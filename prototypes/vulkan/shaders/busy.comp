@@ -1,0 +1,23 @@
+#version 450
+
+// Keeps the client's GPU busy for a bounded time, tens of milliseconds, so that a sync file
+// exported behind this work is still pending when the second device imports it. The result is
+// stored, so that the loop cannot be left out.
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer Result {
+    uint value;
+} result;
+
+layout(push_constant) uniform Busy {
+    uint iterations;
+} busy;
+
+void main() {
+    uint x = result.value;
+    for (uint i = 0u; i < busy.iterations; i++) {
+        x = x * 1664525u + 1013904223u;
+    }
+    result.value = x;
+}

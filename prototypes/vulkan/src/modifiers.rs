@@ -5,7 +5,7 @@
 use ash::vk;
 
 use crate::dmabuf::{self, PatternWriter, Stage};
-use crate::gpu::{Failure, Gpu, Scope, buffer_to_host, image_barrier};
+use crate::gpu::{BoundBuffer, Failure, Gpu, Scope, buffer_to_host, image_barrier};
 use crate::json::Json;
 use crate::pattern::{self, TEST_FORMATS, TestFormat};
 
@@ -93,8 +93,8 @@ pub fn run(client: &Gpu<'_>, compositor: &Gpu<'_>) -> Result<Vec<FormatResult>, 
         let listed = dmabuf::list_modifiers(client, format.format);
         let mut modifiers = Vec::new();
         for (index, entry) in listed.iter().enumerate() {
-            eprintln!(
-                "vulkan-prototype: modifiers: {} {} of {}: {}",
+            progress!(
+                "modifiers: {} {} of {}: {}",
                 format.name,
                 index + 1,
                 listed.len(),
@@ -188,7 +188,7 @@ fn sample_and_check(
 ) -> Result<(), Failure> {
     let view = scope.image_view(&dmabuf::view_info(image, format.format))?;
     let texel_bytes = u64::from(WIDTH) * u64::from(HEIGHT) * 16;
-    let (buffer, mapped) = scope.bound_buffer(
+    let BoundBuffer { buffer, mapped, .. } = scope.bound_buffer(
         compositor,
         texel_bytes,
         vk::BufferUsageFlags::STORAGE_BUFFER,

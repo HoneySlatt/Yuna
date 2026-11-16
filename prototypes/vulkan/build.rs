@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The shaders in `shaders/`, each compiled to `$OUT_DIR/<name>.spv`.
-const SHADERS: [&str; 5] = [
+const SHADERS: [&str; 6] = [
+    "busy.comp",
     "pattern.vert",
     "pattern.frag",
     "sample.comp",

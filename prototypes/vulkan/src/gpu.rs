@@ -6,6 +6,7 @@
 //! and on the spec's valid usage, which `--validate` checks with Khronos' layer. Each block's
 //! `SAFETY:` comment says which of these it relies on and how it holds.
 
+use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -60,6 +61,9 @@ pub struct Vulkan {
     _entry: ash::Entry,
     pub instance: ash::Instance,
     validation: Option<Validation>,
+    /// Set when a device was left alive because its GPU never finished: the instance is then
+    /// left alive too, since destroying it would destroy a device still in use.
+    devices_left: Cell<bool>,
 }
 
 struct Validation {
@@ -153,6 +157,7 @@ impl Vulkan {
             _entry: entry,
             instance,
             validation,
+            devices_left: Cell::new(false),
         })
     }
 
@@ -217,8 +222,12 @@ impl Vulkan {
 
 impl Drop for Vulkan {
     fn drop(&mut self) {
-        // SAFETY: every device was dropped before (a `Gpu` borrows its `Vulkan`), so nothing made
-        // from the instance is alive; the messenger goes first, then the instance.
+        if self.devices_left.get() {
+            return;
+        }
+        // SAFETY: every device was dropped before (a `Gpu` borrows its `Vulkan`) and destroyed,
+        // or `devices_left` is set and this returned above; the messenger goes first, then the
+        // instance.
         unsafe {
             if let Some(validation) = &self.validation {
                 validation
@@ -333,6 +342,9 @@ pub struct Gpu<'v> {
     pub fence_fd: Option<khr::external_fence_fd::Device>,
     pub host_memory: Option<ext::external_memory_host::Device>,
     command_pool: vk::CommandPool,
+    /// Set when a scope left its objects alive because the GPU never finished: the device is
+    /// then left alive too, since destroying it would destroy them.
+    objects_left: Cell<bool>,
 }
 
 impl<'v> Gpu<'v> {
@@ -459,6 +471,7 @@ impl<'v> Gpu<'v> {
             host_memory: is_enabled(ext::external_memory_host::NAME)
                 .then(|| ext::external_memory_host::Device::new(instance, &device)),
             command_pool,
+            objects_left: Cell::new(false),
             device,
         })
     }
@@ -571,14 +584,42 @@ impl<'v> Gpu<'v> {
 
 impl Drop for Gpu<'_> {
     fn drop(&mut self) {
-        // SAFETY: every scope that made objects on this device borrowed it and was dropped first;
-        // waiting for the device leaves no work pending on the pool or the device.
+        if self.objects_left.get() || !queue_finished(&self.device, self.queue) {
+            progress!("a device's GPU did not finish in time: the device is left alive");
+            self.vulkan.devices_left.set(true);
+            return;
+        }
+        // SAFETY: every scope that made objects on this device borrowed it, was dropped first and
+        // destroyed them (`objects_left` is unset); the queue finished all its work, so nothing
+        // pending uses the pool or the device.
         unsafe {
-            let _ = self.device.device_wait_idle();
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
         }
     }
+}
+
+/// Waits until the queue finished every batch submitted to it, for `GPU_TIMEOUT` at most: the
+/// fence of an empty submission signals once all earlier work on its queue is done. Unlike
+/// `vkDeviceWaitIdle`, it cannot wait forever on a batch that waits for a signal never sent.
+/// False when the queue did not finish in time, or the device is lost.
+fn queue_finished(device: &ash::Device, queue: vk::Queue) -> bool {
+    // SAFETY: the device is alive and the info is plain.
+    let Ok(fence) = (unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }) else {
+        return false;
+    };
+    // SAFETY: an empty submission with a new, unsignalled fence, on this device's queue, used
+    // from this thread alone.
+    let submitted = unsafe { device.queue_submit2(queue, &[], fence) }.is_ok();
+    // SAFETY: the fence comes from this device.
+    let finished = submitted
+        && unsafe { device.wait_for_fences(&[fence], true, GPU_TIMEOUT.as_nanos() as u64) }.is_ok();
+    if finished || !submitted {
+        // SAFETY: the fence signalled, or was never submitted: no pending work uses it. A fence
+        // still pending is left alive instead.
+        unsafe { device.destroy_fence(fence, None) };
+    }
+    finished
 }
 
 pub fn version_text(version: u32) -> String {
@@ -588,6 +629,14 @@ pub fn version_text(version: u32) -> String {
         vk::api_version_minor(version),
         vk::api_version_patch(version)
     )
+}
+
+/// A buffer `Scope::bound_buffer` made: its mapping when host-visible, and the memory type it
+/// took.
+pub struct BoundBuffer {
+    pub buffer: vk::Buffer,
+    pub mapped: Option<*mut u8>,
+    pub memory_type: u32,
 }
 
 /// An object a scope destroys.
@@ -609,9 +658,13 @@ enum Object {
 }
 
 /// What one test made on one device, destroyed when the scope ends, whether the test passed or
-/// failed, once the device is idle.
+/// failed, once the device's queue finished its work; left alive if the queue does not finish
+/// within `GPU_TIMEOUT`, so that nothing in use is destroyed.
 pub struct Scope<'d> {
     device: &'d ash::Device,
+    queue: vk::Queue,
+    /// The device's flag, set when this scope leaves its objects alive.
+    objects_left: &'d Cell<bool>,
     objects: Vec<Object>,
 }
 
@@ -619,6 +672,8 @@ impl<'d> Scope<'d> {
     pub fn new(gpu: &'d Gpu<'_>) -> Self {
         Self {
             device: &gpu.device,
+            queue: gpu.queue,
+            objects_left: &gpu.objects_left,
             objects: Vec::new(),
         }
     }
@@ -897,7 +952,7 @@ impl<'d> Scope<'d> {
         usage: vk::BufferUsageFlags,
         required: vk::MemoryPropertyFlags,
         preferred: vk::MemoryPropertyFlags,
-    ) -> Result<(vk::Buffer, Option<*mut u8>), Failure> {
+    ) -> Result<BoundBuffer, Failure> {
         let buffer = self.buffer(
             &vk::BufferCreateInfo::default()
                 .size(size)
@@ -919,7 +974,11 @@ impl<'d> Scope<'d> {
         unsafe { self.device.bind_buffer_memory(buffer, memory, 0) }
             .map_err(|result| Failure::vulkan("bind a buffer's memory", result))?;
         if !required.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) {
-            return Ok((buffer, None));
+            return Ok(BoundBuffer {
+                buffer,
+                mapped: None,
+                memory_type,
+            });
         }
         // SAFETY: the memory is host-visible and not mapped yet; it stays mapped until freed.
         let pointer = unsafe {
@@ -927,7 +986,11 @@ impl<'d> Scope<'d> {
                 .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
         }
         .map_err(|result| Failure::vulkan("map a buffer's memory", result))?;
-        Ok((buffer, Some(pointer.cast())))
+        Ok(BoundBuffer {
+            buffer,
+            mapped: Some(pointer.cast()),
+            memory_type,
+        })
     }
 
     /// Waits for `fence` and resets it for the next submission.
@@ -944,11 +1007,18 @@ impl<'d> Scope<'d> {
 
 impl Drop for Scope<'_> {
     fn drop(&mut self) {
-        // SAFETY: once the device is idle no submitted work uses these objects; each was made on
-        // this device and is destroyed once, in reverse order of creation, memory last, after the
-        // buffers and images bound to it.
+        if !queue_finished(self.device, self.queue) {
+            progress!(
+                "the GPU did not finish within {} s: a test's objects are left alive",
+                GPU_TIMEOUT.as_secs()
+            );
+            self.objects_left.set(true);
+            return;
+        }
+        // SAFETY: the queue, the device's only one, finished every batch, so no submitted work
+        // uses these objects; each was made on this device and is destroyed once, in reverse
+        // order of creation, memory last, after the buffers and images bound to it.
         unsafe {
-            let _ = self.device.device_wait_idle();
             for object in self.objects.iter().rev() {
                 match *object {
                     Object::Buffer(buffer) => self.device.destroy_buffer(buffer, None),
@@ -1000,8 +1070,8 @@ pub struct Recorder<'a> {
 
 // Each method below records one command. Its SAFETY rests on the recorder's invariant (the
 // buffer is recording), on handles that come from the same device, which the scopes owning them
-// keep alive until the GPU finished (they wait for the device), and on the command's valid usage,
-// which the callers follow and `--validate` checks.
+// keep alive until the GPU finished (they wait for the queue, or leave them alive), and on the
+// command's valid usage, which the callers follow and `--validate` checks.
 impl Recorder<'_> {
     pub fn barriers(
         &self,
