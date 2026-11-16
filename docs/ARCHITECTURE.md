@@ -4,6 +4,33 @@ How the code is organised now, for a developer who has never seen it. Decisions 
 are in [`adr/`](adr/README.md); the contracts of each item are in the code's documentation; what
 comes next is in [`PLAN.md`](PLAN.md).
 
+## In one page
+
+The parts, bottom up:
+
+- **The pure models**: [`yuna-layout`](#the-layout-model) decides where every window goes;
+  [`yuna-motion`](#motion) turns the layout's jumps into what each frame draws. Neither knows
+  Wayland, Smithay or a renderer.
+- **The headless compositor**, the `yuna` crate's library on Smithay: the
+  [protocols](#a-windows-life) and [XWayland](#xwayland) in front, the layout and the motion
+  behind, virtual [outputs](#outputs-added-and-removed) with their [clock](#time-and-deadlines),
+  drawn through Smithay's GLES renderer, on llvmpipe or the GPU's render node.
+- **The [MCP server](#the-mcp-server)** around it, for agents; the [program](#the-program),
+  `yuna --headless` and `yuna mcp`.
+- **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
+  Yuna included, from outside.
+
+The main flows:
+
+- **A client's commit** reaches the compositor, changes the layout, and the next
+  [frame](#a-frame) is drawn on damage ahead of its boundary, presented honestly, its feedback
+  sent.
+- **An agent's call** over MCP creates a [seat](#seats-and-input), starts a program, types,
+  clicks and [captures](#captures), on the agent's own seat only.
+- **A change of the layout** becomes [motion](#motion) sampled at each frame's presentation.
+- **An X11 program** connects to its seat's Xwayland, started on demand, managed by Yuna's own
+  [X11 window manager](#an-x11-windows-life).
+
 ## Parts
 
 One Cargo workspace; its crates live in `crates/`.
