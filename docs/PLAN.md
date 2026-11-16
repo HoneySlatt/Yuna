@@ -18,7 +18,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
-- [M1.9](#m19--the-rivals-measured) is in its closing review, with ADR-0072 to ADR-0077.
+- [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077. Next: M1.10,
+  on the owner's go.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 
 ## Status
@@ -33,7 +34,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.6](#m16--emulated-vrr-and-hdr) | Virtual outputs behave as a VRR and HDR monitor would | Done |
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
-| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | In progress |
+| [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
 | [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
@@ -130,25 +131,17 @@ milestone first needs it.
 ### M1.9 — The rivals measured
 
 - **Goal.** The bar's budgets set from facts.
-- **Design.** Decided with the owner on 2026-11-15 and 16: one bench outside the compositor,
-  agents measuring costs, rest and memory headless; frames, input to present and watts on real
-  displays in the owner's tour at Stage 2's exit, with Yuna in it
-  ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
-  [ADR-0076](adr/0076-input-to-present-read-by-mode.md)). Memory and a frame's cost set against
-  niri, Hyprland, Umbriel and KWin at equal work, a comparison the same day and its figure
-  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). The Vulkan prototype on
-  what no rival measures ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
-  Stage 2's core decided ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
-- **Delivers.** The bench, `crates/yuna-bench`, with every rival's recipe; the headless series;
-  the prototype on branch `prototype/vulkan`, run on every tier; the budgets in an ADR and the
-  ROADMAP. The tour's command, begun on branch `m1.9-tour`, waits for Stage 2's exit.
-- **Done when.** Each rival has its headless figures in `docs/measurements.md`, with versions,
-  dates and the machine's state, or a written reason; the ROADMAP's budgets are set from them in
-  an ADR; the prototype's figures and the laptop's display check are recorded.
-- **Status.** Done: the bench, the series at equal work, the prototype on four tiers, the laptop's
-  display, the budgets ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md):
-  a frame's cost and memory met but the process's growth a window, written as debt). Next: the
-  closing review's fixes merged.
+- **Result.** Done on 2026-11-16 (ADR-0072 to ADR-0077), its closing review's findings fixed or
+  written as debt: `crates/yuna-bench` runs nine rivals headless, each in a sandbox, and reads their
+  costs from outside; the series at equal work, 189 cases, none disturbed; the Vulkan prototype on
+  the desktop, lavapipe, the laptop and the Deck, the laptop's display checked
+  ([measurements](measurements.md)). In a fullscreen game Yuna costs 160 to 166 µs of CPU and 191
+  to 196 µs of GPU a frame, below every peer; its own and its GPU's memory are the peers' least,
+  the process's growth a window above Hyprland's ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md),
+  [debt](debt.md#architecture)). Frames, latency and watts on real displays, with Yuna, come at
+  Stage 2's exit ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md));
+  the tour's command waits on branch `m1.9-tour`. Stage 2's core is decided
+  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
 
 ### M1.10 — Yuna for the owner's other projects
 
