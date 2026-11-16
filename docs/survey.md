@@ -511,3 +511,44 @@ gamescope 3.17.0) and on the web.
   `VK_EXT_image_drm_format_modifier`, dmabuf import and export, external semaphores and fences
   (Mesa 26.2.7's source); jay's note that modifiers fail on AMD before RX 5000 is unchecked on
   that GPU. SteamOS's desktop mode is KDE Plasma (6.7.3 on 3.9, 2026-10-23).
+
+## Stage 2's core: what the rivals reworked
+
+Read on 2026-11-16 for [ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md), in the pinned
+sources of wlroots 0.20.2, sway 1.12, Hyprland 0.57.1, aquamarine 0.16.0, niri 26.04, gamescope
+3.17.0, KWin 6.8.2 and Mutter 51.0. The dates of the reworks are remembered, not read.
+
+- **Pending commits.** wlroots holds a surface's state while it is locked
+  (`wlr_surface_lock_pending`, `include/wlr/types/wlr_compositor.h`), for syncobj and subsurfaces;
+  KWin commits one or more surfaces atomically with fences (`src/wayland/transaction.h`), waiting
+  on implicit dma-buf fences; Mutter's transactions handle FIFO, target times and dma-buf waits
+  (`src/wayland/meta-wayland-transaction.c`); Hyprland queues states blocked on a fence, FIFO or a
+  timer (`src/protocols/types/SurfaceState.hpp`); niri blocks commits on dma-bufs and holds
+  transactions across clients up to 300 ms, sway up to 200 ms.
+- **State and backends.** Hyprland split its backend into aquamarine; KWin rebuilt its scene as a
+  tree of items (copyright 2021–22); niri's main crate is about 80,000 lines beside an 9,000-line
+  configuration crate.
+- **Captures.** niri renders separate targets for the screen, screencasts and other captures,
+  blocking windows per target; KWin re-renders the scene for screenshots and casts, usually in
+  sRGB (`doc/color-management.md`).
+- **Frames in flight.** KWin allows a second pending frame when compositing is slow and drops back
+  to one under VRR or tearing (`src/core/renderloop.cpp`); Mutter's frame clock has two dispatched
+  states (`clutter-frame-clock.c`).
+- **Colour.** KWin blends in gamma 2.2 in [0, 1] to avoid float framebuffers, and maps its colour
+  steps onto KMS's plane colour operations; wlroots refuses scanout when a buffer's colour
+  description differs from the output's.
+- **Threads.** KWin (`drm_commit_thread.cpp`), Mutter (`meta-kms.c`, its input thread) and
+  aquamarine (`CommitThread.hpp`) commit KMS on a thread; Mutter can run that thread in its main
+  loop for tests. KWin pings systemd's watchdog and its wrapper restarts it when it hangs.
+- **Outputs.** wlroots tests and commits all outputs at once, since DRM's limits are global
+  (`include/wlr/backend.h`); KWin keys output settings on the connected monitors' EDIDs.
+- **Input.** KWin orders its input filters (accessibility, the lock, shortcuts, input methods,
+  forward: `src/input.h`); KWin, Mutter, sway, Hyprland and niri raise libwayland's buffer per
+  client to 1 MiB, niri "so that it's harder to crash a frozen client with a 1000 Hz mouse";
+  wayland-rs's is 4,096 bytes. Mutter moves the hardware cursor from its input thread.
+- **Priority.** KWin and Mutter ask EGL for a high-priority context; wlroots' Vulkan renderer asks
+  and falls back silently; gamescope asks a realtime queue only with `CAP_SYS_NICE`; KWin's commit
+  thread runs realtime.
+- **Tests.** KWin mocks libdrm (`autotests/drm/mock_drm.cpp`, about 1,400 lines).
+- **Commands.** sway runs bindings, IPC and configuration through one `execute_command`; niri
+  keeps two action types with a conversion; niri's IPC is not API-stable by its own note.

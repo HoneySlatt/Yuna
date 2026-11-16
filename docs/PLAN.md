@@ -208,9 +208,6 @@ milestone first needs it.
 
 - A second Xwayland at scale 1 for games, on its own display, so that a game on an output of a
   smaller scale always draws at its mode ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
-- Several GPUs: a hybrid laptop's two, outputs on two cards, agents' Yunas on a second GPU so
-  that a game is never touched. Stage 2's design keeps it open: each output tied to its device,
-  each device's formats offered to clients ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 ## Known debt
 

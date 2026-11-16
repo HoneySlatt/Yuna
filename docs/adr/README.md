@@ -47,7 +47,7 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009, 0021 |
 | [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
-| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013; settled for X11 by 0066 |
+| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011, 0013; settled for X11 by 0066; extended by 0074 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Superseded by 0063 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; amends 0021, 0035; supersedes 0027; amended by 0045 |
@@ -82,3 +82,4 @@ New ADRs copy [`0000-template.md`](0000-template.md) and take the next free numb
 | [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Accepted |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
 | [0073](0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md) | The Vulkan prototype answers only what no rival measures | Accepted; narrows 0063 |
+| [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Accepted; extends 0039 |

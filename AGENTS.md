@@ -60,6 +60,8 @@ Never here:
 - New behaviour is tested where a test is practical; a layout behaviour always is.
 - The budgets the milestone touches are measured and met; the figures go to
   `docs/measurements.md`.
+- The architecture contracts and the stability scenarios of the ROADMAP's bar that the change
+  touches are checked; their evidence, and what stays unverified, is recorded.
 - `docs/PLAN.md` gives the new status.
 - Every document the change affects is updated and reread as a newcomer would.
 - Every decision a newcomer would question is an ADR.
@@ -77,6 +79,10 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - An agent's seat never reaches the owner's seat ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
 - One client's error never takes Yuna down; a configuration error never stops it
   ([ADR-0007](docs/adr/0007-surviving-a-crash.md), [ADR-0008](docs/adr/0008-configuration-in-kdl.md)).
+- Stage 2's core meets [ADR-0074](docs/adr/0074-the-requirements-of-stage-2s-core.md) from its first
+  commit: owned state, crates whose dependencies `scripts/check.sh` checks, bounded queues, tasks
+  with an owner and a stop order, versioned public contracts. Nothing new is built on today's
+  shared `State` that Stage 2 would have to undo.
 
 ## Rules the code depends on
 
@@ -91,7 +97,8 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 
 ## Code rules
 
-- No abstraction without a second concrete use.
+- An abstraction needs a concrete benefit: reuse, isolating an unstable dependency, protecting an
+  invariant, or a test boundary. No speculative extension points.
 - No reimplementation of the standard library without a measurement.
 - A new dependency needs a reason, an alternative weighed and a licence compatible with
   GPL-3.0-or-later; ask the owner.

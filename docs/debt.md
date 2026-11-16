@@ -377,3 +377,21 @@ with games' VRR:
   X11 window too, the background and the windows below it, where a Wayland surface's opaque
   region would let it skip them; a whole frame costs up to that overdraw more on each output.
   Paid with Yuna's own scene at the opening of Stage 2.
+
+## Architecture
+
+Today's code against [ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md); Stage 2's core
+replaces it, and nothing new is built on it that Stage 2 would undo.
+
+- One `State` of 52 fields, 43 public, implements 22 of Smithay's handler traits: any handler can
+  change any state. Smithay's shape; Stage 2's core gives each protocol module its own objects.
+- The X11 manager's commands go through an unbounded channel
+  (`crates/yuna/src/xwayland/manager.rs`, `mpsc::channel()`); its events are bounded. Bounded at
+  Stage 2, or earlier if a client can fill it.
+- A global, `OPENED_DISPLAYS` (`crates/yuna/src/render.rs`), keeps EGL displays alive because
+  tests run several compositors in one process; Yuna's Vulkan core needs none.
+- wayland-rs bounds each client's outgoing buffer at 4,096 bytes and ends a client whose buffer
+  is full, where the rivals raise libwayland's to 1 MiB; how long a client that stops reading
+  survives a fast pointer is not measured yet (ADR-0074, chosen at Stage 2's opening).
+- No crate forbids `unsafe` code; `yuna` has 8 `unsafe` sites, `yuna-layout` and `yuna-motion`
+  none.

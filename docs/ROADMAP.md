@@ -98,6 +98,33 @@ it is met.
 | `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
 | An agent's output | full rate while its programs draw, nothing at rest; no input of an agent reaching the owner's seat | presentation feedback; a test that tries |
 
+### Architecture and stability scenarios
+
+Realistic change and failure scenarios that judge Yuna's core
+([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)); each a test from Stage 2 where
+practical, else a review of the code; their evidence in `docs/measurements.md` or the stage's
+audit.
+
+| Scenario | Acceptance criterion | Checked by |
+|---|---|---|
+| A game frozen 50 ms while an 8,000 Hz pointer moves | the game is not disconnected | a headless test, an agent's pointer |
+| One client sends 100,000 damage requests a second | the other clients' commits make their boundary | a headless test |
+| A client's GPU work is late at the deadline | its previous buffer is shown; Yuna never waits | a test with a fence held |
+| A column with three windows changes width | all three show their new size in one frame, or after the timeout | a headless test |
+| An output is unplugged while another changes mode | the change applies whole, or the old state stays | the KMS mock |
+| A reload asks a mode the kernel refuses | nothing changes; the error is shown | the KMS mock |
+| The GPU resets during a capture and a scanned-out game | Yuna recovers; the capture fails in a way the client can retry | the GPU lost on demand |
+| Suspend while locked, an HDR game fullscreen | the first frame after resume is the lock | a fake session |
+| Yuna crashes while locked | it comes back locked | a test that kills Yuna |
+| A system update, then a crash, and the new binary fails to start | the keeper starts the previous binary | a keeper test |
+| An older Yuna reads a newer state or configuration file | it keeps the fields it does not know | a format test |
+| A new protocol is added | one crate changes, and one line registers it | a review |
+| The KMS thread is run inline | the same test passes, deterministic, on the manual clock | the tests, both ways |
+| uwui panics while the share picker is open | the picker closes; frames continue | a test |
+| An agent's Yuna runs beside the owner's | it reads and writes nothing of the owner's state | a test |
+| A sandboxed client is connected when Yuna crashes | it reconnects through its security context | a test |
+| Ten times the windows, the outputs or the rate | queues and caches stay within their bounds; nothing grows without end | a soak test |
+
 ### Without a figure
 
 - Games recognised and served first: VRR in a high band, tearing on request, direct scanout,
@@ -141,6 +168,7 @@ it is met.
 | XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
 | XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
 | The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md)) |
+| Stage 2's core | A queue of pending commits, one owner of the state, crates with checked dependencies, a table of tasks, output changes tested whole, one path for pause and loss, the lock kept through a restart, one input chain, a frame's identity, every public contract versioned, client identity from the connection ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)) |
 
 ### Open
 
@@ -150,6 +178,7 @@ it is met.
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
 | Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| The blending space and precision; Yuna's priority against a game; wayland-rs's buffer per client; the plane allocator | the opening of Stage 2, each on a measure ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)) |
 | Public release | the owner's go |
 
 ## 5. Stages
@@ -192,7 +221,9 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
 
 - First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
   its Vulkan renderer hosting uwui, on wayland-rs; WLCS run against it
-  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)).
+  ([ADR-0063](adr/0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)); in crates with checked
+  dependencies, meeting the core's requirements from its first commit
+  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
 - The desktop at a fixed rate: no VRR flicker.
 - XWayland crisp at 1.5 and the right size on every output.
@@ -227,7 +258,8 @@ own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
   under greetd; a new locker relieving a dead one.
 
 **Exit.** The owner uses Yuna for a week in place of Umbriel; the budgets of rest, motion, input and
-power are met on the high tier and the laptop; Smithay is no longer in `Cargo.lock`.
+power are met on the high tier and the laptop; the architecture and stability scenarios pass;
+Smithay is no longer in `Cargo.lock`.
 
 ### Stage 3 — Removed
 
