@@ -395,3 +395,7 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   survives a fast pointer is not measured yet (ADR-0074, chosen at Stage 2's opening).
 - No crate forbids `unsafe` code; `yuna` has 8 `unsafe` sites, `yuna-layout` and `yuna-motion`
   none.
+- Yuna's memory grows by about 0.32 MiB a still window headless, ten times the wlroots rivals'
+  slope ([measurements](measurements.md#m19--the-rivals-headless-at-equal-work-2026-11-16)); its
+  cause is not isolated, the `wl_shm` textures it keeps the likely one. Stage 2's bounded GPU
+  memory (ADR-0074) is where it is paid.
