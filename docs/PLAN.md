@@ -18,7 +18,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
-- [M1.9](#m19--the-rivals-measured) is in progress: its design is decided (ADR-0071 to ADR-0073).
+- [M1.9](#m19--the-rivals-measured) is in its closing review, with ADR-0072 to ADR-0077.
 
 ## Status
 
@@ -145,7 +145,8 @@ milestone first needs it.
   dates and the machine's state, or a written reason; the ROADMAP's budgets are set from them in
   an ADR; the prototype's figures and the laptop's display check are recorded.
 - **Status.** Done: the bench, the series at equal work, the prototype on four tiers, the laptop's
-  display. Next: the budgets' ADR, then the closing review.
+  display, the budgets ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md):
+  a frame's cost met, memory missed and written as debt). Next: the closing review.
 
 ### M1.10 — Yuna for the owner's other projects
 
