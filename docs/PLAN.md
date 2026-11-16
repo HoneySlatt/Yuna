@@ -147,7 +147,8 @@ milestone first needs it.
   an ADR; the prototype's figures and the laptop's display check are recorded.
 - **Status.** Done: the bench, the series at equal work, the prototype on four tiers, the laptop's
   display, the budgets ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md):
-  a frame's cost met, memory missed and written as debt). Next: the closing review.
+  a frame's cost and memory met, the clients' buffers Yuna keeps written as debt). Next: the
+  closing review's fixes merged.
 
 ### M1.10 — Yuna for the owner's other projects
 

@@ -47,16 +47,17 @@ none). Wake-ups a second: Umbriel 10.1 (its timer for hidden windows), Hyprland 
 0.03; Yuna and the others used no CPU time at all in the window, so none of their threads woke.
 
 Memory after the rest window, in MiB, the lowest and highest of the three runs, and its growth a
-window from 1 to 150 windows (the means' difference over 149): the process's own (`Pss_Anon` +
+window from 1 to 150 windows (the means' difference over 149; for Yuna and Hyprland, whose figures
+are near, the range over every pair of runs): the process's own (`Pss_Anon` +
 `Pss_File`); the clients' `wl_shm` buffers it holds mapped (`Pss_Shmem`); its GPU memory, the
 kernel's DRM `resident-vram` + `resident-gtt`. A window's size depends on each compositor's layout,
 which the series did not record.
 
 | Compositor | Process: 1 / 15 / 150 windows | A window | Clients' buffers at 15 | A window | GPU: 1 / 15 / 150 windows | A window |
 |---|---|---|---|---|---|---|
-| Yuna | 83.6–83.7 / 83.6–84.0 / 84.9–85.1 | 0.0087 | 30.4 | 0.31 | 83.6 / 115.1 / 147.1 | 0.43 |
+| Yuna | 83.6–83.7 / 83.6–84.0 / 84.9–85.1 | 0.0075–0.0103 | 30.4 | 0.31 | 83.6 / 115.1 / 147.1 | 0.43 |
 | Umbriel | 102.1–102.4 / 102.5–102.8 / 105.5–105.7 | 0.0225 | 0 | 0 | 124.1 / 364.0 / 2,526.6 | 16.1 |
-| Hyprland | 131.7–131.9 / 131.8 / 132.7–132.9 | 0.0063 | 0 | 0 | 427–429 / 1,159–1,161 / 772–774 | 2.31 |
+| Hyprland | 131.7–131.9 / 131.8 / 132.7–132.9 | 0.0054–0.0079 | 0 | 0 | 427–429 / 1,159–1,161 / 772–774 | 2.31 |
 | KWin | 206.8–208.7 / 207.3–209.4 / 211.9–212.8 | 0.029 | 39.6 | 2.64 | 59.9 / 115.4 / 523.0 | 3.11 |
 | Mutter | 107.2–107.3 / 108.3 / 112.2 | 0.034 | 39.6 | 2.64 | 109.5 / 164.3 / 577.9 | 3.14 |
 | sway | 93.9–94.0 / 94.4–94.7 / 97.3–97.5 | 0.023 | 0 | 0 | 163.7 / 260.2 / 874.3 | 4.77 |

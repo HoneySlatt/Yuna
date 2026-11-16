@@ -44,7 +44,8 @@ the best peer's lowest run.
   and 191 to 196 µs: met. The floor, sway's and dwl's: 150 µs and 215 µs.
 - **The process's memory** (`Pss_Anon` + `Pss_File`) at rest with 15 still windows, and its growth
   a window from 1 to 150, at most the best peer's: **102.5 MiB**, Umbriel's, and **0.0063 MiB a
-  window**, Hyprland's. Yuna: 83.6 to 84.0 MiB, met; 0.0087 MiB a window, missed, debt.
+  window**, Hyprland's. Yuna: 83.6 to 84.0 MiB, met; 0.0075 to 0.0103 MiB a window, met within the
+  runs' spread (Hyprland's 0.0054 to 0.0079), which ADR-0072 does not rank.
 - **The GPU's memory** (the kernel's DRM `resident-vram` + `resident-gtt`) at rest with 15
   windows, and its growth a window, at most the best peer's: **115.4 MiB**, KWin's, and **2.31 MiB
   a window**, Hyprland's. Yuna: 115.1 MiB, met by a margin within the runs' noise; 0.43 MiB a
@@ -82,8 +83,7 @@ the best peer's lowest run.
 
 - The ROADMAP's budgets of a frame's cost and memory carry their rule and these figures; the
   figures change at each stage's end, when the rivals are measured again the same day.
-- Debt: the process's growth a window (0.0087 against 0.0063 MiB) and the clients' buffers Yuna
-  keeps ([debt](../debt.md#architecture)).
+- Debt: the clients' buffers Yuna keeps ([debt](../debt.md#architecture)).
 - A window's size depends on each compositor's layout, which the series did not record: growth a
   window compares windows of different sizes, within each rival's own layout.
 - Umbriel as shipped, its blur and shadows on, drew a game frame in 169 µs of GPU, below its
