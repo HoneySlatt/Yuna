@@ -60,7 +60,8 @@ longest.
 
 ### The laptop (2026-11-16, the owner's run)
 
-The same commit, `report --device 0 --size 1920x1080`, run by the owner on the lowest tier: AMD
+The same commit, `report --device 0 --size 1920x1080`, run by the owner on the lowest tier, whose
+panel is 1600 × 900 (below): an upper bound for it. AMD
 Athlon Silver 3050U (2 logical CPUs, 3.2 GiB visible), Radeon Graphics "RAVEN2" through RADV,
 Mesa 26.1.5, Linux 7.1.5; the GPU's level `auto`. No timed part disturbed.
 
@@ -78,6 +79,18 @@ Mesa 26.1.5, Linux 7.1.5; the GPU's level `auto`. No timed part disturbed.
   44 µs of CPU: 7 to 9 % of a 60 Hz period. The GPU's clock rose from 400 to 1,100 MHz during the
   parts (`auto`), so the first frames ran slower.
 - **A high-priority queue**: refused, as on the desktop.
+
+### The laptop's display (2026-11-16, the owner's run)
+
+The [display check](owner-runs.md#2-the-laptops-display-through-a-vulkan-compositor): sway 1.12
+on wlroots 0.20.2's Vulkan renderer (`WLR_RENDERER=vulkan`), from a virtual terminal, on the
+laptop's panel, a Chimei Innolux eDP panel at 1600 × 900 and 60 Hz (40 Hz also offered), with
+`vkcube` and mpv's test pattern for about 3 min 20 s. The owner saw both smooth. wlroots drew
+with RADV "RAVEN2" (Mesa 26.1.5) and the panel showed its buffers allocated with a compressed
+modifier, `GFX9 64KB_S_X DCC` in `XR24`: the display engine scans out what Vulkan draws, DCC
+included. The only errors came as sway left the display. The second run, without modifiers
+(`WLR_DRM_NO_MODIFIERS=1`), did not start: its session was not the active one within 10 s; it
+was a fallback for modifiers failing, which they did not, and was not run again.
 
 ### The Steam Deck (2026-11-16, the owner's run)
 

@@ -66,8 +66,9 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 
 - **High tier**: RX 6900 XT, Ryzen 7 5800X, ASUS PG32UCDM at 3840 × 2160 and 240 Hz, scale 1.5:
   4.17 ms a frame.
-- **Lowest tier**: the HP laptop, AMD Athlon Silver 3050U with Radeon Vega graphics and 4 GiB; its
-  display, storage and Vulkan driver are still to be read.
+- **Lowest tier**: the HP laptop, AMD Athlon Silver 3050U with Radeon Vega graphics and 4 GiB, a
+  1600 × 900 panel at 60 Hz; its Vulkan driver imports, synchronises and shows Vulkan's buffers
+  ([measurements](measurements.md)); its storage is still to be read.
 - **Steam Deck**, its desktop mode.
 - **CI**: the headless mode on a CPU renderer.
 
