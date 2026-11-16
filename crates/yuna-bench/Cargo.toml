@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 # Nothing of the `yuna` crate: the bench builds alone, fast, and measures Yuna from outside as it
-# measures the others (ADR-0071).
+# measures the others (ADR-0075).
 [dependencies]
 # The bench's own clients: still windows, and the counter of frames through
 # ext-image-copy-capture.

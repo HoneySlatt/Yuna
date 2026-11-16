@@ -16,7 +16,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   physical pixel the average of the X11 pixels it covers, weighted by how much of each, in a
   texture shader of Yuna's ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
 - **As shipped**: a rival run with its own defaults in the rivals' bench, beside *equal work*
-  ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+  ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
 - **Bench shell**: `nix develop .#bench`, the development shell with the compositors and clients
@@ -187,7 +187,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   includes, reloaded live; its format is a public interface
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
-  one after another ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+  one after another ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.

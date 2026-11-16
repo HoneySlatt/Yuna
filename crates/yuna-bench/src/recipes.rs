@@ -9,7 +9,7 @@
 //! wallpaper and XWayland off ([ADR-0072](../../../docs/adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 //! [`Plan::settings`] records what differs between them.
 //!
-//! Every rival of [ADR-0071](../../../docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)
+//! Every rival of [ADR-0075](../../../docs/adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)
 //! has a recipe. Those that cannot run without a display say why instead ([`TOUR_ONLY`]): their
 //! figures come from the owner's tour alone.
 //!
@@ -468,8 +468,8 @@ pub fn recipe(name: &str) -> Option<&'static Recipe> {
     RECIPES.iter().find(|recipe| recipe.name == name)
 }
 
-/// The rivals ADR-0071 names, by their recipes' names.
-pub const ADR_0071_RIVALS: [&str; 9] = [
+/// The rivals ADR-0075 names, by their recipes' names.
+pub const ADR_0075_RIVALS: [&str; 9] = [
     "dwl",
     "sway",
     "hyprland",
@@ -482,7 +482,7 @@ pub const ADR_0071_RIVALS: [&str; 9] = [
 ];
 
 /// The recipe of a rival that cannot run without a display: its figures come from the owner's
-/// tour alone (ADR-0071).
+/// tour alone (ADR-0075).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TourOnly {
     /// Its name on the command line.
@@ -1296,8 +1296,8 @@ mod tests {
     }
 
     #[test]
-    fn every_rival_of_adr_0071_has_a_recipe() {
-        for rival in ADR_0071_RIVALS {
+    fn every_rival_of_adr_0075_has_a_recipe() {
+        for rival in ADR_0075_RIVALS {
             assert!(
                 recipe(rival).is_some() != tour_only(rival).is_some(),
                 "{rival} has no recipe, or two"

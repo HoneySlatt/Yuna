@@ -1,6 +1,6 @@
 # 0071. The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner
 
-- Status: Accepted
+- Status: Superseded by [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)
 - Date: 2026-11-15
 
 ## Context

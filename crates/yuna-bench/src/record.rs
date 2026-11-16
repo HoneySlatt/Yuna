@@ -109,7 +109,7 @@ pub struct CompositorInfo {
     pub version: Option<String>,
     /// Its program.
     pub program: String,
-    /// The backend it ran on: frames are compared only on the same one (ADR-0071).
+    /// The backend it ran on: frames are compared only on the same one (ADR-0075).
     pub backend: String,
     /// What it drew with.
     pub renderer: String,

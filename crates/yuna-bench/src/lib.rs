@@ -1,5 +1,5 @@
 //! The rivals' bench: one bench, outside every compositor, that measures each the same way
-//! ([ADR-0071](../../../docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+//! ([ADR-0075](../../../docs/adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
 //!
 //! It starts a compositor headless, on the GPU's render node, in a sandbox of its own
 //! ([`sandbox`]); runs a scenario with the same clients for every compositor ([`scenarios`]);

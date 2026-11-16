@@ -52,7 +52,7 @@ One Cargo workspace; its crates live in `crates/`.
   its crate documentation explains how. It holds no Wayland or Smithay object.
 - **`yuna-bench`** (`crates/yuna-bench`): the rivals' bench. It runs a compositor headless in a
   sandbox of its own, the same scenarios with the same clients for each, and reads its costs
-  from outside ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md));
+  from outside ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md));
   [The rivals' bench](#the-rivals-bench) below. It depends on nothing of `yuna`: it measures
   Yuna as it measures the others.
 
@@ -1313,7 +1313,7 @@ own thread, both `took_us`.
 ## The rivals' bench
 
 `crates/yuna-bench` measures compositors from outside, the same way for each
-([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
 Its crate documentation gives each part's contract; how to run it is in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md). A case is one compositor, one configuration, one
 scenario; each run of a case goes:

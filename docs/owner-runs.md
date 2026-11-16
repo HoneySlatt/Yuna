@@ -1,7 +1,7 @@
 # The owner's runs
 
-What M1.9 asks the owner to run by hand, on the owner's own machines, after the owner's go
-([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md),
+What the owner runs by hand, on the owner's own machines, after the owner's go
+([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
 [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)). Agents never run
 these: they take a display. Each run's files go back to the agent, which puts their figures in
 [`measurements.md`](measurements.md).
@@ -51,5 +51,6 @@ your notes.
 
 ## 3. The tours
 
-To come: one command that runs every rival on the real display in turn. Its steps are written
-here once the bench can run it.
+At Stage 2's exit, with Yuna among the rivals: one command that runs every rival on the real
+display in turn ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
+Its steps are written here once the bench can run it.

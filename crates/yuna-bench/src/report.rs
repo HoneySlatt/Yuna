@@ -15,10 +15,10 @@
 //! changes, no pace sets the costs: every compositor ranks together. No measured rate decides
 //! where a compositor ranks. A figure of the stack is ranked apart for a compositor whose stack
 //! holds its parent (Hyprland's dwl). A cost a frame is ranked only between compositors on the
-//! same backend whose frames were counted the same way (ADR-0071); frames themselves are never
+//! same backend whose frames were counted the same way (ADR-0075); frames themselves are never
 //! ranked.
 //!
-//! The summary ends with every rival of ADR-0071: those the files measured, those they did not,
+//! The summary ends with every rival of ADR-0075: those the files measured, those they did not,
 //! and those that run on the owner's tour only, with why.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -615,7 +615,7 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
         let _ = writeln!(
             out,
             "- Frames counted headless compare only between compositors on the same backend \
-             (ADR-0071); none is ranked. `≥` marks a lower bound: frames counted by capture, \
+             (ADR-0075); none is ranked. `≥` marks a lower bound: frames counted by capture, \
              which misses some, or wake-ups of processes that ended between readings."
         );
         for note in notes {
@@ -631,7 +631,7 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
     out
 }
 
-/// The summary's closing section: every rival of ADR-0071, measured in `runs` or not, those that
+/// The summary's closing section: every rival of ADR-0075, measured in `runs` or not, those that
 /// run on the tour only and why, the scenarios a recipe cannot run, and why the rivals on
 /// wlroots draw at 250 Hz.
 fn rivals(runs: &[&CaseRun]) -> String {
@@ -639,7 +639,7 @@ fn rivals(runs: &[&CaseRun]) -> String {
         .iter()
         .map(|run| run.case.compositor.as_str())
         .collect();
-    let (measured, not_run): (Vec<&str>, Vec<&str>) = recipes::ADR_0071_RIVALS
+    let (measured, not_run): (Vec<&str>, Vec<&str>) = recipes::ADR_0075_RIVALS
         .iter()
         .filter(|rival| recipes::tour_only(rival).is_none())
         .partition(|rival| ran.contains(*rival));
@@ -650,7 +650,7 @@ fn rivals(runs: &[&CaseRun]) -> String {
             names.join(", ")
         }
     };
-    let mut out = String::from("## Every rival of ADR-0071\n\n");
+    let mut out = String::from("## Every rival of ADR-0075\n\n");
     let _ = writeln!(out, "- Measured in these files: {}.", none(&measured));
     let _ = writeln!(out, "- Not run in these files: {}.", none(&not_run));
     for rival in &recipes::TOUR_ONLY {
@@ -1060,7 +1060,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("refused: process 10 (sway) holds /dev/dri/card1 open"));
-        // Every rival of ADR-0071 is listed: those run, those not, those on the tour only.
+        // Every rival of ADR-0075 is listed: those run, those not, those on the tour only.
         assert!(
             text.contains("- Measured in these files: sway, kwin."),
             "{text}"

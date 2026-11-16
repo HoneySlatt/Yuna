@@ -48,7 +48,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Accepted; amends 0022 and 0025; amended by 0043 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Accepted; amends 0023; amended by 0046 |
-| [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted |
+| [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Superseded by 0076 |
 | [0033](0033-the-mcp-server.md) | The MCP server: a private Yuna on stdio, its own MCP layer | Accepted; amended by 0049, 0054 and 0055 |
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
 | [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted; amended by 0042 |
@@ -87,7 +87,9 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Accepted |
 | [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md) | Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept | Accepted |
 | [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted |
-| [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Accepted |
+| [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Superseded by 0075 |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
 | [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063 |
 | [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Accepted |
+| [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
+| [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |

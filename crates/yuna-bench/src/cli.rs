@@ -16,7 +16,7 @@ use crate::sandbox::{self, RENDER_NODE, ShellPaths};
 use crate::scenarios::{self, Bench, Durations, REST_WINDOWS, SCENARIOS};
 
 const HELP: &str = "\
-yuna-bench: the rivals' bench (ADR-0071). Runs compositors headless, each in a sandbox of its own,
+yuna-bench: the rivals' bench (ADR-0075). Runs compositors headless, each in a sandbox of its own,
 through the same scenarios with the same clients, and reads their costs from outside.
 
   yuna-bench headless [options]     run the cases, write a run file and its summary

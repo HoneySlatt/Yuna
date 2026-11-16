@@ -129,28 +129,23 @@ milestone first needs it.
 ### M1.9 — The rivals measured
 
 - **Goal.** The bar's budgets set from facts.
-- **Design.** Decided with the owner on 2026-11-15: one bench outside the compositor; agents
-  measure costs, rest and memory headless; the owner runs a *tour* on the desktop, the laptop
-  and the Steam Deck, each rival on the real display, for missed frames, input to present and
-  watts, the GPU at `auto`; another tour at Stage 2's exit with Yuna
-  ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
-  Memory and a frame's cost set against niri, Hyprland, Umbriel and KWin at equal work, as a
-  comparison the same day and the figure it gives
-  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). The Vulkan prototype
-  answers only what no rival measures, on `ash`, on a branch never merged
-  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
-- **Delivers.** In phases: (A) the bench, `crates/yuna-bench`, with sway, KWin and Yuna headless;
-  (B) every rival's recipe and the headless figures; (C) the tour, and the owner's three tours
-  from steps written here; (D) the prototype on branch `prototype/vulkan`, beside A; (E) the
-  budgets in ADR-0074 and the ROADMAP.
-- **Done when.** Each rival, and gamescope for latency, has its figures in
-  `docs/measurements.md`, with versions, dates and the machine's state, or a written reason; the
-  ROADMAP's budgets are set from them in an ADR; the prototype's figures and the laptop's
-  display check are recorded.
-- **Status.** Design done. D: the prototype on `prototype/vulkan` at `86984e3`, measured on the
-  desktop, lavapipe, the laptop and the Deck ([measurements](measurements.md)), the laptop's
-  display checked; the tours are the owner's, at the milestone's end ([owner's runs](owner-runs.md)). A and B: the bench and every
-  rival's recipe merged; the equal-work series running; C (the tour) started.
+- **Design.** Decided with the owner on 2026-11-15 and 16: one bench outside the compositor,
+  agents measuring costs, rest and memory headless; frames, input to present and watts on real
+  displays in the owner's tour at Stage 2's exit, with Yuna in it
+  ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
+  [ADR-0076](adr/0076-input-to-present-read-by-mode.md)). Memory and a frame's cost set against
+  niri, Hyprland, Umbriel and KWin at equal work, a comparison the same day and its figure
+  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). The Vulkan prototype on
+  what no rival measures ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
+  Stage 2's core decided ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
+- **Delivers.** The bench, `crates/yuna-bench`, with every rival's recipe; the headless series;
+  the prototype on branch `prototype/vulkan`, run on every tier; the budgets in an ADR and the
+  ROADMAP. The tour's command, begun on branch `m1.9-tour`, waits for Stage 2's exit.
+- **Done when.** Each rival has its headless figures in `docs/measurements.md`, with versions,
+  dates and the machine's state, or a written reason; the ROADMAP's budgets are set from them in
+  an ADR; the prototype's figures and the laptop's display check are recorded.
+- **Status.** Done: the bench, the series at equal work, the prototype on four tiers, the laptop's
+  display. Next: the budgets' ADR, then the closing review.
 
 ### M1.10 — Yuna for the owner's other projects
 

@@ -6,7 +6,7 @@ section names the machine, the build, the command, and the figures with their sp
 
 ## M1.9 — The rivals headless, at equal work (2026-11-16)
 
-The bench (`crates/yuna-bench`, [ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)),
+The bench (`crates/yuna-bench`, [ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)),
 commit `627f160`, every recipe at equal work (effects, wallpaper and XWayland off), every scenario,
 three runs of each case in a random order (seed `1794809641392719660`), 189 cases from 06:14 UTC,
 none failed, none disturbed by other programs. Machine as in M1.4's B4: Ryzen 7 5800X, RX 6900 XT,

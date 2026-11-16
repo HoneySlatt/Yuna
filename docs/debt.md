@@ -37,7 +37,7 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - The lead's floor and margin, 2 ms and 1 ms, are KWin's. On the GPU at 4K and 240 Hz, with
   two `vkcube` on lavapipe, 0 or 1 frame in 2,400 was missed in C5's runs; the lead itself was
   not read there ([measurements](measurements.md)). On llvmpipe it sits at its cap, one period.
-  [ADR-0032](adr/0032-input-to-present-read-by-mode.md)'s budget, no frame missed, is missed:
+  [ADR-0076](adr/0076-input-to-present-read-by-mode.md)'s budget, no frame missed, is missed:
   0.4 to 0.9 % on llvmpipe at 1080p, 0 or 1 frame in 2,400 on the GPU at 4K.
 - `Compositor::advance`, which the tests use, may run virtual time ahead of real time, while
   [ADR-0023](adr/0023-frames-presentation-and-the-clock.md) says never while real clients are

@@ -21,7 +21,7 @@
 //! in a second window apart, the same scenario again, so that the copies never weigh on the
 //! costs; that count is a lower bound, since the counter misses frames that come faster than its
 //! copies, and no cost a frame comes from it. Mutter's are counted by mpv alone. Frames counted
-//! headless compare only between compositors on the same backend (ADR-0071). Each cost window
+//! headless compare only between compositors on the same backend (ADR-0075). Each cost window
 //! records the rate the compositor really drew at ([`achieved_rate`]); no ranking depends on it.
 //!
 //! Before any window, once its clients are up, every scenario checks the sandbox: the

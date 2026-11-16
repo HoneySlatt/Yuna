@@ -112,7 +112,7 @@ nix develop -c target/release/examples/xwayland_time --area-filter
 ```
 
 The rivals are measured with `crates/yuna-bench`
-([ADR-0071](docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md),
+([ADR-0075](docs/adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench), where a table gives how each
 compositor runs). It runs sway, KWin, Yuna, dwl, mango, Umbriel, Hyprland and Mutter headless on
 the GPU's render node, at 3840 × 2160, 240 Hz and scale 1.5, each in a sandbox of its own,

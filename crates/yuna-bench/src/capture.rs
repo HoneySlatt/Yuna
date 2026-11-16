@@ -4,7 +4,7 @@
 //! After its first frame, it asks each next one only when the output's content changed: the
 //! protocol lets the compositor wait for new content before it copies, and wlroots does. Each
 //! frame the compositor copies is one it drew with damage; at rest, none is asked. A frame callback
-//! would make a compositor draw (ADR-0071); this does not, but each copy costs the compositor, so
+//! would make a compositor draw (ADR-0075); this does not, but each copy costs the compositor, so
 //! the bench counts frames this way in a pass apart from the one whose costs it reads.
 //!
 //! It prints `session <width>x<height>` once the compositor gave the buffer's constraints, then a
