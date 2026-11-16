@@ -1,7 +1,7 @@
 # 0073. Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures
 
 - Status: Accepted; supersedes [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)
-- Date: 2026-11-15
+- Date: 2026-11-16
 
 ## Context
 
@@ -43,8 +43,9 @@ The owner chose, on 2026-11-14 and 2026-11-15:
   - **a measured budget**: uwui's time in each of Yuna's frames is counted and checked in CI;
   - **games first**: over a fullscreen game, uwui draws nothing unless the owner opens an
     interface.
-  This reverses the first decision of SlimeEngine's ADR-0199, which SlimeEngine records in an ADR
-  of its own; its other decisions stand.
+  This reverses the first decision of SlimeEngine's ADR-0199, which kept uwui out of the owner's
+  shell, its lock and login screens and what a compositor draws itself; SlimeEngine records the
+  change in an ADR of its own, and ADR-0199's other decisions stand.
 - **A throwaway prototype answers only what no rival measures**, headless on the render node, on
   each tier (the desktop and lavapipe by an agent; the laptop and the Steam Deck by the owner):
   - the import of each format and modifier the driver offers, compressed ones included, from

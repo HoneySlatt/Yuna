@@ -393,10 +393,12 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - wayland-rs bounds each client's outgoing buffer at 4,096 bytes and ends a client whose buffer
   is full, where the rivals raise libwayland's to 1 MiB; how long a client that stops reading
   survives a fast pointer is not measured yet (ADR-0074, chosen at Stage 2's opening).
-- No crate forbids `unsafe` code; `yuna` has 8 `unsafe` sites, `yuna-layout` and `yuna-motion`
-  none.
-- Memory's budget is missed ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)):
-  Yuna's process holds 114 MiB at rest with 15 windows against Umbriel's 102. Its memory grows by about 0.32 MiB a still window headless, ten times the wlroots rivals'
-  slope ([measurements](measurements.md#m19--the-rivals-headless-at-equal-work-2026-11-16)); its
-  cause is not isolated, the `wl_shm` textures it keeps the likely one. Stage 2's bounded GPU
-  memory (ADR-0074) is where it is paid.
+- No crate forbids `unsafe` code; `yuna` has 8 `unsafe` sites, `yuna-bench` one, `yuna-layout`
+  and `yuna-motion` none.
+- Yuna keeps each client's `wl_shm` buffer mapped until the client replaces it, where the wlroots
+  rivals release it once copied: 30.4 MiB at rest with 15 windows, 0.31 MiB a window
+  ([measurements](measurements.md#m19--the-rivals-headless-at-equal-work-2026-11-16)), from code
+  reading and these figures. Paid by releasing a buffer once uploaded, at Stage 2 (ADR-0074).
+- The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
+  ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
+  is not isolated.

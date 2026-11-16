@@ -19,6 +19,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
 - [M1.9](#m19--the-rivals-measured) is in its closing review, with ADR-0072 to ADR-0077.
+- The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 
 ## Status
 

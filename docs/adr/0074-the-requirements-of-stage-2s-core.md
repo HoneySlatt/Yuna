@@ -16,7 +16,7 @@ thread after the fact; Hyprland pulled its backend out into aquamarine.
 
 Today the `yuna` crate is about 25,000 lines around one `State` of 52 fields, 43 of them public,
 that implements 22 of Smithay's handler traits: Smithay's shape, in which any handler can change
-anything. The owner's global rules now count architectural quality in the bar: explicit contracts,
+anything. The project's bar counts architectural quality: explicit contracts,
 controlled dependencies, owned state and task lifetimes, bounded queues, contained failures,
 contracts evolved deliberately, judged by realistic change and failure scenarios.
 
@@ -165,7 +165,12 @@ other and meet only in `yuna-core`.
 | 1 | `yuna-layout`, `yuna-motion`, `yuna-clock`, `yuna-colour`, `yuna-scene`, `yuna-output`, `yuna-config`, `yuna-ipc` (the commands and events, the crate Hollow uses, under semver) | level 0, and within level 1 only scene → colour, output → clock and scene |
 | 2 | one crate per outside library: `yuna-wayland`, `yuna-render` (Vulkan, uwui's hosting), `yuna-kms`, `yuna-headless`, `yuna-input`, `yuna-session`, `yuna-xwm`, `yuna-process` | levels 0 and 1 |
 | 3 | `yuna-core`: the state, the loop, the frame scheduler, the command dispatcher, the `Compositor` interface the tests drive | everything below |
-| 4 | `yuna`, `yuna-mcp`, `yuna-keeper` (types and IPC only), `yuna-portal`, `yuna-wlcs`, `yuna-bench`, fuzz targets | the core's interface |
+| 4 | `yuna`, `yuna-mcp`, `yuna-keeper` (types and IPC only), `yuna-portal`, `yuna-wlcs`, fuzz targets | the core's interface |
+
+`yuna-bench` stands outside the map: it measures Yuna from outside as it measures the rivals
+([ADR-0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)), and
+depends on no crate of Yuna's; Yuna's measuring examples and tests may use its readers as a
+development dependency, never a crate's own code.
 
 `scripts/check.sh` checks: the edges; one owning crate per outside library; `forbid(unsafe_code)`
 outside those crates; no `static` with interior mutability nor `thread_local!` outside logging.
