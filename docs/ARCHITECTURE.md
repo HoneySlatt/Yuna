@@ -1328,28 +1328,30 @@ scenario; each run of a case goes:
    each frame after the last copy, so at a game's rate it misses frames. Mutter offers no capture
    protocol: its frames are counted only by mpv in `game`. Yuna's cost window runs at its default
    log level: its `frame drawn` lines would weigh on its costs. Each cost window records its
-   *achieved rate*, the frames a second the compositor really drew (`achieved_rate`).
+   *achieved rate*, the frames a second the compositor really drew (`achieved_rate`), which the
+   run's file keeps; no ranking depends on it.
 6. **The stop**, as the recipe says, then `cgroup.kill` for what is left; KWin's frame log is
    read once it has flushed it.
 
 `game` is the same scene everywhere: mpv, which asks fullscreen itself, plays a clip at 240
 frames a second as fast as the compositor takes them, drawing it with Vulkan on radv over the
 whole output. The bench refuses the case unless mpv reports itself fullscreen at the output's
-logical size. Its clips, `film`'s too, are long enough never to loop inside a window: mpv is not
-sought back, since sought, it stops at its first frame on Mutter.
+logical size, and fails it unless mpv's clip played during its warm-up. Its clips, `film`'s too,
+are long enough never to loop inside a window: mpv is not sought back to its start, which is one
+more chance for it to stall on Mutter (below).
 
 Each recipe, all on the render node at 3840 × 2160, 240 Hz, scale 1.5:
 
-| Recipe | Backend | Its output's mode | `motion` | Frames | Equal work turns off |
+| Recipe | Backend, its pace | Its output's mode | `motion` | Frames | Equal work turns off |
 |---|---|---|---|---|---|
-| sway, sway-vulkan | wlroots headless, GLES2 or Vulkan | its configuration's `output` | `swaymsg` | capture | its bar, swaybg, XWayland |
-| KWin | its virtual backend | its output configuration | its D-Bus | its frame log | its default effects, XWayland |
-| Yuna | its headless backend, `--gpu` | `--output` | none | capture | nothing: both are the same |
-| dwl | wlroots headless | wlr-randr, once ready | the bench's virtual keyboard | capture | XWayland: a build without it |
-| mango | wlroots headless, SceneFX | a `monitor_rule` | `mmsg` | capture | animations, rounded corners; XWayland: a build without it |
-| Umbriel | wlroots headless, its SceneFX fork | its configuration's output | `umbriel msg` | its commits | animations, blur, shadows, corners, its cheatsheet, XWayland |
-| Hyprland | Aquamarine's headless, inside a dwl | `hyprctl output create headless`, a monitor rule | `hyprctl` | capture | animations, blur, shadows, corners, its wallpaper, XWayland |
-| Mutter | its headless backend | `--virtual-monitor`; scale from its `monitors.xml` | none | mpv in `game` alone | animations, XWayland |
+| sway, sway-vulkan | wlroots headless, GLES2 or Vulkan; wlroots' timer | its configuration's `output` | `swaymsg` | capture | its bar, swaybg, XWayland |
+| KWin | its virtual backend; the mode's rate | its output configuration | its D-Bus | its frame log | its default effects, XWayland |
+| Yuna | its headless backend, `--gpu`; the mode's rate | `--output` | none | capture | nothing: both are the same |
+| dwl | wlroots headless; wlroots' timer | wlr-randr, once ready | the bench's virtual keyboard | capture | XWayland: a build without it |
+| mango | wlroots headless, SceneFX; wlroots' timer | a `monitor_rule` | `mmsg` | capture | animations, rounded corners; XWayland: a build without it |
+| Umbriel | wlroots headless, its SceneFX fork; wlroots' timer | its configuration's output | `umbriel msg` | its commits | animations, blur, shadows, corners, its cheatsheet, XWayland |
+| Hyprland | Aquamarine's headless, inside a dwl; the mode's rate | `hyprctl output create headless`, a monitor rule | `hyprctl` | capture | animations, blur, shadows, corners, its wallpaper, XWayland, realtime scheduling |
+| Mutter | its headless backend; the mode's rate | `--virtual-monitor`; scale from its `monitors.xml` | none | mpv in `game` alone | animations, XWayland |
 
 niri and cosmic-comp have no recipe that runs: niri's headless backend serves its own tests
 only, and cosmic-comp has none. They are measured on the owner's tour alone, and the summary
@@ -1359,29 +1361,37 @@ The run file holds every figure with its unit, the raw `fdinfo`, the machine's s
 how each window's frames were counted, and which figures are lower bounds. `yuna-bench report`
 turns run files into tables. It ranks a cost only where the runs' spreads do not overlap, among
 *equal work* runs that other programs did not disturb, and names a compositor all of whose runs
-were disturbed; it never ranks a lower bound; it ranks a cost a second only between compositors
-whose achieved rates are within 1 %, and a cost a frame only between compositors on the same
-backend whose frames were counted the same way. It ends with every rival of ADR-0071, measured or
-not, and those on the tour only.
+were disturbed; it never ranks a lower bound. In `game` and `pacing`, whose client draws as fast
+as the compositor takes its frames, it ranks a cost a second only between compositors on the
+same pace, the recipe's: wlroots' headless timer, or the mode's rate. In `rest`, `motion` and
+`film`, where equal work draws only when something changes, it ranks them across every
+compositor. A figure of the stack ranks apart for a compositor whose stack holds its parent. A
+cost a frame ranks only between compositors on the same backend whose frames were counted the
+same way. It ends with every rival of ADR-0071, measured or not, and those on the tour only.
 
 Known limits:
 
 - Frames counted by capture are lower bounds, and each copy of a 4K shm buffer costs the
   compositor milliseconds.
-- wlroots' headless backend waits whole milliseconds between frames, `1000000 / 240000` = 4 ms
-  (`backend/headless/output.c:31`): sway, dwl, mango and Umbriel draw at about 250 Hz for a
-  240 Hz mode, 4 % more frames than KWin, Hyprland, Mutter or Yuna. Their costs a second are
-  therefore ranked apart from those.
+- wlroots' headless backend sends a frame event 4 ms after each commit: it counts whole
+  milliseconds, `1000000 / 240000` = 4 (`backend/headless/output.c:31` and `:76`). sway, dwl,
+  mango and Umbriel draw up to 250 frames a second for a 240 Hz mode, fewer as each frame takes
+  time to draw: 241.7 to 243.9 in `game` on 2026-11-16. KWin, Hyprland, Mutter and Yuna draw at
+  the mode's rate, 240 at most. Where the client paces the compositor, their costs a second rank
+  apart.
 - Yuna and Mutter have no actions for `motion`. Mutter takes no command for its windows from
   outside: GNOME Shell drives them from inside Mutter's process, and is not measured.
 - Hyprland's parent is dwl, not sway: Aquamarine binds `xdg_wm_base` at version 6, which sway
   1.12 offers at 5. Hyprland is started through its watchdog, `start-hyprland`, as its session
-  file does; started alone it shows a warning for 15 s. Hyprland 0.57.1 puts its main thread on
-  `SCHED_RR`, which the run notes.
+  file does; started alone it shows a warning for 15 s. A Hyprland that `start-hyprland`
+  restarts, in its safe mode, fails the case. Hyprland 0.57.1 puts its main thread on `SCHED_RR`,
+  from rtkit: kept as shipped; at equal work its system bus is a socket that does not exist, so
+  it runs without, as 0.57.2 ships. The run notes the core's realtime threads. Its stack holds its
+  parent, which the summary says, and its figures of the stack rank apart.
 - dwl and mango have no switch for XWayland at run time: equal work runs nixpkgs' build of each
   without it, the same code but XWayland's.
-- mpv, with `--untimed` and a FIFO swap chain, sometimes stays at its first frames on Mutter: four
-  of the bench's six starts of `game` there on 2026-11-16. The bench then fails the case ("mpv's
+- mpv, with `--untimed` and a FIFO swap chain, sometimes stays at its first frames on Mutter, with
+  or without a seek: four of the bench's six starts of `game` there on 2026-11-16. The bench then fails the case ("mpv's
   clip did not play in its warm-up") rather than measure an empty scene; a run again may play.
 - Mutter's default plugin draws a plain colour with a vignette behind the windows, which no switch
   removes; Umbriel as shipped shows its keybind cheatsheet throughout.

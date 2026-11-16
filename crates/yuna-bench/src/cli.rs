@@ -255,6 +255,13 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
             swept.join(", ")
         ));
     }
+    let links = sandbox::sweep_runtime_links(&crate::procfs::Proc::system(), Path::new("/tmp"));
+    if !links.is_empty() {
+        notes.push(format!(
+            "runtime links left by a bench killed earlier, removed: {}",
+            links.join(", ")
+        ));
+    }
     let exclusive = lock::take()?;
     let started = SystemTime::now();
     let seed = options.seed.unwrap_or_else(|| {

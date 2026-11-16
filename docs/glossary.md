@@ -4,8 +4,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
 - **Achieved rate** (bench): the frames a second a compositor really drew in a cost window: its
   own exact count, else in `pacing` the frames it presented, else the frames window's capture, a
-  lower bound. Costs a second are ranked only between compositors whose achieved rates are within
-  1 %: wlroots' headless backend draws at 250 Hz for a 240 Hz mode.
+  lower bound. On wlroots' headless timer, a frame 4 ms after each commit, it is up to 250 for a
+  240 Hz mode; at the mode's rate, 240 at most. The run's file keeps it; it decides no
+  ranking: the *pace* does.
 - **Activation token**: a string a client asks Yuna for and hands on, a launcher to the program
   it starts, so that a window can be activated with it (`xdg-activation-v1`); valid only when
   asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s.
@@ -126,6 +127,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   menus, tooltips, a drag's icon.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
   stack, not the core: Hyprland's headless dwl, which lends it a render node.
+- **Pace** (bench): how a backend times the frames of a compositor whose client draws as fast as
+  it can, as each recipe records it: wlroots' headless timer, a frame 4 ms after each commit, or
+  the mode's rate. In `game` and `pacing`, costs a second rank only within one pace.
 - **Pairing**: matching an X11 window with the Wayland surface Xwayland draws it into, through
   the serial `xwayland-shell-v1` gives both, in either order.
 - **Pinned window**: a floating window shown over whichever workspace its output shows.

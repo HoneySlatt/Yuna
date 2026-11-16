@@ -132,18 +132,20 @@ by default) and `--configuration` (`as-shipped`, `equal-work`); `--runs` (3 by d
 random order whose seed it records, `--seed` to replay one. `--seconds` makes every measured
 window shorter, to try it: such figures are not comparable. With Yuna among the compositors, it
 builds it for release first. `rest` with 15 windows, `game` and `motion`, once each for dwl,
-mango, Umbriel, Hyprland and Mutter at equal work, took 13 minutes on 2026-11-16; a whole run,
-every recipe, configuration and scenario three times, has not been timed. It writes `target/yuna-bench/run-<time>.json`, the run file, and its summary in
-Markdown beside it (`--out` for another folder); it keeps the run's folder of logs in
+mango, Umbriel, Hyprland and Mutter at equal work, took 13 to 14 minutes on 2026-11-16; a whole
+run, every recipe, configuration and scenario three times, has not been timed. It writes
+`target/yuna-bench/run-<time>.json`, the run file, and its summary in Markdown beside it (`--out` for another folder); it keeps the run's folder of logs in
 `/tmp/yuna-bench-<pid>-<time>` when a case fails, or with `--keep`. It takes the agents' exclusive
 lock itself, waiting for any other exclusive run; under `run.sh --exclusive` it uses the lock its
 parent holds; no descriptor it inherited reaches a compositor or a client. It refuses a case whose
 compositor or clients open a `/dev/dri/card*` node or an input device, or reach the owner's
 runtime folder or an X11 display outside their sandbox, and never runs anything on the owner's
 display. Killed outright, it leaves its sandboxes running until its next start
-kills them. The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw at about
-250 Hz for the 240 Hz mode: wlroots waits whole milliseconds between frames, 4 ms. The summary
-therefore ranks costs a second only between compositors whose achieved rates are within 1 %.
+kills them. The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw a frame
+4 ms after each commit, since wlroots counts whole milliseconds: up to 250 frames a second for
+the 240 Hz mode, fewer under load, 241.7 to 243.9 in `game`. The others draw at the mode's rate.
+In `game` and `pacing`, whose client draws as fast as the compositor takes its frames, the summary
+therefore ranks costs a second only within one of these paces.
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`

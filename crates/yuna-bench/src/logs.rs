@@ -229,18 +229,11 @@ pub fn mpv_property(socket: &Path, name: &str) -> Result<Option<f64>, String> {
 /// Reads property `name` of the mpv whose IPC socket is `socket`, as mpv gives it; `null` when
 /// it is unavailable.
 pub fn mpv_value(socket: &Path, name: &str) -> Result<serde_json::Value, String> {
-    let reply = mpv_command(socket, serde_json::json!(["get_property", name]))?;
-    Ok(reply["data"].clone())
-}
-
-/// Sends `command` to the mpv whose IPC socket is `socket`, and gives its reply; an error when
-/// mpv says the command failed.
-pub fn mpv_command(socket: &Path, command: serde_json::Value) -> Result<serde_json::Value, String> {
     let mut stream = UnixStream::connect(socket).map_err(|e| format!("mpv's IPC: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| format!("mpv's IPC: {e}"))?;
-    let request = serde_json::json!({"command": command, "request_id": 1});
+    let request = serde_json::json!({"command": ["get_property", name], "request_id": 1});
     writeln!(stream, "{request}").map_err(|e| format!("mpv's IPC: {e}"))?;
     for line in BufReader::new(stream).lines() {
         let line = line.map_err(|e| format!("mpv's IPC: {e}"))?;
@@ -248,11 +241,7 @@ pub fn mpv_command(socket: &Path, command: serde_json::Value) -> Result<serde_js
             serde_json::from_str(&line).map_err(|e| format!("mpv's IPC: {e}"))?;
         // Events come on the same socket; the reply carries the request's id.
         if reply["request_id"] == 1 {
-            // A property mpv does not have yet is `null` data, not a failure.
-            return match reply["error"].as_str() {
-                Some("success") | Some("property unavailable") | None => Ok(reply),
-                Some(error) => Err(format!("mpv: {command}: {error}")),
-            };
+            return Ok(reply["data"].clone());
         }
     }
     Err("mpv's IPC closed without a reply".to_owned())

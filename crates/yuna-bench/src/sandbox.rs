@@ -318,7 +318,8 @@ fn common_environment(folders: &Folders, shell: &ShellPaths) -> Environment {
     ]
 }
 
-/// A compositor's environment: the common one, its `PATH`, and the recipe's own variables.
+/// A compositor's environment: the common one, its `PATH`, and the recipe's own variables,
+/// which replace the common ones of the same name: one value a variable.
 pub fn compositor_environment(
     folders: &Folders,
     shell: &ShellPaths,
@@ -327,6 +328,7 @@ pub fn compositor_environment(
 ) -> Environment {
     let mut environment = common_environment(folders, shell);
     environment.push(("PATH".to_owned(), path.to_owned()));
+    environment.retain(|(key, _)| !recipe_variables.iter().any(|(own, _)| own == key));
     environment.extend(recipe_variables.iter().cloned());
     environment
 }
@@ -857,6 +859,30 @@ pub fn sweep_left_behind(proc: &Proc) -> Vec<String> {
     swept
 }
 
+/// Removes the short runtime links ([`Folders::short_runtime`]) in `folder` that a bench killed
+/// earlier left: `yb-<pid>-<n>`, whose bench, process `<pid>`, is gone. Gives their names.
+pub fn sweep_runtime_links(proc: &Proc, folder: &Path) -> Vec<String> {
+    let mut swept = Vec::new();
+    for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(bench) = name
+            .strip_prefix("yb-")
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let is_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
+        let alive = proc
+            .name(bench)
+            .is_some_and(|program| program.starts_with("yuna-bench"));
+        if is_link && !alive && fs::remove_file(entry.path()).is_ok() {
+            swept.push(name);
+        }
+    }
+    swept
+}
+
 /// Sends `signal` to process `pid`.
 pub fn signal(pid: u32, signal: rustix::process::Signal) -> io::Result<()> {
     let pid = i32::try_from(pid)
@@ -918,6 +944,16 @@ mod tests {
         }
         // The client's display is the compositor's socket, in the run's own runtime folder.
         assert!(client.contains(&("WAYLAND_DISPLAY".to_owned(), "wayland-1".to_owned())));
+        // A recipe's own value replaces the sandbox's: one value a variable.
+        let short = [("XDG_RUNTIME_DIR".to_owned(), "/tmp/yb-1-0".to_owned())];
+        let own =
+            compositor_environment(&folders, &shell(), "/nix/store/aaaa-hyprland/bin", &short);
+        let runtimes: Vec<&String> = own
+            .iter()
+            .filter(|(key, _)| key == "XDG_RUNTIME_DIR")
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(runtimes, ["/tmp/yb-1-0"]);
     }
 
     #[test]
@@ -975,6 +1011,24 @@ mod tests {
             line[line.len() - 3..],
             ["/bench", "parent", "/tmp/run/parent-launch.json"]
         );
+    }
+
+    #[test]
+    fn the_links_a_killed_bench_left_are_swept_and_no_others() {
+        let root = crate::testing::folder("links");
+        let (proc_root, links) = (root.join("proc"), root.join("tmp"));
+        fs::create_dir_all(proc_root.join("77")).unwrap();
+        fs::write(proc_root.join("77/comm"), "yuna-bench\n").unwrap();
+        fs::create_dir_all(&links).unwrap();
+        // 77's bench runs; 88's is gone; a folder of that name and another file are not links.
+        std::os::unix::fs::symlink(&root, links.join("yb-77-0")).unwrap();
+        std::os::unix::fs::symlink(&root, links.join("yb-88-3")).unwrap();
+        fs::create_dir_all(links.join("yb-99-1")).unwrap();
+        fs::write(links.join("yb-notes"), "").unwrap();
+        let swept = sweep_runtime_links(&Proc::at(&proc_root), &links);
+        assert_eq!(swept, ["yb-88-3"]);
+        assert!(links.join("yb-77-0").exists());
+        assert!(links.join("yb-99-1").exists());
     }
 
     #[test]

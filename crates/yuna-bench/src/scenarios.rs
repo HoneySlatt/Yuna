@@ -22,8 +22,7 @@
 //! costs; that count is a lower bound, since the counter misses frames that come faster than its
 //! copies, and no cost a frame comes from it. Mutter's are counted by mpv alone. Frames counted
 //! headless compare only between compositors on the same backend (ADR-0071). Each cost window
-//! records the rate the compositor really drew at ([`achieved_rate`]), by which its costs a
-//! second compare.
+//! records the rate the compositor really drew at ([`achieved_rate`]); no ranking depends on it.
 //!
 //! Before any window, once its clients are up, every scenario checks the sandbox: the
 //! compositor's scope and each client's (`sandbox::check`). A case that breaks its rules, or whose
@@ -337,6 +336,11 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         ));
     }
     run.stopped = Some(stop_compositor(bench, &mut running));
+    // A compositor restarted during the case is not the one measured from its start.
+    let measured = match restarted(recipe, &running.log()) {
+        Some(error) => Err(Stop::Failed(error)),
+        None => measured,
+    };
     if let Some(measured) = record_outcome(&mut run, measured) {
         let output = finish_frames(recipe, &running, measured, &mut run);
         if let (Some(output), Some(info)) = (output, run.compositor.as_mut()) {
@@ -353,6 +357,15 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         })
         .flatten();
     run
+}
+
+/// Why the case fails if `log`, the compositor's, says it was restarted, as the recipe tells.
+fn restarted(recipe: &Recipe, log: &str) -> Option<String> {
+    let line = recipe.restarted.filter(|line| log.contains(line))?;
+    Some(format!(
+        "{} was restarted during the case: its log says \"{line}\"",
+        recipe.name
+    ))
 }
 
 /// The threads of the compositor's core under a realtime policy, as `Hyprland's Hyprland:
@@ -429,7 +442,15 @@ fn start_compositor(
         input: false,
     };
     let started = Instant::now();
-    let sandboxed = Sandboxed::start(&launch, &bench.shell, &bench.program)?;
+    let sandboxed = match Sandboxed::start(&launch, &bench.shell, &bench.program) {
+        Ok(sandboxed) => sandboxed,
+        Err(error) => {
+            if let Some(link) = &plan.runtime_link {
+                let _ = fs::remove_file(link);
+            }
+            return Err(error);
+        }
+    };
     let mut running = Running {
         recipe,
         folders,
@@ -1227,9 +1248,10 @@ impl Clip {
     /// Its length in seconds: as long as mpv may play before its last window ends, so that it
     /// never loops inside one. That is the wait for its window to be fullscreen, the warm-up,
     /// the cost window, the frame counter's lead and the frames window, at up to 1.1 times the
-    /// clip's rate: wlroots' headless backend takes `game`'s frames at 250 a second. mpv is not
-    /// sought back instead: sought, mpv with `--untimed` and a FIFO swap chain stops at its first
-    /// frame on Mutter 51.0.
+    /// clip's rate: wlroots' headless backend takes `game`'s frames at up to 250 a second. mpv
+    /// is not sought back to its start instead: on Mutter 51.0, mpv with `--untimed` and a FIFO
+    /// swap chain sometimes stays at its first frames, with or without a seek, and a seek is one
+    /// more chance of it.
     pub fn seconds(durations: &Durations) -> u32 {
         let played = FULLSCREEN_PATIENCE
             + durations.warm_up
@@ -1398,7 +1420,7 @@ fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result
 
 /// Lets mpv play for `length`, and fails the case if its clip did not: a stalled mpv is no scene
 /// to measure. mpv with `--untimed` and a FIFO swap chain sometimes stays at its first frames on
-/// Mutter 51.0: four of the bench's six starts of `game` there on 2026-11-16.
+/// Mutter 51.0, sought or not: four of the bench's six starts of `game` there on 2026-11-16.
 fn warm_up(socket: &Path, length: Duration) -> Result<(), Stop> {
     let position = || logs::mpv_property(socket, "time-pos").ok().flatten();
     let before = position();
@@ -1742,7 +1764,7 @@ fn finish_frames(
             match own {
                 Some(own) => {
                     run.notes.push(format!(
-                        "the cost window's frames are the compositor's own count instead:                          {own_by}"
+                        "the cost window's frames are the compositor's own count instead: {own_by}"
                     ));
                     Some(Count {
                         frames: Some(own as f64),
@@ -1799,9 +1821,10 @@ fn finish_frames(
 
 /// Records in the cost window the rate the compositor really drew at, `achieved_frames_per_s`,
 /// which its costs a second compare by: its own exact count; else, in `pacing`, the frames it
-/// presented to the client, each one in the log; else the frames window's, a lower bound.
-/// wlroots' headless backend draws at 250 Hz for a 240 Hz mode ([`recipes::WLROOTS_HEADLESS_HZ`]),
-/// 4 % more frames a second than a backend that keeps 240.
+/// presented to the client, each one in the log; else the frames window's, a lower bound. The
+/// summary ranks by the recipe's pace instead ([`recipes::Pace`]): wlroots' headless backend
+/// draws a frame 4 ms after each commit, up to 250 frames a second for a 240 Hz mode, fewer
+/// under load.
 pub fn achieved_rate(cost: &mut Phase, frames: Option<&Phase>) {
     let rate = |phase: &Phase| {
         let value = phase.figures.get("frames_per_s")?.value?;
@@ -2275,6 +2298,21 @@ mod tests {
         // Keys are no tool's; sway's command needs its socket.
         assert!(tool_at(&shell, &reach, Action::Sway("exit")).is_err());
         assert!(tool_at(&shell, &reach, recipes::recipe("dwl").unwrap().actions[0]).is_err());
+    }
+
+    #[test]
+    fn a_compositor_restarted_during_the_case_fails_it() {
+        let hyprland = recipes::recipe("hyprland").unwrap();
+        // As start-hyprland logs it when Hyprland ends badly, before it starts it in safe mode.
+        let log = "[ERR] Hyprland exit not-cleanly, restarting\n";
+        let error = restarted(hyprland, log).unwrap();
+        assert!(
+            error.starts_with("hyprland was restarted during the case"),
+            "{error}"
+        );
+        assert_eq!(restarted(hyprland, "[LOG] Hyprland started\n"), None);
+        // A compositor without such a line is never told restarted.
+        assert_eq!(restarted(recipes::recipe("sway").unwrap(), log), None);
     }
 
     #[test]

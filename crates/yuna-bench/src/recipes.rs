@@ -13,9 +13,8 @@
 //! has a recipe. Those that cannot run without a display say why instead ([`TOUR_ONLY`]): their
 //! figures come from the owner's tour alone.
 //!
-//! The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw about 250 frames a
-//! second for a 240 Hz mode: the backend waits whole milliseconds between frames
-//! ([`WLROOTS_HEADLESS_HZ`]).
+//! Each recipe names its backend's pace ([`Pace`]): the rivals on wlroots' headless backend
+//! (sway, dwl, mango, Umbriel) draw a frame 4 ms after each commit, not on a 240 Hz grid.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -36,11 +35,36 @@ pub const OUTPUT_MILLIHERTZ: u32 = 240_000;
 /// Its scale.
 pub const OUTPUT_SCALE: f64 = 1.5;
 
-/// The rate wlroots' headless backend draws at for [`OUTPUT_MILLIHERTZ`]: it waits
-/// `frame_delay = 1000000 / refresh` between frames, in whole milliseconds
-/// (`backend/headless/output.c:31`, `int frame_delay; // ms` in `include/backend/headless.h:24`,
-/// wlroots 0.20.2). 1000000 / 240000 is 4 ms: 250 Hz, not 240.
+/// The most frames a second wlroots' headless backend draws for [`OUTPUT_MILLIHERTZ`]: it sends
+/// a frame event `frame_delay = 1000000 / refresh` after each commit, in whole milliseconds
+/// (`backend/headless/output.c:31` and `:76`, `int frame_delay; // ms` in
+/// `include/backend/headless.h:24`, wlroots 0.20.2). 1000000 / 240000 is 4 ms: 250 frames a
+/// second when frames take no time to draw, fewer as they take more, 241.7 to 243.9 in `game` on
+/// 2026-11-16.
 pub const WLROOTS_HEADLESS_HZ: f64 = 1000.0 / (1_000_000 / OUTPUT_MILLIHERTZ) as f64;
+
+/// How a backend paces a compositor whose client draws as fast as the compositor takes its
+/// frames, as `game`'s and `pacing`'s do: what such a scenario's costs a second scale with, and
+/// so what they compare within.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Pace {
+    /// wlroots' headless backend: a frame 4 ms after each commit, at most
+    /// [`WLROOTS_HEADLESS_HZ`] frames a second, fewer under load.
+    WlrootsTimer,
+    /// At the mode's rate, 240 frames a second at most: KWin's and Yuna's grid of refreshes,
+    /// Mutter's frame clock, Aquamarine's headless timer.
+    ModeRate,
+}
+
+impl Pace {
+    /// Its name in the summary.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Pace::WlrootsTimer => "on wlroots' headless timer, a frame 4 ms after each commit",
+            Pace::ModeRate => "at the mode's rate, 240 frames a second at most",
+        }
+    }
+}
 
 /// Its size in logical pixels, which a fullscreen window is configured to: 2560 × 1440.
 pub fn output_logical_size() -> (u32, u32) {
@@ -185,6 +209,8 @@ pub struct Recipe {
     pub name: &'static str,
     /// The backend it runs on headless.
     pub backend: &'static str,
+    /// How that backend paces its frames.
+    pub pace: Pace,
     /// What it draws with.
     pub renderer: &'static str,
     /// How its frames are counted.
@@ -201,6 +227,9 @@ pub struct Recipe {
     pub actions: &'static [Action],
     /// Why it has no actions, when it has none.
     pub no_actions: Option<&'static str>,
+    /// A line its log holds when it was restarted during the case, which fails the case: the
+    /// compositor measured is no longer the one started.
+    pub restarted: Option<&'static str>,
 }
 
 const SWAY_ACTIONS: &[Action] = &[
@@ -276,6 +305,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "sway",
         backend: "wlroots-headless",
+        pace: Pace::WlrootsTimer,
         renderer: "gles2",
         frames: Frames::Capture,
         ready: Ready::Swaymsg,
@@ -284,10 +314,12 @@ pub const RECIPES: [Recipe; 9] = [
         stop: Some(Action::Sway("exit")),
         actions: SWAY_ACTIONS,
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "sway-vulkan",
         backend: "wlroots-headless",
+        pace: Pace::WlrootsTimer,
         renderer: "vulkan",
         frames: Frames::Capture,
         ready: Ready::Swaymsg,
@@ -296,10 +328,12 @@ pub const RECIPES: [Recipe; 9] = [
         stop: Some(Action::Sway("exit")),
         actions: SWAY_ACTIONS,
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "kwin",
         backend: "kwin-virtual",
+        pace: Pace::ModeRate,
         renderer: "gles (KWin's virtual backend draws with OpenGL ES alone)",
         frames: Frames::KwinLog,
         ready: Ready::BusName("org.kde.KWin"),
@@ -311,10 +345,12 @@ pub const RECIPES: [Recipe; 9] = [
             Action::KwinBus("setCurrentDesktop", &["int32:1"]),
         ],
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "yuna",
         backend: "yuna-headless",
+        pace: Pace::ModeRate,
         renderer: "gles2 (Smithay's GLES renderer on the render node, --gpu)",
         // Its `frame drawn` lines need its debug logging, which would weigh on its costs.
         frames: Frames::Capture,
@@ -327,13 +363,16 @@ pub const RECIPES: [Recipe; 9] = [
             "`yuna --headless` takes no command from outside; MCP's layout tools do not exist \
              (ADR-0056)",
         ),
+        restarted: None,
     },
     Recipe {
         name: "dwl",
         backend: "wlroots-headless",
+        pace: Pace::WlrootsTimer,
         renderer: "gles2",
         frames: Frames::Capture,
-        // Its output exists once wlr-randr lists it.
+        // Ready once it answers wlr-output-management; its output's mode is read back after the
+        // setup.
         ready: Ready::Answers(Action::WlrRandr(&[])),
         // dwl gives a new output its preferred mode, which a headless output has none of
         // (`dwl.c:1178`), and reads no configuration file: wlr-randr sets the bench's.
@@ -349,10 +388,12 @@ pub const RECIPES: [Recipe; 9] = [
         stop: None,
         actions: DWL_ACTIONS,
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "mango",
         backend: "wlroots-headless",
+        pace: Pace::WlrootsTimer,
         renderer: "gles2 (SceneFX's fx_renderer)",
         frames: Frames::Capture,
         ready: Ready::Answers(Action::Mmsg(&["get", "all-monitors"])),
@@ -361,10 +402,12 @@ pub const RECIPES: [Recipe; 9] = [
         stop: None,
         actions: MANGO_ACTIONS,
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "umbriel",
         backend: "wlroots-headless",
+        pace: Pace::WlrootsTimer,
         renderer: "gles2 (umbrielfx, Umbriel's fork of SceneFX)",
         frames: Frames::UmbrielCommits,
         ready: Ready::Answers(Action::Umbriel(&["outputs"])),
@@ -373,10 +416,12 @@ pub const RECIPES: [Recipe; 9] = [
         stop: None,
         actions: UMBRIEL_ACTIONS,
         no_actions: None,
+        restarted: None,
     },
     Recipe {
         name: "hyprland",
         backend: "aquamarine-headless",
+        pace: Pace::ModeRate,
         renderer: "gles (Hyprland's OpenGL renderer, on its parent's render node)",
         frames: Frames::Capture,
         ready: Ready::Answers(Action::Hyprctl(&["monitors"])),
@@ -392,10 +437,14 @@ pub const RECIPES: [Recipe; 9] = [
         stop: None,
         actions: HYPRLAND_ACTIONS,
         no_actions: None,
+        // start-hyprland restarts a Hyprland that ended badly, in its safe mode
+        // (start/src/main.cpp:114).
+        restarted: Some("Hyprland exit not-cleanly, restarting"),
     },
     Recipe {
         name: "mutter",
         backend: "mutter-headless",
+        pace: Pace::ModeRate,
         renderer: "gles (Cogl's GL driver on the render node's GBM device)",
         frames: Frames::None(
             "not counted: Mutter offers no ext-image-copy-capture for the bench's counter, and \
@@ -410,6 +459,7 @@ pub const RECIPES: [Recipe; 9] = [
             "Mutter takes no command for its windows from outside: GNOME Shell drives them from \
              inside Mutter's own process, and is not measured at M1.9",
         ),
+        restarted: None,
     },
 ];
 
@@ -1046,16 +1096,49 @@ fn hyprland(
             ]),
         ),
     };
+    let (realtime, mut variables) = match configuration {
+        Configuration::AsShipped => (
+            "SCHED_RR on its main thread, as 0.57.1 ships: from rtkit, over the system bus \
+             (src/init/initHelpers.cpp); RLIMIT_RTPRIO is 0, so the kernel alone would refuse it",
+            Vec::new(),
+        ),
+        // rtkit is its system bus's only use in Hyprland and Aquamarine.
+        Configuration::EqualWork => (
+            "none, as 0.57.2 ships: its system bus is a socket that does not exist, so rtkit \
+             cannot be asked, and RLIMIT_RTPRIO is 0",
+            vec![(
+                "DBUS_SYSTEM_BUS_ADDRESS".to_owned(),
+                format!(
+                    "unix:path={}",
+                    folders.runtime().join("no-system-bus").display()
+                ),
+            )],
+        ),
+    };
     let config = folders.config().join("hypr/hyprland.lua");
     let parent_runtime = folders.runtime().join("parent");
     let mut parent_variables = wlroots_headless(Some("gles2"));
     parent_variables.push(("PATH".to_owned(), bin(&shell.dwl_no_xwayland)));
+    variables.extend([
+        ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
+        // Aquamarine always tries a DRM session first (Backend.cpp's CDRMBackend::attempt);
+        // libseat's logind backend would look for the user's display session. A backend name
+        // libseat does not know opens no seat at all (libseat/libseat.c:45-55).
+        ("LIBSEAT_BACKEND".to_owned(), "none".to_owned()),
+        // Its instance's sockets, `$XDG_RUNTIME_DIR/hypr/<62 characters>/.socket.sock`, would
+        // pass Unix's 108 bytes under the run's folder.
+        (
+            "XDG_RUNTIME_DIR".to_owned(),
+            folders.short_runtime.to_string_lossy().into_owned(),
+        ),
+    ]);
     let mut settings = settings;
+    settings.insert("realtime".to_owned(), realtime.to_owned());
     settings.insert(
         "parent".to_owned(),
         format!(
-            "dwl {} built without XWayland, headless on the render node, its output disabled \
-             for Hyprland's; counted in the stack, not the core; the same in both \
+            "dwl {} built without XWayland, headless on the render node; Hyprland's window on \
+             it, WAYLAND-1, is disabled; counted in the stack, not the core; the same in both \
              configurations. Not sway: Aquamarine binds xdg_wm_base 6, which sway 1.12 offers \
              at 5",
             version(&shell.dwl_no_xwayland).unwrap_or_default()
@@ -1075,19 +1158,7 @@ fn hyprland(
             config.to_string_lossy().into_owned(),
         ],
         path,
-        variables: vec![
-            ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
-            // Aquamarine always tries a DRM session first (Backend.cpp's CDRMBackend::attempt);
-            // libseat's logind backend would look for the user's display session. A backend
-            // name libseat does not know opens no seat at all (libseat/libseat.c:45-55).
-            ("LIBSEAT_BACKEND".to_owned(), "none".to_owned()),
-            // Its instance's sockets, `$XDG_RUNTIME_DIR/hypr/<62 characters>/.socket.sock`,
-            // would pass Unix's 108 bytes under the run's folder.
-            (
-                "XDG_RUNTIME_DIR".to_owned(),
-                folders.short_runtime.to_string_lossy().into_owned(),
-            ),
-        ],
+        variables,
         version: version(&shell.hyprland),
         settings,
         files: vec![(config, text)],
@@ -1406,6 +1477,26 @@ mod tests {
         let equal = hyprland(Configuration::EqualWork, &shell, &folders).unwrap();
         let text = &equal.files[0].1;
         assert!(text.contains("xwayland = { enabled = false }"));
+        // At equal work, no rtkit to grant realtime scheduling, as Hyprland 0.57.2 ships.
+        assert!(
+            equal
+                .variables
+                .iter()
+                .any(|(key, value)| key == "DBUS_SYSTEM_BUS_ADDRESS"
+                    && value.ends_with("/runtime/no-system-bus"))
+        );
+        assert!(
+            !shipped
+                .variables
+                .iter()
+                .any(|(key, _)| key == "DBUS_SYSTEM_BUS_ADDRESS")
+        );
+        assert!(equal.settings["realtime"].starts_with("none"));
+        assert!(shipped.settings["realtime"].starts_with("SCHED_RR"));
+        assert_eq!(
+            recipe("hyprland").unwrap().restarted,
+            Some("Hyprland exit not-cleanly, restarting")
+        );
         assert!(text.contains("force_default_wallpaper = 0"));
         assert!(!equal.path.contains("xwayland"));
     }
