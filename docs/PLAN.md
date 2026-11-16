@@ -181,7 +181,10 @@ milestone first needs it.
 
 - **Goal.** Stage 1 examined whole before 0.1.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
-  `v0.1.0` on the owner's go.
+  `v0.1.0` on the owner's go. For contributors: the X11 manager and the MCP server split into
+  smaller modules; a README that says what to read for each part; `SECURITY.md`; issue and pull
+  request templates holding the definition of done; a newcomer test, an agent new to Yuna making a
+  small change, its stumbles fixed.
 
 ## Ideas
 
