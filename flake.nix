@@ -21,9 +21,8 @@
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
       };
-    in
-    {
-      devShells.${system}.default = pkgs.mkShell {
+      # The default shell's settings, which the bench's shell extends.
+      shell = {
         packages = [
           (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
           # Licences, advisories and sources of the dependencies.
@@ -93,6 +92,41 @@
           pkgs.vulkan-loader
           pkgs.fontconfig
         ];
+      };
+    in
+    {
+      devShells.${system} = {
+        default = pkgs.mkShell shell;
+
+        # The rivals' bench (crates/yuna-bench, CONTRIBUTING.md): the default shell, and the
+        # compositors and clients it runs, by their store paths. Kept out of the default shell, so
+        # that CI, which fetches that shell at every run, never fetches KWin and its Qt.
+        bench = pkgs.mkShell (
+          shell
+          // {
+            # sway's own binary, not nixpkgs' wrapper, which would add its own environment. Its
+            # shipped configuration, in etc/sway, draws no wallpaper.
+            YUNA_BENCH_SWAY = "${pkgs.sway-unwrapped}";
+            YUNA_BENCH_KWIN = "${pkgs.kdePackages.kwin}";
+            # weston-presentation-shm, the pacing scenario's client.
+            YUNA_BENCH_WESTON = "${pkgs.weston}";
+            # Makes the film scenario's clip.
+            YUNA_BENCH_FFMPEG = "${pkgs.ffmpeg-headless.bin}";
+            # dbus-run-session and dbus-daemon for each compositor's own session bus, dbus-send to
+            # drive KWin.
+            YUNA_BENCH_DBUS = "${pkgs.dbus}";
+            # The Mesa every compositor and client draws with: its EGL, GBM and Vulkan drivers.
+            YUNA_BENCH_MESA = "${pkgs.mesa}";
+            # The shell's LD_LIBRARY_PATH, libglvnd's EGL, for the compositors: `cargo run`
+            # puts its own folders before it in the bench's.
+            YUNA_BENCH_LIBRARY_PATH = shell.LD_LIBRARY_PATH;
+            YUNA_BENCH_XWAYLAND = "${pkgs.xwayland}";
+            # The shell and the commands a compositor's own children run: sway's bar runs a loop
+            # of `date` and `sleep` in `sh`.
+            YUNA_BENCH_COREUTILS = "${pkgs.coreutils}";
+            YUNA_BENCH_BASH = "${pkgs.bash}";
+          }
+        );
       };
     };
 }

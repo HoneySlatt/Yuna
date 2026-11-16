@@ -1,0 +1,27 @@
+[package]
+name = "yuna-bench"
+description = "The rivals' bench: compositors measured from outside, the same way for each"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Nothing of the `yuna` crate: the bench builds alone, fast, and measures Yuna from outside as it
+# measures the others (ADR-0071).
+[dependencies]
+# The bench's own clients: still windows, and the counter of frames through
+# ext-image-copy-capture.
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+# The run's file, versioned JSON, and mpv's IPC.
+serde.workspace = true
+serde_json.workspace = true
+# Already in Cargo.lock, through Smithay and wayland-backend: the system calls the standard library
+# lacks. `time` reads CLOCK_MONOTONIC, the clock KWin stamps its frames with; `process` sends
+# SIGTERM and SIGINT; `fs` makes the still windows' memfds; `net` asks the kernel which socket each
+# socket is connected to (sock_diag), to refuse a compositor connected to the owner's.
+rustix = { version = "1.1.6", features = ["fs", "net", "process", "time"] }
+
+[lints]
+workspace = true

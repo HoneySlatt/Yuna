@@ -917,6 +917,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuna-bench"
+version = "0.0.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "wayland-client",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "yuna-layout"
 version = "0.0.0"
 dependencies = [

@@ -23,6 +23,11 @@ One Cargo workspace; its crates live in `crates/`.
   draws, and which windows are told they are visible
   ([ADR-0052](adr/0052-motion-in-a-pure-crate.md), [ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md));
   its crate documentation explains how. It holds no Wayland or Smithay object.
+- **`yuna-bench`** (`crates/yuna-bench`): the rivals' bench. It runs a compositor headless in a
+  sandbox of its own, the same scenarios with the same clients for each, and reads its costs
+  from outside ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md));
+  [The rivals' bench](#the-rivals-bench) below. It depends on nothing of `yuna`: it measures
+  Yuna as it measures the others.
 
 ## Dependencies
 
@@ -40,6 +45,11 @@ One Cargo workspace; its crates live in `crates/`.
   decode captures, and x11rb for their X11 clients.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
+- `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients;
+  `serde` and `serde_json`, for its run file and mpv's IPC; rustix, already Smithay's, for
+  CLOCK_MONOTONIC, signals, memfds and the kernel's socket diagnostics. At run time, from the
+  bench shell: sway, KWin, weston's `weston-presentation-shm`, ffmpeg, D-Bus, and the host's
+  `systemd-run`, which makes each sandbox.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
@@ -1268,7 +1278,63 @@ own thread, both `took_us`.
 - `crates/yuna-motion/examples/motion_timing.rs`: what motion costs at an operation and at a frame:
   `Motion::update` after a focus move and after a column opened left of the focus, and
   `Motion::frame` while a motion runs, on strips of 100 and 1,000 windows.
+- `crates/yuna-bench`: the rivals' bench, [below](#the-rivals-bench); `flake.nix`'s `bench`
+  shell holds what it runs.
 - `deny.toml`: the dependency policy.
+
+## The rivals' bench
+
+`crates/yuna-bench` measures compositors from outside, the same way for each
+([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+Its crate documentation gives each part's contract; how to run it is in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). A case is one compositor, one configuration, one
+scenario; each run of a case goes:
+
+1. **The sandbox.** `systemd-run --user --scope` makes a transient scope, a control group of its
+   own; `env -i` clears the environment and sets store paths and the run's own folders alone;
+   `dbus-run-session` gives a private session bus; the bench's `enter-core` moves the compositor
+   into a child group, `core`, then becomes it. The scope is the *stack*, `core` the *core*.
+   Each client runs in a scope of its own. No descriptor of the bench but its standard input,
+   output and error reaches them: it marks every other it inherited close-on-exec at its start.
+2. **The recipe** (`recipes.rs`): the compositor's program, variables and configuration file,
+   written into the case's folder, as shipped or at equal work. KWin's 240 Hz comes from its own
+   output configuration, which a first KWin writes and the bench edits.
+3. **Ready, then checked.** The Wayland socket and the recipe's own sign. Then, and again in
+   every scenario once its clients are up, the compositor's scope and each client's are checked:
+   the case is *refused*, and stopped, if a process holds `/dev/dri/card*` or an input device
+   (`/dev/input/*`, `/dev/uinput`, `/dev/hidraw*`), reaches a socket in the owner's runtime
+   folder, is connected to an X11 display served outside the sandbox, or names the owner's
+   runtime folder in its environment. Each window's readers check card nodes again every 250 ms,
+   and a card node found then refuses the case too.
+4. **The windows** (`scenarios.rs`). In each measured window, the control groups' `cpu.stat` at
+   its ends give exact CPU times; a reader every 250 ms keeps each thread's time and context
+   switches and each DRM client's engine times, so that those that end inside count up to their
+   last reading (`sampler.rs`). Wake-ups are a lower bound when the threads read account for less
+   than 90 % of the group's CPU time: processes then lived and ended between readings. Another
+   reader takes the machine's state each second (`machine.rs`). Memory is read after the window.
+5. **The frames.** A cost a frame is given only from an exact count of the window's own frames:
+   KWin's frame log, which it writes in the cost window, or, in `game`, mpv's frames shown, read
+   over its IPC, mpv being paced one frame for one of the compositor's. sway and Yuna are counted
+   by `ext-image-copy-capture` in a *frames window* apart, the scenario run again with the frame
+   counter, whose copies would weigh on the costs. That count is a lower bound: the counter asks
+   each frame after the last copy, so at a game's rate it misses frames. Yuna's cost window runs
+   at its default log level: its `frame drawn` lines would weigh on its costs.
+6. **The stop**, as the recipe says, then `cgroup.kill` for what is left; KWin's frame log is
+   read once it has flushed it.
+
+`game` is the same scene everywhere: mpv, which asks fullscreen itself, plays a clip at 240
+frames a second as fast as the compositor takes them, drawing it with Vulkan on radv over the
+whole output. The bench refuses the case unless mpv reports itself fullscreen at the output's
+logical size.
+
+The run file holds every figure with its unit, the raw `fdinfo`, the machine's state each second,
+how each window's frames were counted, and which figures are lower bounds. `yuna-bench report`
+turns run files into tables. It ranks a cost only where the runs' spreads do not overlap, among
+*equal work* runs that other programs did not disturb; it never ranks a lower bound, and ranks a
+cost a frame only between compositors on the same backend whose frames were counted the same way.
+
+Known limits: frames counted by capture are lower bounds, and each copy of a 4K shm buffer costs
+the compositor milliseconds; Yuna has no actions for `motion`.
 
 ## Where to start reading
 

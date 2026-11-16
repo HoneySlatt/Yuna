@@ -10,8 +10,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Area filter**: how Yuna draws an X11 window on an output below XWayland's scale: each
   physical pixel the average of the X11 pixels it covers, weighted by how much of each, in a
   texture shader of Yuna's ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+- **As shipped**: a rival run with its own defaults in the rivals' bench, beside *equal work*
+  ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Bench shell**: `nix develop .#bench`, the development shell with the compositors and clients
+  the rivals' bench runs, which CI's shell leaves out.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
   ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
@@ -23,6 +27,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the column is as wide as the widest of them as drawn.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
   it, and places scrolling columns by it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **Core** (bench): a compositor's own process and its descendants, in the `core` control group of
+  its sandbox; its **stack** is every process of the sandbox, its session bus included, the
+  bench's clients left out.
+- **Cost window** (bench): a measured window whose costs the bench reads; for a compositor whose
+  frames are counted by capture, the **frames window** after it runs the same scenario again with
+  the frame counter, whose copies would weigh on the costs.
 - **Data control**: `ext-data-control-v1`, which lets a client, such as a clipboard manager, read
   and set the selections without the keyboard focus.
 - **Development shell**: the environment `nix develop` opens from `flake.nix`, with the pinned
@@ -45,6 +55,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).
 - **EDID**: what a monitor tells the computer of itself: its modes, its VRR range, its colours
   and HDR luminances; the owner's monitor's give the HDR outputs' colours.
+- **Equal work**: a rival run with its effects, wallpaper and XWayland off in the rivals' bench, so
+  that compositors that draw more are compared on the same work
+  ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
   follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
@@ -130,11 +143,16 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   beside the clipboard, from X11.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
   turn stays under Yuna, its **subreaper**, and ends with it.
+- **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
+  program, environment and configuration, how it is ready, stopped and driven, and how its frames
+  are counted.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
   A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
 - **Retarget**: giving a running motion a new target; a spring goes on from its value and its
   velocity ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
+- **Run file**: the versioned JSON file a run of the rivals' bench writes, every figure with its
+  unit; `yuna-bench report` summarises run files.
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
   seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is
@@ -172,6 +190,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   rate.
 - **Wake-up**: a round of the compositor's event loop in which something had work for it: a
   client, a new connection or the clock's timer. At rest there are none.
+  In the rivals' bench, a voluntary context switch of a thread, which the kernel counts for any
+  process: each time the thread slept, and was woken later.
 - **Working area**: the part of an output tiled windows go in; the whole output until panels
   reserve zones of it.
 - **XWayland's scale**: S, the largest scale among a seat's outputs when its Xwayland started,

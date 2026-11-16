@@ -35,6 +35,9 @@ The shell gives:
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
   is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
 
+A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths:
+sway, KWin, weston, ffmpeg and D-Bus, in `YUNA_BENCH_*` variables. CI never fetches it.
+
 Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
 `yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
 `warn`, `info` (the default), `debug` (a line per frame drawn, and per round of the loop with its
@@ -105,6 +108,35 @@ nix develop -c cargo build --release -p yuna --bin yuna --example xwayland_time
 nix develop -c target/release/examples/xwayland_time
 nix develop -c target/release/examples/xwayland_time --area-filter
 ```
+
+The rivals are measured with `crates/yuna-bench`
+([ADR-0071](docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench)). It runs sway, KWin and Yuna
+headless on the GPU's render node, at 3840 × 2160, 240 Hz and scale 1.5, each in a sandbox of its
+own, through the same scenarios, and reads their costs from outside. It needs the bench shell and
+the user's systemd manager, which makes each sandbox (`systemd-run --user --scope`):
+
+```sh
+nix develop .#bench -c cargo run --release -p yuna-bench -- headless --compositor sway --scenario rest
+nix develop .#bench -c cargo run --release -p yuna-bench -- report target/yuna-bench/run-*.json
+```
+
+`headless` takes lists separated by commas: `--compositor` (`sway`, `sway-vulkan`, `kwin`,
+`yuna`), `--scenario` (`rest`, `game`, `film`, `pacing`, `motion`), `--windows` (`rest`'s, 1, 15
+and 150 by default) and `--configuration` (`as-shipped`, `equal-work`); `--runs` (3 by
+default), run in a random order whose seed it records, `--seed` to replay one. `--seconds` makes
+every measured window shorter, to try it: such figures are not comparable. With Yuna among
+the compositors, it builds it for release first. `rest` with 15 windows and `game`, for all three
+in both configurations, once, took 10 minutes; everything, three times, should take close to two
+hours, not measured yet. It writes `target/yuna-bench/run-<time>.json`, the run file, and its summary in
+Markdown beside it (`--out` for another folder); it keeps the run's folder of logs in
+`/tmp/yuna-bench-<pid>-<time>` when a case fails, or with `--keep`. It takes the agents' exclusive
+lock itself, waiting for any other exclusive run; under `run.sh --exclusive` it uses the lock its
+parent holds; no descriptor it inherited reaches a compositor or a client. It refuses a case whose
+compositor or clients open a `/dev/dri/card*` node or an input device, or reach the owner's
+runtime folder or an X11 display outside their sandbox, and never runs anything on the owner's
+display. Killed outright, it leaves its sandboxes running until its next start
+kills them.
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
