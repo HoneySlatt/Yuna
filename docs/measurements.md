@@ -56,7 +56,28 @@ longest.
   162 to 178 µs of CPU; the scenes differ, so this is the order of the gap, not its measure. A 4K
   `wl_shm` upload costs 1.3 ms of GPU, 30 % of a period: the cost of clients that do not send
   dma-bufs. On lavapipe a 4K composition takes 10 to 12 ms, more than a 240 Hz period.
-- The laptop and the Steam Deck are the owner's runs, still to come.
+- The Steam Deck is the owner's run, still to come.
+
+### The laptop (2026-11-16, the owner's run)
+
+The same commit, `report --device 0 --size 1920x1080`, run by the owner on the lowest tier: AMD
+Athlon Silver 3050U (2 logical CPUs, 3.2 GiB visible), Radeon Graphics "RAVEN2" through RADV,
+Mesa 26.1.5, Linux 7.1.5; the GPU's level `auto`. No timed part disturbed.
+
+- **The driver**: Vulkan 1.4.354, every extension asked but `VK_EXT_host_image_copy`.
+- **Modifiers**: every one offered imports into a second device and samples correctly, DCC ones
+  included: 10 for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32`, 9 for `R16G16B16A16_SFLOAT`.
+  jay's note that modifiers fail on AMD before RX 5000 does not hold for this GPU's rendering;
+  its display engine is checked by the owner's display check.
+- **Explicit sync**: all three checks pass, the sync files still pending at import.
+- **`wl_shm`**: the memfd's pages refused as a host pointer, as on the desktop; a 1920 × 1080
+  upload through staging costs 1,321 µs of CPU and 2,201 µs of GPU (medians), 13 % of a 60 Hz
+  period; 3840 × 2160, 8.9 ms of GPU.
+- **The composition's floor** at 1920 × 1080: 1 to 15 windows cost 1,089 to 1,199 µs of GPU in 8
+  bits and 1,362 to 1,430 µs in 16-bit floats (medians; 99th percentiles 1.18 to 2.43 ms), and 28 to
+  44 µs of CPU: 7 to 9 % of a 60 Hz period. The GPU's clock rose from 400 to 1,100 MHz during the
+  parts (`auto`), so the first frames ran slower.
+- **A high-priority queue**: refused, as on the desktop.
 
 ## M1.8 — A flood of X11 windows and menus (2026-11-15)
 
