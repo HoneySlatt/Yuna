@@ -148,8 +148,8 @@ milestone first needs it.
   ROADMAP's budgets are set from them in an ADR; the prototype's figures and the laptop's
   display check are recorded.
 - **Status.** Design done. D: the prototype on `prototype/vulkan` at `86984e3`, measured on the
-  desktop and lavapipe ([measurements](measurements.md)); the laptop and the Deck wait for the
-  [owner's runs](owner-runs.md). A: the bench in its correction round.
+  desktop and lavapipe ([measurements](measurements.md)); the laptop and the Deck are run by the
+  owner with the tours, at the milestone's end ([owner's runs](owner-runs.md)). A: the bench in its correction round.
 
 ### M1.10 — Yuna for the owner's other projects
 
