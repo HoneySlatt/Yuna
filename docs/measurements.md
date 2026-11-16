@@ -4,6 +4,60 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.9 — The Vulkan prototype, on the desktop and lavapipe (2026-11-16)
+
+The throwaway prototype of [ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md),
+commit `86984e3` of branch `prototype/vulkan`, run from GitHub as the owner runs it
+([owner's runs](owner-runs.md#1-the-vulkan-prototype-on-the-laptop-and-the-steam-deck)), at
+3840 × 2160, under the agents' exclusive lock:
+`nix run 'github:HoneySlatt/Yuna/prototype/vulkan#vulkan-prototype' -- report --size 3840x2160`,
+on device 0, then with `VK_ICD_FILENAMES` on the shell's lavapipe. Machine as in M1.4's B4: RX 6900
+XT through RADV, the system's Mesa 26.2.6, Linux 7.3.1; the GPU's performance level `high`, sclk
+2,530 MHz, mclk 1,000 MHz, read and left as the owner set it. No timed part was disturbed by other
+programs (the prototype's estimate, ADR-0060's rule). Microseconds: median / 99th percentile /
+longest.
+
+- **The driver**: both report Vulkan 1.4.354 and offer every extension asked (modifiers, dma-buf
+  import and export, foreign queues, sync files, timeline semaphores, host memory); lavapipe has no
+  render node.
+- **Modifiers**: on RADV, every modifier offered is exported, imported into a second device and
+  sampled correctly: 7 for `B8G8R8A8_UNORM` and `A2B10G10R10_UNORM_PACK32`, 6 for
+  `R16G16B16A16_SFLOAT`, DCC ones included; two DCC modifiers allow at most 2560 × 2560. lavapipe:
+  linear only.
+- **Explicit sync**: a semaphore and a fence exported as sync files while the client's work still
+  ran, imported into the second device and waited; a timeline semaphore. All pass on both.
+- **`wl_shm`'s path**: RADV refuses a memfd's pages as a host pointer
+  (`VK_ERROR_INVALID_EXTERNAL_HANDLE`) while anonymous memory imports: on AMD a `wl_shm` buffer
+  goes through a staging copy, from system memory over PCIe.
+
+| Upload of one `wl_shm` buffer | CPU | GPU |
+|---|---|---|
+| RADV, 1920 × 1080, staging | 342 / 416 / 433 | 319 / 395 / 405 |
+| RADV, 3840 × 2160, staging | 1,461 / 1,716 / 1,853 | 1,263 / 1,278 / 1,288 |
+| lavapipe, 3840 × 2160, staging | 1,650 / 2,297 / 2,944 | 1,962 / 2,437 / 3,056 |
+| lavapipe, 3840 × 2160, host pointer | 3.3 / 12.8 / 16.6 | 1,592 / 2,051 / 2,206 |
+
+- **The composition's floor**: windows as textured quads with rounded corners and a shadow,
+  sampled from imported dma-bufs, blended over a clear, 1,000 frames; CPU to record and submit,
+  GPU by timestamps.
+
+| Windows | Output | RADV: CPU | RADV: GPU | lavapipe: GPU |
+|---|---|---|---|---|
+| 1 | `R16G16B16A16_SFLOAT` | 6.4 / 25.8 / 65.0 | 71.1 / 71.4 / 74.3 | 12,276 / 42,151 / 69,128 |
+| 1 | `B8G8R8A8_UNORM` | 8.4 / 41.8 / 67.5 | 53.6 / 55.2 / 56.5 | 9,571 / 10,751 / 12,009 |
+| 15 | `R16G16B16A16_SFLOAT` | 11.7 / 36.0 / 60.6 | 74.8 / 86.4 / 110.6 | 12,462 / 13,713 / 14,127 |
+| 15 | `B8G8R8A8_UNORM` | 10.2 / 36.2 / 76.9 | 56.2 / 60.3 / 74.6 | 9,917 / 11,607 / 13,567 |
+
+- **A high-priority queue**: refused on RADV without privileges (`VK_ERROR_NOT_PERMITTED_KHR`) at
+  `HIGH` and `REALTIME`; lavapipe grants both.
+- On the desktop, a composition at 4K costs Vulkan about 56 µs of GPU in 8 bits and 75 µs in
+  16-bit floats, and 10 µs of CPU, whatever the number of windows up to 15: 1.3 to 1.8 % of a
+  240 Hz period. Yuna's current GLES path drew M1.4's two `vkcube` windows in 117 µs of GPU and
+  162 to 178 µs of CPU; the scenes differ, so this is the order of the gap, not its measure. A 4K
+  `wl_shm` upload costs 1.3 ms of GPU, 30 % of a period: the cost of clients that do not send
+  dma-bufs. On lavapipe a 4K composition takes 10 to 12 ms, more than a 240 Hz period.
+- The laptop and the Steam Deck are the owner's runs, still to come.
+
 ## M1.8 — A flood of X11 windows and menus (2026-11-15)
 
 What one X11 program flooding its seat costs the other windows (ADR-0070): the story

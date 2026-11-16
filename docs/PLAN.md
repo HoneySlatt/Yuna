@@ -147,7 +147,9 @@ milestone first needs it.
   `docs/measurements.md`, with versions, dates and the machine's state, or a written reason; the
   ROADMAP's budgets are set from them in an ADR; the prototype's figures and the laptop's
   display check are recorded.
-- **Status.** Design done; phases A and D started.
+- **Status.** Design done. D: the prototype on `prototype/vulkan` at `86984e3`, measured on the
+  desktop and lavapipe ([measurements](measurements.md)); the laptop and the Deck wait for the
+  [owner's runs](owner-runs.md). A: the bench in its correction round.
 
 ### M1.10 — Yuna for the owner's other projects
 
