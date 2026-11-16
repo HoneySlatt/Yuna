@@ -56,7 +56,7 @@ longest.
   162 to 178 µs of CPU; the scenes differ, so this is the order of the gap, not its measure. A 4K
   `wl_shm` upload costs 1.3 ms of GPU, 30 % of a period: the cost of clients that do not send
   dma-bufs. On lavapipe a 4K composition takes 10 to 12 ms, more than a 240 Hz period.
-- The Steam Deck is the owner's run, still to come.
+- The laptop and the Steam Deck, the owner's runs, follow.
 
 ### The laptop (2026-11-16, the owner's run)
 
@@ -78,6 +78,23 @@ Mesa 26.1.5, Linux 7.1.5; the GPU's level `auto`. No timed part disturbed.
   44 µs of CPU: 7 to 9 % of a 60 Hz period. The GPU's clock rose from 400 to 1,100 MHz during the
   parts (`auto`), so the first frames ran slower.
 - **A high-priority queue**: refused, as on the desktop.
+
+### The Steam Deck (2026-11-16, the owner's run)
+
+The same commit and command, at 1920 × 1080 rather than the panel's 1280 × 800: an upper bound
+for the panel. AMD Custom APU 0932 (8 logical CPUs, 14.5 GiB), "VANGOGH" through RADV, Mesa
+26.2.0-devel, Linux 7.2.7-valve2, under NixOS; the GPU's level `auto`.
+
+- **The driver**: Vulkan 1.4.350, the same extensions as the desktop's.
+- **Modifiers**: 7, 7 and 6 offered, all imported and sampled correctly, DCC ones included.
+- **Explicit sync**: all three checks pass.
+- **`wl_shm`**: the memfd refused as a host pointer; a 1920 × 1080 upload through staging, 691 µs
+  of CPU and 247 µs of GPU; 3840 × 2160, 1,306 µs of GPU. The 1920 × 1080 part is marked
+  disturbed: one reading of the GPU, at 95 % busy over a part of 0.3 s, against the prototype's
+  own 21 %; another program is not established, the estimate being one reading.
+- **The composition's floor** at 1920 × 1080: 315 to 348 µs of GPU in 8 bits and 394 to 429 µs in
+  16-bit floats (medians), 12 to 34 µs of CPU: about 2 to 3 % of a 90 Hz period.
+- **A high-priority queue**: refused.
 
 ## M1.8 — A flood of X11 windows and menus (2026-11-15)
 
