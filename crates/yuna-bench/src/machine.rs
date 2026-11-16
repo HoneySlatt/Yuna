@@ -563,4 +563,44 @@ mod tests {
         assert_eq!(busy.disturbed, Some(true));
         assert_eq!(busy.others_gpu_percent_mean, None);
     }
+
+    #[test]
+    fn a_process_that_appears_counts_from_its_second_reading() {
+        let at = Instant::now();
+        let reading = |seconds: u64, gpu_ns: Option<u64>| Reading {
+            at: at + Duration::from_secs(seconds),
+            busy_ticks: Some(0),
+            own_ticks: 0,
+            others_gpu_ns: gpu_ns
+                .map(|ns| BTreeMap::from([(7, ns)]))
+                .unwrap_or_default(),
+            state: MachineState::default(),
+        };
+        let load = Load::of(&[reading(0, None), reading(2, Some(5_000_000_000))]);
+        assert_eq!(load.others_gpu_percent_mean, Some(0.0));
+        assert_eq!(load.others_gpu_processes, 1);
+    }
+
+    #[test]
+    fn only_the_drawing_engines_count_as_the_other_programs_gpu_time() {
+        let root = crate::testing::folder("machine-drawing-engines");
+        let process = root.join("100");
+        fs::create_dir_all(process.join("fd")).unwrap();
+        fs::create_dir_all(process.join("fdinfo")).unwrap();
+        // A process of someone else's, parent 1, that draws 300 ns and decodes video for 9,000 ns.
+        fs::write(
+            process.join("stat"),
+            "100 (player) S 1 100 100 0 -1 0 0 0 0 0 7 3 20 5 20 0 1 0 1000 1000000 100\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/dev/dri/renderD128", process.join("fd/7")).unwrap();
+        fs::write(
+            process.join("fdinfo/7"),
+            "drm-client-id:\t1\ndrm-engine-gfx:\t200 ns\ndrm-engine-compute:\t100 ns\n\
+             drm-engine-dec:\t9000 ns\n",
+        )
+        .unwrap();
+        let reading = Reading::take(&Proc::at(&root), "/dev/dri/renderD128");
+        assert_eq!(reading.others_gpu_ns, BTreeMap::from([(100, 300)]));
+    }
 }

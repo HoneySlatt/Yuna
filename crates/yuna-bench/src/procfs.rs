@@ -118,6 +118,11 @@ impl Proc {
         fs::read_to_string(self.path(pid, &format!("fdinfo/{fd}"))).ok()
     }
 
+    /// The text of process `pid`'s `status`: its name, state and memory (`VmRSS`, …).
+    pub fn status(&self, pid: u32) -> Option<String> {
+        fs::read_to_string(self.path(pid, "status")).ok()
+    }
+
     /// The text of process `pid`'s `smaps_rollup`: its memory, summed over its mappings. Reading
     /// it walks the process's page tables: the bench reads it between phases only.
     pub fn smaps_rollup(&self, pid: u32) -> Option<String> {
@@ -314,6 +319,7 @@ mod tests {
             "voluntary_ctxt_switches:\t4\nnonvoluntary_ctxt_switches:\t1\n",
         )
         .unwrap();
+        fs::write(root.join("100/status"), "Name:\tsway\nVmRSS:\t   1234 kB\n").unwrap();
         fs::create_dir_all(root.join("100/fd")).unwrap();
         std::os::unix::fs::symlink("/dev/dri/renderD128", root.join("100/fd/7")).unwrap();
         let proc = Proc::at(&root);
@@ -333,6 +339,8 @@ mod tests {
             proc.open_files(100),
             [(7, PathBuf::from("/dev/dri/renderD128"))]
         );
+        assert_eq!(parse_kib(&proc.status(100).unwrap(), "VmRSS"), Some(1234));
+        assert_eq!(proc.status(999), None);
         assert!(proc.threads(999).is_empty());
     }
 }

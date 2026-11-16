@@ -23,15 +23,16 @@
 //! the end of its wait for the renderer, as the test's figure. Then it prints what Yuna and
 //! Xwayland, its client, used per frame: CPU time and GPU time, by the kernel's statistics.
 //!
-//! Beside each phase it reads what the machine's *other* programs used, every 2 s
+//! Beside each phase it reads what the machine's *other* programs used, every second, with the
+//! readers of `yuna_bench::machine`
 //! ([ADR-0060](../../../docs/adr/0060-development-first-agents-in-their-own-yuna.md)): their
-//! processor time, the machine's busy time in `/proc/stat` less this program's and its
-//! descendants', Yuna and Xwayland among them, those reaped included; and their GPU time on the
-//! engines Yuna draws on, `gfx` and `compute`, by the DRM statistics of every process this user
-//! may read but those; a sandbox that hides other processes' files leaves it unknown, and says
-//! so. A phase whose other programs used more than 2 cores or 10 % of that GPU time, on
-//! average, is marked disturbed; their peak over one reading, this measure's own processor time
-//! and the GPU's busy percentage (`gpu_busy_percent`) are printed beside it.
+//! processor time, the machine's busy time less this program's and its descendants', Yuna and
+//! Xwayland among them, those reaped included; and their GPU time on the engines Yuna draws on,
+//! by the DRM statistics of every process this user may read but those; a sandbox that hides
+//! other processes' files leaves it unknown, and says so. A phase is marked disturbed by that
+//! module's rule (`OTHERS_CPU_LIMIT`, `OTHERS_GPU_LIMIT`); their peak over one reading, this
+//! measure's own processor time and the busy percentage of the GPU behind `/dev/dri/renderD128`
+//! are printed beside it.
 //!
 //! Build it and Yuna for release, then run it in the development shell, alone among
 //! measurements; it needs no screen of its own:
@@ -51,20 +52,15 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{
-    PATIENCE, Run, Usage, WARM_UP, field, gpu_engines, percentile, print_usage, shell_variable,
-};
+use common::{PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, shell_variable};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
@@ -73,6 +69,9 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
+use yuna_bench::machine::{self, MachineState, MachineWatch};
+use yuna_bench::procfs::{self, Proc};
+use yuna_bench::sandbox::RENDER_NODE;
 
 /// How long Yuna's log must stay the same for Yuna to count as quiet.
 const QUIET: Duration = Duration::from_millis(500);
@@ -82,18 +81,6 @@ const SETTLE: Duration = Duration::from_secs(2);
 const WINDOW_SIDE: u16 = 256;
 /// How long the area filter's frames are measured, after [`WARM_UP`].
 const MEASURED: Duration = Duration::from_secs(10);
-/// How often the other programs' load is read.
-const LOAD_PERIOD: Duration = Duration::from_secs(2);
-/// Above these, on average over a phase, the other programs disturb it: cores, and percent of the
-/// time of the GPU's drawing engines.
-const OTHERS_CPU_LIMIT: f64 = 2.0;
-const OTHERS_GPU_LIMIT: f64 = 10.0;
-/// The GPU's engines Yuna and Xwayland draw on, as the kernel's DRM statistics name them:
-/// another program's video decoding, on engines of its own, takes nothing from them.
-const DRAWING_ENGINES: [&str; 2] = ["gfx", "compute"];
-/// The kernel's clock ticks a second in `/proc/stat` and `/proc/<pid>/stat`, `USER_HZ`: 100 on
-/// x86_64, the only machines Yuna runs on (ADR-0006).
-const TICKS_A_SECOND: f64 = 100.0;
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq)]
@@ -551,26 +538,21 @@ fn cookie_of(path: &Path) -> Result<Vec<u8>, String> {
     Ok(field)
 }
 
-/// A `key:  <n> kB` line of `/proc/<pid>/status`, in KiB.
+/// A `key:  <n> kB` line of process `pid`'s `status`, in KiB.
 fn status_kib(pid: u32, key: &str) -> Result<u64, String> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status"))
-        .map_err(|e| format!("process {pid}'s status: {e}"))?;
-    kib_of(&status, key).ok_or_else(|| format!("no {key} in process {pid}'s status"))
+    let status = Proc::system()
+        .status(pid)
+        .ok_or_else(|| format!("process {pid}'s status cannot be read"))?;
+    procfs::parse_kib(&status, key).ok_or_else(|| format!("no {key} in process {pid}'s status"))
 }
 
-/// A `key:  <n> kB` line of `/proc/<pid>/smaps_rollup`, in KiB.
+/// A `key:  <n> kB` line of process `pid`'s `smaps_rollup`, in KiB.
 fn smaps_rollup_kib(pid: u32, key: &str) -> Result<u64, String> {
-    let rollup = fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
-        .map_err(|e| format!("process {pid}'s smaps_rollup: {e}"))?;
-    kib_of(&rollup, key).ok_or_else(|| format!("no {key} in process {pid}'s smaps_rollup"))
-}
-
-/// The value of the line `key:  <n> kB` of `text`.
-fn kib_of(text: &str, key: &str) -> Option<u64> {
-    text.lines().find_map(|line| {
-        let value = line.strip_prefix(key)?.strip_prefix(':')?;
-        value.trim().strip_suffix("kB")?.trim().parse().ok()
-    })
+    let rollup = Proc::system()
+        .smaps_rollup(pid)
+        .ok_or_else(|| format!("process {pid}'s smaps_rollup cannot be read"))?;
+    procfs::parse_kib(&rollup, key)
+        .ok_or_else(|| format!("no {key} in process {pid}'s smaps_rollup"))
 }
 
 fn mib(kib: u64) -> String {
@@ -777,288 +759,83 @@ impl Drop for Yuna {
     }
 }
 
-/// What the machine's other programs use over a phase, read on a thread of its own every
-/// [`LOAD_PERIOD`], and at the phase's start and end.
+/// What the machine's other programs use over a phase: the bench's [`MachineWatch`], and the
+/// GPU's busy percentage before the phase, which it keeps only from the first second on.
 struct LoadWatch {
-    readings: Arc<Mutex<Vec<Reading>>>,
-    stop: Arc<AtomicBool>,
-    thread: std::thread::JoinHandle<()>,
+    watch: MachineWatch,
+    gpu_busy_before: Option<u32>,
 }
 
 impl LoadWatch {
     fn start() -> LoadWatch {
-        let readings = Arc::new(Mutex::new(vec![Reading::take()]));
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread = {
-            let (readings, stop) = (Arc::clone(&readings), Arc::clone(&stop));
-            std::thread::spawn(move || {
-                let mut next = Instant::now() + LOAD_PERIOD;
-                while !stop.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(100));
-                    if Instant::now() >= next {
-                        readings.lock().expect("readings").push(Reading::take());
-                        next += LOAD_PERIOD;
-                    }
-                }
-            })
-        };
         LoadWatch {
-            readings,
-            stop,
-            thread,
+            gpu_busy_before: MachineState::read(RENDER_NODE).gpu_busy_percent,
+            watch: MachineWatch::start(RENDER_NODE),
         }
     }
 
     fn finish(self) -> Load {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.join();
-        let mut readings = std::mem::take(&mut *self.readings.lock().expect("readings"));
-        readings.push(Reading::take());
-        Load::of(&readings)
-    }
-}
-
-/// One reading of what the machine has done so far.
-#[derive(Debug, Clone, PartialEq)]
-struct Reading {
-    at: Instant,
-    /// Every processor's busy time, in clock ticks: `/proc/stat`'s first line but its idle and
-    /// its wait for disks.
-    busy_ticks: u64,
-    /// This program's and its descendants' processor time, in clock ticks, the time of the
-    /// children each has reaped included: Yuna, Xwayland and the X11 client are among them.
-    own_ticks: u64,
-    /// Each other process's GPU time, per engine, in nanoseconds; those this user may not read
-    /// are missing.
-    others_gpu: BTreeMap<u32, BTreeMap<String, u64>>,
-    /// The busiest GPU's `gpu_busy_percent`, the measure's own work included.
-    gpu_busy: u32,
-}
-
-impl Reading {
-    fn take() -> Reading {
-        let processes = processes();
-        let mut own = BTreeSet::from([std::process::id()]);
-        // Parents come before their children in no set order: walk until nothing is added.
-        let mut grew = true;
-        while grew {
-            grew = false;
-            for process in &processes {
-                if own.contains(&process.parent) && own.insert(process.pid) {
-                    grew = true;
-                }
-            }
-        }
-        let own_ticks = processes
+        let others = self.watch.finish();
+        let busy_after = others
+            .seconds
+            .last()
+            .and_then(|second| second.state.gpu_busy_percent);
+        let busy_at_most = others
+            .seconds
             .iter()
-            .filter(|process| own.contains(&process.pid))
-            .map(|process| process.ticks)
-            .sum();
-        let others_gpu = processes
-            .iter()
-            .filter(|process| !own.contains(&process.pid))
-            .map(|process| (process.pid, gpu_engines(process.pid)))
-            .filter(|(_, engines)| !engines.is_empty())
-            .collect();
-        Reading {
-            at: Instant::now(),
-            busy_ticks: busy_ticks(),
-            own_ticks,
-            others_gpu,
-            gpu_busy: gpu_busy(),
+            .filter_map(|second| second.state.gpu_busy_percent)
+            .chain(self.gpu_busy_before)
+            .max();
+        Load {
+            others,
+            gpu_busy: (self.gpu_busy_before, busy_after, busy_at_most),
         }
     }
 }
 
-/// A process, as its `/proc/<pid>/stat` gives it: its parent, and its processor time and its
-/// reaped children's, in clock ticks.
-struct Process {
-    pid: u32,
-    parent: u32,
-    ticks: u64,
-}
-
-/// Every process the machine runs now; those that end while they are read are left out.
-fn processes() -> Vec<Process> {
-    fs::read_dir("/proc")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let pid = entry.file_name().to_str()?.parse().ok()?;
-            let stat = fs::read_to_string(entry.path().join("stat")).ok()?;
-            let (parent, ticks) = parse_stat(&stat)?;
-            Some(Process { pid, parent, ticks })
-        })
-        .collect()
-}
-
-/// A process's parent and its processor time from its `stat`: `utime`, `stime`, `cutime` and
-/// `cstime`, fields 14 to 17, read after the last `)`, which ends its name.
-fn parse_stat(stat: &str) -> Option<(u32, u64)> {
-    let fields: Vec<&str> = stat
-        .get(stat.rfind(')')? + 1..)?
-        .split_whitespace()
-        .collect();
-    // After the name come the state, field 3, and the parent, field 4.
-    let parent = fields.get(1)?.parse().ok()?;
-    let ticks = fields
-        .get(11..15)?
-        .iter()
-        .map(|field| field.parse::<u64>().ok())
-        .sum::<Option<u64>>()?;
-    Some((parent, ticks))
-}
-
-/// Every processor's busy time so far, in clock ticks.
-fn busy_ticks() -> u64 {
-    fs::read_to_string("/proc/stat")
-        .ok()
-        .and_then(|stat| parse_busy_ticks(&stat))
-        .unwrap_or(0)
-}
-
-/// The busy time of `/proc/stat`'s first line: user, nice, system, irq, softirq and steal, its
-/// idle time and its wait for disks left out.
-fn parse_busy_ticks(stat: &str) -> Option<u64> {
-    let fields: Vec<u64> = stat
-        .lines()
-        .next()?
-        .strip_prefix("cpu ")?
-        .split_whitespace()
-        .map(|field| field.parse().ok())
-        .collect::<Option<_>>()?;
-    let [user, nice, system, _idle, _iowait, irq, softirq, steal, ..] = fields[..] else {
-        return None;
-    };
-    Some(user + nice + system + irq + softirq + steal)
-}
-
-/// The busiest GPU's `gpu_busy_percent`; 0 where none can be read.
-fn gpu_busy() -> u32 {
-    fs::read_dir("/sys/class/drm")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|card| {
-            fs::read_to_string(card.path().join("device/gpu_busy_percent"))
-                .ok()?
-                .trim()
-                .parse()
-                .ok()
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// What the other programs used over a phase, from its readings: on average, and at most over
-/// one period between two readings.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What the other programs used over a phase, as `yuna_bench::machine` reads it, and the busy
+/// percentage of the GPU behind `/dev/dri/renderD128`, at the phase's start, its end, and at most.
 struct Load {
-    /// Their processor time, in cores.
-    others_cpu: (f64, f64),
-    /// Their GPU time on its drawing engines, [`DRAWING_ENGINES`], in percent of the time.
-    others_gpu: (f64, f64),
-    /// The most other processes whose GPU files a reading could read. None means their GPU
-    /// time is unknown, not nil: a desktop's compositor holds one at least, and a sandbox may
-    /// hide other processes' files.
-    gpu_processes: usize,
-    /// This measure's own processor time, in cores, on average.
-    own_cpu: f64,
-    /// The busiest GPU's busy percentage, at the first reading, the last, and at most.
-    gpu_busy: (u32, u32, u32),
+    others: machine::Load,
+    gpu_busy: (Option<u32>, Option<u32>, Option<u32>),
 }
 
 impl Load {
-    /// The load of `readings`, which hold two at least, in order.
-    fn of(readings: &[Reading]) -> Load {
-        let (first, last) = (&readings[0], &readings[readings.len() - 1]);
-        let others_cpu = |from: &Reading, to: &Reading| {
-            let busy = to.busy_ticks.saturating_sub(from.busy_ticks);
-            let own = to.own_ticks.saturating_sub(from.own_ticks);
-            busy.saturating_sub(own) as f64 / TICKS_A_SECOND / seconds(from, to)
-        };
-        let others_gpu = |from: &Reading, to: &Reading| {
-            let mut used = 0;
-            for (pid, after) in &to.others_gpu {
-                // A process that started between the readings counts from the next one.
-                let Some(before) = from.others_gpu.get(pid) else {
-                    continue;
-                };
-                for (engine, ns) in after {
-                    if DRAWING_ENGINES.contains(&engine.as_str()) {
-                        used += ns.saturating_sub(before.get(engine).copied().unwrap_or(*ns));
-                    }
-                }
-            }
-            used as f64 / 1e9 / seconds(from, to) * 100.0
-        };
-        let peak = |of: &dyn Fn(&Reading, &Reading) -> f64| {
-            readings
-                .windows(2)
-                .map(|pair| of(&pair[0], &pair[1]))
-                .fold(0.0, f64::max)
-        };
-        let own = last.own_ticks.saturating_sub(first.own_ticks) as f64 / TICKS_A_SECOND;
-        Load {
-            others_cpu: (others_cpu(first, last), peak(&others_cpu)),
-            others_gpu: (others_gpu(first, last), peak(&others_gpu)),
-            own_cpu: own / seconds(first, last),
-            gpu_processes: readings
-                .iter()
-                .map(|reading| reading.others_gpu.len())
-                .max()
-                .unwrap_or(0),
-            gpu_busy: (
-                first.gpu_busy,
-                last.gpu_busy,
-                readings
-                    .iter()
-                    .map(|reading| reading.gpu_busy)
-                    .max()
-                    .unwrap_or(0),
-            ),
-        }
-    }
-
-    fn disturbed(&self) -> bool {
-        self.others_cpu.0 > OTHERS_CPU_LIMIT || self.others_gpu.0 > OTHERS_GPU_LIMIT
-    }
-
-    /// What the other programs' GPU time was, or why it is not known.
+    /// What the other programs' GPU time was, or why it is not known: no process's GPU files
+    /// could be read, which is not the same as nil.
     fn others_gpu(&self) -> String {
-        if self.gpu_processes == 0 {
-            return "no other process's GPU time could be read".to_owned();
+        match (
+            self.others.others_gpu_percent_mean,
+            self.others.others_gpu_percent_max,
+        ) {
+            (Some(mean), Some(max)) => format!(
+                "{mean:.1} % of the GPU's drawing on average, {max:.1} % at most, by {} processes",
+                self.others.others_gpu_processes
+            ),
+            _ => "no other process's GPU time could be read".to_owned(),
         }
-        format!(
-            "{:.1} % of the GPU's drawing on average, {:.1} % at most, by {} processes",
-            self.others_gpu.0, self.others_gpu.1, self.gpu_processes
-        )
     }
-}
-
-/// The seconds between two readings, never 0.
-fn seconds(from: &Reading, to: &Reading) -> f64 {
-    (to.at - from.at).as_secs_f64().max(1e-3)
 }
 
 impl std::fmt::Display for Load {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cores = |cores: Option<f64>| cores.map_or("?".to_owned(), |c| format!("{c:.2}"));
+        let percent = |busy: Option<u32>| busy.map_or("?".to_owned(), |b| b.to_string());
         write!(
             f,
-            "other programs: {:.2} cores on average, {:.2} at most, and {}; this measure: {:.2} \
+            "other programs: {} cores on average, {} at most, and {}; this measure: {:.2} \
              cores; the GPU {} % busy before, {} % after, {} % at most: {}",
-            self.others_cpu.0,
-            self.others_cpu.1,
+            cores(self.others.others_cpu_cores_mean),
+            cores(self.others.others_cpu_cores_max),
             self.others_gpu(),
-            self.own_cpu,
-            self.gpu_busy.0,
-            self.gpu_busy.1,
-            self.gpu_busy.2,
-            if self.disturbed() {
-                "disturbed"
-            } else {
-                "quiet"
+            self.others.bench_cpu_cores_mean,
+            percent(self.gpu_busy.0),
+            percent(self.gpu_busy.1),
+            percent(self.gpu_busy.2),
+            match self.others.disturbed {
+                Some(true) => "disturbed",
+                Some(false) => "quiet",
+                None => "unknown",
             }
         )
     }
@@ -1097,72 +874,60 @@ mod tests {
     }
 
     #[test]
-    fn memory_lines_are_read_in_kib() {
-        let rollup = "Rss:               41236 kB\nPss:               20512 kB\nPss_Dirty:  9 kB\n";
-        assert_eq!(kib_of(rollup, "Pss"), Some(20_512));
-        assert_eq!(kib_of(rollup, "Rss"), Some(41_236));
-        assert_eq!(kib_of(rollup, "Swap"), None);
-    }
-
-    #[test]
-    fn a_process_stat_gives_its_parent_and_its_time_with_its_reaped_childrens() {
-        // Its name holds a space and a parenthesis; utime 7, stime 3, cutime 20, cstime 5.
-        let stat = "4242 (Web (Content) 1) S 4200 4242 4200 0 -1 4194560 100 0 0 0 7 3 20 5 20 0 \
-                    1 0 1000 1000000 100 18446744073709551615";
-        assert_eq!(parse_stat(stat), Some((4200, 35)));
-        assert_eq!(parse_stat("4242 (cut"), None);
-    }
-
-    #[test]
-    fn the_machines_busy_time_leaves_idle_and_disk_waits_out() {
-        let stat = "cpu  100 2 30 5000 40 5 6 7 0 0\ncpu0 50 1 15 2500 20 2 3 3 0 0\n";
-        assert_eq!(parse_busy_ticks(stat), Some(100 + 2 + 30 + 5 + 6 + 7));
-        assert_eq!(parse_busy_ticks("intr 1 2 3\n"), None);
-    }
-
-    #[test]
-    fn the_other_programs_load_leaves_this_measures_own_out() {
-        let at = Instant::now();
-        let reading = |seconds: u64, busy_ticks, own_ticks, gfx_ns: Option<u64>| Reading {
-            at: at + Duration::from_secs(seconds),
-            busy_ticks,
-            own_ticks,
-            // Process 7's video decoding, on an engine of its own, never counts.
-            others_gpu: gfx_ns
-                .map(|ns| {
-                    let engines = [("gfx".to_owned(), ns), ("dec".to_owned(), ns * 3)];
-                    BTreeMap::from([(7, BTreeMap::from(engines))])
-                })
-                .unwrap_or_default(),
-            gpu_busy: 5,
+    fn a_load_says_what_the_other_programs_used() {
+        let others = machine::Load {
+            others_cpu_cores_mean: Some(1.0),
+            others_cpu_cores_max: Some(1.5),
+            others_gpu_percent_mean: Some(5.0),
+            others_gpu_percent_max: Some(10.0),
+            others_gpu_processes: 1,
+            bench_cpu_cores_mean: 1.5,
+            disturbed: Some(false),
+            ..machine::Load::default()
         };
-        // Over 4 s: 1,000 ticks busy, 600 of them this measure's; process 7 used the GPU's gfx
-        // engine 0.2 s, all of it in the second half.
-        let load = Load::of(&[
-            reading(0, 0, 0, Some(0)),
-            reading(2, 300, 200, Some(0)),
-            reading(4, 1_000, 600, Some(200_000_000)),
-        ]);
-        assert!((load.others_cpu.0 - 1.0).abs() < 1e-9, "{load:?}");
-        assert!((load.others_cpu.1 - 1.5).abs() < 1e-9, "{load:?}");
-        assert!((load.own_cpu - 1.5).abs() < 1e-9, "{load:?}");
-        assert!((load.others_gpu.0 - 5.0).abs() < 1e-9, "{load:?}");
-        assert!((load.others_gpu.1 - 10.0).abs() < 1e-9, "{load:?}");
-        assert!(!load.disturbed());
-        assert_eq!(load.gpu_processes, 1);
-        assert!(load.to_string().contains("by 1 processes"), "{load}");
-        // A process that appears counts from its second reading.
-        let appeared = Load::of(&[
-            reading(0, 0, 0, None),
-            reading(2, 0, 0, Some(5_000_000_000)),
-        ]);
-        assert_eq!(appeared.others_gpu, (0.0, 0.0));
-        let busy = Load::of(&[reading(0, 0, 0, None), reading(1, 300, 0, None)]);
-        assert!(busy.disturbed());
-        // No other process's GPU files read: unknown, not nil.
+        let load = Load {
+            others,
+            gpu_busy: (Some(5), Some(6), Some(7)),
+        };
+        let text = load.to_string();
         assert!(
-            busy.to_string()
-                .contains("no other process's GPU time could be read")
+            text.contains("1.00 cores on average, 1.50 at most"),
+            "{text}"
         );
+        assert!(
+            text.contains("5.0 % of the GPU's drawing on average, 10.0 % at most, by 1 processes"),
+            "{text}"
+        );
+        assert!(text.contains("this measure: 1.50 cores"), "{text}");
+        assert!(
+            text.contains("the GPU 5 % busy before, 6 % after, 7 % at most: quiet"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_load_says_when_nothing_could_be_read() {
+        // No other process's GPU files read: unknown, not nil; and a verdict of none is unknown.
+        let load = Load {
+            others: machine::Load::default(),
+            gpu_busy: (None, None, None),
+        };
+        let text = load.to_string();
+        assert!(
+            text.contains("no other process's GPU time could be read"),
+            "{text}"
+        );
+        assert!(
+            text.contains("the GPU ? % busy before, ? % after, ? % at most: unknown"),
+            "{text}"
+        );
+        let disturbed = Load {
+            others: machine::Load {
+                disturbed: Some(true),
+                ..machine::Load::default()
+            },
+            gpu_busy: (None, None, None),
+        };
+        assert!(disturbed.to_string().ends_with(": disturbed"));
     }
 }

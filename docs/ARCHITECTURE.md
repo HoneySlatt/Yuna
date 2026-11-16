@@ -42,7 +42,8 @@ One Cargo workspace; its crates live in `crates/`.
   `yuna-motion`. rustix, which Smithay re-exports, makes its system calls: pipes, sockets,
   signals, `waitpid`, pidfds, `prctl`. Its tests use `wayland-client` and `wayland-protocols`'
   client side, staging protocols included, proptest, without its default features, `png` to
-  decode captures, and x11rb for their X11 clients.
+  decode captures, and x11rb for their X11 clients; its measuring examples read `/proc`, the
+  DRM statistics and the machine's load through `yuna-bench`'s library.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
 - `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients;
