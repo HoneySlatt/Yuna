@@ -124,6 +124,8 @@ audit.
 | An agent's Yuna runs beside the owner's | it reads and writes nothing of the owner's state | a test |
 | A sandboxed client is connected when Yuna crashes | it reconnects through its security context | a test |
 | Ten times the windows, the outputs or the rate | queues and caches stay within their bounds; nothing grows without end | a soak test |
+| Ten agents' Yunas started together | each holds full rate while its programs draw; none grows without end | a headless test |
+| One agent's Yuna started | its first frame comes within its budget, set at M1.11 | the log's times |
 
 ### Without a figure
 

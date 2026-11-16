@@ -134,6 +134,26 @@ commit. Four choices inside them are made at Stage 2's opening design, each on a
 23. **Yuna's own text** in a message catalogue from its first string, never built by joining
     pieces.
 
+### Headless and agents
+
+Each agent runs its own headless Yuna ([ADR-0060](0060-development-first-agents-in-their-own-yuna.md)):
+the core serves it as it serves the desktop.
+
+24. **Agents' Yunas at normal priority**, never lowered for a game: the owner accepts that a game
+    loses frames to agents' work while developing. Only the session's Yuna may get a high
+    priority, chosen at Stage 2's opening.
+25. **Budgets per instance and for many together**: start to the first frame, memory, GPU memory,
+    each instance's and ten instances' at once; the core loads nothing before its first frame that
+    the frame does not need.
+26. **The CPU renderer as a tier**: lavapipe, CI's and an agent's without a GPU, holds a budget of
+    its own; it draws only what changed (a 4K composition costs lavapipe 10 to 12 ms,
+    [measurements](../measurements.md)).
+27. **Agents' caches**: their XDG folders are thrown away, so the shaders an instance needs come
+    precompiled or from a cache the instances share read-only, never compiled again at each start.
+28. **Agents on a second GPU** when the machine has one, through item 20.
+29. **Parity**: no path in the core for headless alone; both modes run the same code, only the
+    backend differs, so that what agents test is what the owner runs.
+
 ### The crates
 
 "→" reads "depends on". Edges go only down a level; the crates of level 2 never depend on each
@@ -201,5 +221,6 @@ and a scanned-out game is recovered; suspend while locked resumes on the lock; a
 restarts locked; a failed upgrade falls back to the previous binary; an older Yuna keeps a newer
 file's fields; a new protocol changes one crate; the KMS thread run inline passes the same test;
 uwui's panic closes its interface only; an agent's Yuna writes nothing of the owner's; a sandboxed
-client reconnects after a crash. A requirement that a measure at Stage 2's opening shows wrong is
+client reconnects after a crash; ten agents' Yunas each hold full rate while their programs draw;
+an instance shows its first frame within a budget. A requirement that a measure at Stage 2's opening shows wrong is
 put to the owner again, with the figure.
