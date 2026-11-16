@@ -93,7 +93,7 @@ for the panel. AMD Custom APU 0932 (8 logical CPUs, 14.5 GiB), "VANGOGH" through
   disturbed: one reading of the GPU, at 95 % busy over a part of 0.3 s, against the prototype's
   own 21 %; another program is not established, the estimate being one reading.
 - **The composition's floor** at 1920 × 1080: 315 to 348 µs of GPU in 8 bits and 394 to 429 µs in
-  16-bit floats (medians), 12 to 34 µs of CPU: about 2 to 3 % of a 90 Hz period.
+  16-bit floats (medians), 12 to 34 µs of CPU: at most 4 % of a period at 90 Hz, the fastest the Deck's panels refresh.
 - **A high-priority queue**: refused.
 
 ## M1.8 — A flood of X11 windows and menus (2026-11-15)
