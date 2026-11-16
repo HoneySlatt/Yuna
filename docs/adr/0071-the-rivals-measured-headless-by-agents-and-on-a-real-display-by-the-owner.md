@@ -71,3 +71,10 @@ The owner chose, on 2026-11-15:
 - A tour takes the display: only the owner runs it, from a virtual terminal of their own.
 - Yuna enters the tour at Stage 2; its headless figures are compared to the rivals' headless
   ones only on what the clock does not decide.
+
+## Validation and reconsideration
+
+Evidence at the time: the rivals' sources and the web survey of 2026-11-15, and the bench's first
+runs on the desktop. Reviewed reasoning: only a real display gives every compositor the same
+clock. Proposed again if a headless backend that paces every rival on one clock becomes usable
+(VKMS, studied at Stage 2), or if the tours cannot be run.

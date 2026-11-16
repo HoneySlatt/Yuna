@@ -64,3 +64,9 @@ The owner chose, on 2026-11-15:
 - The owner runs the prototype and the display check on the laptop and the Steam Deck.
 - If the laptop cannot import modifiers or run sway's Vulkan renderer on its panel, the lowest
   tier returns to the owner, as ADR-0063 says.
+
+## Validation and reconsideration
+
+Evidence at the time: the prototype's runs on the desktop, lavapipe, the laptop and the Steam
+Deck, and the laptop's display check ([measurements](../measurements.md)). Proposed again if
+Stage 2's renderer finds a figure the prototype did not measure that changes the frame's budget.

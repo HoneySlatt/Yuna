@@ -46,3 +46,9 @@ The owner chose, on 2026-11-15:
 - The ROADMAP's budgets are written as their rule and their current figure; the figures change
   at each stage's end, the rules only by an ADR.
 - Yuna may cost more than sway or dwl; it must not cost more than the peers.
+
+## Validation and reconsideration
+
+Evidence at the time: the rivals' defaults read in their sources (what each draws and animates)
+and the bench's first equal-work runs. Proposed again if the peers' equal-work figures turn out
+too far apart to name one best, or if a new rival joins the peers in features.
