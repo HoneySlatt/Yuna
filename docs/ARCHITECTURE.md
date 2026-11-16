@@ -26,8 +26,9 @@ One Cargo workspace; its crates live in `crates/`.
 - **`yuna-bench`** (`crates/yuna-bench`): the rivals' bench. It runs a compositor headless in a
   sandbox of its own, the same scenarios with the same clients for each, and reads its costs
   from outside ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md));
-  [The rivals' bench](#the-rivals-bench) below. It depends on nothing of `yuna`: it measures
-  Yuna as it measures the others.
+  the owner's tour runs the same on the real display; [The rivals' bench](#the-rivals-bench)
+  below. It depends on nothing of `yuna`: it measures Yuna as it measures the others, and the
+  flake builds it alone, as the package `yuna-bench`, for the owner's laptop and Steam Deck.
 
 ## Dependencies
 
@@ -46,11 +47,13 @@ One Cargo workspace; its crates live in `crates/`.
   DRM statistics and the machine's load through `yuna-bench`'s library.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
-- `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients;
-  `serde` and `serde_json`, for its run file and mpv's IPC; rustix, already Smithay's, for
-  CLOCK_MONOTONIC, signals, memfds and the kernel's socket diagnostics. At run time, from the
-  bench shell: sway, KWin, weston's `weston-presentation-shm`, ffmpeg, D-Bus, and the host's
-  `systemd-run`, which makes each sandbox.
+- `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients,
+  and `wayland-client`'s backend for the two protocols no crate binds, KWin's fake input and
+  gamescope's input method; `serde` and `serde_json`, for its run file and mpv's IPC; rustix,
+  already Smithay's, for CLOCK_MONOTONIC, signals, memfds and the kernel's socket diagnostics. At
+  run time, from the bench shell or the `yuna-bench` package's wrapper: the rivals, weston's
+  `weston-presentation-shm`, ffmpeg, mpv, D-Bus, and the host's `systemd-run`, which makes each
+  sandbox; on the tour, the host's logind too.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
@@ -1353,9 +1356,10 @@ Each recipe, all on the render node at 3840 × 2160, 240 Hz, scale 1.5:
 | Hyprland | Aquamarine's headless, inside a dwl; the mode's rate | `hyprctl output create headless`, a monitor rule | `hyprctl` | capture | animations, blur, shadows, corners, its wallpaper, XWayland, realtime scheduling |
 | Mutter | its headless backend; the mode's rate | `--virtual-monitor`; scale from its `monitors.xml` | none | mpv in `game` alone | animations, XWayland |
 
-niri and cosmic-comp have no recipe that runs: niri's headless backend serves its own tests
+niri and cosmic-comp have no recipe `headless` runs: niri's headless backend serves its own tests
 only, and cosmic-comp has none. They are measured on the owner's tour alone, and the summary
-says so. The recipe of each gives its reasons, with its sources' lines.
+says so. The recipe of each gives its reasons, with its sources' lines. They and gamescope have
+recipes of the tour's ([below](#the-owners-tour)).
 
 The run file holds every figure with its unit, the raw `fdinfo`, the machine's state each second,
 how each window's frames were counted, and which figures are lower bounds. `yuna-bench report`
@@ -1397,6 +1401,63 @@ Known limits:
   removes; Umbriel as shipped shows its keybind cheatsheet throughout.
 - Umbriel's commits are read inside the cost window, at its ends: two answers of its IPC count in
   its costs.
+
+### The owner's tour
+
+`yuna-bench tour` (`tour.rs`) runs the same cases on the real display, rival by rival, for what
+only a real display measures: frames missed on its refresh, input to present end to end, and
+watts. The owner runs it from a virtual terminal where they logged in; agents run its dry run
+alone. A case on the tour goes:
+
+1. **Refusals, before anything starts.** A compositor of the terminal's own session
+   (`WAYLAND_DISPLAY`, `WAYLAND_SOCKET` or `DISPLAY` set); a GPU whose
+   `power_dpm_force_performance_level` is not `auto`, with the commands that set it and put the
+   owner's back; and a process outside a logind session on a seat's virtual terminal, of type
+   `tty`, shown. The session is read from the tour's own `/proc/self/cgroup`
+   (`session-<id>.scope`) and logind's file for it, never from the environment.
+2. **The rival on DRM.** The same sandbox, with three changes: its variables are those of the
+   tour's session (`XDG_SESSION_ID`, `XDG_SEAT`, `XDG_VTNR`, `LIBSEAT_BACKEND=logind`), which
+   libseat, KWin and Mutter take first; its scope has a `RuntimeMaxSec`, twice the case's time
+   and a minute, after which systemd stops it whatever the bench does; and its own scope may hold
+   the screens' card nodes and the input devices' event nodes, which logind hands the session's
+   controller. Its clients still may not, and `/dev/uinput` and raw HID devices stay forbidden to
+   all. The recipe drops its headless backend, its setup, its parent and its output's settings:
+   each rival takes each screen at the mode it picks itself. Without `XDG_SESSION_ID`, a process in
+   a scope of the user's manager is in no session, and libseat and Mutter would take the user's
+   display session, the owner's own.
+3. **The rounds.** `rest` (15 still windows, 60 s, no frames counted apart), `game`, `motion` as
+   `headless` runs it, and `latency`. `game` first reads the refresh from the probe's own frames
+   (`probe.rs`, `wp_presentation`), then sets mpv's frames shown against it: mpv, untimed with a
+   FIFO swap chain, shows one frame each refresh the compositor presents it, so each refresh
+   without one is a frame missed. KWin's frame log gives each flip's time beside the one it aimed
+   at: a flip half a refresh late or more missed its refresh. `latency` runs the probe fullscreen,
+   which draws a frame on each key, and the bench's keyboard, which types into the same compositor
+   through its virtual keyboard, KWin's fake input or gamescope's input method; each key's time
+   from its sending to its frame's presentation, both on `CLOCK_MONOTONIC`, is input to present.
+   Each window's watts are the mean of the GPU's `power1_average` and, on battery, the batteries'
+   power, read each second with the machine's state.
+4. **The terminal between cases.** logind gives the virtual terminal back to text when the
+   rival's controller goes. Before each case, the tour waits for its terminal to be the one
+   shown; a case at whose end it is not fails.
+
+The run file is `headless`'s, its cases marked `tour` (or `tour-dry-run`), and the summary gives
+them tables of their own. The dry run, `--dry-run`, runs the same code with each rival headless,
+as `headless` does, niri and cosmic-comp nested in a headless dwl, and gamescope on its own
+headless backend: everything but the start on the display.
+
+The tour's own limits:
+
+- Its DRM path is checked by its tests and its dry run alone: no agent takes the display. That
+  logind grants control of the tour's session to a compositor outside its scope, as the user's
+  own, is read from libseat's, KWin's and Mutter's sources, not seen.
+- Missed frames while moving are KWin's alone: no other rival times its flips, and the capture
+  counter misses frames of its own at 240 Hz.
+- Mutter offers no protocol a client types keys through: its `latency` fails, and says why.
+- gamescope's game, mpv, is an X11 client of its Xwayland, found by the socket its scope listens
+  on: gamescope offers its Wayland clients no `wp_viewporter`, which mpv's Wayland output needs.
+  It runs no `rest` and no `motion`: it shows one window at a time.
+- The probe draws with `wl_shm`: no rival can show its frames without a copy, as it would a
+  game's buffers.
 
 ## Where to start reading
 

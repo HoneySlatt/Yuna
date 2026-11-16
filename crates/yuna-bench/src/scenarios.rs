@@ -27,6 +27,13 @@
 //! Before any window, once its clients are up, every scenario checks the sandbox: the
 //! compositor's scope and each client's (`sandbox::check`). A case that breaks its rules, or whose
 //! client is not fullscreen where the scenario asks it, is *refused*, not failed.
+//!
+//! The owner's tour runs the same cases on the real display ([`Place`]), and its dry run headless,
+//! with three differences. `rest` and `game` count no frames apart: `rest` needs none, and
+//! `game`'s are mpv's own, set against the refresh the probe's frames were presented at
+//! (`presentation_refresh`), which gives the frames missed. On KWin, the flips its frame log
+//! times give the late ones exactly. And a fourth scenario, `latency`, measures input to present
+//! (`latency`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -41,22 +48,74 @@ use crate::cgroup::Cgroup;
 use crate::clock::monotonic_ns;
 use crate::drm;
 use crate::logs;
-use crate::machine::{DRAWING_ENGINES, MachineWatch};
+use crate::machine::{DRAWING_ENGINES, Load, MachineState, MachineWatch};
+use crate::probe::Presented;
 use crate::procfs::{self, Proc};
-use crate::recipes::{self, Action, Configuration, Frames, Output, Plan, Prepared, Ready, Recipe};
+use crate::recipes::{
+    self, Action, Configuration, Display, Frames, Output, Plan, Prepared, Ready, Recipe,
+};
 use crate::record::{
     self, Case, CaseRun, ClientUsage, CompositorInfo, Figure, Figures, Memory, MemorySum, Phase,
     ProcessMemory, RawFdinfo,
 };
-use crate::sampler::Watch;
+use crate::sampler::{Watch, Watched};
 use crate::sandbox::{
-    self, Folders, Launch, Owner, RENDER_NODE, Sandboxed, ShellPaths, client_environment,
+    self, Folders, Launch, Owner, RENDER_NODE, Sandboxed, Seat, ShellPaths, client_environment,
     compositor_environment,
 };
 use crate::sockets::SocketTable;
 
-/// The scenarios, by name.
+/// The scenarios of `headless`, by name.
 pub const SCENARIOS: [&str; 5] = ["rest", "game", "film", "pacing", "motion"];
+/// The rounds of the tour, by name ([ADR-0071](../../../docs/adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+pub const TOUR_SCENARIOS: [&str; 4] = ["rest", "game", "motion", "latency"];
+/// The still windows of the tour's `rest`.
+pub const TOUR_REST_WINDOWS: u32 = 15;
+/// The keys the tour's `latency` presses and measures.
+pub const PRESSES: u32 = 300;
+/// The keys it presses first, not measured: a compositor's first ones may load what it needs, or
+/// close a window it shows at start, as Umbriel's cheatsheet.
+pub const WARM_UP_PRESSES: u32 = 10;
+
+/// Where the cases run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// Headless, on the render node: the `headless` command.
+    Headless,
+    /// On the real display, through the logind session of the tour's terminal: the owner's tour.
+    Display(Seat),
+    /// Headless, through the tour's own code: its dry run.
+    DryRun,
+}
+
+impl Place {
+    /// What the compositor shows its output on.
+    pub fn display(&self) -> Display<'_> {
+        match self {
+            Place::Display(seat) => Display::Drm(seat),
+            Place::Headless | Place::DryRun => Display::Headless,
+        }
+    }
+
+    /// Whether the compositor drives the real display, and may hold its nodes.
+    pub fn on_display(&self) -> bool {
+        matches!(self, Place::Display(_))
+    }
+
+    /// Whether the cases are the tour's, on the display or in its dry run.
+    pub fn is_tour(&self) -> bool {
+        !matches!(self, Place::Headless)
+    }
+
+    /// The mark of its cases in the run's file ([`Case::tour`]).
+    pub fn mark(&self) -> Option<&'static str> {
+        match self {
+            Place::Headless => None,
+            Place::Display(_) => Some(record::ON_THE_DISPLAY),
+            Place::DryRun => Some(record::DRY_RUN),
+        }
+    }
+}
 /// The still windows of `rest`.
 pub const REST_WINDOWS: [u32; 3] = [1, 15, 150];
 /// The still windows of `motion`.
@@ -120,6 +179,12 @@ pub struct Bench {
     pub prepared: Prepared,
     /// The scenarios' lengths.
     pub durations: Durations,
+    /// Where the cases run.
+    pub place: Place,
+    /// The longest the next compositor's scope may run, on the tour: systemd stops it then.
+    pub time_limit: Option<Duration>,
+    /// The keys `latency` measures.
+    pub presses: u32,
     /// The clips made so far, by their names.
     clips: BTreeMap<&'static str, PathBuf>,
     units: usize,
@@ -141,6 +206,9 @@ impl Bench {
             folder,
             prepared: Prepared::default(),
             durations,
+            place: Place::Headless,
+            time_limit: None,
+            presses: PRESSES,
             clips: BTreeMap::new(),
             units: 0,
         }
@@ -171,6 +239,11 @@ struct Running {
     wayland_display: String,
     sway_socket: Option<PathBuf>,
     output: Option<String>,
+    /// The output its tools read back: `HEADLESS-1`, the one the bench made; none on the real
+    /// display, where the first enabled one is read.
+    output_name: Option<&'static str>,
+    /// Whether it drives the real display, and may hold the display's nodes.
+    on_display: bool,
     /// The short link to its runtime folder it was given, if it was: removed at its stop.
     runtime_link: Option<PathBuf>,
 }
@@ -264,10 +337,13 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         disturbed: None,
         notes: Vec::new(),
     };
-    let (Some(recipe), Some(configuration)) = (
-        recipes::recipe(&case.compositor),
-        Configuration::named(&case.configuration),
-    ) else {
+    let recipe = if bench.place.is_tour() {
+        recipes::tour_recipe(&case.compositor)
+    } else {
+        recipes::recipe(&case.compositor)
+    };
+    let (Some(recipe), Some(configuration)) = (recipe, Configuration::named(&case.configuration))
+    else {
         run.error = Some(format!("no recipe for {}", case.label()));
         return run;
     };
@@ -289,6 +365,10 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         };
     run.ready_after = Figure::new(Some(ready_after.as_secs_f64() * 1000.0), "ms");
     run.compositor = Some(compositor_info(bench, &running, &plan));
+    if let Output::None(why) = recipe.output {
+        run.notes
+            .push(format!("its output is not read back: {why}"));
+    }
     if recipe.name == "kwin" {
         run.notes.push(
             "KWin is given two desktops in both configurations, for motion's switch".to_owned(),
@@ -326,6 +406,7 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         "film" => film(bench, &running, &mut run),
         "pacing" => pacing(bench, &running, &mut run),
         "motion" => motion(bench, &running, &mut run),
+        "latency" => latency(bench, &running, &mut run),
         other => Err(Stop::Failed(format!("no scenario {other}"))),
     };
     let realtime_at_end = realtime_threads(bench, &running);
@@ -415,6 +496,7 @@ fn start_compositor(
     let plan = recipes::plan(
         recipe,
         configuration,
+        bench.place.display(),
         &bench.shell,
         &folders,
         &bench.prepared,
@@ -440,6 +522,7 @@ fn start_compositor(
         compositor: true,
         parent: plan.parent.clone(),
         input: false,
+        time_limit: bench.time_limit,
     };
     let started = Instant::now();
     let sandboxed = match Sandboxed::start(&launch, &bench.shell, &bench.program) {
@@ -451,6 +534,7 @@ fn start_compositor(
             return Err(error);
         }
     };
+    let on_display = bench.place.on_display();
     let mut running = Running {
         recipe,
         folders,
@@ -458,11 +542,15 @@ fn start_compositor(
         wayland_display: String::new(),
         sway_socket: None,
         output: None,
+        output_name: (!on_display).then_some("HEADLESS-1"),
+        on_display,
         runtime_link: plan.runtime_link.clone(),
     };
     let ready = wait_ready(bench, &mut running).and_then(|()| {
         let ready_after = started.elapsed();
-        for action in recipe.setup {
+        // The setup makes or sets the headless output; the real display has its own.
+        let setup: &[Action] = if on_display { &[] } else { recipe.setup };
+        for action in setup {
             send(&bench.shell, &running, None, *action)?;
         }
         running.output = wait_output(bench, &running)?;
@@ -491,14 +579,14 @@ fn wait_ready(bench: &Bench, running: &mut Running) -> Result<(), String> {
         if let Some(status) = running.sandboxed.ended() {
             return Err(format!("it ended with {status}"));
         }
-        let socket = wayland_socket(&runtime);
+        let socket = wayland_socket(&runtime, running.recipe.socket);
         let ready = match running.recipe.ready {
             Ready::Swaymsg => {
                 running.sway_socket = file_in(&runtime, "sway-ipc.", ".sock");
                 running
                     .sway_socket
                     .as_ref()
-                    .and_then(|ipc| sway_output(&bench.shell, ipc))
+                    .and_then(|ipc| sway_output(&bench.shell, ipc, running.output_name))
                     .is_some()
             }
             Ready::BusName(name) => bus_has(&bench.shell, &running.bus(), name),
@@ -506,6 +594,7 @@ fn wait_ready(bench: &Bench, running: &mut Running) -> Result<(), String> {
             Ready::Answers(action) => {
                 socket.is_some() && send(&bench.shell, running, None, action).is_ok()
             }
+            Ready::Socket => socket.is_some(),
         };
         if ready && let Some(socket) = socket {
             running.wayland_display = socket;
@@ -555,31 +644,35 @@ fn read_output(bench: &Bench, running: &Running) -> Reading {
         Some(output) => Reading::Found(output),
         None => Reading::NotYet(format!("{what} lists no such output")),
     };
+    let name = running.output_name;
     match running.recipe.output {
         Output::Swaymsg => found(
             running
                 .sway_socket
                 .as_ref()
-                .and_then(|ipc| sway_output(shell, ipc)),
+                .and_then(|ipc| sway_output(shell, ipc, name)),
             "swaymsg",
         ),
         Output::YunaLog => found(logs::yuna_output(&running.log()), "its log"),
         Output::KwinLog => Reading::Later,
         Output::WlrRandr => match answer(Action::WlrRandr(&["--json"])) {
-            Ok(text) => found(logs::wlr_randr_output(&text, "HEADLESS-1"), "wlr-randr"),
+            Ok(text) => found(logs::wlr_randr_output(&text, name), "wlr-randr"),
             Err(error) => Reading::NotYet(error),
         },
         Output::Umbriel => match answer(Action::Umbriel(&["outputs", "--json"])) {
-            Ok(text) => found(logs::umbriel_output(&text, "HEADLESS-1"), "umbriel outputs"),
+            Ok(text) => found(logs::umbriel_output(&text, name), "umbriel outputs"),
             Err(error) => Reading::NotYet(error),
         },
         Output::Hyprctl => match answer(Action::Hyprctl(&["-j", "monitors", "all"])) {
-            Ok(text) => found(
-                logs::hyprctl_output(&text, "HEADLESS-1"),
-                "hyprctl monitors",
-            ),
+            Ok(text) => found(logs::hyprctl_output(&text, name), "hyprctl monitors"),
             Err(error) => Reading::NotYet(error),
         },
+        // niri's own output, nested or real: the first it lists.
+        Output::NiriMsg => match answer(Action::NiriMsg(&["--json", "outputs"])) {
+            Ok(text) => found(logs::niri_output(&text), "niri msg outputs"),
+            Err(error) => Reading::NotYet(error),
+        },
+        Output::None(_) => Reading::Later,
         Output::Gdctl => {
             let mut command = Command::new(shell.mutter.join("bin/gdctl"));
             command.arg("show").env_clear().env(
@@ -606,12 +699,16 @@ fn umbriel_commits(bench: &Bench, running: &Running) -> Option<u64> {
     )
     .ok()?;
     let output = output_within(command, TOOL_PATIENCE).ok()?;
-    logs::umbriel_commits(&String::from_utf8_lossy(&output.stdout), "HEADLESS-1")
+    logs::umbriel_commits(
+        &String::from_utf8_lossy(&output.stdout),
+        running.output_name,
+    )
 }
 
-/// The name of the Wayland socket in `runtime`.
-fn wayland_socket(runtime: &Path) -> Option<String> {
-    sandbox::wayland_socket_in(runtime)?
+/// The name of the Wayland socket in `runtime` whose name starts with `prefix`, `wayland-` but
+/// for gamescope's.
+fn wayland_socket(runtime: &Path, prefix: &str) -> Option<String> {
+    file_in(runtime, prefix, "")?
         .file_name()?
         .to_str()
         .map(str::to_owned)
@@ -635,8 +732,9 @@ fn file_in(folder: &Path, prefix: &str, suffix: &str) -> Option<PathBuf> {
     names.into_iter().next()
 }
 
-/// sway's output, as `swaymsg -t get_outputs` reports it, once it is active.
-fn sway_output(shell: &ShellPaths, ipc: &Path) -> Option<String> {
+/// sway's output `name`, or its first active one, as `swaymsg -t get_outputs` reports it, once it
+/// is active.
+fn sway_output(shell: &ShellPaths, ipc: &Path, name: Option<&str>) -> Option<String> {
     let mut command = Command::new(shell.sway.join("bin/swaymsg"));
     command
         .arg("-s")
@@ -645,10 +743,9 @@ fn sway_output(shell: &ShellPaths, ipc: &Path) -> Option<String> {
         .env_clear();
     let output = output_within(command, TOOL_PATIENCE).ok()?;
     let outputs: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let headless = outputs
-        .as_array()?
-        .iter()
-        .find(|output| output["name"] == "HEADLESS-1" && output["active"] == true)?;
+    let headless = outputs.as_array()?.iter().find(|output| {
+        name.is_none_or(|name| output["name"] == name) && output["active"] == true
+    })?;
     let mode = &headless["current_mode"];
     Some(format!(
         "{}x{}@{:.3},{}",
@@ -798,8 +895,15 @@ fn tool_at(shell: &ShellPaths, reach: &Reach, action: Action) -> Result<Command,
                 .args(arguments)
                 .env("XDG_RUNTIME_DIR", reach.runtime_link.unwrap_or(&runtime));
         }
+        Action::NiriMsg(arguments) => {
+            command = cleared(shell.niri.join("bin/niri"));
+            command
+                .arg("msg")
+                .args(arguments)
+                .env("NIRI_SOCKET", socket("niri.", ".sock")?);
+        }
         Action::WlrRandr(arguments) => {
-            let name = wayland_socket(&runtime).ok_or("no Wayland socket")?;
+            let name = wayland_socket(&runtime, "wayland-").ok_or("no Wayland socket")?;
             command = cleared(shell.wlr_randr.join("bin/wlr-randr"));
             command
                 .args(arguments)
@@ -820,7 +924,8 @@ fn send(
     if let Action::Keys(chord) = action {
         return keyboard
             .ok_or("keys need the keyboard client")?
-            .type_chord(&chord.text());
+            .type_chord(&chord.text())
+            .map(|_| ());
     }
     let output = output_within(tool(shell, running, action)?, TOOL_PATIENCE)
         .map_err(|e| format!("{action:?}: {e}"))?;
@@ -870,8 +975,12 @@ fn stop_compositor(bench: &Bench, running: &mut Running) -> String {
 /// Checks the sandbox's rules on the compositor's scope and each client's; a break refuses the
 /// case.
 fn refuse_if_broken(bench: &Bench, running: &Running, clients: &[&Client]) -> Result<(), Stop> {
-    let mut groups: Vec<&Cgroup> = vec![&running.sandboxed.scope];
-    groups.extend(clients.iter().map(|client| &client.sandboxed.scope));
+    let mut groups: Vec<(&Cgroup, bool)> = vec![(&running.sandboxed.scope, running.on_display)];
+    groups.extend(
+        clients
+            .iter()
+            .map(|client| (&client.sandboxed.scope, false)),
+    );
     let sockets = SocketTable::read(&bench.proc.unix_sockets());
     let found = sandbox::check(&bench.proc, &groups, &bench.owner, &sockets);
     if found.is_empty() {
@@ -895,7 +1004,11 @@ fn compositor_info(bench: &Bench, running: &Running, plan: &Plan) -> CompositorI
         name: running.recipe.name.to_owned(),
         version: plan.version.clone(),
         program: plan.program.to_string_lossy().into_owned(),
-        backend: running.recipe.backend.to_owned(),
+        backend: if running.on_display {
+            "drm".to_owned()
+        } else {
+            running.recipe.backend.to_owned()
+        },
         renderer: running.recipe.renderer.to_owned(),
         settings: plan.settings.clone(),
         output_asked: recipes::OUTPUT.to_owned(),
@@ -915,20 +1028,39 @@ fn start_client(
     path: &str,
     input: bool,
 ) -> Result<Client, String> {
+    start_client_with(bench, running, name, command, path, input, None)
+}
+
+/// [`start_client`], the client given `x11_display` too, an X11 display the compositor's own
+/// Xwayland serves inside the sandbox ([`served_x11_display`]).
+fn start_client_with(
+    bench: &mut Bench,
+    running: &Running,
+    name: &str,
+    command: Vec<String>,
+    path: &str,
+    input: bool,
+    x11_display: Option<&str>,
+) -> Result<Client, String> {
+    let mut environment = client_environment(
+        &running.folders,
+        &bench.shell,
+        path,
+        &running.wayland_display,
+    );
+    if let Some(display) = x11_display {
+        environment.push(("DISPLAY".to_owned(), display.to_owned()));
+    }
     let launch = Launch {
         unit: bench.unit(name),
         command,
-        environment: client_environment(
-            &running.folders,
-            &bench.shell,
-            path,
-            &running.wayland_display,
-        ),
+        environment,
         folder: running.folders.root.clone(),
         log: running.folders.root.join(format!("{name}.log")),
         compositor: false,
         parent: None,
         input,
+        time_limit: bench.time_limit,
     };
     let sandboxed = Sandboxed::start(&launch, &bench.shell, &bench.program)?;
     Ok(Client {
@@ -939,7 +1071,16 @@ fn start_client(
 
 /// Waits until `client`'s log holds a line that starts with `prefix`.
 fn wait_for_line(client: &mut Client, prefix: &str) -> Result<(), String> {
-    let deadline = Instant::now() + PATIENCE;
+    wait_for_line_within(client, prefix, PATIENCE)
+}
+
+/// Waits up to `patience` until `client`'s log holds a line that starts with `prefix`.
+fn wait_for_line_within(
+    client: &mut Client,
+    prefix: &str,
+    patience: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + patience;
     loop {
         if client
             .log()
@@ -1024,18 +1165,22 @@ impl Keyboard {
         ))
     }
 
-    /// Types `chord`, then waits until the keyboard says the compositor handled it.
-    fn type_chord(&mut self, chord: &str) -> Result<(), String> {
+    /// Types `chord`, or `press`, one key alone, then waits until the keyboard says the
+    /// compositor handled it; gives when its key's press left, on CLOCK_MONOTONIC, in ns.
+    fn type_chord(&mut self, chord: &str) -> Result<u64, String> {
         writeln!(self.input, "{chord}")
             .and_then(|()| self.input.flush())
             .map_err(|e| format!("the keyboard: {e}"))?;
         self.sent += 1;
-        let handled = format!("sent {}", self.sent);
+        let handled = format!("sent {} ", self.sent);
         let deadline = Instant::now() + TOOL_PATIENCE;
         loop {
             let log = fs::read_to_string(&self.log).unwrap_or_default();
-            if log.lines().any(|line| line == handled) {
-                return Ok(());
+            if let Some(at) = log
+                .lines()
+                .find_map(|line| line.strip_prefix(&handled)?.trim().parse::<u64>().ok())
+            {
+                return Ok(at);
             }
             if Instant::now() > deadline {
                 return Err(format!(
@@ -1067,14 +1212,19 @@ fn measure(
     activity: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<Measured, Stop> {
     let core = running.sandboxed.core();
+    let watched = |name: &str, group: &Cgroup, on_display: bool| Watched {
+        name: name.to_owned(),
+        group: group.clone(),
+        on_display,
+    };
     let mut groups = vec![
-        ("core".to_owned(), core.clone()),
-        ("stack".to_owned(), running.sandboxed.scope.clone()),
+        watched("core", &core, running.on_display),
+        watched("stack", &running.sandboxed.scope, running.on_display),
     ];
     groups.extend(
         clients
             .iter()
-            .map(|client| (client.name.clone(), client.sandboxed.scope.clone())),
+            .map(|client| watched(&client.name, &client.sandboxed.scope, false)),
     );
     let fdinfo_raw = |when: &str| -> Vec<RawFdinfo> {
         crate::sampler::drm_now(&bench.proc, &core)
@@ -1093,13 +1243,13 @@ fn measure(
     let watch = Watch::start(&bench.proc, groups.clone());
     // The exact counters are read right at the activity's ends: the watches' readings take
     // milliseconds, which the window's length would not count.
-    let cpu_before: Vec<_> = groups.iter().map(|(_, group)| group.cpu()).collect();
+    let cpu_before: Vec<_> = groups.iter().map(|watched| watched.group.cpu()).collect();
     let from_ns = monotonic_ns();
     let started = Instant::now();
     let done = activity();
     let to_ns = monotonic_ns();
     let length = started.elapsed();
-    let cpu_after: Vec<_> = groups.iter().map(|(_, group)| group.cpu()).collect();
+    let cpu_after: Vec<_> = groups.iter().map(|watched| watched.group.cpu()).collect();
     let forbidden = watch.forbidden();
     let windows = watch.finish(&bench.proc, &groups);
     let load = machine.finish();
@@ -1162,13 +1312,15 @@ struct Windows {
 }
 
 /// Checks the sandbox with the clients up, measures the cost window, then, for a recipe that
-/// counts by capture, the same activity again with the frame counter.
+/// counts by capture and a scenario that counts frames apart (`frames_apart`), the same activity
+/// again with the frame counter.
 fn cost_and_frames(
     bench: &mut Bench,
     running: &Running,
     clients: &[&Client],
     activity: &mut dyn FnMut() -> Result<(), String>,
     run: &mut CaseRun,
+    frames_apart: bool,
 ) -> Result<Windows, Stop> {
     refuse_if_broken(bench, running, clients)?;
     let mut own_count = None;
@@ -1189,7 +1341,7 @@ fn cost_and_frames(
         measure(bench, running, clients, "cost", activity)?
     };
     run.memory.push(memory(bench, running, "after"));
-    if running.recipe.frames != Frames::Capture {
+    if running.recipe.frames != Frames::Capture || !frames_apart {
         return Ok(Windows {
             cost,
             frames: None,
@@ -1222,12 +1374,15 @@ fn rest(
 ) -> Result<Windows, Stop> {
     let still = still_client(bench, running, windows)?;
     std::thread::sleep(bench.durations.settle);
+    // The tour's rest measures costs and watts alone: no frames apart.
+    let frames_apart = !bench.place.is_tour();
     let windows = cost_and_frames(
         bench,
         running,
         &[&still],
         &mut idle(bench.durations.rest),
         run,
+        frames_apart,
     );
     still.stop(Signal::TERM);
     windows
@@ -1345,9 +1500,27 @@ fn mpv_client(
         format!("--input-ipc-server={}", socket.display()),
     ];
     command.extend(extra.iter().map(|option| (*option).to_owned()));
+    // gamescope's games are X11 clients of its own Xwayland: it offers no wp_viewporter, which
+    // mpv's Wayland output needs.
+    let x11_display = if recipes::X11_GAMES.contains(&running.recipe.name) {
+        let display = served_x11_display(bench, running)
+            .ok_or("its Xwayland serves no X11 display that mpv could show on")?;
+        command.push("--gpu-context=x11vk".to_owned());
+        Some(display)
+    } else {
+        None
+    };
     command.push(clip.to_string_lossy().into_owned());
     let path = bench.shell.applications_path.clone();
-    let mut client = start_client(bench, running, "mpv", command, &path, false)?;
+    let mut client = start_client_with(
+        bench,
+        running,
+        "mpv",
+        command,
+        &path,
+        false,
+        x11_display.as_deref(),
+    )?;
     let deadline = Instant::now() + PATIENCE;
     while logs::mpv_value(socket, "pid").is_err() {
         if let Some(status) = client.sandboxed.ended() {
@@ -1366,10 +1539,16 @@ fn mpv_client(
 }
 
 /// Waits until mpv's window is fullscreen at the output's logical size, as mpv sees it: the
-/// compositor told it fullscreen, and its size divided by its scale is the output's. Refuses the
-/// case if it never is: the scene would not be the scenario's. An mpv that ended meanwhile fails
-/// the case.
-fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result<(), Stop> {
+/// compositor told it fullscreen, and its size divided by its scale is the output's. On the tour,
+/// whose outputs are each compositor's own, fullscreen alone, the size it saw recorded. Refuses
+/// the case if it never is: the scene would not be the scenario's. An mpv that ended meanwhile
+/// fails the case.
+fn wait_fullscreen(
+    socket: &Path,
+    mpv: &mut Client,
+    run: &mut CaseRun,
+    any_size: bool,
+) -> Result<(), Stop> {
     let (logical_width, logical_height) = recipes::output_logical_size();
     let deadline = Instant::now() + FULLSCREEN_PATIENCE;
     loop {
@@ -1403,7 +1582,7 @@ fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result
             scale.map_or("?".to_owned(), |s| s.to_string()),
         );
         if fullscreen.as_ref().and_then(|v| v.as_bool()) == Some(true)
-            && logical == Some((logical_width, logical_height))
+            && (any_size || logical == Some((logical_width, logical_height)))
         {
             run.notes.push(format!("mpv's window: {seen}"));
             return Ok(());
@@ -1418,22 +1597,49 @@ fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result
     }
 }
 
+/// The X11 display the compositor's own Xwayland serves, as `:1`: the one a socket of its scope
+/// listens on, never another of the machine's.
+fn served_x11_display(bench: &Bench, running: &Running) -> Option<String> {
+    let sockets = SocketTable::read(&bench.proc.unix_sockets());
+    running
+        .sandboxed
+        .scope
+        .processes()
+        .into_iter()
+        .flat_map(|pid| bench.proc.open_files(pid))
+        .filter_map(|(_, target)| crate::sockets::socket_inode(&target.to_string_lossy()))
+        .filter_map(|inode| sockets.paths.get(&inode))
+        .find_map(|path| {
+            sandbox::X11_SOCKETS
+                .iter()
+                .find_map(|prefix| path.strip_prefix(prefix))
+                .map(|number| format!(":{number}"))
+        })
+}
+
 /// Lets mpv play for `length`, and fails the case if its clip did not: a stalled mpv is no scene
 /// to measure. mpv with `--untimed` and a FIFO swap chain sometimes stays at its first frames on
 /// Mutter 51.0, sought or not: four of the bench's six starts of `game` there on 2026-11-16.
-fn warm_up(socket: &Path, length: Duration) -> Result<(), Stop> {
+/// `pace` is the share of its clip's rate mpv can show at: 1 headless, the screen's refresh over
+/// the clip's rate on a display slower than it, a quarter at 60 Hz.
+fn warm_up(socket: &Path, length: Duration, pace: f64) -> Result<(), Stop> {
     let position = || logs::mpv_property(socket, "time-pos").ok().flatten();
     let before = position();
     std::thread::sleep(length);
-    played(before, position(), length).map_err(Stop::Failed)
+    played(before, position(), length, pace).map_err(Stop::Failed)
 }
 
-/// Whether mpv's position moved from `before` to `after` by half of `length` at least: its clip
-/// played, at its own rate or near it.
-fn played(before: Option<f64>, after: Option<f64>, length: Duration) -> Result<(), String> {
+/// Whether mpv's position moved from `before` to `after` by half of `length` at `pace` at least:
+/// its clip played, at the rate it can show at or near it.
+fn played(
+    before: Option<f64>,
+    after: Option<f64>,
+    length: Duration,
+    pace: f64,
+) -> Result<(), String> {
     let moved = after.zip(before).map(|(after, before)| after - before);
     match moved {
-        Some(moved) if moved >= length.as_secs_f64() / 2.0 => Ok(()),
+        Some(moved) if moved >= length.as_secs_f64() * pace / 2.0 => Ok(()),
         _ => Err(format!(
             "mpv's clip did not play in its {} s of warm-up: its position went from {} to {}",
             length.as_secs_f64(),
@@ -1481,6 +1687,13 @@ impl MpvFrames {
 fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windows, Stop> {
     let clip = make_clip(bench, GAME)?;
     let socket = running.folders.runtime().join("mpv.sock");
+    // On the tour, the refresh the compositor presents at, from the probe's own frames, before
+    // mpv covers them: mpv's frames are set against it.
+    let refresh = if bench.place.is_tour() {
+        Some(presentation_refresh(bench, running)?)
+    } else {
+        None
+    };
     // Every frame decoded is shown, as soon as the compositor takes it: a FIFO swap chain paces
     // mpv by the compositor's frames, as a game's.
     let mut client = mpv_client(
@@ -1491,8 +1704,12 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
         &socket,
     )?;
     let windows = (|| {
-        wait_fullscreen(&socket, &mut client, run)?;
-        warm_up(&socket, bench.durations.warm_up)?;
+        wait_fullscreen(&socket, &mut client, run, bench.place.is_tour())?;
+        // A screen slower than the clip shows a share of its frames.
+        let pace = refresh.map_or(1.0, |refresh_ns| {
+            (1e9 / refresh_ns / f64::from(GAME.fps)).min(1.0)
+        });
+        warm_up(&socket, bench.durations.warm_up, pace)?;
         run.notes.push(format!(
             "game: mpv fullscreen, --untimed, a FIFO swap chain, drawing with Vulkan on radv a \
              {}-frame-a-second clip of {}, decoded on the CPU",
@@ -1506,7 +1723,13 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
             shown.push(MpvFrames::read(&socket).shown_since(&before, f64::from(GAME.fps)));
             Ok(())
         };
-        let mut windows = cost_and_frames(bench, running, &[&client], &mut activity, run)?;
+        let frames_apart = !bench.place.is_tour();
+        let mut windows =
+            cost_and_frames(bench, running, &[&client], &mut activity, run, frames_apart)?;
+        if let (Some(refresh), Some(Some(shown))) = (refresh, shown.first()) {
+            let seconds = windows.cost.phase.seconds.value.unwrap_or(0.0);
+            missed_frames(&mut windows.cost.phase.figures, refresh, seconds, *shown);
+        }
         windows.client_frames = shown;
         Ok(windows)
     })();
@@ -1514,13 +1737,126 @@ fn game(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
     windows
 }
 
+/// The frames a window of `seconds` at `refresh_ns` holds, `frames_expected`, and those `shown`
+/// missed of them, `frames_missed`: mpv, untimed with a FIFO swap chain, shows one frame each
+/// refresh the compositor presents it, so each refresh it did not is a frame missed. Never below
+/// 0: a window measured a little long holds a refresh more.
+pub fn missed_frames(figures: &mut Figures, refresh_ns: f64, seconds: f64, shown: f64) {
+    if refresh_ns <= 0.0 {
+        return;
+    }
+    let expected = (seconds * 1e9 / refresh_ns).round();
+    figures.insert(
+        "refresh_hz".to_owned(),
+        Figure::new(Some(1e9 / refresh_ns), "per_s"),
+    );
+    figures.insert(
+        "frames_expected".to_owned(),
+        Figure::new(Some(expected), "count"),
+    );
+    figures.insert(
+        "frames_missed".to_owned(),
+        Figure::new(Some((expected - shown).max(0.0)), "count"),
+    );
+}
+
+/// The probe's frames it draws to read the refresh.
+const REFRESH_FRAMES: u32 = 120;
+
+/// The refresh the compositor presents at, in ns, from the probe's frames
+/// ([`refresh_of`]): the real display's, which each compositor reports in its presentation
+/// feedback.
+fn presentation_refresh(bench: &mut Bench, running: &Running) -> Result<f64, Stop> {
+    let command = vec![
+        bench.program.to_string_lossy().into_owned(),
+        "client".to_owned(),
+        "probe".to_owned(),
+        "--frames".to_owned(),
+        REFRESH_FRAMES.to_string(),
+    ];
+    let mut probe = start_client(bench, running, "refresh", command, "", false)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while probe.sandboxed.ended().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let log = probe.log().unwrap_or_default();
+    probe.stop(Signal::TERM);
+    check_clock(&log)?;
+    let presented: Vec<Presented> = log.lines().filter_map(Presented::read).collect();
+    refresh_of(&presented).ok_or_else(|| {
+        Stop::Failed(format!(
+            "the probe's frames gave no refresh: {} presented of {}",
+            presented.len(),
+            REFRESH_FRAMES + 1
+        ))
+    })
+}
+
+/// The refresh of `presented` frames, in ns: the median refresh the compositor reported, or, where
+/// it reports none (0), the median time between two frames presented at consecutive refreshes;
+/// where it counts no refreshes either (wlroots' headless backend gives 0 for both), between two
+/// consecutive frames.
+pub fn refresh_of(presented: &[Presented]) -> Option<f64> {
+    if let Some(median) = reported_refresh(presented) {
+        return Some(median);
+    }
+    let counted = presented.iter().any(|frame| frame.seq != 0);
+    let mut between: Vec<f64> = presented
+        .windows(2)
+        .filter(|pair| {
+            let next = if counted {
+                pair[1].seq == pair[0].seq + 1
+            } else {
+                pair[1].frame == pair[0].frame + 1
+            };
+            next && pair[1].at_ns > pair[0].at_ns
+        })
+        .map(|pair| (pair[1].at_ns - pair[0].at_ns) as f64)
+        .collect();
+    between.sort_by(f64::total_cmp);
+    logs::percentile(&between, 50.0)
+}
+
+/// The median refresh the compositor reported with `presented` frames, in ns; none where it
+/// reported none.
+pub fn reported_refresh(presented: &[Presented]) -> Option<f64> {
+    let mut reported: Vec<f64> = presented
+        .iter()
+        .filter(|frame| frame.refresh_ns > 0)
+        .map(|frame| frame.refresh_ns as f64)
+        .collect();
+    reported.sort_by(f64::total_cmp);
+    logs::percentile(&reported, 50.0)
+}
+
+/// The clock `wp_presentation` stamps with, CLOCK_MONOTONIC, the bench's own.
+const CLOCK_MONOTONIC: u32 = 1;
+
+/// Fails unless the probe's log says the compositor stamps its presentations on
+/// CLOCK_MONOTONIC, the clock the bench's own times are on.
+fn check_clock(log: &str) -> Result<(), Stop> {
+    let clock = log
+        .lines()
+        .find_map(|line| line.strip_prefix("clock ")?.trim().parse::<u32>().ok());
+    match clock {
+        Some(CLOCK_MONOTONIC) => Ok(()),
+        Some(other) => Err(Stop::Failed(format!(
+            "the compositor stamps its presentations on clock {other}, not CLOCK_MONOTONIC: \
+             its times cannot be set against the bench's"
+        ))),
+        None => Err(Stop::Failed(
+            "the probe never said the presentation's clock".to_owned(),
+        )),
+    }
+}
+
 fn film(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windows, Stop> {
     let clip = make_clip(bench, FILM)?;
     let socket = running.folders.runtime().join("mpv.sock");
     let mut client = mpv_client(bench, running, &clip, &[], &socket)?;
     let windows = (|| {
-        wait_fullscreen(&socket, &mut client, run)?;
-        warm_up(&socket, bench.durations.warm_up)?;
+        wait_fullscreen(&socket, &mut client, run, bench.place.is_tour())?;
+        warm_up(&socket, bench.durations.warm_up, 1.0)?;
         run.notes.push(
             "film: mpv fullscreen, software decoding (--hwdec=no), drawn with Vulkan on radv \
              (--vo=gpu-next)"
@@ -1541,7 +1877,7 @@ fn film(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windo
             readings.push((before, counters(&socket), shown));
             Ok(())
         };
-        let mut windows = cost_and_frames(bench, running, &[&client], &mut activity, run)?;
+        let mut windows = cost_and_frames(bench, running, &[&client], &mut activity, run, true)?;
         let phases = std::iter::once(&mut windows.cost)
             .chain(windows.frames.as_mut().map(|(measured, _)| measured));
         for (measured, (before, after, shown)) in phases.zip(readings) {
@@ -1595,7 +1931,7 @@ fn pacing(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
         stretches.push(stretch);
         Ok(())
     };
-    let windows = cost_and_frames(bench, running, &[&client], &mut activity, run);
+    let windows = cost_and_frames(bench, running, &[&client], &mut activity, run, true);
     client.stop(Signal::INT);
     let mut windows = windows?;
     run.notes.push(
@@ -1677,7 +2013,7 @@ fn motion(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
             ));
             let mut clients = vec![&still];
             clients.extend(keys.as_ref());
-            cost_and_frames(bench, running, &clients, &mut round, run)
+            cost_and_frames(bench, running, &clients, &mut round, run, true)
         }
         Err(error) => Err(Stop::Failed(error)),
     };
@@ -1686,6 +2022,219 @@ fn motion(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
         keys.stop(Signal::TERM);
     }
     windows
+}
+
+/// The longest the probe may take to answer a key: to say it got it, then that its frame was
+/// presented or discarded.
+const ANSWER_PATIENCE: Duration = Duration::from_secs(1);
+/// The pause after each key's answer: 50 ms, and up to [`PAUSE_SPREAD_MS`] more, drawn at random,
+/// so that keys come at every phase of the refresh, as a person's do.
+const PAUSE_MS: u64 = 50;
+/// The random part of the pause, longer than a refresh at 60 Hz.
+const PAUSE_SPREAD_MS: u64 = 20;
+/// The longest the probe may take to get the keyboard's focus once it shows.
+const FOCUS_PATIENCE: Duration = Duration::from_secs(10);
+
+/// `latency`: the probe fullscreen, drawing a frame on each key, and the bench's keyboard typing
+/// `press` into the same compositor: [`WARM_UP_PRESSES`] first, then [`Bench::presses`] in the
+/// cost window, each after the last one's frame was presented and a pause ([`PAUSE_MS`]). Each
+/// key's time from its sending to its frame's presentation is input to present, end to end
+/// ([`latencies`]).
+fn latency(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Windows, Stop> {
+    let command = vec![
+        bench.program.to_string_lossy().into_owned(),
+        "client".to_owned(),
+        "probe".to_owned(),
+        "--keys".to_owned(),
+    ];
+    let mut probe = start_client(bench, running, "probe", command, "", false)?;
+    let windows = latency_with(bench, running, &mut probe, run);
+    probe.stop(Signal::TERM);
+    windows
+}
+
+fn latency_with(
+    bench: &mut Bench,
+    running: &Running,
+    probe: &mut Client,
+    run: &mut CaseRun,
+) -> Result<Windows, Stop> {
+    wait_for_line(probe, "ready")?;
+    check_clock(&probe.log().unwrap_or_default())?;
+    let (keys, mut keyboard) = Keyboard::start(bench, running)?;
+    let windows = (|| -> Result<Windows, Stop> {
+        wait_for_line_within(probe, "focus", FOCUS_PATIENCE).map_err(|_| {
+            Stop::Failed(format!(
+                "the probe never had the keyboard's focus in {} s: the keys would reach \
+                 another window",
+                FOCUS_PATIENCE.as_secs()
+            ))
+        })?;
+        let protocol = keys
+            .log()
+            .unwrap_or_default()
+            .lines()
+            .find_map(|line| line.strip_prefix("ready ").map(str::to_owned))
+            .unwrap_or_default();
+        let probe_log = probe.sandboxed.log.clone();
+        let mut random = crate::cli::SplitMix(monotonic_ns());
+        let mut press = |keyboard: &mut Keyboard| -> Result<u64, String> {
+            let answered = probe_keys(&probe_log) + 1;
+            let at = keyboard.type_chord("press")?;
+            wait_answer(&probe_log, answered);
+            std::thread::sleep(Duration::from_millis(
+                PAUSE_MS + random.next_number() % PAUSE_SPREAD_MS,
+            ));
+            Ok(at)
+        };
+        for _ in 0..WARM_UP_PRESSES {
+            press(&mut keyboard)?;
+        }
+        let presses = bench.presses;
+        let mut sent = Vec::with_capacity(presses as usize);
+        let mut activity = || -> Result<(), String> {
+            for _ in 0..presses {
+                sent.push(press(&mut keyboard)?);
+            }
+            Ok(())
+        };
+        let mut windows =
+            cost_and_frames(bench, running, &[&*probe, &keys], &mut activity, run, false)?;
+        let log = probe.log().unwrap_or_default();
+        let received: Vec<(u64, u64)> = log.lines().filter_map(read_key).collect();
+        let presented: Vec<Presented> = log.lines().filter_map(Presented::read).collect();
+        let measured = latencies(&sent, &received, &presented);
+        measured.record(&mut windows.cost.phase.figures);
+        let window_frames: Vec<Presented> = presented
+            .iter()
+            .filter(|frame| {
+                (windows.cost.marks.from_ns..=windows.cost.marks.to_ns).contains(&frame.at_ns)
+            })
+            .copied()
+            .collect();
+        // Its frames come on keys, not at each refresh: the refresh the compositor reports alone.
+        if let Some(refresh) = reported_refresh(&window_frames) {
+            windows.cost.phase.figures.insert(
+                "refresh_hz".to_owned(),
+                Figure::new(Some(1e9 / refresh), "per_s"),
+            );
+        }
+        run.notes.push(format!(
+            "latency: {} keys typed through {protocol} after {WARM_UP_PRESSES} to warm up, each \
+             once the last one's frame was presented and {PAUSE_MS} to {} ms after; the probe \
+             fullscreen draws a frame on each",
+            sent.len(),
+            PAUSE_MS + PAUSE_SPREAD_MS
+        ));
+        Ok(windows)
+    })();
+    keys.stop(Signal::TERM);
+    windows
+}
+
+/// A `key <n> <ns>` line of the probe, as `(n, ns)`.
+fn read_key(line: &str) -> Option<(u64, u64)> {
+    let mut words = line.strip_prefix("key ")?.split_whitespace();
+    Some((words.next()?.parse().ok()?, words.next()?.parse().ok()?))
+}
+
+/// The keys the probe of log `log` received so far.
+fn probe_keys(log: &Path) -> u64 {
+    fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(read_key)
+        .map(|(n, _)| n)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Waits up to [`ANSWER_PATIENCE`] until the probe of log `log` says its frame `frame` was
+/// presented or discarded: a key it never gets, or a frame never presented, is counted later,
+/// from the log, not waited for longer.
+fn wait_answer(log: &Path, frame: u64) {
+    let deadline = Instant::now() + ANSWER_PATIENCE;
+    let discarded = format!("discarded {frame}");
+    while Instant::now() < deadline {
+        let text = fs::read_to_string(log).unwrap_or_default();
+        if text.lines().any(|line| {
+            line == discarded || Presented::read(line).is_some_and(|p| p.frame == frame)
+        }) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// What `latency` measured: for each key sent, its time to the probe and to its frame's
+/// presentation, and the keys lost on the way.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Latencies {
+    /// Each key's time from its sending to its frame's presentation, in ns, in the order sent.
+    pub end_to_end_ns: Vec<u64>,
+    /// Each key's time from its sending to the probe's receiving it, in ns.
+    pub input_ns: Vec<u64>,
+    /// The keys sent.
+    pub sent: usize,
+    /// Keys the probe never received before the next was sent.
+    pub lost: usize,
+    /// Keys received whose frame was discarded or never presented.
+    pub unpresented: usize,
+}
+
+/// Pairs each time in `sent`, in order, with the first key the probe received at or after it and
+/// before the next one was sent (`received`, its `(n, ns)` lines), and that key's frame with its
+/// presentation (`presented`, frame `n`). Every time is on CLOCK_MONOTONIC: the keyboard stamps a
+/// key before it leaves, so it never arrives before its time.
+pub fn latencies(sent: &[u64], received: &[(u64, u64)], presented: &[Presented]) -> Latencies {
+    let mut measured = Latencies {
+        sent: sent.len(),
+        ..Latencies::default()
+    };
+    let mut keys = received.iter().peekable();
+    for (i, &at) in sent.iter().enumerate() {
+        let next = sent.get(i + 1).copied().unwrap_or(u64::MAX);
+        // Keys received before this one was sent answered none: skip them.
+        while keys.next_if(|(_, received_at)| *received_at < at).is_some() {}
+        let Some(&(key, received_at)) = keys.next_if(|(_, received_at)| *received_at < next) else {
+            measured.lost += 1;
+            continue;
+        };
+        measured.input_ns.push(received_at - at);
+        match presented
+            .iter()
+            .find(|frame| frame.frame == key && frame.at_ns >= at)
+        {
+            Some(frame) => measured.end_to_end_ns.push(frame.at_ns - at),
+            None => measured.unpresented += 1,
+        }
+    }
+    measured
+}
+
+impl Latencies {
+    /// Writes its figures into a window's: the keys, and the median, 99th percentile and most of
+    /// each time, in µs.
+    pub fn record(&self, figures: &mut Figures) {
+        let count = |value: usize| Figure::new(Some(value as f64), "count");
+        figures.insert("keys_sent".to_owned(), count(self.sent));
+        figures.insert("keys_lost".to_owned(), count(self.lost));
+        figures.insert("frames_unpresented".to_owned(), count(self.unpresented));
+        figures.insert(
+            "frames_presented".to_owned(),
+            count(self.end_to_end_ns.len()),
+        );
+        for (name, times) in [("latency", &self.end_to_end_ns), ("input", &self.input_ns)] {
+            let mut us: Vec<f64> = times.iter().map(|ns| *ns as f64 / 1e3).collect();
+            us.sort_by(f64::total_cmp);
+            for (statistic, p) in [("median", 50.0), ("p99", 99.0), ("max", 100.0)] {
+                figures.insert(
+                    format!("{name}_{statistic}_us"),
+                    Figure::new(logs::percentile(&us, p), "us"),
+                );
+            }
+        }
+    }
 }
 
 /// How a window's frames were counted.
@@ -1787,6 +2336,20 @@ fn finish_frames(
         None => None,
     };
     derive(&mut cost.phase, count);
+    if recipe.frames == Frames::KwinLog
+        && let Some(csv) = file_in(&running.folders.root, "kwin perf statistics", ".csv")
+            .and_then(|path| fs::read_to_string(path).ok())
+    {
+        let flips = logs::kwin_flips(&csv, cost.marks.from_ns, cost.marks.to_ns);
+        cost.phase.figures.insert(
+            "flips".to_owned(),
+            Figure::new(Some(flips.frames as f64), "count"),
+        );
+        cost.phase.figures.insert(
+            "flips_late".to_owned(),
+            Figure::new(Some(flips.late as f64), "count"),
+        );
+    }
     let counted = frames.map(|(mut counted, captured)| {
         derive(
             &mut counted.phase,
@@ -1941,8 +2504,31 @@ pub fn derive(phase: &mut Phase, count: Option<Count>) {
         _ => {}
     }
     phase.frames_counted_by = count.map(|count| count.by);
+    let watts: [(&str, ReadWatts); 2] = [
+        ("gpu_power_w", |state| state.power_w),
+        ("battery_power_w", |state| state.battery_w),
+    ];
+    for (name, watts) in watts {
+        figures.insert(name.to_owned(), mean_watts(&phase.load, watts));
+    }
     phase.figures.extend(figures);
     phase.lower_bounds.extend(lower_bounds);
+}
+
+/// A power the machine's state holds, in watts.
+type ReadWatts = fn(&MachineState) -> Option<f64>;
+
+/// The mean of a power the machine's seconds of `load` read, in watts; none if none read it.
+fn mean_watts(load: &Load, watts: ReadWatts) -> Figure {
+    let read: Vec<f64> = load
+        .seconds
+        .iter()
+        .filter_map(|second| watts(&second.state))
+        .collect();
+    Figure::new(
+        (!read.is_empty()).then(|| read.iter().sum::<f64>() / read.len() as f64),
+        "W",
+    )
 }
 
 /// The memory of the sandbox's processes now, from `smaps_rollup` and the DRM statistics.
@@ -2026,7 +2612,8 @@ pub fn prepare(
             Err(error) => notes.push(format!("yuna could not be built: {error}")),
         }
     }
-    if compositors.contains(&"kwin") {
+    // KWin's 240 Hz output is a headless one's; on the real display, KWin keeps its own.
+    if compositors.contains(&"kwin") && !bench.place.on_display() {
         match prepare_kwin(bench) {
             Ok(config) => bench.prepared.kwin_output_config = Some(config),
             Err(error) => notes.push(format!("KWin's output configuration: {error}")),
@@ -2318,12 +2905,15 @@ mod tests {
     #[test]
     fn a_clip_that_did_not_play_in_its_warm_up_fails_the_case() {
         let warm_up = Duration::from_secs(3);
-        assert!(played(Some(0.2), Some(3.3), warm_up).is_ok());
+        assert!(played(Some(0.2), Some(3.3), warm_up, 1.0).is_ok());
+        // On a 60 Hz screen, a 240-frame-a-second clip moves a quarter as fast.
+        assert!(played(Some(0.2), Some(1.0), warm_up, 0.25).is_ok());
+        assert!(played(Some(0.2), Some(1.0), warm_up, 1.0).is_err());
         // Stalled at its first frame, as on Mutter: 0.013 s, then 0.013 s.
-        let stalled = played(Some(0.013), Some(0.013), warm_up).unwrap_err();
+        let stalled = played(Some(0.013), Some(0.013), warm_up, 1.0).unwrap_err();
         assert!(stalled.contains("from 0.013 s to 0.013 s"), "{stalled}");
-        assert!(played(None, Some(3.0), warm_up).is_err());
-        assert!(played(Some(1.0), None, warm_up).is_err());
+        assert!(played(None, Some(3.0), warm_up, 1.0).is_err());
+        assert!(played(Some(1.0), None, warm_up, 1.0).is_err());
     }
 
     #[test]
@@ -2332,6 +2922,161 @@ mod tests {
         assert_eq!(Clip::seconds(&Durations::STANDARD), 44);
         // Longer windows, to try the bench, make a longer clip.
         assert_eq!(Clip::seconds(&Durations::with_windows(25.0)), 77);
+    }
+
+    fn frame(frame: u64, at_ns: u64, refresh_ns: u64, seq: u64) -> Presented {
+        Presented {
+            frame,
+            at_ns,
+            refresh_ns,
+            seq,
+            flags: 7,
+        }
+    }
+
+    #[test]
+    fn each_key_is_paired_with_the_frame_it_drew_and_lost_ones_counted() {
+        let ms = 1_000_000;
+        // Key 1 sent at 100 ms, received 0.5 ms later, its frame presented at 106 ms. Key 2 sent
+        // at 200 ms never arrives. Key 3, sent at 300 ms, arrives as the probe's second key, and
+        // its frame is discarded. Key 4, at 400 ms, is the probe's third, presented at 409 ms.
+        let sent = [100 * ms, 200 * ms, 300 * ms, 400 * ms];
+        let received = [
+            (1, 100 * ms + ms / 2),
+            (2, 301 * ms),
+            (3, 400 * ms + 200_000),
+        ];
+        let presented = [
+            frame(0, 50 * ms, 4_166_666, 10),
+            frame(1, 106 * ms, 4_166_666, 22),
+            frame(3, 409 * ms, 4_166_666, 94),
+        ];
+        let measured = latencies(&sent, &received, &presented);
+        assert_eq!(measured.end_to_end_ns, [6 * ms, 9 * ms]);
+        assert_eq!(measured.input_ns, [ms / 2, ms, 200_000]);
+        assert_eq!(
+            (measured.sent, measured.lost, measured.unpresented),
+            (4, 1, 1)
+        );
+        let mut figures = Figures::new();
+        measured.record(&mut figures);
+        assert_eq!(figures["latency_median_us"].value, Some(6_000.0));
+        assert_eq!(figures["latency_p99_us"].value, Some(9_000.0));
+        assert_eq!(figures["latency_max_us"].value, Some(9_000.0));
+        assert_eq!(figures["input_median_us"].value, Some(500.0));
+        assert_eq!(figures["keys_lost"].value, Some(1.0));
+        assert_eq!(figures["frames_presented"].value, Some(2.0));
+        // A key received before any was sent, as one typed at start, answers none.
+        let early = latencies(
+            &[100 * ms],
+            &[(1, 90 * ms), (2, 101 * ms)],
+            &[frame(2, 105 * ms, 0, 1)],
+        );
+        assert_eq!(early.end_to_end_ns, [5 * ms]);
+        // Nothing sent: nothing measured, no percentile.
+        let none = latencies(&[], &received, &presented);
+        let mut figures = Figures::new();
+        none.record(&mut figures);
+        assert_eq!(figures["latency_median_us"].value, None);
+        assert_eq!(figures["keys_sent"].value, Some(0.0));
+    }
+
+    #[test]
+    fn the_refresh_is_the_reported_one_or_the_time_between_refreshes() {
+        // 240 Hz, as a compositor reports it; one frame without a refresh is left out.
+        let reported = [
+            frame(0, 0, 4_166_666, 1),
+            frame(1, 4_166_666, 4_166_667, 2),
+            frame(2, 8_333_333, 0, 3),
+        ];
+        assert_eq!(refresh_of(&reported), Some(4_166_666.0));
+        // A compositor that reports none: the time between frames of consecutive refreshes,
+        // a frame that missed one left out.
+        let unreported = [
+            frame(0, 0, 0, 1),
+            frame(1, 16_666_667, 0, 2),
+            frame(2, 50_000_000, 0, 4),
+            frame(3, 66_666_667, 0, 5),
+        ];
+        assert_eq!(refresh_of(&unreported), Some(16_666_667.0));
+        // Nor any refresh counted, as wlroots' headless backend: between consecutive frames.
+        let uncounted = [
+            frame(2, 1_000_000, 0, 0),
+            frame(3, 5_000_000, 0, 0),
+            frame(5, 13_000_000, 0, 0),
+            frame(6, 17_000_000, 0, 0),
+        ];
+        assert_eq!(refresh_of(&uncounted), Some(4_000_000.0));
+        // Frames drawn on keys are no refreshes apart: the reported refresh alone.
+        assert_eq!(reported_refresh(&uncounted), None);
+        assert_eq!(reported_refresh(&reported), Some(4_166_666.0));
+        assert_eq!(refresh_of(&[]), None);
+        assert_eq!(refresh_of(&[frame(0, 0, 0, 1)]), None);
+    }
+
+    #[test]
+    fn frames_missed_are_the_refreshes_mpv_was_not_shown_at() {
+        let mut figures = Figures::new();
+        // 10 s at 240 Hz: 2,400 refreshes; mpv shown at 2,391 of them.
+        missed_frames(&mut figures, 1e9 / 240.0, 10.0, 2_391.0);
+        assert_eq!(figures["frames_expected"].value, Some(2_400.0));
+        assert_eq!(figures["frames_missed"].value, Some(9.0));
+        assert_eq!(figures["refresh_hz"].value, Some(240.0));
+        // A window measured a little long holds a refresh more than mpv's count: none missed.
+        missed_frames(&mut figures, 1e9 / 60.0, 10.004, 601.0);
+        assert_eq!(figures["frames_missed"].value, Some(0.0));
+        // No refresh known: nothing said.
+        let mut unknown = Figures::new();
+        missed_frames(&mut unknown, 0.0, 10.0, 600.0);
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn a_windows_watts_are_the_mean_of_its_seconds_that_read_them() {
+        let second = |gpu: Option<f64>, battery: Option<f64>| crate::machine::Second {
+            at_s: 1.0,
+            others_cpu_cores: None,
+            others_gpu_percent: None,
+            bench_cpu_cores: 0.0,
+            state: MachineState {
+                power_w: gpu,
+                battery_w: battery,
+                ..MachineState::default()
+            },
+        };
+        let mut phase = phase_of(1_000.0);
+        phase.load.seconds = vec![
+            second(Some(10.0), Some(14.0)),
+            second(Some(12.0), None),
+            second(None, Some(16.0)),
+        ];
+        derive(&mut phase, None);
+        assert_eq!(phase.figures["gpu_power_w"].value, Some(11.0));
+        assert_eq!(phase.figures["battery_power_w"].value, Some(15.0));
+        assert_eq!(phase.figures["gpu_power_w"].unit, "W");
+        // A desktop has no battery: unknown, not 0.
+        let mut desktop = phase_of(1_000.0);
+        desktop.load.seconds = vec![second(Some(30.0), None)];
+        derive(&mut desktop, None);
+        assert_eq!(desktop.figures["battery_power_w"].value, None);
+    }
+
+    #[test]
+    fn the_tour_marks_its_cases_and_puts_the_display_s_compositor_on_drm() {
+        let seat = Seat {
+            session: "3".to_owned(),
+            seat: "seat0".to_owned(),
+            vt: Some(3),
+        };
+        let place = Place::Display(seat.clone());
+        assert!(place.on_display() && place.is_tour());
+        assert_eq!(place.display(), Display::Drm(&seat));
+        assert_eq!(place.mark(), Some(record::ON_THE_DISPLAY));
+        assert_eq!(Place::DryRun.display(), Display::Headless);
+        assert!(!Place::DryRun.on_display() && Place::DryRun.is_tour());
+        assert_eq!(Place::DryRun.mark(), Some(record::DRY_RUN));
+        assert_eq!(Place::Headless.mark(), None);
+        assert!(!Place::Headless.is_tour());
     }
 
     #[test]

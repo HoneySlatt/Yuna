@@ -147,6 +147,27 @@ the 240 Hz mode, fewer under load, 241.7 to 243.9 in `game`. The others draw at 
 In `game` and `pacing`, whose client draws as fast as the compositor takes its frames, the summary
 therefore ranks costs a second only within one of these paces.
 
+`tour` is the owner's tour: each rival in turn on the real display, from a virtual terminal where
+the owner logged in and no compositor runs ([`docs/owner-runs.md`](docs/owner-runs.md#3-the-tours)
+gives its steps). Agents never run it on the display. They run its dry run, the same code with
+each rival headless, or nested in a headless dwl for niri and cosmic-comp:
+
+```sh
+nix develop .#bench -c cargo run --release -p yuna-bench -- tour --dry-run --compositor sway,kwin,hyprland
+nix build .#yuna-bench    # the bench alone, as the owner's laptop and Steam Deck run it
+```
+
+`tour` takes `--compositor` (`sway`, `dwl`, `mango`, `umbriel`, `hyprland`, `niri`, `kwin`,
+`mutter`, `cosmic-comp`, `gamescope`; by default the machine's: all of them on the desktop, the
+peers with dwl and mango on a laptop, and gamescope too on the Steam Deck, the machine told by its
+board and a battery, or `--machine`), `--scenario` (`rest`, `game`, `motion`, `latency`),
+`--configuration` (`equal-work` by default), `--runs` (1 by default), `--presses` (`latency`'s
+keys, 300), `--seconds`, `--out` (the current folder by default), `--dry-run` and `--keep`. It
+prints how long it will take, and each case's time and the most it may keep the display. The dry
+run of sway, KWin and Hyprland, every round once at the standard lengths, took 6 min 57 s on
+2026-11-16. It refuses to start under a compositor of its own session, or when a GPU's
+performance level is not `auto`; the dry run records the level instead.
+
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which

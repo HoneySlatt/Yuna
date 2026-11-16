@@ -9,7 +9,8 @@
 //! each window it reads the machine's state and the load of its other programs ([`machine`]). How
 //! each compositor is run is a recipe, as data ([`recipes`]); one driven by its keys alone gets
 //! the bench's virtual keyboard ([`keys`]). Each run writes a versioned JSON file ([`record`]);
-//! [`report`] summarises them in Markdown.
+//! [`report`] summarises them in Markdown. The owner's tour ([`tour`]) runs the same cases on the
+//! real display, with a probe of its own whose frames say when they were presented ([`probe`]).
 //!
 //! It depends on nothing of the `yuna` crate: it measures Yuna as it measures the others, and
 //! builds alone.
@@ -25,6 +26,7 @@ pub mod keys;
 pub mod lock;
 pub mod logs;
 pub mod machine;
+pub mod probe;
 pub mod procfs;
 pub mod recipes;
 pub mod record;
@@ -34,6 +36,7 @@ pub mod sandbox;
 pub mod scenarios;
 pub mod sockets;
 pub mod still;
+pub mod tour;
 
 /// What the tests share.
 #[cfg(test)]
@@ -55,6 +58,9 @@ mod testing {
             umbriel: store("umbriel-0.1.0"),
             hyprland: store("hyprland-0.57.1"),
             mutter: store("mutter-51.0"),
+            niri: store("niri-26.04"),
+            cosmic_comp: store("cosmic-comp-1.11.0"),
+            gamescope: store("gamescope-3.17.0"),
             wlr_randr: store("wlr-randr-0.5.0"),
             weston: store("weston-16.0.0"),
             ffmpeg: store("ffmpeg-headless-9.0.2-bin"),

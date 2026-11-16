@@ -51,5 +51,88 @@ your notes.
 
 ## 3. The tours
 
-To come: one command that runs every rival on the real display in turn. Its steps are written
-here once the bench can run it.
+One command runs each rival in turn on the real display, the same rounds with the same clients,
+and writes what it measured: frames missed on the screen's refresh, input to present, and watts
+([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+It runs from a virtual terminal of its own, so that it measures no shell and no window of yours.
+Your own session stays on its own terminal: the tour reaches nothing of it.
+
+| Machine | Rivals | About |
+|---|---|---|
+| Desktop | sway, dwl, mango, Umbriel, Hyprland, niri, KWin, Mutter, cosmic-comp, gamescope | 25 min |
+| Laptop | dwl, mango, Umbriel, Hyprland, niri, KWin | 16 min |
+| Steam Deck | the laptop's and gamescope | 17 min |
+
+Those times are the rounds'. The first `nix run` on a machine also downloads about 4 GB (the
+rivals, Qt for KWin, Mesa) and builds Umbriel and the bench, a few minutes more. The tour tells
+the machine by itself (`--machine desktop`, `laptop` or `deck` to say it).
+
+### Before
+
+- Close games and builds: the run file marks what other programs disturbed.
+- The laptop and the Deck: run on battery, charged above half, so that the battery gives the whole
+  machine's watts. On mains only the GPU's watts are read, which a laptop's APU may not give.
+- The Deck: plug a keyboard in, for the virtual terminal.
+- Every GPU's performance level must be `auto`:
+
+  ```sh
+  cat /sys/class/drm/card*/device/power_dpm_force_performance_level
+  ```
+
+  If one is not, the tour refuses to start, and prints the command that sets it and the one that
+  puts yours back after. It never writes it itself.
+
+### Run it
+
+Switch to a spare virtual terminal (Ctrl+Alt+F3, for example) and log in. No compositor may run
+in that session: the tour refuses to start if `WAYLAND_DISPLAY` or `DISPLAY` is set there. Then,
+the same on each machine:
+
+```sh
+mkdir -p ~/yuna-tour && cd ~/yuna-tour
+nix run 'github:HoneySlatt/Yuna/m1.9#yuna-bench' -- tour
+```
+
+It prints the rivals, the time it will take, and waits 5 s: Ctrl+C then stops it before it takes
+the screen. Then, for each case, it prints the case, its time, and the most it may keep the screen.
+
+### What you see
+
+For each case the screen goes black a moment, and the rival takes it:
+
+- `rest`: 15 windows of plain colours, still, for a minute.
+- `game`: first a dark grey screen for a second, then a moving test pattern, fullscreen.
+- `motion`: five windows; the focus moves between them and the workspace switches, eight times.
+- `latency`: a dark grey screen whose shade changes faintly at each key the tour types, about 16
+  a second, for half a minute. Mutter takes no typed keys: its `latency` shows for a moment and
+  fails, saying so. gamescope runs `game` and `latency` alone.
+
+Between cases the terminal comes back for a moment. Leave the keyboard and the mouse alone while a
+rival shows: they reach the rival, and would change what it draws.
+
+### If a rival hangs
+
+Each case says the most it may keep the screen: at that time systemd stops it, whatever the tour
+does, and the terminal comes back. The tour then goes on with the next rival, its case failed.
+
+If you cannot wait: Ctrl+Alt+F4 still switches terminals while the rival answers. Log in there and
+stop the rival's sandbox; the tour waits up to 10 minutes for its terminal to come back:
+
+```sh
+systemctl --user kill --signal=KILL 'yuna-bench-*.scope'
+```
+
+Then switch back to the tour's terminal. If the screen and the keys are frozen, only the time
+limit, or that command from another machine over SSH, stops it.
+
+### What to bring back
+
+The two files the tour writes in `~/yuna-tour`, `tour-<time>.json` and `tour-<time>.md`, with your
+notes of anything that looked wrong. When a case failed, the tour prints the folder of its logs,
+`/tmp/yuna-bench-<pid>-<time>`: bring it back too,
+`tar czf ~/yuna-tour/logs.tgz -C /tmp yuna-bench-<pid>-<time>`.
+
+What agents could not check without a display, and so what a first tour may show: that each rival
+takes the screen through the tour's session as their sources say; that KWin and gamescope take
+the tour's keys on the real display as they do headless; and that SteamOS gives a login prompt on
+a virtual terminal.

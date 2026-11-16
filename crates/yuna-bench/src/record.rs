@@ -4,6 +4,11 @@
 //! measured, never 0. In the readings kept raw (the machine's seconds, the raw `fdinfo`), the
 //! unit is the end of the field's name: `_ns`, `_kib`, `_mhz`, `_w`. A reader of a later format
 //! refuses this one rather than guess.
+//!
+//! Format 2 marks where each case ran ([`Case::tour`]: headless, the owner's tour on the real
+//! display, or the tour's dry run) and adds the machine's battery and screens to each second
+//! ([`crate::machine::MachineState`]). A file of format 1 reads as format 2: its cases ran
+//! headless, and its seconds hold no battery or screen, `null` (`report::read`).
 
 use std::collections::BTreeMap;
 
@@ -13,8 +18,14 @@ use crate::cgroup::CpuStat;
 use crate::machine::{Load, MachineInfo};
 use crate::sampler::Window;
 
-/// The format of the run's file; raised when a field changes its meaning.
-pub const FORMAT: u32 = 1;
+/// The format of the run's file; raised when a field changes its meaning, or a field a reader of
+/// the last format would misread is added.
+pub const FORMAT: u32 = 2;
+
+/// [`Case::tour`] of a case the owner's tour ran on the real display.
+pub const ON_THE_DISPLAY: &str = "tour";
+/// [`Case::tour`] of a case the tour's dry run ran, headless: never a figure of the display.
+pub const DRY_RUN: &str = "tour-dry-run";
 
 /// Below this share of a group's CPU time in the threads sampled, its wake-ups are a lower bound.
 pub const COVERAGE: f64 = 0.9;
@@ -87,16 +98,28 @@ pub struct Case {
     pub scenario: String,
     /// The still windows, for `rest`.
     pub windows: Option<u32>,
+    /// Where it ran: none for `headless`; [`ON_THE_DISPLAY`] for the owner's tour, [`DRY_RUN`]
+    /// for the tour's dry run. Cases of different places never share a table.
+    #[serde(default)]
+    pub tour: Option<String>,
 }
 
 impl Case {
-    /// Its label, such as `sway/equal-work/rest-15`.
+    /// Its label, such as `sway/equal-work/rest-15`, or `tour/sway/equal-work/rest-15` on the
+    /// tour.
     pub fn label(&self) -> String {
         let scenario = match self.windows {
             Some(windows) => format!("{}-{windows}", self.scenario),
             None => self.scenario.clone(),
         };
-        format!("{}/{}/{scenario}", self.compositor, self.configuration)
+        let place = self
+            .tour
+            .as_ref()
+            .map_or(String::new(), |tour| format!("{tour}/"));
+        format!(
+            "{place}{}/{}/{scenario}",
+            self.compositor, self.configuration
+        )
     }
 }
 
@@ -388,8 +411,14 @@ mod tests {
             configuration: "equal-work".to_owned(),
             scenario: "rest".to_owned(),
             windows: Some(15),
+            tour: None,
         };
         assert_eq!(case.label(), "sway/equal-work/rest-15");
+        let toured = Case {
+            tour: Some(ON_THE_DISPLAY.to_owned()),
+            ..case
+        };
+        assert_eq!(toured.label(), "tour/sway/equal-work/rest-15");
     }
 
     #[test]

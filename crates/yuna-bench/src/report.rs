@@ -20,6 +20,11 @@
 //!
 //! The summary ends with every rival of ADR-0071: those the files measured, those they did not,
 //! and those that run on the owner's tour only, with why.
+//!
+//! The tour's cases, on the real display or in its dry run, have tables of their own, never
+//! mixed with `headless`'s: the frames missed on the screen's refresh, input to present, and the
+//! GPU's and the battery's watts. The dry run's figures are headless, and test the tour's code
+//! alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -27,14 +32,23 @@ use std::fmt::Write as _;
 use crate::recipes;
 use crate::record::{CaseRun, FORMAT, RunFile};
 
-/// Reads a run file, refusing another format than this bench's.
+/// The first format this bench reads: format 1's files read as format 2's, their cases headless
+/// and their seconds without a battery or a screen (`record`).
+pub const OLDEST_FORMAT: u32 = 1;
+
+/// Reads a run file of this bench's format, or of an older one, migrated; refuses a later one
+/// rather than guess.
 pub fn read(text: &str) -> Result<RunFile, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     match value["format"].as_u64() {
-        Some(format) if format == u64::from(FORMAT) => {
-            serde_json::from_value(value).map_err(|e| e.to_string())
+        Some(format) if (u64::from(OLDEST_FORMAT)..=u64::from(FORMAT)).contains(&format) => {
+            let mut file: RunFile = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            file.format = FORMAT;
+            Ok(file)
         }
-        Some(format) => Err(format!("format {format}: this bench reads format {FORMAT}")),
+        Some(format) => Err(format!(
+            "format {format}: this bench reads formats {OLDEST_FORMAT} to {FORMAT}"
+        )),
         None => Err("not a run file: no format".to_owned()),
     }
 }
@@ -122,6 +136,67 @@ const PSS_STACK: Column = Column {
     source: Source::Pss(false),
     rank: Rank::Total,
 };
+
+/// The GPU's and the battery's mean watts over a window.
+const WATTS: [Column; 2] = [
+    Column {
+        title: "GPU (W)",
+        source: Source::Cost("gpu_power_w"),
+        rank: Rank::Total,
+    },
+    Column {
+        title: "Battery (W)",
+        source: Source::Cost("battery_power_w"),
+        rank: Rank::Total,
+    },
+];
+
+/// Each round's columns on the tour.
+fn tour_columns(scenario: &str) -> Vec<Column> {
+    let mut columns = match scenario {
+        "rest" => vec![
+            cost("Wake-ups a second, core", "core_wakeups"),
+            cost("CPU, core (ms/s)", "core_cpu"),
+            cost("CPU, stack (ms/s)", "stack_cpu"),
+            cost("GPU, core (ms/s)", "core_gpu"),
+            PSS_CORE,
+        ],
+        "game" => vec![
+            shown("Refresh (Hz)", "refresh_hz"),
+            shown("Frames shown", "frames"),
+            total("Frames missed", "frames_missed"),
+            total("Late flips (KWin's log)", "flips_late"),
+            per_frame("CPU a frame, core (µs)", "core_cpu_per_frame"),
+            per_frame("GPU a frame, core (µs)", "core_gpu_per_frame"),
+        ],
+        "motion" => vec![
+            frames("Frames", "frames"),
+            total("Late flips (KWin's log)", "flips_late"),
+            cost("CPU, core (ms/s)", "core_cpu"),
+            cost("GPU, core (ms/s)", "core_gpu"),
+        ],
+        "latency" => vec![
+            shown("Refresh (Hz)", "refresh_hz"),
+            shown("Keys", "keys_sent"),
+            shown("Lost", "keys_lost"),
+            total("Input to present, median (µs)", "latency_median_us"),
+            total("p99 (µs)", "latency_p99_us"),
+            shown("Input alone, median (µs)", "input_median_us"),
+        ],
+        _ => Vec::new(),
+    };
+    columns.extend(WATTS);
+    columns
+}
+
+/// How the tables of the cases run at `place` (`record::Case::tour`) are titled.
+fn place_title(place: Option<&str>) -> &'static str {
+    match place {
+        None => "",
+        Some(crate::record::ON_THE_DISPLAY) => "Tour: ",
+        Some(_) => "Tour's dry run: ",
+    }
+}
 
 /// Each scenario's columns.
 fn columns(scenario: &str) -> Vec<Column> {
@@ -490,27 +565,36 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
         out.push('\n');
     }
     let runs: Vec<&CaseRun> = files.iter().flat_map(|(_, file)| &file.runs).collect();
-    let scenarios: BTreeSet<(String, Option<u32>)> = runs
+    let scenarios: BTreeSet<(Option<String>, String, Option<u32>)> = runs
         .iter()
-        .map(|run| (run.case.scenario.clone(), run.case.windows))
+        .map(|run| {
+            (
+                run.case.tour.clone(),
+                run.case.scenario.clone(),
+                run.case.windows,
+            )
+        })
         .collect();
-    for (scenario, windows) in scenarios {
+    for (place, scenario, windows) in scenarios {
         let title = match windows {
             Some(windows) => format!("{scenario}, {windows} windows"),
             None => scenario.clone(),
         };
-        let _ = writeln!(out, "## {title}\n");
+        let _ = writeln!(out, "## {}{title}\n", place_title(place.as_deref()));
         let mut groups: BTreeMap<(String, String), Vec<&CaseRun>> = BTreeMap::new();
-        for run in runs
-            .iter()
-            .filter(|run| run.case.scenario == scenario && run.case.windows == windows)
-        {
+        for run in runs.iter().filter(|run| {
+            run.case.tour == place && run.case.scenario == scenario && run.case.windows == windows
+        }) {
             groups
                 .entry((run.case.compositor.clone(), run.case.configuration.clone()))
                 .or_default()
                 .push(run);
         }
-        let columns = columns(&scenario);
+        let columns = if place.is_some() {
+            tour_columns(&scenario)
+        } else {
+            columns(&scenario)
+        };
         let _ = write!(out, "| Compositor | Configuration | Backend | Runs |");
         for column in &columns {
             let _ = write!(out, " {} |", column.title);
@@ -603,7 +687,15 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
         let _ = writeln!(
             out,
             "- {}",
-            if PACED.contains(&scenario.as_str()) {
+            if place.as_deref() == Some(crate::record::ON_THE_DISPLAY) {
+                "On the real display every rival presents at the screen's refresh: one clock for \
+                 all. Frames missed are the refreshes mpv was not shown at; late flips, KWin's \
+                 own log of each flip against the time it aimed at; input to present, a key's \
+                 sending to its frame's presentation."
+            } else if place.is_some() {
+                "The tour's dry run: each rival headless, or nested in a headless dwl. Its figures \
+                 test the tour's code alone, and are never a display's."
+            } else if PACED.contains(&scenario.as_str()) {
                 "Its client draws as fast as the compositor takes its frames: a cost a second \
                  ranks only between compositors on the same pace, wlroots' headless timer or \
                  the mode's rate."
@@ -612,12 +704,14 @@ pub fn summary(files: &[(String, RunFile)]) -> String {
                  second ranks across every compositor."
             }
         );
-        let _ = writeln!(
-            out,
-            "- Frames counted headless compare only between compositors on the same backend \
-             (ADR-0071); none is ranked. `≥` marks a lower bound: frames counted by capture, \
-             which misses some, or wake-ups of processes that ended between readings."
-        );
+        if place.as_deref() != Some(crate::record::ON_THE_DISPLAY) {
+            let _ = writeln!(
+                out,
+                "- Frames counted headless compare only between compositors on the same backend \
+                 (ADR-0071); none is ranked. `≥` marks a lower bound: frames counted by capture, \
+                 which misses some, or wake-ups of processes that ended between readings."
+            );
+        }
         for note in notes {
             let _ = writeln!(out, "- {note}");
         }
@@ -783,6 +877,7 @@ mod tests {
                 configuration: configuration.to_owned(),
                 scenario: "game".to_owned(),
                 windows: None,
+                tour: None,
             },
             compositor: Some(crate::record::CompositorInfo {
                 backend: backend.to_owned(),
@@ -1081,9 +1176,78 @@ mod tests {
     }
 
     #[test]
+    fn the_tours_cases_have_tables_of_their_own() {
+        let mut headless = run(("kwin", "equal-work", "k"), "core_cpu", 1.0, false, None);
+        headless.case.scenario = "rest".to_owned();
+        let mut toured = run(
+            ("kwin", "equal-work", "drm"),
+            "latency_median_us",
+            9_850.0,
+            false,
+            None,
+        );
+        toured.case.scenario = "latency".to_owned();
+        toured.case.tour = Some(crate::record::ON_THE_DISPLAY.to_owned());
+        toured.phases[0].figures.insert(
+            "gpu_power_w".to_owned(),
+            crate::record::Figure::new(Some(42.5), "W"),
+        );
+        let mut dry = toured.clone();
+        dry.case.tour = Some(crate::record::DRY_RUN.to_owned());
+        let file = RunFile {
+            format: FORMAT,
+            runs: vec![headless, toured, dry],
+            ..Default::default()
+        };
+        let text = summary(&[("tour.json".to_owned(), file)]);
+        assert!(text.contains("## rest\n"), "{text}");
+        assert!(text.contains("## Tour: latency\n"), "{text}");
+        assert!(text.contains("## Tour's dry run: latency\n"), "{text}");
+        assert!(text.contains("Input to present, median (µs)"), "{text}");
+        assert!(text.contains("| kwin | equal-work | drm | 1 |"), "{text}");
+        assert!(text.contains("| 9,850 |"), "{text}");
+        assert!(text.contains("| 42.5 |"), "{text}");
+        assert!(text.contains("never a display's"), "{text}");
+    }
+
+    #[test]
     fn a_file_of_another_format_is_refused() {
-        assert!(read(r#"{"format": 2}"#).unwrap_err().contains("format 2"));
+        assert!(read(r#"{"format": 3}"#).unwrap_err().contains("format 3"));
+        assert!(read(r#"{"format": 0}"#).is_err());
         assert!(read("{}").is_err());
         assert!(read("not json").is_err());
+    }
+
+    #[test]
+    fn a_file_of_format_1_reads_as_this_formats_its_cases_headless() {
+        // Format 1 knew no tour, no battery and no screen.
+        let file = RunFile {
+            format: FORMAT,
+            runs: vec![run(
+                ("sway", "equal-work", "w"),
+                "core_cpu",
+                1.0,
+                false,
+                None,
+            )],
+            ..Default::default()
+        };
+        let mut old = serde_json::to_value(&file).unwrap();
+        old["format"] = serde_json::json!(1);
+        for run in old["runs"].as_array_mut().unwrap() {
+            run["case"].as_object_mut().unwrap().remove("tour");
+        }
+        let read = read(&old.to_string()).unwrap();
+        assert_eq!(read.format, FORMAT);
+        assert_eq!(read.runs[0].case.tour, None);
+        assert_eq!(read.runs[0].case.label(), "sway/equal-work/game");
+        let state: crate::machine::MachineState = serde_json::from_str(
+            r#"{"gpu_busy_percent": null, "sclk_mhz": null, "mclk_mhz": null,
+                "performance_level": "auto", "power_w": 30.5, "cpu_mhz": {},
+                "temperatures_celsius": {}}"#,
+        )
+        .unwrap();
+        assert_eq!((state.battery_w, state.on_battery), (None, None));
+        assert!(state.screens.is_empty());
     }
 }

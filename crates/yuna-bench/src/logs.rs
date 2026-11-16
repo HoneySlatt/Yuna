@@ -39,6 +39,41 @@ pub fn kwin_frames(csv: &str, from_ns: u64, to_ns: u64) -> (u64, Option<f64>) {
     (frames, percentile(&refreshes, 50.0))
 }
 
+/// What KWin's frame log says of the flips in `[from_ns, to_ns]`: its rows' first column is the
+/// time a flip aimed at, their second the flip's own, which the kernel stamps on the real
+/// display (`src/core/renderloop.cpp`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KwinFlips {
+    /// The frames presented.
+    pub frames: u64,
+    /// Of them, those that flipped half a refresh or more after the time they aimed at: each
+    /// one missed its refresh.
+    pub late: u64,
+    /// The median refresh, in ns.
+    pub refresh_ns: Option<f64>,
+}
+
+/// The flips of KWin's frame log `csv` in `[from_ns, to_ns]`, by their presentation time.
+pub fn kwin_flips(csv: &str, from_ns: u64, to_ns: u64) -> KwinFlips {
+    let (frames, refresh_ns) = kwin_frames(csv, from_ns, to_ns);
+    let late = csv
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let columns: Vec<&str> = line.split(',').collect();
+            let number = |n: usize| columns.get(n)?.trim().parse::<f64>().ok();
+            Some((number(0)?, number(1)?, number(5)?))
+        })
+        .filter(|(_, presented, _)| (from_ns as f64..=to_ns as f64).contains(presented))
+        .filter(|(target, presented, refresh)| presented - target >= refresh / 2.0)
+        .count() as u64;
+    KwinFlips {
+        frames,
+        late,
+        refresh_ns,
+    }
+}
+
 /// The output Yuna made, from its log line `virtual output created output=1 width=3840
 /// height=2160 millihertz=240000 scale=1.5`, as `3840x2160@240.000,1.5`.
 pub fn yuna_output(log: &str) -> Option<String> {
@@ -64,13 +99,18 @@ fn output_text(width: u64, height: u64, hertz: f64, scale: f64) -> String {
     format!("{width}x{height}@{hertz:.3},{scale}")
 }
 
-/// The output `name` of `wlr-randr --json`, enabled, at its current mode.
-pub fn wlr_randr_output(json: &str, name: &str) -> Option<String> {
+/// Whether `output`, a JSON object, is named `name`; any is, without one.
+fn named(output: &serde_json::Value, name: Option<&str>) -> bool {
+    name.is_none_or(|name| output["name"] == name)
+}
+
+/// The output `name` of `wlr-randr --json`, or its first, enabled, at its current mode.
+pub fn wlr_randr_output(json: &str, name: Option<&str>) -> Option<String> {
     let outputs: serde_json::Value = serde_json::from_str(json).ok()?;
     let output = outputs
         .as_array()?
         .iter()
-        .find(|output| output["name"] == name && output["enabled"] == true)?;
+        .find(|output| named(output, name) && output["enabled"] == true)?;
     let mode = output["modes"]
         .as_array()?
         .iter()
@@ -94,12 +134,12 @@ fn umbriel_outputs(json: &str) -> Option<Vec<serde_json::Value>> {
     outputs.as_array().cloned()
 }
 
-/// The output `name` of `umbriel outputs --json`, enabled, at its current mode.
-pub fn umbriel_output(json: &str, name: &str) -> Option<String> {
+/// The output `name` of `umbriel outputs --json`, or its first, enabled, at its current mode.
+pub fn umbriel_output(json: &str, name: Option<&str>) -> Option<String> {
     let outputs = umbriel_outputs(json)?;
     let output = outputs
         .iter()
-        .find(|output| output["name"] == name && output["enabled"] == true)?;
+        .find(|output| named(output, name) && output["enabled"] == true)?;
     let mode = output["modes"]
         .as_array()?
         .iter()
@@ -112,30 +152,34 @@ pub fn umbriel_output(json: &str, name: &str) -> Option<String> {
     ))
 }
 
-/// The commits Umbriel counted on output `name` so far, from `umbriel outputs --json`: each
-/// frame it drew or scanned out (`direct_scanout.commits`, docs/user/ipc.md).
-pub fn umbriel_commits(json: &str, name: &str) -> Option<u64> {
-    umbriel_outputs(json)?
-        .iter()
-        .find(|output| output["name"] == name)?["direct_scanout"]["commits"]
+/// The commits Umbriel counted on output `name`, or its first enabled one, so far, from `umbriel
+/// outputs --json`: each frame it drew or scanned out (`direct_scanout.commits`, docs/user/ipc.md).
+pub fn umbriel_commits(json: &str, name: Option<&str>) -> Option<u64> {
+    umbriel_outputs(json)?.iter().find(|output| match name {
+        Some(name) => output["name"] == name,
+        None => output["enabled"] == true,
+    })?["direct_scanout"]["commits"]
         .as_u64()
 }
 
-/// The monitor `name` of `hyprctl -j monitors all`, enabled, and every other monitor and
-/// whether it is disabled: `3840x2160@240.000,1.5; WAYLAND-1 disabled`.
-pub fn hyprctl_output(json: &str, name: &str) -> Option<String> {
+/// The monitor `name` of `hyprctl -j monitors all`, or its first, enabled, and every other
+/// monitor and whether it is disabled: `3840x2160@240.000,1.5; WAYLAND-1 disabled`.
+pub fn hyprctl_output(json: &str, name: Option<&str>) -> Option<String> {
     let monitors: serde_json::Value = serde_json::from_str(json).ok()?;
     let monitors = monitors.as_array()?;
     let monitor = monitors
         .iter()
-        .find(|monitor| monitor["name"] == name && monitor["disabled"] == false)?;
+        .find(|monitor| named(monitor, name) && monitor["disabled"] == false)?;
     let mut text = output_text(
         monitor["width"].as_u64()?,
         monitor["height"].as_u64()?,
         monitor["refreshRate"].as_f64()?,
         monitor["scale"].as_f64()?,
     );
-    for other in monitors.iter().filter(|other| other["name"] != name) {
+    for other in monitors
+        .iter()
+        .filter(|other| other["name"] != monitor["name"])
+    {
         let state = if other["disabled"] == true {
             "disabled"
         } else {
@@ -147,6 +191,23 @@ pub fn hyprctl_output(json: &str, name: &str) -> Option<String> {
         ));
     }
     Some(text)
+}
+
+/// The first output of `niri msg --json outputs`, a map by connector's name, at its current mode
+/// and scale: `3840x2160@240.000,1.5`. Its modes' refresh is in mHz (niri-ipc's `Mode`).
+pub fn niri_output(json: &str) -> Option<String> {
+    let outputs: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut outputs: Vec<(&String, &serde_json::Value)> = outputs.as_object()?.iter().collect();
+    outputs.sort_by_key(|(name, _)| *name);
+    outputs.into_iter().find_map(|(_, output)| {
+        let mode = &output["modes"][usize::try_from(output["current_mode"].as_u64()?).ok()?];
+        Some(output_text(
+            mode["width"].as_u64()?,
+            mode["height"].as_u64()?,
+            mode["refresh_rate"].as_f64()? / 1000.0,
+            output["logical"]["scale"].as_f64()?,
+        ))
+    })
 }
 
 /// The first monitor of `gdctl show`, its current mode and its logical monitor's scale:
@@ -303,16 +364,22 @@ mod tests {
             "preferred": false, "current": true}], "position": {"x": 0, "y": 0},
             "transform": "normal", "scale": 1.500000, "adaptive_sync": false}]"#;
         assert_eq!(
-            wlr_randr_output(json, "HEADLESS-1").as_deref(),
+            wlr_randr_output(json, Some("HEADLESS-1")).as_deref(),
             Some("3840x2160@240.000,1.5")
         );
-        assert_eq!(wlr_randr_output(json, "HEADLESS-2"), None);
+        assert_eq!(wlr_randr_output(json, Some("HEADLESS-2")), None);
         // A disabled output, or one without a current mode, is not the bench's yet.
         let disabled = json.replace("\"enabled\": true", "\"enabled\": false");
-        assert_eq!(wlr_randr_output(&disabled, "HEADLESS-1"), None);
+        assert_eq!(wlr_randr_output(&disabled, Some("HEADLESS-1")), None);
         let no_mode = json.replace("\"current\": true", "\"current\": false");
-        assert_eq!(wlr_randr_output(&no_mode, "HEADLESS-1"), None);
-        assert_eq!(wlr_randr_output("not json", "HEADLESS-1"), None);
+        assert_eq!(wlr_randr_output(&no_mode, Some("HEADLESS-1")), None);
+        assert_eq!(wlr_randr_output("not json", Some("HEADLESS-1")), None);
+        // On the real display, the first enabled output, whatever its name.
+        let real = json.replace("HEADLESS-1", "DP-1");
+        assert_eq!(
+            wlr_randr_output(&real, None).as_deref(),
+            Some("3840x2160@240.000,1.5")
+        );
     }
 
     #[test]
@@ -324,20 +391,21 @@ mod tests {
             "height":2160,"preferred":false,"refresh_mhz":240000,"width":3840}],
             "name":"HEADLESS-1","powered":true,"scale":1.5}]"#;
         assert_eq!(
-            umbriel_output(json, "HEADLESS-1").as_deref(),
+            umbriel_output(json, Some("HEADLESS-1")).as_deref(),
             Some("3840x2160@240.000,1.5")
         );
-        assert_eq!(umbriel_commits(json, "HEADLESS-1"), Some(3));
+        assert_eq!(umbriel_commits(json, Some("HEADLESS-1")), Some(3));
         // The same in an IPC reply's `ok`; no count while the output is off.
         let reply = format!("{{\"ok\": {json}}}");
-        assert_eq!(umbriel_commits(&reply, "HEADLESS-1"), Some(3));
+        assert_eq!(umbriel_commits(&reply, Some("HEADLESS-1")), Some(3));
         let off = json.replace(
             r#""direct_scanout":{"active":false,
             "commit_seq":3,"commits":3,"reason":"composited","scanout_commits":0,"window":null}"#,
             r#""direct_scanout":null"#,
         );
-        assert_eq!(umbriel_commits(&off, "HEADLESS-1"), None);
-        assert_eq!(umbriel_output(json, "DP-1"), None);
+        assert_eq!(umbriel_commits(&off, Some("HEADLESS-1")), None);
+        assert_eq!(umbriel_output(json, Some("DP-1")), None);
+        assert_eq!(umbriel_commits(json, None), Some(3));
     }
 
     #[test]
@@ -351,15 +419,52 @@ mod tests {
             "refreshRate": 240.00000, "scale": 1.5, "disabled": false,
             "hardwareDetails": {"backend": "headless"}}]"#;
         assert_eq!(
-            hyprctl_output(json, "HEADLESS-1").as_deref(),
+            hyprctl_output(json, Some("HEADLESS-1")).as_deref(),
             Some("3840x2160@240.000,1.5; WAYLAND-1 disabled")
         );
         let both = json.replace("\"disabled\": true", "\"disabled\": false");
         assert_eq!(
-            hyprctl_output(&both, "HEADLESS-1").as_deref(),
+            hyprctl_output(&both, Some("HEADLESS-1")).as_deref(),
             Some("3840x2160@240.000,1.5; WAYLAND-1 enabled")
         );
-        assert_eq!(hyprctl_output(json, "FALLBACK"), None);
+        assert_eq!(hyprctl_output(json, Some("FALLBACK")), None);
+        // On the real display, the first enabled monitor, the others named after it.
+        assert_eq!(
+            hyprctl_output(json, None).as_deref(),
+            Some("3840x2160@240.000,1.5; WAYLAND-1 disabled")
+        );
+    }
+
+    #[test]
+    fn kwins_late_flips_are_those_half_a_refresh_after_their_aim() {
+        // Three flips at 240 Hz: on time, 1 µs late, and a whole refresh late.
+        let csv = "target pageflip timestamp,pageflip timestamp,render start,render end,\
+                   safety margin,refresh duration,vrr,tearing,predicted render time\n\
+                   1000000,1000000,0,0,0,4166666,0,0,0\n\
+                   5166666,5167666,0,0,0,4166666,0,0,0\n\
+                   9333333,13500000,0,0,0,4166666,0,0,0\n";
+        assert_eq!(
+            kwin_flips(csv, 0, 20_000_000),
+            KwinFlips {
+                frames: 3,
+                late: 1,
+                refresh_ns: Some(4_166_666.0)
+            }
+        );
+        assert_eq!(kwin_flips(csv, 0, 6_000_000).late, 0);
+    }
+
+    #[test]
+    fn niris_first_output_is_read_at_its_current_mode() {
+        // As niri-ipc writes `niri msg --json outputs` (abridged).
+        let json = r#"{"DP-1": {"name": "DP-1", "modes": [{"width": 3840, "height": 2160,
+            "refresh_rate": 239990, "is_preferred": true}, {"width": 1920, "height": 1080,
+            "refresh_rate": 60000, "is_preferred": false}], "current_mode": 0,
+            "logical": {"x": 0, "y": 0, "width": 2560, "height": 1440, "scale": 1.5}}}"#;
+        assert_eq!(niri_output(json).as_deref(), Some("3840x2160@239.990,1.5"));
+        let off = json.replace("\"current_mode\": 0", "\"current_mode\": null");
+        assert_eq!(niri_output(&off), None);
+        assert_eq!(niri_output("[]"), None);
     }
 
     #[test]

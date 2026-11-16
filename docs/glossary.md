@@ -52,6 +52,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Drawn rectangle**: where a frame draws a window during motion, rounded once to the physical
   grid; pointer, clicks and captures use it. Its client is told from its **place**, the
   rectangle the layout gives it ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+- **Dry run** (tour): `yuna-bench tour --dry-run`, the tour's own code with each rival headless,
+  or nested in a headless dwl: everything but the start on the real display. Its cases are marked
+  `tour-dry-run`, and its figures are never the display's.
 - **DRM usage statistics**: what the kernel counts for each client of a GPU, read in the
   `fdinfo` of its render node: each engine's busy time in nanoseconds (`drm-engine-gfx`), the
   measure of a frame's GPU time ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
@@ -67,6 +70,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
   follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
   viewport (`wp_viewporter`) to its logical size: one buffer pixel per physical pixel.
+- **Frames missed** (tour): in the tour's `game`, the refreshes of the screen at which mpv was not
+  shown: the refreshes a window holds, at the refresh the probe's frames were presented at, less
+  mpv's frames shown.
 - **Full width**: a column that spans the working area, gaps aside; in dwindle, a window
   maximised over the working area. Umbriel calls it "maximize".
 - **Fullscreen state**: what Yuna tells the shell is fullscreen: a game, a film, plain fullscreen
@@ -91,6 +97,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
   every Vulkan client.
+- **Late flip** (tour): a frame KWin's frame log shows flipped half a refresh or more after the
+  time it aimed at: a refresh missed.
 - **Layer**: the part of a workspace a window is placed in: the strip of scrolling columns, the
   tiles of dwindle, the floating windows, or the pinned ones above them
   ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
@@ -151,6 +159,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   window's workspace's output's ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
+- **Probe** (bench): the bench's client whose own frames say when they were presented, through
+  `wp_presentation`: it draws a frame on each key in the tour's `latency`, and a run of frames
+  for the refresh a compositor presents at.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
   turn stays under Yuna, its **subreaper**, and ends with it.
 - **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
@@ -187,7 +198,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   includes, reloaded live; its format is a public interface
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
-  one after another ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)).
+  one after another ([ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)):
+  `yuna-bench tour`, its rounds `rest`, `game`, `motion` and `latency`.
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.
@@ -197,9 +209,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Variant**: a named set of settings in the configuration, applied over it and switched on
   command, such as the shell's compact mode
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
-- **Virtual keyboard** (bench): the bench's client that types key chords through
-  `zwp_virtual_keyboard_v1` into one compositor's sandboxed instance, for one driven by its keys
-  alone, dwl; its keys reach no other compositor.
+- **Virtual keyboard** (bench): the bench's client that types keys into one compositor's
+  sandboxed instance, through `zwp_virtual_keyboard_v1`, KWin's fake input or gamescope's input
+  method: for one driven by its keys alone, dwl or cosmic-comp, and for the tour's `latency`; its
+  keys reach no other compositor.
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed

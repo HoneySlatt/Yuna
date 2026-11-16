@@ -16,7 +16,12 @@
 //! - **Refusals** ([`check`]): if any process of the scope holds a `/dev/dri/card*` node or an
 //!   input device open ([`FORBIDDEN_NODES`]), is bound or connected to a socket in the owner's
 //!   runtime folder, or was started with a variable naming that folder, the bench stops the
-//!   compositor and measures nothing.
+//!   compositor and measures nothing. On the owner's tour alone, the compositor's own scope may
+//!   hold the screens' card nodes and the input devices logind hands it ([`DISPLAY_NODES`]); its
+//!   clients never.
+//! - **A time limit**, on the tour: the scope's `RuntimeMaxSec`, after which systemd stops it
+//!   whatever the bench does, so that a hung compositor, or a bench killed, never keeps the
+//!   display ([`Launch::time_limit`]).
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -34,7 +39,9 @@ use crate::procfs::Proc;
 use crate::sockets::{SocketTable, socket_inode};
 
 /// The variables that would lead a program to the owner's own session; none of them is ever set
-/// from the bench's environment.
+/// from the bench's environment. On the tour, a compositor is given `XDG_SESSION_ID`, `XDG_SEAT`
+/// and `XDG_VTNR` of the tour's own terminal session, which the tour reads and checks itself
+/// (`tour::Seat`): never the owner's graphical session, which libseat would take otherwise.
 pub const OWNER_VARIABLES: [&str; 13] = [
     "WAYLAND_DISPLAY",
     "WAYLAND_SOCKET",
@@ -76,6 +83,12 @@ pub struct ShellPaths {
     pub hyprland: PathBuf,
     /// Mutter's package.
     pub mutter: PathBuf,
+    /// niri's package, for the tour.
+    pub niri: PathBuf,
+    /// cosmic-comp's package, for the tour.
+    pub cosmic_comp: PathBuf,
+    /// gamescope's package, for the tour.
+    pub gamescope: PathBuf,
     /// wlr-randr, a client of wlr-output-management.
     pub wlr_randr: PathBuf,
     /// weston's package, for `weston-presentation-shm`.
@@ -129,6 +142,9 @@ impl ShellPaths {
             umbriel: path("YUNA_BENCH_UMBRIEL")?,
             hyprland: path("YUNA_BENCH_HYPRLAND")?,
             mutter: path("YUNA_BENCH_MUTTER")?,
+            niri: path("YUNA_BENCH_NIRI")?,
+            cosmic_comp: path("YUNA_BENCH_COSMIC_COMP")?,
+            gamescope: path("YUNA_BENCH_GAMESCOPE")?,
             wlr_randr: path("YUNA_BENCH_WLR_RANDR")?,
             weston: path("YUNA_BENCH_WESTON")?,
             ffmpeg: path("YUNA_BENCH_FFMPEG")?,
@@ -148,6 +164,37 @@ impl ShellPaths {
     /// The Vulkan driver of the shell's Mesa for AMD GPUs, radv.
     pub fn radv(&self) -> PathBuf {
         self.mesa.join("share/vulkan/icd.d/radeon_icd.x86_64.json")
+    }
+}
+
+/// The logind session a compositor on the real display takes: the tour's own terminal's, which
+/// the tour reads from its own process and checks before it starts anything (`tour::own_seat`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seat {
+    /// The session's id.
+    pub session: String,
+    /// Its seat, such as `seat0`.
+    pub seat: String,
+    /// Its virtual terminal.
+    pub vt: Option<u32>,
+}
+
+impl Seat {
+    /// The variables that lead a compositor to this session alone. libseat's logind backend
+    /// (`libseat/backend/logind.c:609`), KWin and Mutter take `XDG_SESSION_ID` before anything
+    /// else; without it, a compositor in a scope of the user's manager is in no session, and
+    /// libseat and Mutter would take the user's display session, the owner's own. libseat is
+    /// told its logind backend: seatd's would need a daemon, its builtin one root.
+    pub fn variables(&self) -> Vec<(String, String)> {
+        let mut variables = vec![
+            ("XDG_SESSION_ID".to_owned(), self.session.clone()),
+            ("XDG_SEAT".to_owned(), self.seat.clone()),
+            ("LIBSEAT_BACKEND".to_owned(), "logind".to_owned()),
+        ];
+        if let Some(vt) = self.vt {
+            variables.push(("XDG_VTNR".to_owned(), vt.to_string()));
+        }
+        variables
     }
 }
 
@@ -388,7 +435,13 @@ pub struct Launch {
     pub parent: Option<Parent>,
     /// Whether its standard input is a pipe the bench writes to; else it reads nothing.
     pub input: bool,
+    /// The longest its scope may run: systemd stops it then, SIGTERM and SIGKILL 5 s later,
+    /// whether the bench still runs or not. The tour gives one to each compositor.
+    pub time_limit: Option<Duration>,
 }
+
+/// What systemd gives a scope with a time limit to end after its SIGTERM, before its SIGKILL.
+pub const STOP_PATIENCE: Duration = Duration::from_secs(5);
 
 /// A compositor that another runs inside, in the same sandbox: `yuna-bench parent` starts it
 /// first, outside `core`, so that its costs count in the stack alone, waits for its Wayland
@@ -446,6 +499,14 @@ pub fn command_line(
     .collect();
     if launch.compositor {
         line.extend(["--property".to_owned(), "Delegate=yes".to_owned()]);
+    }
+    if let Some(limit) = launch.time_limit {
+        line.extend([
+            "--property".to_owned(),
+            format!("RuntimeMaxSec={}", limit.as_secs().max(1)),
+            "--property".to_owned(),
+            format!("TimeoutStopSec={}", STOP_PATIENCE.as_secs()),
+        ]);
     }
     line.push("--".to_owned());
     line.push(text(&shell.coreutils.join("bin/env")));
@@ -706,30 +767,61 @@ pub fn wayland_socket_in(runtime: &Path) -> Option<PathBuf> {
 pub const FORBIDDEN_NODES: [&str; 4] =
     ["/dev/dri/card", "/dev/input/", "/dev/uinput", "/dev/hidraw"];
 
+/// The forbidden nodes a compositor on the real display holds, on the owner's tour alone: the
+/// screens' card nodes and the input devices' event nodes, which logind opens for the session's
+/// controller and pauses when its terminal is not the active one. `/dev/uinput`, through which
+/// input could be made, and raw HID devices stay forbidden.
+pub const DISPLAY_NODES: [&str; 2] = ["/dev/dri/card", "/dev/input/event"];
+
+/// Whether a process may not hold `node` open: a node of [`FORBIDDEN_NODES`], unless the process
+/// is a compositor's on the real display (`on_display`) and the node one of [`DISPLAY_NODES`].
+pub fn is_forbidden(node: &str, on_display: bool) -> bool {
+    FORBIDDEN_NODES
+        .iter()
+        .any(|forbidden| node.starts_with(forbidden))
+        && !(on_display
+            && DISPLAY_NODES
+                .iter()
+                .any(|display| node.starts_with(display)))
+}
+
 /// The X11 displays' sockets, abstract and in the file system. A sandboxed process may serve one,
 /// as sway's lazy XWayland does; it may never be connected to one served outside its sandbox,
 /// such as the owner's display.
 pub const X11_SOCKETS: [&str; 2] = ["@/tmp/.X11-unix/X", "/tmp/.X11-unix/X"];
 
 /// What a check of a sandbox found against its rules, one line each; empty when it holds. The
-/// sandbox is `groups`: the compositor's scope and its clients'. A process breaks them if it holds
-/// a node of [`FORBIDDEN_NODES`] open, is bound or connected to a socket in the owner's runtime
+/// sandbox is `groups`: the compositor's scope and its clients', each with whether it may hold
+/// the display's nodes (a compositor's on the tour, [`is_forbidden`]). A process breaks them if
+/// it holds a forbidden node open, is bound or connected to a socket in the owner's runtime
 /// folders, is connected to an X11 display served outside the sandbox, or was started with a
 /// variable naming the owner's runtime folders.
-pub fn check(proc: &Proc, groups: &[&Cgroup], owner: &Owner, sockets: &SocketTable) -> Vec<String> {
+pub fn check(
+    proc: &Proc,
+    groups: &[(&Cgroup, bool)],
+    owner: &Owner,
+    sockets: &SocketTable,
+) -> Vec<String> {
     /// A process of the sandbox and what it holds open.
     struct Held {
         pid: u32,
         name: String,
         files: Vec<(u32, PathBuf)>,
+        on_display: bool,
     }
     let processes: Vec<Held> = groups
         .iter()
-        .flat_map(|group| group.processes())
-        .map(|pid| Held {
+        .flat_map(|(group, on_display)| {
+            group
+                .processes()
+                .into_iter()
+                .map(move |pid| (pid, *on_display))
+        })
+        .map(|(pid, on_display)| Held {
             pid,
             name: proc.name(pid).unwrap_or_default(),
             files: proc.open_files(pid),
+            on_display,
         })
         .collect();
     // The sockets the sandbox itself holds: a peer among them is inside it.
@@ -739,10 +831,16 @@ pub fn check(proc: &Proc, groups: &[&Cgroup], owner: &Owner, sockets: &SocketTab
         .filter_map(|(_, target)| socket_inode(&target.to_string_lossy()))
         .collect();
     let mut found = Vec::new();
-    for Held { pid, name, files } in &processes {
+    for Held {
+        pid,
+        name,
+        files,
+        on_display,
+    } in &processes
+    {
         for (fd, target) in files {
             let target = target.to_string_lossy();
-            if FORBIDDEN_NODES.iter().any(|node| target.starts_with(node)) {
+            if is_forbidden(&target, *on_display) {
                 found.push(format!(
                     "process {pid} ({name}) holds {target} open, fd {fd}"
                 ));
@@ -849,9 +947,7 @@ pub fn sweep_left_behind(proc: &Proc) -> Vec<String> {
         else {
             continue;
         };
-        let alive = proc
-            .name(bench)
-            .is_some_and(|program| program.starts_with("yuna-bench"));
+        let alive = is_a_bench(proc, bench);
         if !alive && slice.child(&name).kill().is_ok() {
             swept.push(name);
         }
@@ -873,14 +969,19 @@ pub fn sweep_runtime_links(proc: &Proc, folder: &Path) -> Vec<String> {
             continue;
         };
         let is_link = entry.file_type().is_ok_and(|kind| kind.is_symlink());
-        let alive = proc
-            .name(bench)
-            .is_some_and(|program| program.starts_with("yuna-bench"));
+        let alive = is_a_bench(proc, bench);
         if is_link && !alive && fs::remove_file(entry.path()).is_ok() {
             swept.push(name);
         }
     }
     swept
+}
+
+/// Whether process `pid` is a bench: its name starts so, or, run through Nix's wrapper as the
+/// `yuna-bench` package is, `.yuna-bench-wrapped`, cut to 15 characters by the kernel.
+fn is_a_bench(proc: &Proc, pid: u32) -> bool {
+    proc.name(pid)
+        .is_some_and(|program| program.trim_start_matches('.').starts_with("yuna-bench"))
 }
 
 /// Sends `signal` to process `pid`.
@@ -967,6 +1068,7 @@ mod tests {
             compositor: true,
             parent: None,
             input: false,
+            time_limit: None,
         };
         let line = command_line(
             &launch,
@@ -985,6 +1087,21 @@ mod tests {
         assert!(line.contains(&"Delegate=yes".to_owned()));
         assert!(line.contains(&"enter-core".to_owned()));
         assert_eq!(line.last().unwrap(), "/nix/store/aaaa-sway/bin/sway");
+        assert!(!line.iter().any(|word| word.starts_with("RuntimeMaxSec")));
+        // On the tour, systemd stops the scope at its time limit, whatever the bench does.
+        let limited = Launch {
+            time_limit: Some(Duration::from_secs(300)),
+            ..launch.clone()
+        };
+        let line = command_line(&limited, &shell(), Path::new("/bench"), Path::new("/x"));
+        let separator = line.iter().position(|word| word == "--").unwrap();
+        let property = |value: &str| {
+            line[..separator]
+                .windows(2)
+                .any(|pair| pair[0] == "--property" && pair[1] == value)
+        };
+        assert!(property("RuntimeMaxSec=300"), "{line:?}");
+        assert!(property("TimeoutStopSec=5"), "{line:?}");
         // A client gets no bus and stays in its scope's own group.
         let client = Launch {
             compositor: false,
@@ -1013,21 +1130,97 @@ mod tests {
         );
     }
 
+    /// A sandbox whose scope is a made-up group, `populated` or not, around a real child that has
+    /// ended.
+    fn made_up_sandbox(name: &str, populated: bool) -> (Sandboxed, PathBuf) {
+        let root = crate::testing::folder(name);
+        let scope = Cgroup::named(&root, "/app.slice/yuna-bench-1-1-sway.scope");
+        fs::create_dir_all(scope.folder()).unwrap();
+        fs::write(
+            scope.folder().join("cgroup.events"),
+            format!("populated {}\nfrozen 0\n", u8::from(populated)),
+        )
+        .unwrap();
+        let kill = scope.folder().join("cgroup.kill");
+        let child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        let sandboxed = Sandboxed {
+            child,
+            scope,
+            log: root.join("log"),
+        };
+        (sandboxed, kill)
+    }
+
+    #[test]
+    fn a_scope_left_running_is_killed_whole_and_an_empty_one_left_alone() {
+        // A rival that does not end within its patience: its whole scope is killed at once.
+        let (mut hung, kill) = made_up_sandbox("cleanup-hung", true);
+        let ended = hung.wait_or_kill(Duration::ZERO);
+        assert!(ended.starts_with("killed after 0 s"), "{ended}");
+        assert_eq!(fs::read_to_string(&kill).unwrap(), "1");
+        // One that an error leaves behind is killed as the bench drops it.
+        let (dropped, kill) = made_up_sandbox("cleanup-dropped", true);
+        drop(dropped);
+        assert_eq!(fs::read_to_string(&kill).unwrap(), "1");
+        // One that ended is not killed.
+        let (mut done, kill) = made_up_sandbox("cleanup-done", false);
+        assert!(
+            done.wait_or_kill(Duration::from_secs(1))
+                .starts_with("ended")
+        );
+        drop(done);
+        assert!(!kill.exists());
+    }
+
+    #[test]
+    fn the_tours_session_reaches_the_compositor_and_nothing_else_of_the_owners() {
+        let seat = Seat {
+            session: "7".to_owned(),
+            seat: "seat0".to_owned(),
+            vt: Some(2),
+        };
+        let variables = seat.variables();
+        assert_eq!(
+            variables,
+            [
+                ("XDG_SESSION_ID".to_owned(), "7".to_owned()),
+                ("XDG_SEAT".to_owned(), "seat0".to_owned()),
+                ("LIBSEAT_BACKEND".to_owned(), "logind".to_owned()),
+                ("XDG_VTNR".to_owned(), "2".to_owned()),
+            ]
+        );
+        let folders = Folders {
+            root: PathBuf::from("/tmp/yuna-bench-1/sway-1"),
+            short_runtime: PathBuf::from("/tmp/yb-1-0"),
+        };
+        let environment =
+            compositor_environment(&folders, &shell(), "/nix/store/aaaa-sway/bin", &variables);
+        for key in ["WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS"] {
+            assert!(!environment.iter().any(|(name, _)| name == key), "{key}");
+        }
+        assert!(environment.contains(&("XDG_SESSION_ID".to_owned(), "7".to_owned())));
+    }
+
     #[test]
     fn the_links_a_killed_bench_left_are_swept_and_no_others() {
         let root = crate::testing::folder("links");
         let (proc_root, links) = (root.join("proc"), root.join("tmp"));
         fs::create_dir_all(proc_root.join("77")).unwrap();
         fs::write(proc_root.join("77/comm"), "yuna-bench\n").unwrap();
+        // The package's bench runs through Nix's wrapper, its name cut by the kernel.
+        fs::create_dir_all(proc_root.join("66")).unwrap();
+        fs::write(proc_root.join("66/comm"), ".yuna-bench-wra\n").unwrap();
         fs::create_dir_all(&links).unwrap();
         // 77's bench runs; 88's is gone; a folder of that name and another file are not links.
         std::os::unix::fs::symlink(&root, links.join("yb-77-0")).unwrap();
+        std::os::unix::fs::symlink(&root, links.join("yb-66-2")).unwrap();
         std::os::unix::fs::symlink(&root, links.join("yb-88-3")).unwrap();
         fs::create_dir_all(links.join("yb-99-1")).unwrap();
         fs::write(links.join("yb-notes"), "").unwrap();
         let swept = sweep_runtime_links(&Proc::at(&proc_root), &links);
         assert_eq!(swept, ["yb-88-3"]);
         assert!(links.join("yb-77-0").exists());
+        assert!(links.join("yb-66-2").exists());
         assert!(links.join("yb-99-1").exists());
     }
 
@@ -1123,8 +1316,30 @@ mod tests {
         sockets.paths.insert(801, "@/tmp/.X11-unix/X1".to_owned());
         sockets.peers.insert(801, 802);
         sockets.peers.insert(802, 801);
-        let found = check(&Proc::at(&proc_root), &[&scope], &owner(), &sockets);
+        let found = check(
+            &Proc::at(&proc_root),
+            &[(&scope, false)],
+            &owner(),
+            &sockets,
+        );
         assert_eq!(found.len(), 7, "{found:#?}");
+        // On the tour, the compositor's own scope may hold the card node and the input device
+        // logind hands it, never /dev/uinput nor a raw HID device.
+        let on_display = check(&Proc::at(&proc_root), &[(&scope, true)], &owner(), &sockets);
+        assert_eq!(on_display.len(), 5, "{on_display:#?}");
+        assert!(
+            !on_display
+                .iter()
+                .any(|line| line.contains("/dev/dri/card1"))
+        );
+        assert!(
+            !on_display
+                .iter()
+                .any(|line| line.contains("/dev/input/event3"))
+        );
+        assert!(on_display.iter().any(|line| line.contains("/dev/uinput")));
+        assert!(is_forbidden("/dev/input/mice", true));
+        assert!(!is_forbidden("/dev/dri/renderD128", false));
         for (line, what) in found.iter().zip([
             "/dev/dri/card1",
             "/dev/input/event3",
@@ -1143,7 +1358,15 @@ mod tests {
             fs::remove_file(proc_root.join(file)).unwrap();
         }
         fs::write(proc_root.join("11/environ"), b"HOME=/tmp/run/home\0").unwrap();
-        assert!(check(&Proc::at(&proc_root), &[&scope], &owner(), &sockets).is_empty());
+        assert!(
+            check(
+                &Proc::at(&proc_root),
+                &[(&scope, false)],
+                &owner(),
+                &sockets
+            )
+            .is_empty()
+        );
     }
 
     /// Set in the process that runs the close-on-exec test alone.

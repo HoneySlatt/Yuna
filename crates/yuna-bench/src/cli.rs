@@ -1,5 +1,6 @@
-//! The command line: `headless` runs the cases, `report` summarises run files, and the bench's
-//! own clients and launcher run as subcommands of the same program.
+//! The command line: `headless` runs the cases, `tour` runs them on the real display (`tour`),
+//! `report` summarises run files, and the bench's own clients and launcher run as subcommands of
+//! the same program.
 
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
@@ -20,6 +21,8 @@ yuna-bench: the rivals' bench (ADR-0071). Runs compositors headless, each in a s
 through the same scenarios with the same clients, and reads their costs from outside.
 
   yuna-bench headless [options]     run the cases, write a run file and its summary
+  yuna-bench tour [options]         the owner's tour: each rival on the real display, from a
+                                    virtual terminal (docs/owner-runs.md, section 3)
   yuna-bench report <file.json>...  print the summary of run files, in Markdown
 
 Options of headless (each list separated by commas):
@@ -34,8 +37,24 @@ Options of headless (each list separated by commas):
   --out <folder>          where the run file goes (default: target/yuna-bench)
   --keep                  keep the run's folder of logs, which an error keeps anyway
 
+Options of tour (each list separated by commas):
+  --compositor <list>     sway, dwl, mango, umbriel, hyprland, niri, kwin, mutter, cosmic-comp,
+                          gamescope (default: the machine's: all on the desktop; dwl, mango,
+                          umbriel, hyprland, niri, kwin on a laptop; those and gamescope on the
+                          Steam Deck)
+  --machine <name>        desktop, laptop or deck (default: told by the board and a battery)
+  --scenario <list>       rest, game, motion, latency (default: all)
+  --configuration <list>  as-shipped, equal-work (default: equal-work)
+  --runs <n>              runs of each case (default: 1)
+  --presses <n>           the keys latency measures (default: 300)
+  --seconds <s>           every measured window this long, to try the tour: not comparable
+  --out <folder>          where the run file goes (default: the current folder)
+  --dry-run               each rival headless, or nested in a headless dwl, not on the display
+  --keep                  keep the run's folder of logs, which an error keeps anyway
+
 Run it in the bench's shell: nix develop .#bench -c cargo run --release -p yuna-bench -- headless
-It takes the agents' exclusive lock itself, or uses the one run.sh --exclusive holds for it.
+or, built alone: nix run .#yuna-bench -- tour
+Both take the agents' exclusive lock themselves, or use the one run.sh --exclusive holds for them.
 ";
 
 /// The options of `headless`.
@@ -61,7 +80,8 @@ pub struct Options {
     pub keep: bool,
 }
 
-fn list(value: &str) -> Vec<String> {
+/// The items of a list separated by commas, blanks left out.
+pub fn list(value: &str) -> Vec<String> {
     value
         .split(',')
         .map(str::trim)
@@ -169,6 +189,7 @@ pub fn cases(options: &Options, seed: u64) -> Vec<(Case, u32)> {
                                 configuration: configuration.name().to_owned(),
                                 scenario: scenario.clone(),
                                 windows,
+                                tour: None,
                             },
                             repeat,
                         ));
@@ -181,11 +202,13 @@ pub fn cases(options: &Options, seed: u64) -> Vec<(Case, u32)> {
     cases
 }
 
-/// SplitMix64: a small generator whose sequence a seed fixes, for the cases' order.
-struct SplitMix(u64);
+/// SplitMix64: a small generator whose sequence a seed fixes, for the cases' order and the
+/// latency round's pauses.
+pub struct SplitMix(pub u64);
 
 impl SplitMix {
-    fn next(&mut self) -> u64 {
+    /// The next number of its sequence.
+    pub fn next_number(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -198,7 +221,7 @@ impl SplitMix {
 fn shuffle<T>(items: &mut [T], seed: u64) {
     let mut random = SplitMix(seed);
     for i in (1..items.len()).rev() {
-        let j = (random.next() % (i as u64 + 1)) as usize;
+        let j = (random.next_number() % (i as u64 + 1)) as usize;
         items.swap(i, j);
     }
 }
@@ -227,7 +250,7 @@ pub fn utc(time: SystemTime) -> String {
 
 /// Writes `text` to `path` through a temporary file and a rename: a run file is never left half
 /// written.
-fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
+pub fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
     let temporary = path.with_extension("partial");
     fs::write(&temporary, text).map_err(|e| format!("{}: {e}", temporary.display()))?;
     fs::rename(&temporary, path).map_err(|e| format!("{}: {e}", path.display()))
@@ -288,7 +311,8 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
     let scenarios_asked: Vec<&str> = options.scenarios.iter().map(String::as_str).collect();
     scenarios::prepare(&mut bench, &compositors, &scenarios_asked, &mut notes);
     let cases = cases(&options, seed);
-    let commit = scenarios::commit(&[]);
+    let commit =
+        scenarios::commit(&[]).or_else(|| option_env!("YUNA_BENCH_COMMIT").map(str::to_owned));
     let mut file = RunFile {
         format: FORMAT,
         commit: commit
@@ -381,6 +405,13 @@ pub fn main(arguments: &[String]) -> ExitCode {
                 ExitCode::FAILURE
             }
         }),
+        Some("tour") => crate::tour::run(&arguments[1..]).map(|clean| {
+            if clean {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }),
         Some("report") => report(&arguments[1..]).map(|()| ExitCode::SUCCESS),
         Some("client") => match arguments.get(1..).unwrap_or_default() {
             [still, flag, count] if still == "still" && flag == "--windows" => count
@@ -390,7 +421,19 @@ pub fn main(arguments: &[String]) -> ExitCode {
                 .map(|()| ExitCode::SUCCESS),
             [frames] if frames == "frames" => crate::capture::run().map(|()| ExitCode::SUCCESS),
             [keys] if keys == "keys" => crate::keys::run().map(|()| ExitCode::SUCCESS),
-            _ => Err("client takes `still --windows <n>`, `frames` or `keys`".to_owned()),
+            [probe, keys] if probe == "probe" && keys == "--keys" => {
+                crate::probe::run(crate::probe::Mode::Keys).map(|()| ExitCode::SUCCESS)
+            }
+            [probe, flag, count] if probe == "probe" && flag == "--frames" => count
+                .parse()
+                .map_err(|_| "--frames takes a number".to_owned())
+                .and_then(|count| crate::probe::run(crate::probe::Mode::Frames(count)))
+                .map(|()| ExitCode::SUCCESS),
+            _ => Err(
+                "client takes `still --windows <n>`, `frames`, `keys`, `probe --keys` or \
+                 `probe --frames <n>`"
+                    .to_owned(),
+            ),
         },
         Some("parent") => match arguments.get(1..).unwrap_or_default() {
             [file] => sandbox::run_parent(Path::new(file)).map(|ended_well| {

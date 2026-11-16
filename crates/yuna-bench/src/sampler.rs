@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use crate::cgroup::Cgroup;
 use crate::drm::{self, DrmFile};
 use crate::procfs::Proc;
-use crate::sandbox::FORBIDDEN_NODES;
+use crate::sandbox;
 
 /// How often a window reads its processes: a thread that ends loses at most this much of its
 /// counts.
@@ -73,14 +73,16 @@ pub struct Sample {
     /// Each DRM client's engines' busy times in nanoseconds, by [`DrmFile::client_key`].
     pub drm: BTreeMap<String, BTreeMap<String, u64>>,
     /// The forbidden nodes the processes held open, each with its process: a card node, which
-    /// drives the owner's display, or an input device ([`FORBIDDEN_NODES`]). A case that holds
-    /// one is refused.
+    /// drives the owner's display, or an input device ([`sandbox::FORBIDDEN_NODES`]), but those a
+    /// compositor on the tour may hold ([`sandbox::is_forbidden`]). A case that holds one is
+    /// refused.
     pub forbidden: Vec<(u32, String)>,
 }
 
 impl Sample {
-    /// Reads processes `pids` now.
-    pub fn take(proc: &Proc, pids: &[u32]) -> Sample {
+    /// Reads processes `pids` now; with `on_display`, they are a compositor's on the real
+    /// display, which may hold its nodes.
+    pub fn take(proc: &Proc, pids: &[u32], on_display: bool) -> Sample {
         let mut sample = Sample::default();
         for &pid in pids {
             let process = proc.name(pid).unwrap_or_default();
@@ -101,10 +103,7 @@ impl Sample {
             }
             for (_, target) in proc.open_files(pid) {
                 let node = target.to_string_lossy();
-                if FORBIDDEN_NODES
-                    .iter()
-                    .any(|forbidden| node.starts_with(forbidden))
-                {
+                if sandbox::is_forbidden(&node, on_display) {
                     sample.forbidden.push((pid, node.into_owned()));
                 }
             }
@@ -233,6 +232,23 @@ impl Window {
     }
 }
 
+/// A control group a [`Watch`] reads.
+#[derive(Debug, Clone)]
+pub struct Watched {
+    /// Its name in the window's figures: `core`, `stack`, a client's.
+    pub name: String,
+    /// The group.
+    pub group: Cgroup,
+    /// Whether it is a compositor's on the real display, which may hold the display's nodes.
+    pub on_display: bool,
+}
+
+impl Watched {
+    fn sample(&self, proc: &Proc) -> Sample {
+        Sample::take(proc, &self.group.processes(), self.on_display)
+    }
+}
+
 /// Windows over several control groups, read on a thread of its own every [`PERIOD`].
 pub struct Watch {
     windows: Arc<Mutex<Vec<(String, Window)>>>,
@@ -242,15 +258,10 @@ pub struct Watch {
 
 impl Watch {
     /// Starts a window over each of `groups`, by their names.
-    pub fn start(proc: &Proc, groups: Vec<(String, Cgroup)>) -> Watch {
+    pub fn start(proc: &Proc, groups: Vec<Watched>) -> Watch {
         let windows: Vec<(String, Window)> = groups
             .iter()
-            .map(|(name, group)| {
-                (
-                    name.clone(),
-                    Window::start(Sample::take(proc, &group.processes())),
-                )
-            })
+            .map(|watched| (watched.name.clone(), Window::start(watched.sample(proc))))
             .collect();
         let windows = Arc::new(Mutex::new(windows));
         let stop = Arc::new(AtomicBool::new(false));
@@ -268,10 +279,8 @@ impl Watch {
                         continue;
                     }
                     next += PERIOD;
-                    let samples: Vec<Sample> = groups
-                        .iter()
-                        .map(|(_, group)| Sample::take(&proc, &group.processes()))
-                        .collect();
+                    let samples: Vec<Sample> =
+                        groups.iter().map(|watched| watched.sample(&proc)).collect();
                     let mut windows = windows.lock().unwrap_or_else(|e| e.into_inner());
                     for ((_, window), sample) in windows.iter_mut().zip(samples) {
                         window.observe(sample);
@@ -296,14 +305,14 @@ impl Watch {
     }
 
     /// Takes a last reading of each group at once, and gives the windows, by their names.
-    pub fn finish(self, proc: &Proc, groups: &[(String, Cgroup)]) -> Vec<(String, Window)> {
+    pub fn finish(self, proc: &Proc, groups: &[Watched]) -> Vec<(String, Window)> {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.thread().unpark();
         let _ = self.thread.join();
         let mut windows =
             std::mem::take(&mut *self.windows.lock().unwrap_or_else(|e| e.into_inner()));
-        for ((_, window), (_, group)) in windows.iter_mut().zip(groups) {
-            window.observe(Sample::take(proc, &group.processes()));
+        for ((_, window), watched) in windows.iter_mut().zip(groups) {
+            window.observe(watched.sample(proc));
         }
         windows
     }
@@ -390,7 +399,7 @@ mod tests {
         ] {
             std::os::unix::fs::symlink(node, root.join("10/fd").join(fd)).unwrap();
         }
-        let sample = Sample::take(&Proc::at(&root), &[10]);
+        let sample = Sample::take(&Proc::at(&root), &[10], false);
         let nodes: Vec<&str> = sample
             .forbidden
             .iter()
@@ -408,6 +417,14 @@ mod tests {
         assert!(sample.forbidden.iter().all(|(pid, _)| *pid == 10));
         let window = Window::start(sample);
         assert_eq!(window.forbidden().len(), 4);
+        // A compositor on the tour may hold the card node and the input device, nothing else.
+        let on_display = Sample::take(&Proc::at(&root), &[10], true);
+        let nodes: Vec<&str> = on_display
+            .forbidden
+            .iter()
+            .map(|(_, node)| node.as_str())
+            .collect();
+        assert_eq!(nodes, ["/dev/uinput", "/dev/hidraw0"]);
     }
 
     #[test]

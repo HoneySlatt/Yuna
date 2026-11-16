@@ -15,6 +15,13 @@
 //!
 //! Each recipe names its backend's pace ([`Pace`]): the rivals on wlroots' headless backend
 //! (sway, dwl, mango, Umbriel) draw a frame 4 ms after each commit, not on a 240 Hz grid.
+//!
+//! The owner's tour runs each rival on the real display too ([`Display::Drm`]): its plan then
+//! drops the headless backend, the output the bench makes and the parent, and gives the
+//! compositor the tour terminal's logind session instead (`sandbox::Seat`). Three rivals run on
+//! the tour alone, with recipes of their own ([`TOUR_RECIPES`]): niri and cosmic-comp, which
+//! cannot run headless, nested in a headless dwl for the tour's dry run, and gamescope, the
+//! reference for input to present (ADR-0032), on its own headless backend there.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use crate::keys::Chord;
 use crate::procfs;
-use crate::sandbox::{Folders, Parent, RENDER_NODE, ShellPaths};
+use crate::sandbox::{Folders, Parent, RENDER_NODE, Seat, ShellPaths};
 
 /// The output every compositor is given: 3840 × 2160 physical pixels at 240 Hz, scale 1.5.
 pub const OUTPUT: &str = "3840x2160@240,1.5";
@@ -117,6 +124,15 @@ pub enum Frames {
     None(&'static str),
 }
 
+/// Where a compositor shows its output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Display<'a> {
+    /// Headless, on the render node: `headless`, and the tour's dry run.
+    Headless,
+    /// The real display, through the logind session of the tour's own terminal.
+    Drm(&'a Seat),
+}
+
 impl Frames {
     /// What the run's file says of it.
     pub fn describe(self) -> &'static str {
@@ -146,6 +162,8 @@ pub enum Ready {
     Line(&'static str),
     /// The action succeeds: its own tool answers.
     Answers(Action),
+    /// Its Wayland socket is there: it has no tool to ask.
+    Socket,
 }
 
 /// How the bench reads back the output a compositor made, which the run's file records.
@@ -165,6 +183,10 @@ pub enum Output {
     Hyprctl,
     /// `gdctl show`, through Mutter's `org.gnome.Mutter.DisplayConfig`.
     Gdctl,
+    /// `niri msg --json outputs`.
+    NiriMsg,
+    /// Not read back, for the reason given.
+    None(&'static str),
 }
 
 /// A command sent to a compositor.
@@ -185,6 +207,8 @@ pub enum Action {
     Hyprctl(&'static [&'static str]),
     /// `wlr-randr <arguments>`, through wlr-output-management.
     WlrRandr(&'static [&'static str]),
+    /// `niri msg <arguments>`, to niri's socket.
+    NiriMsg(&'static [&'static str]),
 }
 
 impl Action {
@@ -197,7 +221,8 @@ impl Action {
             Action::Mmsg(arguments)
             | Action::Umbriel(arguments)
             | Action::Hyprctl(arguments)
-            | Action::WlrRandr(arguments) => arguments.join(" "),
+            | Action::WlrRandr(arguments)
+            | Action::NiriMsg(arguments) => arguments.join(" "),
         }
     }
 }
@@ -209,6 +234,8 @@ pub struct Recipe {
     pub name: &'static str,
     /// The backend it runs on headless.
     pub backend: &'static str,
+    /// How its Wayland socket's name starts, in its runtime folder.
+    pub socket: &'static str,
     /// How that backend paces its frames.
     pub pace: Pace,
     /// What it draws with.
@@ -217,7 +244,8 @@ pub struct Recipe {
     pub frames: Frames,
     /// How it tells it is ready.
     pub ready: Ready,
-    /// What it is told once ready, in order, before anything is measured.
+    /// What it is told once ready, in order, before anything is measured: headless alone, since
+    /// it makes or sets the output the bench asks for, which the real display has already.
     pub setup: &'static [Action],
     /// How the output it made is read back.
     pub output: Output,
@@ -300,11 +328,46 @@ const HYPRLAND_ACTIONS: &[Action] = &[
 /// The output Hyprland is told to make on its headless backend, and which its monitor rule sets.
 const HYPRLAND_OUTPUT: &str = "HEADLESS-1";
 
+/// niri's own actions for `motion`, through `niri msg action`: the column to the right three
+/// times, back to the left, the workspace below and back.
+const NIRI_ACTIONS: &[Action] = &[
+    Action::NiriMsg(&["action", "focus-column-right"]),
+    Action::NiriMsg(&["action", "focus-column-right"]),
+    Action::NiriMsg(&["action", "focus-column-right"]),
+    Action::NiriMsg(&["action", "focus-column-left"]),
+    Action::NiriMsg(&["action", "focus-column-left"]),
+    Action::NiriMsg(&["action", "focus-column-left"]),
+    Action::NiriMsg(&["action", "focus-workspace-down"]),
+    Action::NiriMsg(&["action", "focus-workspace-up"]),
+];
+
+/// A chord of Super and `key`, cosmic-comp's modifier.
+const fn super_key(key: &'static str) -> Action {
+    Action::Keys(Chord {
+        modifiers: &["super"],
+        key,
+    })
+}
+
+/// cosmic-comp's default bindings (`data/keybindings.ron`): Super+K and Super+J focus up and
+/// down, Super+2 and Super+1 view another workspace and back. It takes no command from outside.
+const COSMIC_ACTIONS: &[Action] = &[
+    super_key("k"),
+    super_key("k"),
+    super_key("k"),
+    super_key("j"),
+    super_key("j"),
+    super_key("j"),
+    super_key("2"),
+    super_key("1"),
+];
+
 /// The recipes, by name.
 pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "sway",
         backend: "wlroots-headless",
+        socket: "wayland-",
         pace: Pace::WlrootsTimer,
         renderer: "gles2",
         frames: Frames::Capture,
@@ -319,6 +382,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "sway-vulkan",
         backend: "wlroots-headless",
+        socket: "wayland-",
         pace: Pace::WlrootsTimer,
         renderer: "vulkan",
         frames: Frames::Capture,
@@ -333,6 +397,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "kwin",
         backend: "kwin-virtual",
+        socket: "wayland-",
         pace: Pace::ModeRate,
         renderer: "gles (KWin's virtual backend draws with OpenGL ES alone)",
         frames: Frames::KwinLog,
@@ -350,6 +415,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "yuna",
         backend: "yuna-headless",
+        socket: "wayland-",
         pace: Pace::ModeRate,
         renderer: "gles2 (Smithay's GLES renderer on the render node, --gpu)",
         // Its `frame drawn` lines need its debug logging, which would weigh on its costs.
@@ -368,6 +434,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "dwl",
         backend: "wlroots-headless",
+        socket: "wayland-",
         pace: Pace::WlrootsTimer,
         renderer: "gles2",
         frames: Frames::Capture,
@@ -393,6 +460,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "mango",
         backend: "wlroots-headless",
+        socket: "wayland-",
         pace: Pace::WlrootsTimer,
         renderer: "gles2 (SceneFX's fx_renderer)",
         frames: Frames::Capture,
@@ -407,6 +475,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "umbriel",
         backend: "wlroots-headless",
+        socket: "wayland-",
         pace: Pace::WlrootsTimer,
         renderer: "gles2 (umbrielfx, Umbriel's fork of SceneFX)",
         frames: Frames::UmbrielCommits,
@@ -421,6 +490,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "hyprland",
         backend: "aquamarine-headless",
+        socket: "wayland-",
         pace: Pace::ModeRate,
         renderer: "gles (Hyprland's OpenGL renderer, on its parent's render node)",
         frames: Frames::Capture,
@@ -444,6 +514,7 @@ pub const RECIPES: [Recipe; 9] = [
     Recipe {
         name: "mutter",
         backend: "mutter-headless",
+        socket: "wayland-",
         pace: Pace::ModeRate,
         renderer: "gles (Cogl's GL driver on the render node's GBM device)",
         frames: Frames::None(
@@ -466,6 +537,96 @@ pub const RECIPES: [Recipe; 9] = [
 /// The recipe named `name`.
 pub fn recipe(name: &str) -> Option<&'static Recipe> {
     RECIPES.iter().find(|recipe| recipe.name == name)
+}
+
+/// The recipes of the rivals the tour alone runs: niri and cosmic-comp, which cannot run headless
+/// ([`TOUR_ONLY`]), and gamescope, the reference for input to present
+/// ([ADR-0032](../../../docs/adr/0032-input-to-present-read-by-mode.md)). Their `backend` is the
+/// one the tour's dry run gives them.
+pub const TOUR_RECIPES: [Recipe; 3] = [
+    Recipe {
+        name: "niri",
+        backend: "winit, nested in a headless dwl",
+        socket: "wayland-",
+        pace: Pace::WlrootsTimer,
+        renderer: "gles (Smithay's GLES renderer)",
+        frames: Frames::None(
+            "not counted: niri offers no ext-image-copy-capture for the bench's counter",
+        ),
+        ready: Ready::Answers(Action::NiriMsg(&["outputs"])),
+        setup: &[],
+        output: Output::NiriMsg,
+        stop: None,
+        actions: NIRI_ACTIONS,
+        no_actions: None,
+        restarted: None,
+    },
+    Recipe {
+        name: "cosmic-comp",
+        backend: "winit, nested in a headless dwl",
+        socket: "wayland-",
+        pace: Pace::WlrootsTimer,
+        renderer: "gles (Smithay's GLES renderer)",
+        frames: Frames::Capture,
+        ready: Ready::Socket,
+        setup: &[],
+        output: Output::None(
+            "cosmic-comp's outputs are read by cosmic-randr, which the bench lacks",
+        ),
+        stop: None,
+        actions: COSMIC_ACTIONS,
+        no_actions: None,
+        restarted: None,
+    },
+    Recipe {
+        name: "gamescope",
+        backend: "gamescope-headless",
+        socket: "gamescope-",
+        pace: Pace::ModeRate,
+        renderer: "vulkan (gamescope composites with Vulkan alone)",
+        frames: Frames::None(
+            "not counted: gamescope offers no ext-image-copy-capture; mpv counts its own in game",
+        ),
+        ready: Ready::Socket,
+        setup: &[],
+        output: Output::None("gamescope has no tool that reads its output back"),
+        stop: None,
+        actions: &[],
+        no_actions: Some(
+            "gamescope shows one window at a time, its game's: no window to move between",
+        ),
+        restarted: None,
+    },
+];
+
+/// The rivals whose game, mpv, runs as an X11 client of their own Xwayland: gamescope, which
+/// shows X11 games, and offers its Wayland clients no `wp_viewporter`, which mpv's Wayland output
+/// needs.
+pub const X11_GAMES: [&str; 1] = ["gamescope"];
+
+/// The rivals the tour runs, in the order it runs them: every rival of ADR-0071 and gamescope.
+pub const TOUR_RIVALS: [&str; 10] = [
+    "sway",
+    "dwl",
+    "mango",
+    "umbriel",
+    "hyprland",
+    "niri",
+    "kwin",
+    "mutter",
+    "cosmic-comp",
+    "gamescope",
+];
+
+/// The recipe the tour runs for the rival `name`, of [`TOUR_RIVALS`].
+pub fn tour_recipe(name: &str) -> Option<&'static Recipe> {
+    if !TOUR_RIVALS.contains(&name) {
+        return None;
+    }
+    RECIPES
+        .iter()
+        .chain(&TOUR_RECIPES)
+        .find(|recipe| recipe.name == name)
 }
 
 /// The rivals ADR-0071 names, by their recipes' names.
@@ -581,39 +742,93 @@ fn wlroots_headless(renderer: Option<&str>) -> Vec<(String, String)> {
     variables
 }
 
-/// The plan of `recipe` in `configuration`, its files in `folders`.
+/// The plan of `recipe` in `configuration` on `display`, its files in `folders`.
 pub fn plan(
     recipe: &Recipe,
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
     prepared: &Prepared,
 ) -> Result<Plan, String> {
     match recipe.name {
-        "sway" | "sway-vulkan" => sway(recipe, configuration, shell, folders),
-        "kwin" => kwin(configuration, shell, folders, prepared),
-        "yuna" => yuna(shell, prepared),
-        "dwl" => dwl(configuration, shell),
-        "mango" => mango(configuration, shell, folders),
-        "umbriel" => umbriel(configuration, shell, folders),
-        "hyprland" => hyprland(configuration, shell, folders),
-        "mutter" => mutter(configuration, shell, folders),
+        "sway" | "sway-vulkan" => sway(recipe, configuration, display, shell, folders),
+        "kwin" => kwin(configuration, display, shell, folders, prepared),
+        "yuna" if display == Display::Headless => yuna(shell, prepared),
+        "yuna" => Err(
+            "Yuna enters the tour at Stage 2's exit, when it drives a display (ADR-0071)"
+                .to_owned(),
+        ),
+        "dwl" => dwl(configuration, display, shell),
+        "mango" => mango(configuration, display, shell, folders),
+        "umbriel" => umbriel(configuration, display, shell, folders),
+        "hyprland" => hyprland(configuration, display, shell, folders),
+        "mutter" => mutter(configuration, display, shell, folders),
+        "niri" => niri(configuration, display, shell, folders),
+        "cosmic-comp" => cosmic(configuration, display, shell, folders),
+        "gamescope" => gamescope(display, shell),
         name => Err(format!("no plan for {name}")),
     }
 }
 
-/// sway on wlroots' headless backend, on the render node, with nixpkgs' shipped configuration.
+/// The variables that put a wlroots compositor on the real display: wlroots' own choice of
+/// backends with no parent display (DRM and libinput, `wlr_backend_autocreate`), through the
+/// tour's session; with `renderer`, the renderer wlroots creates.
+fn wlroots_drm(seat: &Seat, renderer: Option<&str>) -> Vec<(String, String)> {
+    let mut variables = seat.variables();
+    if let Some(renderer) = renderer {
+        variables.push(("WLR_RENDERER".to_owned(), renderer.to_owned()));
+    }
+    variables
+}
+
+/// The variables of a wlroots compositor on `display`.
+fn wlroots_on(display: Display, renderer: Option<&str>) -> Vec<(String, String)> {
+    match display {
+        Display::Headless => wlroots_headless(renderer),
+        Display::Drm(seat) => wlroots_drm(seat, renderer),
+    }
+}
+
+/// A headless dwl on the render node, built without XWayland, which a compositor that cannot run
+/// headless runs inside, nested: Hyprland on its headless backend, niri and cosmic-comp in a
+/// window for the tour's dry run.
+fn headless_dwl_parent(shell: &ShellPaths, folders: &Folders) -> Parent {
+    let mut variables = wlroots_headless(Some("gles2"));
+    variables.push(("PATH".to_owned(), bin(&shell.dwl_no_xwayland)));
+    Parent {
+        command: vec![
+            shell
+                .dwl_no_xwayland
+                .join("bin/dwl")
+                .to_string_lossy()
+                .into_owned(),
+        ],
+        variables,
+        runtime: folders.runtime().join("parent"),
+        log: folders.root.join("parent.log"),
+    }
+}
+
+/// sway on wlroots' headless backend, on the render node, or on the real display, with nixpkgs'
+/// shipped configuration.
 fn sway(
     recipe: &Recipe,
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
 ) -> Result<Plan, String> {
     let shipped_path = shell.sway.join("etc/sway/config");
     let shipped = fs::read_to_string(&shipped_path)
         .map_err(|e| format!("{}: {e}", shipped_path.display()))?;
-    let output =
-        format!("output HEADLESS-1 mode --custom {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}@240Hz scale 1.5\n");
+    // On the real display, each screen at the mode sway picks itself, its preferred one.
+    let output = match display {
+        Display::Headless => format!(
+            "output HEADLESS-1 mode --custom {OUTPUT_WIDTH}x{OUTPUT_HEIGHT}@240Hz scale 1.5\n"
+        ),
+        Display::Drm(_) => String::new(),
+    };
     let (text, settings) = match configuration {
         Configuration::AsShipped => (
             format!("{shipped}\n{output}"),
@@ -648,7 +863,7 @@ fn sway(
         arguments: vec!["--config".to_owned(), config.to_string_lossy().into_owned()],
         // swaybar runs its status command in `sh`, with `date` and `sleep`.
         path: [bin(&shell.sway), bin(&shell.coreutils), bin(&shell.bash)].join(":"),
-        variables: wlroots_headless(Some(recipe.renderer)),
+        variables: wlroots_on(display, Some(recipe.renderer)),
         version: version(&shell.sway),
         settings,
         files: vec![(config, text)],
@@ -716,24 +931,33 @@ pub const KWIN_DEFAULT_EFFECTS: [&str; 30] = [
 
 /// KWin's virtual backend, at 2560 × 1440 logical pixels at scale 1.5, 3840 × 2160 physical,
 /// on the render node; its 240 Hz from the output configuration [`Prepared`] holds.
+///
+/// On the real display, `kwin_wayland --drm`, each screen at the mode KWin picks itself, through
+/// the tour's session (`src/core/session_logind.cpp:64` reads `XDG_SESSION_ID`).
 fn kwin(
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
     prepared: &Prepared,
 ) -> Result<Plan, String> {
-    let mut arguments = words(&[
-        "--virtual",
-        "--width",
-        "2560",
-        "--height",
-        "1440",
-        "--scale",
-        "1.5",
+    let mut arguments = match display {
+        Display::Headless => words(&[
+            "--virtual",
+            "--width",
+            "2560",
+            "--height",
+            "1440",
+            "--scale",
+            "1.5",
+        ]),
+        Display::Drm(_) => words(&["--drm"]),
+    };
+    arguments.extend(words(&[
         "--no-lockscreen",
         "--no-global-shortcuts",
         "--no-kactivities",
-    ]);
+    ]));
     // Two desktops, for the motion scenario's switch; the same in both configurations.
     let mut kwinrc = String::from("[Desktops]\nNumber=2\nRows=1\n");
     let settings = match configuration {
@@ -762,12 +986,20 @@ fn kwin(
         }
     };
     let mut files = vec![(folders.config().join("kwinrc"), kwinrc)];
-    if let Some(output) = &prepared.kwin_output_config {
+    if let (Display::Headless, Some(output)) = (display, &prepared.kwin_output_config) {
         files.push((
             folders.config().join("kwinoutputconfig.json"),
             output.clone(),
         ));
     }
+    let mut variables = match display {
+        // The render device KWin draws on; never a card node.
+        Display::Headless => vec![("KWIN_DRM_DEVICES".to_owned(), RENDER_NODE.to_owned())],
+        Display::Drm(seat) => seat.variables(),
+    };
+    // Its frame log, a row per frame presented: on the real display, the flip's time beside the
+    // one it aimed at.
+    variables.push(("KWIN_LOG_PERFORMANCE_DATA".to_owned(), "1".to_owned()));
     Ok(Plan {
         program: shell.kwin.join("bin/kwin_wayland"),
         arguments,
@@ -777,11 +1009,7 @@ fn kwin(
             bin(&shell.coreutils),
         ]
         .join(":"),
-        variables: vec![
-            // The render device KWin draws on; never a card node.
-            ("KWIN_DRM_DEVICES".to_owned(), RENDER_NODE.to_owned()),
-            ("KWIN_LOG_PERFORMANCE_DATA".to_owned(), "1".to_owned()),
-        ],
+        variables,
         version: version(&shell.kwin),
         settings,
         files,
@@ -849,8 +1077,9 @@ fn yuna(shell: &ShellPaths, prepared: &Prepared) -> Result<Plan, String> {
 }
 
 /// dwl on wlroots' headless backend, on the render node. It reads no configuration file: its
-/// output's mode comes from wlr-randr, once it is ready (the recipe's `setup`).
-fn dwl(configuration: Configuration, shell: &ShellPaths) -> Result<Plan, String> {
+/// output's mode comes from wlr-randr, once it is ready (the recipe's `setup`). On the real
+/// display, it gives each screen its preferred mode (`dwl.c:1178`).
+fn dwl(configuration: Configuration, display: Display, shell: &ShellPaths) -> Result<Plan, String> {
     let both = "the same in both configurations";
     let (package, xwayland) = match configuration {
         Configuration::AsShipped => (
@@ -868,7 +1097,7 @@ fn dwl(configuration: Configuration, shell: &ShellPaths) -> Result<Plan, String>
         program: package.join("bin/dwl"),
         arguments: Vec::new(),
         path: [bin(package), bin(&shell.xwayland)].join(":"),
-        variables: wlroots_headless(Some("gles2")),
+        variables: wlroots_on(display, Some("gles2")),
         version: version(package),
         settings: settings(&[
             (
@@ -892,16 +1121,20 @@ fn dwl(configuration: Configuration, shell: &ShellPaths) -> Result<Plan, String>
 /// `monitor_rule` for the bench's output.
 fn mango(
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
 ) -> Result<Plan, String> {
     let shipped_path = shell.mango.join("etc/mango/config.conf");
     let shipped = fs::read_to_string(&shipped_path)
         .map_err(|e| format!("{}: {e}", shipped_path.display()))?;
-    let rule = format!(
-        "monitor_rule=name:HEADLESS-1,width:{OUTPUT_WIDTH},height:{OUTPUT_HEIGHT},refresh:240,\
-         scale:1.5\n"
-    );
+    let rule = match display {
+        Display::Headless => format!(
+            "monitor_rule=name:HEADLESS-1,width:{OUTPUT_WIDTH},height:{OUTPUT_HEIGHT},refresh:240,\
+             scale:1.5\n"
+        ),
+        Display::Drm(_) => String::new(),
+    };
     let (package, text, settings) = match configuration {
         Configuration::AsShipped => (
             &shell.mango,
@@ -947,7 +1180,7 @@ fn mango(
         arguments: vec!["-c".to_owned(), config.to_string_lossy().into_owned()],
         path: [bin(package), bin(&shell.xwayland)].join(":"),
         // SceneFX picks its render node as wlroots does; it reads no WLR_RENDERER.
-        variables: wlroots_headless(None),
+        variables: wlroots_on(display, None),
         version: version(package),
         settings,
         files: vec![(config, text)],
@@ -960,6 +1193,7 @@ fn mango(
 /// included, and the bench's output section after it.
 fn umbriel(
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
 ) -> Result<Plan, String> {
@@ -968,11 +1202,12 @@ fn umbriel(
         return Err(format!("{}: missing", shipped.display()));
     }
     // An included file applies first, the including one last (docs/user/configuration.md).
-    let mut text = format!(
-        "[include]\nfiles = [\"{}\"]\n\n[output.HEADLESS-1]\nmode = \"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}@240\"\n\
-         scale = 1.5\n",
-        shipped.display()
-    );
+    let mut text = format!("[include]\nfiles = [\"{}\"]\n", shipped.display());
+    if display == Display::Headless {
+        text.push_str(&format!(
+            "\n[output.HEADLESS-1]\nmode = \"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}@240\"\nscale = 1.5\n"
+        ));
+    }
     let settings = match configuration {
         Configuration::AsShipped => settings(&[
             (
@@ -1017,7 +1252,7 @@ fn umbriel(
         arguments: vec!["-c".to_owned(), config.to_string_lossy().into_owned()],
         path: bin(&shell.umbriel),
         // umbrielfx creates GLES2 alone, and reads no WLR_RENDERER (docs/survey.md).
-        variables: wlroots_headless(None),
+        variables: wlroots_on(display, None),
         version: version(&shell.umbriel),
         settings,
         files: vec![(config, text)],
@@ -1034,21 +1269,29 @@ fn umbriel(
 /// The parent is dwl, not sway: Aquamarine's Wayland backend binds `xdg_wm_base` at version 6
 /// (`src/backend/Wayland.cpp:125`), which sway 1.12 offers at 5 (`sway/server.c:77`) and dwl at 6
 /// (`dwl.c:2718`), with `wl_compositor` 6 and wlroots' `wl_seat` 9, which it binds too.
+///
+/// On the real display, no parent and no headless output: Aquamarine takes the tour's session
+/// through libseat's logind backend, and its system bus, at both configurations.
 fn hyprland(
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
 ) -> Result<Plan, String> {
     let shipped_path = shell.hyprland.join("share/hypr/hyprland.lua");
     let shipped = fs::read_to_string(&shipped_path)
         .map_err(|e| format!("{}: {e}", shipped_path.display()))?;
-    let output = format!(
-        "\n-- The bench's output, which `hyprctl output create headless` makes, and the window on\n\
+    let output = if let Display::Drm(_) = display {
+        String::new()
+    } else {
+        format!(
+            "\n-- The bench's output, which `hyprctl output create headless` makes, and the window on\n\
          -- its parent, disabled: Hyprland draws on its own headless timer.\n\
          hl.monitor({{ output = \"{HYPRLAND_OUTPUT}\", mode = \"{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}@240\", \
          position = \"0x0\", scale = \"1.5\" }})\n\
          hl.monitor({{ output = \"WAYLAND-1\", disabled = true }})\n"
-    );
+        )
+    };
     let (text, path, settings) = match configuration {
         Configuration::AsShipped => (
             format!("{shipped}{output}"),
@@ -1096,14 +1339,20 @@ fn hyprland(
             ]),
         ),
     };
-    let (realtime, mut variables) = match configuration {
-        Configuration::AsShipped => (
+    let (realtime, mut variables) = match (configuration, display) {
+        // libseat reaches logind over the system bus: rtkit stays reachable too.
+        (_, Display::Drm(seat)) => (
+            "SCHED_RR on its main thread, from rtkit, as 0.57.1 ships, at both configurations: \
+             on the real display its system bus is the machine's, which libseat needs for logind",
+            seat.variables(),
+        ),
+        (Configuration::AsShipped, Display::Headless) => (
             "SCHED_RR on its main thread, as 0.57.1 ships: from rtkit, over the system bus \
              (src/init/initHelpers.cpp); RLIMIT_RTPRIO is 0, so the kernel alone would refuse it",
             Vec::new(),
         ),
-        // rtkit is its system bus's only use in Hyprland and Aquamarine.
-        Configuration::EqualWork => (
+        // rtkit is its system bus's only use in Hyprland and Aquamarine, headless.
+        (Configuration::EqualWork, Display::Headless) => (
             "none, as 0.57.2 ships: its system bus is a socket that does not exist, so rtkit \
              cannot be asked, and RLIMIT_RTPRIO is 0",
             vec![(
@@ -1116,15 +1365,14 @@ fn hyprland(
         ),
     };
     let config = folders.config().join("hypr/hyprland.lua");
-    let parent_runtime = folders.runtime().join("parent");
-    let mut parent_variables = wlroots_headless(Some("gles2"));
-    parent_variables.push(("PATH".to_owned(), bin(&shell.dwl_no_xwayland)));
-    variables.extend([
-        ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
+    if display == Display::Headless {
         // Aquamarine always tries a DRM session first (Backend.cpp's CDRMBackend::attempt);
         // libseat's logind backend would look for the user's display session. A backend name
         // libseat does not know opens no seat at all (libseat/libseat.c:45-55).
-        ("LIBSEAT_BACKEND".to_owned(), "none".to_owned()),
+        variables.push(("LIBSEAT_BACKEND".to_owned(), "none".to_owned()));
+    }
+    variables.extend([
+        ("XDG_CURRENT_DESKTOP".to_owned(), "Hyprland".to_owned()),
         // Its instance's sockets, `$XDG_RUNTIME_DIR/hypr/<62 characters>/.socket.sock`, would
         // pass Unix's 108 bytes under the run's folder.
         (
@@ -1134,16 +1382,19 @@ fn hyprland(
     ]);
     let mut settings = settings;
     settings.insert("realtime".to_owned(), realtime.to_owned());
-    settings.insert(
-        "parent".to_owned(),
-        format!(
-            "dwl {} built without XWayland, headless on the render node; Hyprland's window on \
-             it, WAYLAND-1, is disabled; counted in the stack, not the core; the same in both \
-             configurations. Not sway: Aquamarine binds xdg_wm_base 6, which sway 1.12 offers \
-             at 5",
-            version(&shell.dwl_no_xwayland).unwrap_or_default()
-        ),
-    );
+    let parent = (display == Display::Headless).then(|| headless_dwl_parent(shell, folders));
+    if parent.is_some() {
+        settings.insert(
+            "parent".to_owned(),
+            format!(
+                "dwl {} built without XWayland, headless on the render node; Hyprland's window \
+                 on it, WAYLAND-1, is disabled; counted in the stack, not the core; the same in \
+                 both configurations. Not sway: Aquamarine binds xdg_wm_base 6, which sway 1.12 \
+                 offers at 5",
+                version(&shell.dwl_no_xwayland).unwrap_or_default()
+            ),
+        );
+    }
     Ok(Plan {
         // As its session file starts it (share/wayland-sessions/hyprland.desktop): through its
         // watchdog, which runs `Hyprland` from the PATH, nixpkgs' wrapper. Started without it,
@@ -1162,31 +1413,34 @@ fn hyprland(
         version: version(&shell.hyprland),
         settings,
         files: vec![(config, text)],
-        parent: Some(Parent {
-            command: vec![
-                shell
-                    .dwl_no_xwayland
-                    .join("bin/dwl")
-                    .to_string_lossy()
-                    .into_owned(),
-            ],
-            variables: parent_variables,
-            runtime: parent_runtime,
-            log: folders.root.join("parent.log"),
-        }),
+        parent,
         runtime_link: Some(folders.short_runtime.clone()),
     })
 }
 
 /// Mutter's own headless backend, one virtual monitor at 240 Hz, its scale from its monitor
-/// configuration, which the bench writes for that monitor.
+/// configuration, which the bench writes for that monitor. On the real display, Mutter alone as
+/// a display server, each screen at the mode it picks, through the tour's session
+/// (`src/backends/meta-launcher.c:162` reads `XDG_SESSION_ID` first): GNOME Shell's session
+/// would start its services through the owner's systemd user manager.
 fn mutter(
     configuration: Configuration,
+    display: Display,
     shell: &ShellPaths,
     folders: &Folders,
 ) -> Result<Plan, String> {
-    let mut arguments = words(&["--headless", "--virtual-monitor", "3840x2160@240"]);
-    let mut variables = Vec::new();
+    let (mut arguments, mut variables, files) = match display {
+        Display::Headless => (
+            words(&["--headless", "--virtual-monitor", "3840x2160@240"]),
+            Vec::new(),
+            vec![(folders.config().join("monitors.xml"), mutter_monitors())],
+        ),
+        Display::Drm(seat) => (
+            words(&["--display-server", "--wayland"]),
+            seat.variables(),
+            Vec::new(),
+        ),
+    };
     let wallpaper = "its default plugin's: a plain colour with a vignette, which no switch turns \
                      off; the same in both configurations";
     let settings = match configuration {
@@ -1222,7 +1476,170 @@ fn mutter(
         variables,
         version: version(&shell.mutter),
         settings,
-        files: vec![(folders.config().join("monitors.xml"), mutter_monitors())],
+        files,
+        parent: None,
+        runtime_link: None,
+    })
+}
+
+/// niri, on the real display through the tour's session (its TTY backend, `src/niri.rs:725`, when
+/// no parent display is set), or nested in a headless dwl for the tour's dry run (its winit
+/// backend, `src/niri.rs:721`): it has no headless mode of its own ([`TOUR_ONLY`]).
+fn niri(
+    configuration: Configuration,
+    display: Display,
+    shell: &ShellPaths,
+    folders: &Folders,
+) -> Result<Plan, String> {
+    let config = folders.config().join("niri/config.kdl");
+    let (files, arguments, settings) = match configuration {
+        // No configuration file: niri writes its default one and reads it, as on a first start.
+        Configuration::AsShipped => (
+            Vec::new(),
+            Vec::new(),
+            settings(&[
+                (
+                    "effects",
+                    "its default configuration: animations, a focus ring",
+                ),
+                (
+                    "bar",
+                    "none: its default configuration starts waybar, which is not on its PATH",
+                ),
+                (
+                    "xwayland",
+                    "none: xwayland-satellite, which niri starts for X11 clients, is not on its PATH",
+                ),
+                ("wallpaper", "none: niri draws none"),
+            ]),
+        ),
+        Configuration::EqualWork => (
+            vec![(
+                config.clone(),
+                "animations {\n    off\n}\nhotkey-overlay {\n    skip-at-startup\n}\n".to_owned(),
+            )],
+            vec!["--config".to_owned(), config.to_string_lossy().into_owned()],
+            settings(&[
+                ("effects", "animations off; its built-in defaults otherwise"),
+                ("bar", "none: no spawn-at-startup"),
+                ("xwayland", "none: xwayland-satellite is not on its PATH"),
+                ("wallpaper", "none: niri draws none"),
+            ]),
+        ),
+    };
+    let (variables, parent) = match display {
+        Display::Headless => (Vec::new(), Some(headless_dwl_parent(shell, folders))),
+        Display::Drm(seat) => (seat.variables(), None),
+    };
+    Ok(Plan {
+        program: shell.niri.join("bin/niri"),
+        arguments,
+        path: bin(&shell.niri),
+        variables,
+        version: version(&shell.niri),
+        settings,
+        files,
+        parent,
+        runtime_link: None,
+    })
+}
+
+/// cosmic-comp, on the real display through the tour's session (`COSMIC_BACKEND=kms`), or nested
+/// in a headless dwl for the tour's dry run (`winit`): it has no headless backend
+/// (`src/backend/mod.rs:25-43`). It has no switch for its animations; its XWayland, which it
+/// starts with itself (`src/backend/kms/mod.rs:186`), is on its PATH as shipped alone.
+fn cosmic(
+    configuration: Configuration,
+    display: Display,
+    shell: &ShellPaths,
+    folders: &Folders,
+) -> Result<Plan, String> {
+    let (path, xwayland) = match configuration {
+        Configuration::AsShipped => (
+            [bin(&shell.cosmic_comp), bin(&shell.xwayland)].join(":"),
+            "started with cosmic-comp, as shipped",
+        ),
+        Configuration::EqualWork => (
+            bin(&shell.cosmic_comp),
+            "off: Xwayland is not on its PATH, so its start fails",
+        ),
+    };
+    let (variables, parent) = match display {
+        Display::Headless => (
+            vec![("COSMIC_BACKEND".to_owned(), "winit".to_owned())],
+            Some(headless_dwl_parent(shell, folders)),
+        ),
+        Display::Drm(seat) => {
+            let mut variables = seat.variables();
+            variables.push(("COSMIC_BACKEND".to_owned(), "kms".to_owned()));
+            (variables, None)
+        }
+    };
+    let both = "the same in both configurations";
+    Ok(Plan {
+        program: shell.cosmic_comp.join("bin/cosmic-comp"),
+        arguments: Vec::new(),
+        path,
+        variables,
+        version: version(&shell.cosmic_comp),
+        settings: settings(&[
+            (
+                "effects",
+                &format!("its defaults: no switch turns its animations off; {both}"),
+            ),
+            ("xwayland", xwayland),
+            (
+                "wallpaper",
+                &format!("none: cosmic-bg, which draws it, is not run; {both}"),
+            ),
+            ("bar", &format!("none: cosmic-panel is not run; {both}")),
+        ]),
+        files: Vec::new(),
+        parent,
+        runtime_link: None,
+    })
+}
+
+/// gamescope, on the real display through the tour's session (`--backend drm`; wlroots' session,
+/// `src/wlserver.cpp:1900`), or on its own headless backend for the tour's dry run, at the
+/// bench's output. Its Wayland socket takes xdg-shell clients, the bench's, with
+/// `--expose-wayland` (`src/main.cpp:184`). It has nothing to turn off: one configuration.
+fn gamescope(display: Display, shell: &ShellPaths) -> Result<Plan, String> {
+    let mut arguments = match display {
+        Display::Headless => vec![
+            "--backend".to_owned(),
+            "headless".to_owned(),
+            "-W".to_owned(),
+            OUTPUT_WIDTH.to_string(),
+            "-H".to_owned(),
+            OUTPUT_HEIGHT.to_string(),
+            "-r".to_owned(),
+            (OUTPUT_MILLIHERTZ / 1000).to_string(),
+        ],
+        Display::Drm(_) => words(&["--backend", "drm"]),
+    };
+    arguments.push("--expose-wayland".to_owned());
+    let variables = match display {
+        Display::Headless => Vec::new(),
+        Display::Drm(seat) => seat.variables(),
+    };
+    let both = "the same in both configurations: gamescope has no effect to turn off";
+    Ok(Plan {
+        program: shell.gamescope.join("bin/gamescope"),
+        arguments,
+        // It starts its own Xwayland, for X11 games.
+        path: [bin(&shell.gamescope), bin(&shell.xwayland)].join(":"),
+        variables,
+        version: version(&shell.gamescope),
+        settings: settings(&[
+            ("effects", &format!("none; {both}")),
+            (
+                "xwayland",
+                &format!("started with gamescope, as always; {both}"),
+            ),
+            ("wallpaper", &format!("none; {both}")),
+        ]),
+        files: Vec::new(),
         parent: None,
         runtime_link: None,
     })
@@ -1322,8 +1739,8 @@ mod tests {
     #[test]
     fn dwl_and_mango_run_a_build_without_xwayland_at_equal_work() {
         let shell = shell();
-        let shipped = dwl(Configuration::AsShipped, &shell).unwrap();
-        let equal = dwl(Configuration::EqualWork, &shell).unwrap();
+        let shipped = dwl(Configuration::AsShipped, Display::Headless, &shell).unwrap();
+        let equal = dwl(Configuration::EqualWork, Display::Headless, &shell).unwrap();
         assert_eq!(shipped.program, shell.dwl.join("bin/dwl"));
         assert_eq!(equal.program, shell.dwl_no_xwayland.join("bin/dwl"));
         assert!(
@@ -1368,7 +1785,13 @@ mod tests {
         )
         .unwrap();
         let folders = folders("plan-mango");
-        let shipped = mango(Configuration::AsShipped, &shell, &folders).unwrap();
+        let shipped = mango(
+            Configuration::AsShipped,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let (path, text) = &shipped.files[0];
         assert_eq!(shipped.arguments, ["-c", &path.to_string_lossy()]);
         assert!(text.starts_with("animations=1\n"));
@@ -1378,7 +1801,13 @@ mod tests {
             )
         );
         assert!(!text.contains("animations=0"));
-        let equal = mango(Configuration::EqualWork, &shell, &folders).unwrap();
+        let equal = mango(
+            Configuration::EqualWork,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let text = &equal.files[0].1;
         // The bench's lines come after the shipped ones, which they override.
         assert!(text.find("animations=1").unwrap() < text.find("animations=0").unwrap());
@@ -1398,12 +1827,24 @@ mod tests {
         )
         .unwrap();
         let folders = folders("plan-umbriel");
-        let shipped = umbriel(Configuration::AsShipped, &shell, &folders).unwrap();
+        let shipped = umbriel(
+            Configuration::AsShipped,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let text = &shipped.files[0].1;
         assert!(text.starts_with("[include]\nfiles = [\""));
         assert!(text.contains("[output.HEADLESS-1]\nmode = \"3840x2160@240\"\nscale = 1.5\n"));
         assert!(!text.contains("[animation]"));
-        let equal = umbriel(Configuration::EqualWork, &shell, &folders).unwrap();
+        let equal = umbriel(
+            Configuration::EqualWork,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let text = &equal.files[0].1;
         for line in [
             "xwayland = false",
@@ -1414,7 +1855,13 @@ mod tests {
             assert!(text.contains(line), "{line} missing from {text}");
         }
         assert!(
-            umbriel(Configuration::AsShipped, &crate::testing::shell(), &folders).is_err(),
+            umbriel(
+                Configuration::AsShipped,
+                Display::Headless,
+                &crate::testing::shell(),
+                &folders
+            )
+            .is_err(),
             "a package without its configuration is refused"
         );
     }
@@ -1431,7 +1878,13 @@ mod tests {
         )
         .unwrap();
         let folders = folders("plan-hyprland");
-        let shipped = hyprland(Configuration::AsShipped, &shell, &folders).unwrap();
+        let shipped = hyprland(
+            Configuration::AsShipped,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let text = &shipped.files[0].1;
         assert!(text.contains(
             "hl.monitor({ output = \"HEADLESS-1\", mode = \"3840x2160@240\", position = \"0x0\", \
@@ -1474,7 +1927,13 @@ mod tests {
                 "HEADLESS-1"
             ])]
         );
-        let equal = hyprland(Configuration::EqualWork, &shell, &folders).unwrap();
+        let equal = hyprland(
+            Configuration::EqualWork,
+            Display::Headless,
+            &shell,
+            &folders,
+        )
+        .unwrap();
         let text = &equal.files[0].1;
         assert!(text.contains("xwayland = { enabled = false }"));
         // At equal work, no rtkit to grant realtime scheduling, as Hyprland 0.57.2 ships.
@@ -1504,7 +1963,13 @@ mod tests {
     #[test]
     fn mutters_monitor_takes_the_benchs_scale() {
         let folders = folders("plan-mutter");
-        let shipped = mutter(Configuration::AsShipped, &shell(), &folders).unwrap();
+        let shipped = mutter(
+            Configuration::AsShipped,
+            Display::Headless,
+            &shell(),
+            &folders,
+        )
+        .unwrap();
         assert_eq!(
             shipped.arguments,
             ["--headless", "--virtual-monitor", "3840x2160@240"]
@@ -1514,7 +1979,13 @@ mod tests {
         assert!(text.contains("<scale>1.5</scale>"));
         assert!(text.contains("<connector>Meta-0</connector>"));
         assert!(text.contains("<rate>240</rate>"));
-        let equal = mutter(Configuration::EqualWork, &shell(), &folders).unwrap();
+        let equal = mutter(
+            Configuration::EqualWork,
+            Display::Headless,
+            &shell(),
+            &folders,
+        )
+        .unwrap();
         assert_eq!(equal.arguments.last().map(String::as_str), Some("--no-x11"));
         assert!(
             equal
