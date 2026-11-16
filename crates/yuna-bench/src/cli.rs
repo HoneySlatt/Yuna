@@ -1,7 +1,8 @@
 //! The command line: `headless` runs the cases, `report` summarises run files, and the bench's
 //! own clients and launcher run as subcommands of the same program.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write as _};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -225,12 +226,37 @@ pub fn utc(time: SystemTime) -> String {
     )
 }
 
-/// Writes `text` to `path` through a temporary file and a rename: a run file is never left half
-/// written.
-fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
-    let temporary = path.with_extension("partial");
-    fs::write(&temporary, text).map_err(|e| format!("{}: {e}", temporary.display()))?;
-    fs::rename(&temporary, path).map_err(|e| format!("{}: {e}", path.display()))
+/// Writes `path` with `write`, through a temporary file beside it, flushed to the disk, and a
+/// rename: the file is never left half written, and an earlier version stays whole until the new
+/// one replaces it.
+fn write_atomically(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+) -> Result<(), String> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".partial");
+    let temporary = path.with_file_name(name);
+    let written = (|| {
+        let mut writer = BufWriter::new(File::create(&temporary)?);
+        write(&mut writer)?;
+        let file = writer
+            .into_inner()
+            .map_err(io::IntoInnerError::into_error)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
+    })();
+    written.map_err(|e| {
+        let _ = fs::remove_file(&temporary);
+        format!("{}: {e}", path.display())
+    })
+}
+
+/// Writes the run file `file` to `path`, atomically, the time it is written in it.
+fn write_run_file(path: &Path, file: &mut RunFile) -> Result<(), String> {
+    file.written_utc = Some(utc(SystemTime::now()));
+    write_atomically(path, |writer| {
+        serde_json::to_writer_pretty(writer, file).map_err(io::Error::from)
+    })
 }
 
 fn headless(arguments: &[String]) -> Result<bool, String> {
@@ -296,6 +322,7 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
             .map(|c| c.trim_end_matches("-dirty").to_owned()),
         dirty: commit.as_ref().map(|c| c.ends_with("-dirty")),
         started_utc: utc(started),
+        written_utc: None,
         arguments: arguments.to_vec(),
         seed,
         seconds_override: options.seconds,
@@ -308,6 +335,15 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
             .collect(),
         runs: Vec::new(),
     };
+    // Written before the first case and again after each, so that a run cut short keeps every
+    // case it ran: `report` summarises it then.
+    let out = options
+        .out
+        .unwrap_or_else(|| scenarios::workspace().join("target/yuna-bench"));
+    fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let stem = format!("run-{}", file.started_utc.replace([':', '-'], ""));
+    let json = out.join(format!("{stem}.json"));
+    write_run_file(&json, &mut file)?;
     for (n, (case, repeat)) in cases.iter().enumerate() {
         eprintln!(
             "yuna-bench: [{}/{}] {} run {repeat}",
@@ -323,20 +359,11 @@ fn headless(arguments: &[String]) -> Result<bool, String> {
             eprintln!("yuna-bench:   refused: {refused}");
         }
         file.runs.push(run);
+        write_run_file(&json, &mut file)?;
     }
-    let out = options
-        .out
-        .unwrap_or_else(|| scenarios::workspace().join("target/yuna-bench"));
-    fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let stem = format!("run-{}", file.started_utc.replace([':', '-'], ""));
-    let json = out.join(format!("{stem}.json"));
-    let text = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-    write_atomically(&json, &text)?;
     let summary = out.join(format!("{stem}.md"));
-    write_atomically(
-        &summary,
-        &report::summary(&[(format!("{stem}.json"), file.clone())]),
-    )?;
+    let text = report::summary(&[(format!("{stem}.json"), file.clone())]);
+    write_atomically(&summary, |writer| writer.write_all(text.as_bytes()))?;
     let clean = file
         .runs
         .iter()
@@ -473,6 +500,49 @@ mod tests {
         unshuffled.sort();
         assert_eq!(sorted, unshuffled);
         assert_ne!(first, sorted, "the order is not shuffled");
+    }
+
+    #[test]
+    fn a_run_file_is_replaced_whole_or_not_at_all() {
+        let folder =
+            std::env::temp_dir().join(format!("yuna-bench-test-atomic-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("run-x.json");
+        let mut file = RunFile {
+            format: FORMAT,
+            started_utc: "2026-11-16T06:14:01Z".to_owned(),
+            ..RunFile::default()
+        };
+        write_run_file(&path, &mut file).unwrap();
+        let first = fs::read_to_string(&path).unwrap();
+        let read = report::read(&first).unwrap();
+        assert!(read.written_utc.is_some());
+        assert!(read.runs.is_empty());
+        // A case later, the file holds it, whole.
+        file.runs.push(crate::record::CaseRun::default());
+        write_run_file(&path, &mut file).unwrap();
+        assert_eq!(
+            report::read(&fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .runs
+                .len(),
+            1
+        );
+        // A write cut short leaves the last whole file, and no temporary beside it.
+        let before = fs::read_to_string(&path).unwrap();
+        let cut = write_atomically(&path, |writer| {
+            writer.write_all(b"{\"format\": 1, \"ru")?;
+            Err(io::Error::other("the disk is full"))
+        });
+        assert!(cut.unwrap_err().contains("the disk is full"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let left: Vec<_> = fs::read_dir(&folder)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(left, ["run-x.json"]);
+        fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]

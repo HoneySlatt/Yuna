@@ -5,13 +5,16 @@
 //! nothing else: a buffer of the logical size times the preferred scale, shown at the logical
 //! size. It asks no frame callback, so that it never makes a compositor draw. A window is drawn
 //! again only when the compositor gives it a new size or scale: a tiling compositor resizes every
-//! window as each opens, and waits for each to answer. It prints `ready` once every window has
-//! shown, then sleeps in the compositor's events until they close.
+//! window as each opens, and waits for each to answer. Each time it draws a window it prints a
+//! line, `drew <n> configured <w>x<h> buffer <w>x<h>`, which [`windows_shown`] reads back. It
+//! prints `ready` once every window has shown, then sleeps in the compositor's events until they
+//! close.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::os::fd::AsFd;
 
+use crate::record::StillWindow;
 use rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
@@ -123,6 +126,31 @@ pub fn run(count: usize) -> Result<(), String> {
     }
 }
 
+/// Each of the `count` windows as the still client's `log` last says it drew, in order; none
+/// unless the log gives every one of them.
+pub fn windows_shown(log: &str, count: u32) -> Option<Vec<StillWindow>> {
+    let size = |text: &str| -> Option<[i32; 2]> {
+        let (width, height) = text.split_once('x')?;
+        Some([width.parse().ok()?, height.parse().ok()?])
+    };
+    let mut windows: Vec<Option<StillWindow>> = vec![None; count as usize];
+    for line in log.lines() {
+        let words: Vec<&str> = line.split(' ').collect();
+        let ["drew", n, "configured", configured, "buffer", buffer] = words[..] else {
+            continue;
+        };
+        let (Some(n), Some(configured), Some(buffer)) =
+            (n.parse::<usize>().ok(), size(configured), size(buffer))
+        else {
+            continue;
+        };
+        if let Some(slot) = n.checked_sub(1).and_then(|n| windows.get_mut(n)) {
+            *slot = Some(StillWindow { configured, buffer });
+        }
+    }
+    windows.into_iter().collect()
+}
+
 /// A plain colour of its own for window `n`, opaque.
 fn colour(n: usize) -> u32 {
     let n = n as u32;
@@ -165,6 +193,14 @@ impl Still {
                         viewport.set_destination(logical.0, logical.1);
                     }
                     window.drawn = Some((logical, pixels));
+                    println!(
+                        "drew {} configured {}x{} buffer {}x{}",
+                        n + 1,
+                        window.asked.0,
+                        window.asked.1,
+                        pixels.0,
+                        pixels.1
+                    );
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -321,5 +357,37 @@ mod tests {
         let colours: std::collections::BTreeSet<u32> = (0..150).map(colour).collect();
         assert!(colours.len() > 100, "{} colours", colours.len());
         assert!(colours.iter().all(|c| c >> 24 == 0xff));
+    }
+
+    #[test]
+    fn each_windows_last_drawing_gives_its_size() {
+        // A tiling compositor: the first window filled the output, then shared it.
+        let log = "drew 1 configured 2560x1440 buffer 3840x2160\n\
+                   drew 2 configured 0x0 buffer 960x720\n\
+                   drew 1 configured 1280x1440 buffer 1920x2160\n\
+                   drew 2 configured 1280x1440 buffer 1920x2160\n\
+                   ready 2\n";
+        let shown = windows_shown(log, 2).unwrap();
+        assert_eq!(
+            shown,
+            [StillWindow {
+                configured: [1280, 1440],
+                buffer: [1920, 2160],
+            }; 2]
+        );
+        // A window the log never names, a malformed line or one out of range: not all known.
+        assert_eq!(
+            windows_shown("drew 1 configured 0x0 buffer 640x480\n", 2),
+            None
+        );
+        assert_eq!(
+            windows_shown(
+                "drew 1 configured 0x0 buffer 640x480\ndrew 2 configured ?x0 buffer 1x1\n\
+                 drew 3 configured 0x0 buffer 640x480\ndrew 0 configured 0x0 buffer 1x1\n",
+                2
+            ),
+            None
+        );
+        assert_eq!(windows_shown("", 0), Some(Vec::new()));
     }
 }

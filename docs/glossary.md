@@ -47,6 +47,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Dismissed popup**: a popup Yuna told `popup_done`, as xdg-shell lets a compositor do: it
   leaves its window, is no longer drawn, takes no keyboard grab, and waits for its client to
   destroy it.
+- **Disturbed** (bench): said of a measured window during which the machine's other programs
+  used more than 2 cores, or more than 10 % of the GPU's drawing, on average; a run with one is
+  shown, marked †, never ranked.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
 - **Drawn rectangle**: where a frame draws a window during motion, rounded once to the physical
@@ -64,6 +67,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   that compositors that draw more are compared on the same work
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
+- **Floor** (bench): the figures of the rivals that draw least, sway and dwl, recorded beside
+  the budgets, never a budget ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
   follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
   viewport (`wp_viewporter`) to its logical size: one buffer pixel per physical pixel.
@@ -132,6 +137,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the mode's rate. In `game` and `pacing`, costs a second rank only within one pace.
 - **Pairing**: matching an X11 window with the Wayland surface Xwayland draws it into, through
   the serial `xwayland-shell-v1` gives both, in either order.
+- **Peers** (bench): the rivals with Yuna's features, niri, Hyprland, Umbriel and KWin: Yuna's
+  budgets of a frame's cost and of memory are their best figure at equal work, measured the same
+  day ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Pinned window**: a floating window shown over whichever workspace its output shows.
 - **Popup grab**: a popup's request for its seat's keyboard and pointer until it is dismissed, as
   an open menu holds them; granted only with a serial its client's own seat sent to its window,
@@ -159,10 +167,17 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
   A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
+- **Refused** (bench): said of a case whose sandbox broke its rules, or whose scene was not the
+  scenario's (mpv not fullscreen): the bench stops it and measures nothing. A refusal is not a
+  failure.
 - **Retarget**: giving a running motion a new target; a spring goes on from its value and its
   velocity ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
 - **Run file**: the versioned JSON file a run of the rivals' bench writes, every figure with its
   unit; `yuna-bench report` summarises run files.
+- **Sandbox** (bench): what each compositor and client of the rivals' bench runs in: a systemd
+  scope of its own, an environment built from nothing, a runtime folder and session bus of its
+  own. It detects a process that reaches the owner's display, devices, runtime folder or bus, and
+  refuses its case; it prevents nothing ([ARCHITECTURE](ARCHITECTURE.md#the-rivals-bench)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
   seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is

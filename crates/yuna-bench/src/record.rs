@@ -3,7 +3,8 @@
 //! Every figure is a [`Figure`], a value and its unit, the value `null` when it could not be
 //! measured, never 0. In the readings kept raw (the machine's seconds, the raw `fdinfo`), the
 //! unit is the end of the field's name: `_ns`, `_kib`, `_mhz`, `_w`. A reader of a later format
-//! refuses this one rather than guess.
+//! refuses this one rather than guess. A field added since a file was written, which changes no
+//! other field's meaning, reads as `null` from it: `written_utc`, `still_windows`.
 
 use std::collections::BTreeMap;
 
@@ -57,6 +58,10 @@ pub struct RunFile {
     pub dirty: Option<bool>,
     /// When it started, in UTC.
     pub started_utc: String,
+    /// When the file was last written, in UTC: after each case, so that the file of a run cut
+    /// short says when its last case ended; at the run's end, when its last did.
+    #[serde(default)]
+    pub written_utc: Option<String>,
     /// The bench's arguments.
     pub arguments: Vec<String>,
     /// The seed of the cases' random order.
@@ -150,6 +155,22 @@ pub struct CaseRun {
     pub disturbed: Option<bool>,
     /// Facts a reader needs beside the figures.
     pub notes: Vec<String>,
+    /// The still client's windows as they were shown once the scenario's windows ended, in its
+    /// `rest` and `motion`; none in the other scenarios, when its log did not give every window,
+    /// or in a file written before the field.
+    #[serde(default)]
+    pub still_windows: Option<Vec<StillWindow>>,
+}
+
+/// One of the still client's windows, as it last drew: the compositor's layout sets its size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StillWindow {
+    /// The size its last configure asked, in logical pixels, width then height: 0 on an axis the
+    /// compositor left to the window, which then drew 640 × 480.
+    pub configured: [i32; 2],
+    /// Its buffer's size in pixels, width then height: the logical size it drew at times the
+    /// preferred scale, where it could honour one.
+    pub buffer: [i32; 2],
 }
 
 /// One measured window.
@@ -210,11 +231,12 @@ pub struct Usage {
     /// none without CPU time.
     pub threads_coverage: Option<f64>,
     /// Voluntary context switches, every thread together: its wake-ups. Those of processes
-    /// that lived between two readings are missed: see `wakeups_lower_bound`.
+    /// that lived between two readings are missed: see `wakeups_lower_bound`. Exactly 0 when the
+    /// group ran nothing ([`Usage::ran_nothing`]).
     pub wakeups: Figure,
     /// Whether `wakeups` and `preemptions` are lower bounds: the threads sampled account for
     /// less than [`COVERAGE`] of the group's CPU time, so processes escaped the readings, or
-    /// that share is unknown, its `cpu.stat` unread or nil.
+    /// that share is unknown, its `cpu.stat` unread. Never when the group ran nothing.
     pub wakeups_lower_bound: bool,
     /// Involuntary context switches: its preemptions.
     pub preemptions: Figure,
@@ -226,6 +248,67 @@ pub struct Usage {
     pub drm_clients: usize,
     /// The readings the window took.
     pub readings: usize,
+}
+
+impl Usage {
+    /// Whether no thread of the group ran in the window: its `cpu.stat`, which counts every
+    /// thread that ran, those that ended included, counted no CPU time. A thread that woke would
+    /// have run, so none did: the group's wake-ups and preemptions are exactly 0, whatever the
+    /// readings around the window saw.
+    pub fn ran_nothing(&self) -> bool {
+        self.cpu.value == Some(0.0)
+    }
+
+    /// Sets its wake-ups and preemptions to exactly 0 if it ran nothing.
+    fn settle_if_idle(&mut self) {
+        if self.ran_nothing() {
+            self.wakeups = Figure::count(0);
+            self.preemptions = Figure::count(0);
+            self.wakeups_lower_bound = false;
+        }
+    }
+}
+
+impl Phase {
+    /// Each group's usage, named as the window's figures name it: `core`, `stack` and
+    /// `client_<name>`, as in `core_wakeups`.
+    pub fn usages(&self) -> Vec<(String, &Usage)> {
+        let mut usages = vec![
+            ("core".to_owned(), &self.core),
+            ("stack".to_owned(), &self.stack),
+        ];
+        usages.extend(
+            self.clients
+                .iter()
+                .map(|client| (format!("client_{}", client.name), &client.usage)),
+        );
+        usages
+    }
+
+    /// Applies to a window read from a file written before [`Usage::ran_nothing`]'s rule that a
+    /// group which ran nothing woke exactly 0 times: such a file marked its wake-ups and
+    /// preemptions lower bounds.
+    pub fn settle_idle_groups(&mut self) {
+        let idle: Vec<String> = self
+            .usages()
+            .into_iter()
+            .filter(|(_, usage)| usage.ran_nothing())
+            .map(|(name, _)| name)
+            .collect();
+        for name in idle {
+            for key in [format!("{name}_wakeups"), format!("{name}_preemptions")] {
+                if let Some(figure) = self.figures.get_mut(&key) {
+                    figure.value = Some(0.0);
+                }
+                self.lower_bounds.retain(|bound| *bound != key);
+            }
+        }
+        self.core.settle_if_idle();
+        self.stack.settle_if_idle();
+        for client in &mut self.clients {
+            client.usage.settle_if_idle();
+        }
+    }
 }
 
 /// One kind of thread of one process.
@@ -305,7 +388,8 @@ pub struct ProcessMemory {
     pub memory: MemorySum,
 }
 
-/// The usage of a group over a window: its `cpu.stat` at both ends, and its window.
+/// The usage of a group over a window: its `cpu.stat` at both ends, and its window. A group that
+/// ran nothing woke exactly 0 times ([`Usage::ran_nothing`]).
 pub fn usage(before: Option<CpuStat>, after: Option<CpuStat>, window: &Window) -> Usage {
     let microseconds = |pick: fn(&CpuStat) -> u64| {
         let value = match (before, after) {
@@ -343,7 +427,7 @@ pub fn usage(before: Option<CpuStat>, after: Option<CpuStat>, window: &Window) -
         .value
         .filter(|cpu| *cpu > 0.0)
         .map(|cpu| if seen { total.cpu_ns as f64 / cpu } else { 0.0 });
-    Usage {
+    let mut usage = Usage {
         cpu,
         cpu_user: microseconds(|stat| stat.user_us),
         cpu_system: microseconds(|stat| stat.system_us),
@@ -361,7 +445,9 @@ pub fn usage(before: Option<CpuStat>, after: Option<CpuStat>, window: &Window) -
             .collect(),
         drm_clients: window.drm_clients(),
         readings: window.readings(),
-    }
+    };
+    usage.settle_if_idle();
+    usage
 }
 
 fn add(figure: &mut Figure, more: u64) {
@@ -449,9 +535,8 @@ mod tests {
         };
         let exact = super::usage(Some(before), Some(covered), &window);
         assert!(!exact.wakeups_lower_bound, "{:?}", exact.threads_coverage);
-        // Without the group's time, or with none, the share is unknown: not exact.
+        // Without the group's time, the share is unknown: not exact.
         assert!(super::usage(None, Some(after), &window).wakeups_lower_bound);
-        assert!(super::usage(Some(before), Some(before), &window).wakeups_lower_bound);
         // A window that saw no thread knows no wake-up.
         let empty = Window::start(Sample::default());
         let unseen = super::usage(Some(before), Some(after), &empty);
@@ -460,5 +545,77 @@ mod tests {
         assert!(unseen.wakeups_lower_bound);
         assert_eq!(thread_kind("llvmpipe-12"), "llvmpipe");
         assert_eq!(thread_kind("1234"), "1234");
+    }
+
+    #[test]
+    fn a_group_that_ran_nothing_woke_exactly_zero_times() {
+        let counts = |cpu_ns: u64, voluntary: u64| ThreadCounts {
+            process: "dwl".to_owned(),
+            name: "dwl".to_owned(),
+            cpu_ns,
+            voluntary,
+            involuntary: voluntary,
+        };
+        let mut first = Sample::default();
+        first
+            .threads
+            .insert(ThreadId { pid: 1, tid: 1 }, counts(0, 0));
+        let mut window = Window::start(first);
+        // The readings run a little past the window's exact ends, and saw a wake-up there.
+        let mut second = Sample::default();
+        second
+            .threads
+            .insert(ThreadId { pid: 1, tid: 1 }, counts(1_000, 1));
+        window.observe(second);
+        let stat = CpuStat {
+            usage_us: 50,
+            user_us: 30,
+            system_us: 20,
+        };
+        let idle = usage(Some(stat), Some(stat), &window);
+        assert!(idle.ran_nothing());
+        assert_eq!(idle.wakeups, Figure::count(0));
+        assert_eq!(idle.preemptions, Figure::count(0));
+        assert!(!idle.wakeups_lower_bound);
+        // So too when no thread was read at all: none ran.
+        let unseen = usage(Some(stat), Some(stat), &Window::start(Sample::default()));
+        assert_eq!(unseen.wakeups, Figure::count(0));
+        assert!(!unseen.wakeups_lower_bound);
+        // An unread `cpu.stat` is no proof that nothing ran.
+        let unknown = usage(None, None, &window);
+        assert!(!unknown.ran_nothing());
+        assert!(unknown.wakeups_lower_bound);
+
+        // A window of a file written before the rule: its idle core's wake-ups were marked lower
+        // bounds; its busy client's stay as they were.
+        let mut old = Phase {
+            core: Usage {
+                cpu: Figure::new(Some(0.0), "ns"),
+                wakeups: Figure::count(0),
+                wakeups_lower_bound: true,
+                ..Usage::default()
+            },
+            clients: vec![ClientUsage {
+                name: "still".to_owned(),
+                usage: Usage {
+                    cpu: Figure::new(Some(4_000.0), "ns"),
+                    wakeups: Figure::count(3),
+                    wakeups_lower_bound: true,
+                    ..Usage::default()
+                },
+            }],
+            ..Phase::default()
+        };
+        for key in ["core_wakeups", "core_preemptions", "client_still_wakeups"] {
+            let value = if key.starts_with("core") { 0.0 } else { 0.05 };
+            old.figures
+                .insert(key.to_owned(), Figure::new(Some(value), "per_s"));
+            old.lower_bounds.push(key.to_owned());
+        }
+        old.settle_idle_groups();
+        assert_eq!(old.lower_bounds, ["client_still_wakeups"]);
+        assert_eq!(old.figures["core_wakeups"].value, Some(0.0));
+        assert!(!old.core.wakeups_lower_bound);
+        assert!(old.clients[0].usage.wakeups_lower_bound);
     }
 }

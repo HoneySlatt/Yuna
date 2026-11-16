@@ -22,8 +22,9 @@ serde.workspace = true
 serde_json.workspace = true
 # Already in Cargo.lock, through Smithay and wayland-backend: the system calls the standard library
 # lacks. `time` reads CLOCK_MONOTONIC, the clock KWin stamps its frames with; `process` sends
-# SIGTERM and SIGINT; `fs` makes the still windows' memfds; `net` asks the kernel which socket each
-# socket is connected to (sock_diag), to refuse a compositor connected to the owner's.
+# SIGTERM and SIGINT, and reads the user's id, which names their runtime folder; `fs` makes the
+# still windows' memfds; `net` asks the kernel which socket each socket is connected to
+# (sock_diag), to refuse a compositor connected to the owner's.
 rustix = { version = "1.1.6", features = ["fs", "net", "process", "time"] }
 
 [lints]

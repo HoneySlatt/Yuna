@@ -158,21 +158,17 @@ pub struct Owner {
     pub runtime_folders: Vec<PathBuf>,
 }
 
+/// This process's user's runtime folder, `/run/user/<uid>`, which systemd makes at their login:
+/// the owner's, where their display's socket and session bus are. An agents' service runs as the
+/// same user with an `XDG_RUNTIME_DIR` of its own beneath it.
+pub fn user_runtime_folder() -> PathBuf {
+    PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw()))
+}
+
 impl Owner {
     /// The owner of this process: its user's runtime folders.
     pub fn of_this_process() -> Owner {
-        let uid = fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|status| {
-                status
-                    .lines()
-                    .find_map(|line| line.strip_prefix("Uid:"))
-                    .and_then(|ids| ids.split_whitespace().next()?.parse::<u32>().ok())
-            });
-        let mut runtime_folders: Vec<PathBuf> = uid
-            .map(|uid| PathBuf::from(format!("/run/user/{uid}")))
-            .into_iter()
-            .collect();
+        let mut runtime_folders = vec![user_runtime_folder()];
         for name in ["OWNER_RUNTIME_DIR", "XDG_RUNTIME_DIR"] {
             if let Some(folder) = std::env::var_os(name).map(PathBuf::from)
                 && !runtime_folders.contains(&folder)

@@ -39,8 +39,8 @@ pub const OUTPUT_SCALE: f64 = 1.5;
 /// a frame event `frame_delay = 1000000 / refresh` after each commit, in whole milliseconds
 /// (`backend/headless/output.c:31` and `:76`, `int frame_delay; // ms` in
 /// `include/backend/headless.h:24`, wlroots 0.20.2). 1000000 / 240000 is 4 ms: 250 frames a
-/// second when frames take no time to draw, fewer as they take more, 241.7 to 243.9 in `game` on
-/// 2026-11-16.
+/// second when frames take no time to draw, fewer as they take more; the summary gives the rates
+/// its runs reached.
 pub const WLROOTS_HEADLESS_HZ: f64 = 1000.0 / (1_000_000 / OUTPUT_MILLIHERTZ) as f64;
 
 /// How a backend paces a compositor whose client draws as fast as the compositor takes its

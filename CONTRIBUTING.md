@@ -38,7 +38,8 @@ The shell gives:
 A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths, in
 `YUNA_BENCH_*` variables: sway, KWin, dwl and mango (each also built without XWayland, for equal
 work), Umbriel (built from its source at the revision `flake.lock` pins, the flake's `umbriel`
-input), Hyprland, Mutter, wlr-randr, weston, ffmpeg and D-Bus. CI never fetches it.
+input), Hyprland, Mutter, wlr-randr, weston, ffmpeg, D-Bus, Xwayland, the Mesa they all draw
+with, coreutils and bash. CI never fetches it.
 
 Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
 `yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
@@ -131,21 +132,41 @@ nix develop .#bench -c cargo run --release -p yuna-bench -- report target/yuna-b
 by default) and `--configuration` (`as-shipped`, `equal-work`); `--runs` (3 by default), run in a
 random order whose seed it records, `--seed` to replay one. `--seconds` makes every measured
 window shorter, to try it: such figures are not comparable. With Yuna among the compositors, it
-builds it for release first. `rest` with 15 windows, `game` and `motion`, once each for dwl,
-mango, Umbriel, Hyprland and Mutter at equal work, took 13 to 14 minutes on 2026-11-16; a whole
-run, every recipe, configuration and scenario three times, has not been timed. It writes
-`target/yuna-bench/run-<time>.json`, the run file, and its summary in Markdown beside it (`--out` for another folder); it keeps the run's folder of logs in
-`/tmp/yuna-bench-<pid>-<time>` when a case fails, or with `--keep`. It takes the agents' exclusive
-lock itself, waiting for any other exclusive run; under `run.sh --exclusive` it uses the lock its
-parent holds; no descriptor it inherited reaches a compositor or a client. It refuses a case whose
-compositor or clients open a `/dev/dri/card*` node or an input device, or reach the owner's
-runtime folder or an X11 display outside their sandbox, and never runs anything on the owner's
-display. Killed outright, it leaves its sandboxes running until its next start
-kills them. The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw a frame
-4 ms after each commit, since wlroots counts whole milliseconds: up to 250 frames a second for
-the 240 Hz mode, fewer under load, 241.7 to 243.9 in `game`. The others draw at the mode's rate.
-In `game` and `pacing`, whose client draws as fast as the compositor takes its frames, the summary
-therefore ranks costs a second only within one of these paces.
+builds it for release first. On 2026-11-16, every recipe and scenario at equal work, three times,
+189 cases, took 3 h 07 min; as shipped, once each, 63 cases, 1 h 03 min.
+
+It writes `target/yuna-bench/run-<time>.json`, the run file (`--out` for another folder), before
+its first case and again after each, through a temporary file and a rename: a run cut short
+keeps every case it ran, and `report` summarises it. At its end it writes the summary in
+Markdown beside it. It keeps the run's folder of logs in `/tmp/yuna-bench-<pid>-<time>` when a
+case fails, or with `--keep`. It takes the agents' exclusive lock itself, waiting for any other
+exclusive run: `agents-exclusive-run.lock` in `$OWNER_RUNTIME_DIR`, or in `/run/user/<uid>` when
+that is unset, never in an agents' service's own `XDG_RUNTIME_DIR`. Under `run.sh --exclusive`,
+which locks that file when `OWNER_RUNTIME_DIR` is set, it uses the lock its parent holds; with
+the variable unset, `run.sh` locks a file in its service's own folder, and the bench takes the
+owner's itself. The run file says which file it locked, and how. No descriptor it inherited
+reaches a compositor or a client. Killed outright, it leaves its sandboxes running until its next
+start kills them.
+
+Its sandbox detects; it does not prevent. The rivals run as the owner's user, without
+namespaces, kept off the owner's display, devices, runtime folder and session bus by their
+configuration alone: a cleared environment, and a runtime folder and session bus of their own.
+The bench checks each compositor and its clients once the compositor is ready, again once a
+scenario's clients are up, before anything is measured, and every 250 ms in each measured window
+for the device nodes. A process that opens a `/dev/dri/card*` node or an input device, reaches a
+socket in the owner's runtime folder (their Wayland display and session bus among them) or an
+X11 display served outside its sandbox, or names that folder in its environment, has its case
+refused and stopped, and nothing of it measured; what it did before the check found it is not
+undone. To see which socket a socket is connected to, the checks read the kernel's socket
+diagnostics (`sock_diag`); without them, they see only the sockets bound in the owner's runtime
+folder, and each case's run says so. The bench itself never starts anything on the owner's
+display.
+
+The rivals on wlroots' headless backend (sway, dwl, mango, Umbriel) draw a frame 4 ms after each
+commit, since wlroots counts whole milliseconds: up to 250 frames a second for the 240 Hz mode,
+fewer as each frame takes time to draw. The others draw at the mode's rate. The summary gives
+the rates their runs of `game` reached, and how it ranks is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench).
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
@@ -235,9 +256,9 @@ otherwise.
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
 ([ADR-0036](docs/adr/0036-yuna-is-public.md)). A change of Markdown files alone skips it:
-[`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`, their
-links and the length of those read at every session, with lychee and git alone, in a minute or
-two. `scripts/check.sh docs` runs the same locally.
+[`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`: their
+links, the length of those read at every session, the ADRs' index, the changelog's fragments and
+the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
 changes the drawing path or what the agent's story uses; it builds the examples and cooks their

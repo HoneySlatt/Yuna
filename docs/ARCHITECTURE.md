@@ -74,10 +74,17 @@ One Cargo workspace; its crates live in `crates/`.
 - `yuna-layout` → nothing. Its tests use proptest, without its default features.
 - `yuna-motion` → `yuna-layout`. Its tests use proptest, without its default features.
 - `yuna-bench` → `wayland-client` and `wayland-protocols`' client side, for its own clients;
-  `serde` and `serde_json`, for its run file and mpv's IPC; rustix, already Smithay's, for
-  CLOCK_MONOTONIC, signals, memfds and the kernel's socket diagnostics. At run time, from the
-  bench shell: sway, KWin, weston's `weston-presentation-shm`, ffmpeg, D-Bus, and the host's
-  `systemd-run`, which makes each sandbox.
+  `wayland-protocols-misc`, for its virtual keyboard's `zwp_virtual_keyboard_v1`; `serde` and
+  `serde_json`, for its run file and mpv's IPC; rustix, already Smithay's, for CLOCK_MONOTONIC,
+  signals, the user's id, memfds and the kernel's socket diagnostics. At run time, from the bench
+  shell: the compositors of its nine recipes, sway (for sway and sway-vulkan), KWin, dwl and
+  mango (each also built without XWayland), Umbriel, Hyprland (through `start-hyprland`, inside a
+  dwl) and Mutter, and Yuna, which it builds from the workspace with `cargo`; their tools,
+  `swaymsg`, `dbus-send`, `wlr-randr`, `mmsg`, `umbriel`, `hyprctl` and `gdctl`; mpv, from the
+  applications' `PATH`, and weston's `weston-presentation-shm`, under coreutils' `stdbuf`, as
+  clients; Xwayland, which the rivals as shipped start; ffmpeg, for its clips; D-Bus's
+  `dbus-run-session` and `dbus-daemon`; coreutils' `env`, and bash; `git`, for the commit it
+  records; and the host's `systemd-run`, which makes each sandbox.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
@@ -1338,14 +1345,18 @@ scenario; each run of a case goes:
    (`/dev/input/*`, `/dev/uinput`, `/dev/hidraw*`), reaches a socket in the owner's runtime
    folder, is connected to an X11 display served outside the sandbox, or names the owner's
    runtime folder in its environment. Each window's readers check the same nodes again every
-   250 ms, and one found then refuses the case too.
+   250 ms, and one found then refuses the case too. These checks detect; they do not prevent
+   (the known limits below).
 4. **The windows** (`scenarios.rs`). In each measured window, the control groups' `cpu.stat` at
    its ends give exact CPU times; a reader every 250 ms keeps each thread's time and context
    switches and each DRM client's engine times, so that those that end inside count up to their
    last reading (`sampler.rs`). Wake-ups are a lower bound when the threads read account for less
    than 90 % of the group's CPU time, or when that share is unknown: processes then lived and
-   ended between readings. Another reader takes the machine's state each second (`machine.rs`).
-   Memory is read after the window. The run notes the core's threads under a realtime policy.
+   ended between readings. A group whose `cpu.stat` counted no CPU time ran no thread, so woke
+   exactly 0 times. Another reader takes the machine's state each second (`machine.rs`). Memory
+   is read once the compositor is ready and after the cost window: each process's
+   `smaps_rollup`, and the DRM `fdinfo` of its GPU files. The run notes the core's threads under
+   a realtime policy.
 5. **The frames.** A cost a frame is given only from an exact count of the window's own frames:
    KWin's frame log, which it writes in the cost window; Umbriel's count of its output's
    commits, read at the cost window's ends; or, in `game`, mpv's frames shown, read over its
@@ -1385,27 +1396,51 @@ only, and cosmic-comp has none. They are measured on the owner's tour alone, and
 says so. The recipe of each gives its reasons, with its sources' lines.
 
 The run file holds every figure with its unit, the raw `fdinfo`, the machine's state each second,
-how each window's frames were counted, and which figures are lower bounds. `yuna-bench report`
-turns run files into tables. It ranks a cost only where the runs' spreads do not overlap, among
-*equal work* runs that other programs did not disturb, and names a compositor all of whose runs
-were disturbed; it never ranks a lower bound. In `game` and `pacing`, whose client draws as fast
-as the compositor takes its frames, it ranks a cost a second only between compositors on the
-same pace, the recipe's: wlroots' headless timer, or the mode's rate. In `rest`, `motion` and
-`film`, where equal work draws only when something changes, it ranks them across every
-compositor. A figure of the stack ranks apart for a compositor whose stack holds its parent. A
-cost a frame ranks only between compositors on the same backend whose frames were counted the
-same way. It ends with every rival of ADR-0071, measured or not, and those on the tour only.
+how each window's frames were counted, which figures are lower bounds, the lock the run held,
+and each still window's configured size and buffer. The bench writes it before its first case
+and again after each, through a temporary file flushed to the disk and a rename, with the time
+of the writing: a run cut short keeps every case it ran, whole.
+
+`yuna-bench report` turns run files into tables. It ranks only the runs of one day and one
+machine state ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)): the UTC day
+their run file started, one machine whole (processor, memory, GPU, VBIOS, firmware, kernel and
+Mesa) and one GPU performance level, those of the first file named. Other runs are shown on rows
+of their own, marked ‡, unranked, with why. It ranks a figure only where the runs' spreads do
+not overlap, among *equal work* runs that other programs did not disturb, and names a compositor
+all of whose runs were disturbed; it never ranks a lower bound. In `game` and `pacing`, whose
+client draws as fast as the compositor takes its frames, it ranks a cost a second only between
+compositors on the same pace, the recipe's: wlroots' headless timer, or the mode's rate. In
+`rest`, `motion` and `film`, where equal work draws only when something changes, it ranks them
+across every compositor. A cost a frame does not scale with the pace: it ranks across backends,
+between compositors whose frames were counted the same exact way, by mpv in `game` or by one
+compositor's own count; frame counts never rank. A figure of the stack ranks apart for a
+compositor whose stack holds its parent. Its memory at rest gives each compositor's core after
+`rest`'s cost window, at each count of still windows the files ran (1, 15 and 150 by default),
+and its growth a window from the fewest to the most: its own memory (`Pss_Anon` + `Pss_File`) and its GPU memory (`resident-vram` + `resident-gtt`) rank, and
+the clients' buffers it holds (`Pss_Shmem`) are shown, not ranked, since each layout gives the
+still windows sizes of its own. A run file written before the bench gave a group that ran
+nothing exactly 0 wake-ups is read under that rule. It ends with every rival of
+[ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
+measured or not, and those on the tour only.
 
 Known limits:
 
+- The sandbox detects; it does not prevent. No namespace keeps a rival from the owner's display,
+  devices, runtime folder or session bus: the rivals run as the owner's user, kept off them by
+  their configuration alone, a cleared environment and a runtime folder and bus of their own. A
+  rival that reached one would be seen at the next check, once ready, once its scenario's clients
+  are up, or by a window's readers every 250 ms for the device nodes, and its case refused; what
+  it did between two checks is not undone. To see which socket a socket is connected to, the
+  checks read the kernel's socket diagnostics (`sock_diag`). Without them, they see the sockets
+  bound in the owner's runtime folder, not those connected to one, and each case's run says so.
 - Frames counted by capture are lower bounds, and each copy of a 4K shm buffer costs the
   compositor milliseconds.
 - wlroots' headless backend sends a frame event 4 ms after each commit: it counts whole
   milliseconds, `1000000 / 240000` = 4 (`backend/headless/output.c:31` and `:76`). sway, dwl,
   mango and Umbriel draw up to 250 frames a second for a 240 Hz mode, fewer as each frame takes
-  time to draw: 241.7 to 243.9 in `game` on 2026-11-16. KWin, Hyprland, Mutter and Yuna draw at
-  the mode's rate, 240 at most. Where the client paces the compositor, their costs a second rank
-  apart.
+  time to draw; the summary gives the rates their runs reached. KWin, Hyprland, Mutter and Yuna
+  draw at the mode's rate, 240 at most. Where the client paces the compositor, their costs a
+  second rank apart.
 - Yuna and Mutter have no actions for `motion`. Mutter takes no command for its windows from
   outside: GNOME Shell drives them from inside Mutter's process, and is not measured.
 - Hyprland's parent is dwl, not sway: Aquamarine binds `xdg_wm_base` at version 6, which sway
@@ -1417,9 +1452,9 @@ Known limits:
   parent, which the summary says, and its figures of the stack rank apart.
 - dwl and mango have no switch for XWayland at run time: equal work runs nixpkgs' build of each
   without it, the same code but XWayland's.
-- mpv, with `--untimed` and a FIFO swap chain, sometimes stays at its first frames on Mutter, with
-  or without a seek: four of the bench's six starts of `game` there on 2026-11-16. The bench then fails the case ("mpv's
-  clip did not play in its warm-up") rather than measure an empty scene; a run again may play.
+- mpv, with `--untimed` and a FIFO swap chain, can stay at its first frames on Mutter, with or
+  without a seek. The bench then fails the case ("mpv's clip did not play in its warm-up")
+  rather than measure an empty scene; a run again may play.
 - Mutter's default plugin draws a plain colour with a vignette behind the windows, which no switch
   removes; Umbriel as shipped shows its keybind cheatsheet throughout.
 - Umbriel's commits are read inside the cost window, at its ends: two answers of its IPC count in

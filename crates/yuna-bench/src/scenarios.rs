@@ -263,6 +263,7 @@ pub fn run_case(bench: &mut Bench, case: &Case, repeat: u32) -> CaseRun {
         stopped: None,
         disturbed: None,
         notes: Vec::new(),
+        still_windows: None,
     };
     let (Some(recipe), Some(configuration)) = (
         recipes::recipe(&case.compositor),
@@ -1222,15 +1223,22 @@ fn rest(
 ) -> Result<Windows, Stop> {
     let still = still_client(bench, running, windows)?;
     std::thread::sleep(bench.durations.settle);
-    let windows = cost_and_frames(
+    let measured = cost_and_frames(
         bench,
         running,
         &[&still],
         &mut idle(bench.durations.rest),
         run,
     );
+    run.still_windows = still_windows(&still, windows);
     still.stop(Signal::TERM);
-    windows
+    measured
+}
+
+/// The still client's windows as its log last says they were drawn: the sizes the compositor's
+/// layout gave them.
+fn still_windows(still: &Client, windows: u32) -> Option<Vec<record::StillWindow>> {
+    crate::still::windows_shown(&still.log()?, windows)
 }
 
 /// A clip the bench makes with ffmpeg's test pattern, H.264.
@@ -1419,8 +1427,8 @@ fn wait_fullscreen(socket: &Path, mpv: &mut Client, run: &mut CaseRun) -> Result
 }
 
 /// Lets mpv play for `length`, and fails the case if its clip did not: a stalled mpv is no scene
-/// to measure. mpv with `--untimed` and a FIFO swap chain sometimes stays at its first frames on
-/// Mutter 51.0, sought or not: four of the bench's six starts of `game` there on 2026-11-16.
+/// to measure. mpv with `--untimed` and a FIFO swap chain can stay at its first frames on Mutter
+/// 51.0, sought or not.
 fn warm_up(socket: &Path, length: Duration) -> Result<(), Stop> {
     let position = || logs::mpv_property(socket, "time-pos").ok().flatten();
     let before = position();
@@ -1681,6 +1689,7 @@ fn motion(bench: &mut Bench, running: &Running, run: &mut CaseRun) -> Result<Win
         }
         Err(error) => Err(Stop::Failed(error)),
     };
+    run.still_windows = still_windows(&still, MOTION_WINDOWS);
     still.stop(Signal::TERM);
     if let Some(keys) = keys {
         keys.stop(Signal::TERM);
@@ -1871,21 +1880,10 @@ pub fn derive(phase: &mut Phase, count: Option<Count>) {
     };
     let mut figures = Figures::new();
     let mut lower_bounds = Vec::new();
-    let mut costs: Vec<(String, Option<f64>)> = vec![
-        ("core_cpu".to_owned(), phase.core.cpu.value),
-        ("core_gpu".to_owned(), drawing(&phase.core)),
-        ("stack_cpu".to_owned(), phase.stack.cpu.value),
-        ("stack_gpu".to_owned(), drawing(&phase.stack)),
-    ];
-    for client in &phase.clients {
-        costs.push((
-            format!("client_{}_cpu", client.name),
-            client.usage.cpu.value,
-        ));
-        costs.push((
-            format!("client_{}_gpu", client.name),
-            drawing(&client.usage),
-        ));
+    let mut costs: Vec<(String, Option<f64>)> = Vec::new();
+    for (name, usage) in phase.usages() {
+        costs.push((format!("{name}_cpu"), usage.cpu.value));
+        costs.push((format!("{name}_gpu"), drawing(usage)));
     }
     for (name, ns) in &costs {
         figures.insert(name.clone(), per_second_ms(*ns, seconds));
@@ -1896,17 +1894,7 @@ pub fn derive(phase: &mut Phase, count: Option<Count>) {
             per_second_ms(figure.value, seconds),
         );
     }
-    let mut woken: Vec<(String, &record::Usage)> = vec![
-        ("core".to_owned(), &phase.core),
-        ("stack".to_owned(), &phase.stack),
-    ];
-    woken.extend(
-        phase
-            .clients
-            .iter()
-            .map(|client| (format!("client_{}", client.name), &client.usage)),
-    );
-    for (name, usage) in woken {
+    for (name, usage) in phase.usages() {
         let per_s = |figure: &Figure| Figure::new(figure.value.map(|v| v / seconds), "per_s");
         figures.insert(format!("{name}_wakeups"), per_s(&usage.wakeups));
         figures.insert(format!("{name}_preemptions"), per_s(&usage.preemptions));
