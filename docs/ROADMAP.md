@@ -76,17 +76,19 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 
 ### Budgets
 
-Starting figures, tightened once the rivals are measured (Stage 1). A budget missed is debt until
-it is met.
+A budget set from the rivals is a comparison measured the same day and the figure it gave, checked
+until the rivals are measured again at the next stage's end
+([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)). A budget missed is debt
+until it is met.
 
 | Budget | Figure | Measured by |
 |---|---|---|
 | At rest | 0 frames, 0 own wake-ups a second, 0 % of a core | every thread's context switches over 10 s, headless and on the desktop |
 | Motion | no missed frame at 240 Hz while scrolling, animating or switching workspaces | presentation feedback over scripted gestures, headless and on the owner's monitor |
 | Input to present | at a fixed rate, no commit presented after the first boundary it could reach, and end to end at the 99th percentile against gamescope and KWin; under VRR or tearing, one frame, 4.17 ms on the high tier ([ADR-0076](adr/0076-input-to-present-read-by-mode.md)) | input given through the compositor, presentation feedback and the frame log read |
-| A frame's cost | GPU and CPU time per frame, set from the rivals' at Stage 1 | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
+| A frame's cost | in a fullscreen game, CPU and GPU time a frame at most the best peer's at equal work, the same day: 198 µs and 203 µs on the high tier, Umbriel's on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)) | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
-| Memory | set from the rivals' at Stage 1 | resident memory at rest with 15 windows |
+| Memory | at rest, at most the best peer's at equal work, the same day: 102 MiB with 15 windows and 0.03 MiB a window, Umbriel's on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); missed, debt | the proportional set size of the process at rest with 1, 15 and 150 windows |
 | Start | from launch to the first frame, set from the rivals' at Stage 2 | the log's times |
 | A crash | back within 1 s; no window lost of an application that reconnects; the others reopened in place | a test that kills Yuna and counts the windows |
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |

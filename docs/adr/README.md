@@ -93,3 +93,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Accepted |
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
+| [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
