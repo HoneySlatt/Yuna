@@ -149,8 +149,8 @@ milestone first needs it.
   display check are recorded.
 - **Status.** Design done. D: the prototype on `prototype/vulkan` at `86984e3`, measured on the
   desktop, lavapipe, the laptop and the Deck ([measurements](measurements.md)), the laptop's
-  display checked; the tours are the owner's, at the milestone's end ([owner's runs](owner-runs.md)). A: the bench merged, with sway, KWin and Yuna;
-  B (the other recipes) started.
+  display checked; the tours are the owner's, at the milestone's end ([owner's runs](owner-runs.md)). A and B: the bench and every
+  rival's recipe merged; the equal-work series running; C (the tour) started.
 
 ### M1.10 — Yuna for the owner's other projects
 
