@@ -5,7 +5,9 @@ What changed for users, newest first. Yuna has no release yet: everything below 
 [`changelog.d/`](changelog.d/README.md); `scripts/changelog.py --merge` brings them here at each
 release.
 
-## Unreleased
+## [Unreleased]
+
+### Added
 
 - X11 programs can connect: each seat with a Wayland socket gets an X display of its own, and
   the first X11 program to connect starts Xwayland for it, found on `PATH`, behind the seat's
