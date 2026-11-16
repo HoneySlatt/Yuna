@@ -4,6 +4,81 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.9 — The rivals headless, at equal work (2026-11-16)
+
+The bench (`crates/yuna-bench`, [ADR-0071](adr/0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md)),
+commit `627f160`, every recipe at equal work (effects, wallpaper and XWayland off), every scenario,
+three runs of each case in a random order (seed `1794809641392719660`), 189 cases from 06:14 UTC,
+none failed, none disturbed by other programs. Machine as in M1.4's B4: Ryzen 7 5800X, RX 6900 XT,
+Linux 7.3.1, Mesa 26.2.6; the GPU's level `high`, as the owner set it. Every compositor on the
+render node, one output at 3840 × 2160, 240 Hz, scale 1.5, read back from the compositor. Versions:
+sway 1.12 on wlroots 0.20.2 (GLES2, and Vulkan as sway-vulkan), dwl 0.9, mango 0.18.4, Umbriel
+`d171ccb`, Hyprland 0.57.1 (inside a dwl parent counted outside its core, without realtime
+scheduling), KWin 6.8.2, Mutter 51.0, Yuna on Smithay's GLES. Command:
+
+```sh
+nix develop .#bench -c cargo run --release -p yuna-bench -- headless \
+  --compositor sway,sway-vulkan,kwin,yuna,dwl,mango,umbriel,hyprland,mutter \
+  --configuration equal-work --scenario rest,game,film,pacing,motion --runs 3
+```
+
+The lowest and highest of the three runs. wlroots' headless backend draws 4 ms after each commit,
+so its rivals run at up to 250 frames a second where the others hold 240: costs a second compare
+only within one pace; costs a frame, from exact counts, compare across.
+
+**A game**: mpv fullscreen, a 240-frame-a-second clip drawn with Vulkan on radv, 10 s; frames
+counted by mpv in the window itself.
+
+| Compositor | Frames a second | CPU a frame | GPU a frame | PSS |
+|---|---|---|---|---|
+| Yuna | 240 | 160–166 µs | 191–196 µs | 69.4–69.5 MiB |
+| Umbriel | 242 | 198–200 µs | 203–207 µs | 86.3–86.6 MiB |
+| Hyprland | 239 | 210–214 µs | 336–343 µs | 126 MiB |
+| KWin | 240 | 244–247 µs | 332–336 µs | 189–192 MiB |
+| Mutter | 240 | 248–249 µs | 289–292 µs | 91.6–91.7 MiB |
+| sway | 244 | 150–153 µs | 215–218 µs | 76.8–77.0 MiB |
+| sway on Vulkan | 242 | 169–170 µs | 290–296 µs | 62.3 MiB |
+| dwl | 244 | 150–152 µs | 215–217 µs | 70.5–70.6 MiB |
+| mango | 244 | 156–157 µs | 216–219 µs | 78.2–78.5 MiB |
+
+**At rest**, still windows, 60 s after 5 s: every compositor drew nothing and used no GPU. Wake-ups
+a second: Umbriel 10.1 (its timer for hidden windows), Hyprland 3.5 to 3.6, mango 0.03, the
+others none seen (a lower bound: no CPU time to check the readings' coverage). Memory, PSS of the
+core:
+
+| Compositor | 1 window | 15 windows | 150 windows | A window, from 1 to 150 |
+|---|---|---|---|---|
+| Yuna | 98.8–98.9 MiB | 114 MiB | 146 MiB | 0.32 MiB |
+| Umbriel | 102 MiB | 102–103 MiB | 106 MiB | 0.03 MiB |
+| Hyprland | 132 MiB | 132 MiB | 133 MiB | 0.01 MiB |
+| KWin | 209–211 MiB | 247–249 MiB | 607–608 MiB | 2.7 MiB |
+| Mutter | 110 MiB | 148 MiB | 508 MiB | 2.7 MiB |
+| sway | 93.9–94.0 MiB | 94.4–94.7 MiB | 97.3–97.5 MiB | 0.02 MiB |
+| dwl | 85.4–85.5 MiB | 86.9–87.2 MiB | 89.4–89.5 MiB | 0.03 MiB |
+| mango | 94.6–94.8 MiB | 95.6–96.0 MiB | 100–101 MiB | 0.04 MiB |
+
+**Pacing**, `weston-presentation-shm` in a small window, 10 s: no presentation more than 1.5
+periods after the last, for any. Yuna, KWin, Mutter and Hyprland present at 4,166 µs (their p99
+4,166, 4,166, 4,212 to 4,223 and 4,218 to 4,235 µs); the wlroots rivals at 4,010 to 4,093 µs.
+
+**A film**, mpv playing a 24-frame-a-second clip, 10 s: every compositor showed its 240 frames,
+none dropped or delayed; 5 to 10 ms of CPU a second.
+
+**Motion**, the recipe's actions through its own commands, 8 actions: no comparison of frames
+across backends (ADR-0071); Yuna and Mutter take no outside command and were not run. Yuna's own
+motion is M1.7's, below.
+
+- **Yuna costs the least of the peers in a game**: 160 to 166 µs of CPU and 191 to 196 µs of GPU a
+  frame, against Umbriel's 198 to 200 and 203 to 207 µs, the next; and the least memory of them
+  with one window. sway and dwl, the floor ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)),
+  spend 150 µs of CPU and 215 µs of GPU a frame. sway costs the GPU more on Vulkan (290 µs)
+  than on GLES (215 µs).
+- **Yuna's memory grows by about 0.32 MiB a still window**, ten times the wlroots rivals' and
+  Umbriel's slope, a tenth of KWin's and Mutter's; its cause is not isolated (the `wl_shm`
+  textures it keeps are the likely one). At 150 windows Yuna holds 146 MiB against Umbriel's 106.
+- These are headless figures, the costs the clock does not decide; frames missed on a real
+  display, input to present and watts come from the owner's tours.
+
 ## M1.9 — The Vulkan prototype, on the desktop and lavapipe (2026-11-16)
 
 The throwaway prototype of [ADR-0073](adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md),
