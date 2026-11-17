@@ -43,9 +43,7 @@ use yuna_layout::OutputId;
 use yuna_layout::geometry::Rect;
 
 use crate::capture::{Destination, Failure, physical_area};
-use crate::screencopy::{
-    FORMATS, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT, copy_into_shm,
-};
+use crate::screencopy::{FORMATS, copy_into_shm};
 use crate::seats::seat_of_client;
 use crate::state::State;
 
@@ -183,26 +181,6 @@ impl State {
         let read = physical_area(found.id, &found.mode, rect).ok()?;
         Some((found.id, read))
     }
-
-    /// Whether `client` may keep one more frame waiting, within the bounds of capture sessions.
-    fn may_wait_another_frame(&self, client: &ClientId) -> bool {
-        let waiting = |pending: &&crate::capture::PendingCapture| {
-            matches!(
-                pending.destination,
-                Destination::Client(_) | Destination::Wlr(_)
-            )
-        };
-        let all = self.pending_captures.iter().filter(waiting).count();
-        let of_client = self
-            .pending_captures
-            .iter()
-            .filter(|pending| {
-                matches!(&pending.destination, Destination::Wlr(frame)
-                    if frame.client().as_ref() == Some(client))
-            })
-            .count();
-        of_client < MAX_CAPTURE_SESSIONS_PER_CLIENT && all < MAX_CAPTURE_SESSIONS
-    }
 }
 
 impl GlobalDispatch<ZwlrScreencopyManagerV1, ManagerGlobal> for State {
@@ -311,7 +289,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameData> for State {
             );
             return;
         }
-        if !state.may_wait_another_frame(&client.id()) {
+        if !state.may_hold_another_capture(&client.id()) {
             tracing::debug!(output = output.0, "a frame past the captures' bounds fails");
             frame.failed();
             return;

@@ -623,7 +623,9 @@ impl State {
         }
         let (id, mode, drawn_frames) = (output.id, output.mode, output.drawn_frames);
         let whole = Rectangle::from_size((to_i32(mode.width()), to_i32(mode.height())).into());
-        let mut whole_pixels: Option<Result<Vec<u8>, String>> = None;
+        // Each area clients' frames read is read once for all of them: the whole output for
+        // every `ext-image-copy-capture-v1` frame, and each `wlr-screencopy` region.
+        let mut client_reads: Vec<ClientRead> = Vec::new();
         for destination in destinations {
             match destination {
                 Destination::Agent {
@@ -655,18 +657,8 @@ impl State {
                     self.captured.push((ticket, copied));
                 }
                 Destination::Client(frame) => {
-                    let pixels = whole_pixels.get_or_insert_with(|| {
-                        let began = Instant::now();
-                        let pixels = crate::render::read_pixels(
-                            &mut self.renderer,
-                            &mut self.outputs[index],
-                            whole,
-                        )
-                        .map_err(|e| e.to_string());
-                        log_copy(id, whole, began);
-                        pixels
-                    });
-                    match pixels {
+                    let read = self.client_read(index, whole, &mut client_reads);
+                    match &client_reads[read].1 {
                         Ok(pixels) => self.finish_client_frame(
                             frame,
                             pixels,
@@ -681,17 +673,10 @@ impl State {
                     }
                 }
                 Destination::Wlr(frame) => {
-                    let began = Instant::now();
-                    let read = frame.read();
-                    let pixels = crate::render::read_pixels(
-                        &mut self.renderer,
-                        &mut self.outputs[index],
-                        read,
-                    );
-                    log_copy(id, read, began);
-                    match pixels {
+                    let read = self.client_read(index, frame.read(), &mut client_reads);
+                    match &client_reads[read].1 {
                         Ok(pixels) => {
-                            self.finish_wlr_frame(frame, &pixels, presented_at, drawn_frames);
+                            self.finish_wlr_frame(frame, pixels, presented_at, drawn_frames);
                         }
                         Err(error) => {
                             tracing::warn!(%error, output = id.0, "a client's capture failed");
@@ -701,6 +686,25 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Where in `reads` the pixels of `area` of output `index` are, read once for every
+    /// client's frame of one refresh: read now and kept there unless read already.
+    fn client_read(
+        &mut self,
+        index: usize,
+        area: Rectangle<i32, Physical>,
+        reads: &mut Vec<ClientRead>,
+    ) -> usize {
+        if let Some(found) = reads.iter().position(|(read_area, _)| *read_area == area) {
+            return found;
+        }
+        let began = Instant::now();
+        let read = crate::render::read_pixels(&mut self.renderer, &mut self.outputs[index], area)
+            .map_err(|e| e.to_string());
+        log_copy(self.outputs[index].id, area, began);
+        reads.push((area, read));
+        reads.len() - 1
     }
 
     /// What an agent's capture of `target` reads on output `index`, as its last frame drew it,
@@ -750,6 +754,9 @@ impl State {
         }
     }
 }
+
+/// An area of an output read for clients' frames, and its pixels or why they could not be read.
+type ClientRead = (Rectangle<i32, Physical>, Result<Vec<u8>, String>);
 
 /// Fails a capture that will not be copied: an agent's with `why`, a client's as `failure`
 /// says.

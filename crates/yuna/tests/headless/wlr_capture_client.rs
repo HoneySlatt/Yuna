@@ -79,6 +79,12 @@ impl WlrCaptureClient {
         )
     }
 
+    /// Binds the globals on `client`'s connection, a client that already captures through
+    /// `ext-image-copy-capture-v1` for instance.
+    pub fn bind_to(client: Client, compositor: &mut Compositor) -> WlrCaptureClient {
+        WlrCaptureClient::bind(client, compositor)
+    }
+
     fn bind(client: Client, compositor: &mut Compositor) -> WlrCaptureClient {
         let queue = client.connection().new_event_queue();
         client

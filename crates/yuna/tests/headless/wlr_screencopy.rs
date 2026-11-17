@@ -12,8 +12,12 @@ use std::time::Duration;
 use wayland_client::WEnum;
 
 use yuna::yuna_layout::OutputId;
-use yuna::{ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS_PER_CLIENT, OWNER_SEAT};
+use yuna::{
+    ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT,
+    OWNER_SEAT,
+};
 
+use crate::capture_client::CaptureClient;
 use crate::screencopy::{compositor_with_a_window, output_pixel, small_output};
 use crate::wlr_capture_client::{Format, WlrCaptureClient};
 use crate::{BLUE, RED, assert_rests, run_armed_deadlines};
@@ -278,4 +282,56 @@ fn a_removed_output_fails_its_waiting_frame() {
     compositor.remove_output(OutputId(2)).expect("removed");
     capture.roundtrip(&mut compositor);
     assert!(capture.events(waiting).failed);
+}
+
+/// The bounds hold across both capture protocols: a client keeps 4 sessions and frames waiting
+/// together, all clients 16. Four clients holding 4 wlr frames each leave no room for a fifth's
+/// `ext-image-copy-capture-v1` session, nor four holding 4 sessions each for a wlr frame.
+#[test]
+fn the_capture_bounds_count_both_protocols_together() {
+    let (mut compositor, _client) = compositor_with_a_window(RED);
+    let mut wlr_clients = Vec::new();
+    for _ in 0..MAX_CAPTURE_SESSIONS / MAX_CAPTURE_SESSIONS_PER_CLIENT {
+        let mut capture = WlrCaptureClient::connect(&mut compositor, OWNER_SEAT);
+        let first = capture.frame("HEADLESS-1", None);
+        capture.copy(first, Format::Xrgb8888, WHOLE, true);
+        capture.roundtrip(&mut compositor);
+        run_armed_deadlines(&mut compositor);
+        capture.roundtrip(&mut compositor);
+        for _ in 0..MAX_CAPTURE_SESSIONS_PER_CLIENT {
+            let frame = capture.frame("HEADLESS-1", None);
+            capture.copy(frame, Format::Xrgb8888, WHOLE, true);
+        }
+        capture.roundtrip(&mut compositor);
+        wlr_clients.push(capture);
+    }
+    let mut ext = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let session = ext.start_session("HEADLESS-1");
+    ext.roundtrip(&mut compositor);
+    assert!(
+        ext.session(session).stopped,
+        "a 17th capture past the bound of all clients"
+    );
+
+    // One client: 3 sessions and 1 wlr frame waiting fill its 4; a second frame fails.
+    let (mut compositor, _client) = compositor_with_a_window(RED);
+    let mut ext = CaptureClient::connect(&mut compositor, OWNER_SEAT);
+    for _ in 0..MAX_CAPTURE_SESSIONS_PER_CLIENT - 1 {
+        ext.start_session("HEADLESS-1");
+    }
+    ext.roundtrip(&mut compositor);
+    let mut same = WlrCaptureClient::bind_to(ext.client, &mut compositor);
+    let first = same.frame("HEADLESS-1", None);
+    same.copy(first, Format::Xrgb8888, WHOLE, true);
+    same.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    same.roundtrip(&mut compositor);
+    assert!(same.events(first).ready());
+    let kept = same.frame("HEADLESS-1", None);
+    same.copy(kept, Format::Xrgb8888, WHOLE, true);
+    let past = same.frame("HEADLESS-1", None);
+    same.copy(past, Format::Xrgb8888, WHOLE, true);
+    same.roundtrip(&mut compositor);
+    assert!(!same.events(kept).failed);
+    assert!(same.events(past).failed, "a 5th capture of one client");
 }

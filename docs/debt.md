@@ -168,8 +168,7 @@ with games' VRR:
 ## Captures
 
 - `wlr-screencopy` frames are `wl_shm` alone, their damage the whole frame: a tool that asks a
-  dmabuf, or reads the damage to copy less, gets none (ADR-0089). Each frame of a region reads
-  its region apart, where `ext-image-copy-capture-v1`'s frames of one output share one read.
+  dmabuf, or reads the damage to copy less, gets none (ADR-0089).
 
 - Smithay `8fd9fe0` asks a session's buffer constraints (`capture_constraints`) without naming
   its client: a client of another seat is told that output's size and formats before Yuna stops

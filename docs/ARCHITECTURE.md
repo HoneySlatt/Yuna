@@ -1012,8 +1012,8 @@ the frame its buffer holds. Nothing is drawn for a capture.
    `Argb8888` or `Xrgb8888`, the renderer's R, G, B, A swapped to B, G, R, A; the frame is ready
    as soon as it is copied, as the protocol asks, with full damage and the time of the boundary
    it is presented at. A frame that could not be drawn or read fails as one the client may ask
-   again; a removed output stops its sessions. A client keeps 4 sessions at most, all clients
-   16.
+   again; a removed output stops its sessions. A client keeps 4 sessions and `wlr-screencopy`
+   frames waiting together at most, all clients 16; a session or a frame past them is stopped.
 5. `wlr-screencopy-unstable-v1` (`wlr_screencopy.rs`, [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)),
    which uwui's measures speak, takes the same path under the same rules: every client sees it,
    a frame of another seat's output fails at once. A frame is one copy of the whole output or
@@ -1023,7 +1023,8 @@ the frame its buffer holds. Nothing is drawn for a capture.
    output drew since that manager object's last copy of it, or for its first, and otherwise
    waits for a refresh that draws something; its damage is the whole frame. `ready` gives the
    time of the boundary the frame is presented at. Its frames waiting count among the 4 a client
-   keeps and the 16 of all clients.
+   keeps and the 16 of all clients, with the sessions of point 4; an area read for one client's
+   frame of a refresh, the whole output or a region, is read once for all.
 
 ### The MCP server
 

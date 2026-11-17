@@ -34,6 +34,7 @@ use crate::capture::{Destination, Failure};
 use crate::output::to_i32;
 use crate::seats::seat_of_client;
 use crate::state::State;
+use smithay::reexports::wayland_server::backend::ClientId;
 
 /// The most capture sessions one client keeps; past it, a new one is stopped at once
 /// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)). A recorder or
@@ -185,6 +186,38 @@ pub(crate) fn copy_into_shm(buffer: &WlBuffer, pixels: &[u8], (width, height): (
     matches!(written, Ok(true))
 }
 
+impl State {
+    /// Whether `client` may hold one more capture: an `ext-image-copy-capture-v1` session or a
+    /// `wlr-screencopy` frame waiting, counted together, within
+    /// [`MAX_CAPTURE_SESSIONS_PER_CLIENT`] for it and [`MAX_CAPTURE_SESSIONS`] for all clients.
+    pub(crate) fn may_hold_another_capture(&self, client: &ClientId) -> bool {
+        let sessions = self
+            .screencopy
+            .sessions
+            .iter()
+            .map(|(session, _, _)| session.client());
+        let wlr_frames =
+            self.pending_captures
+                .iter()
+                .filter_map(|pending| match &pending.destination {
+                    Destination::Wlr(frame) => Some(frame.client()),
+                    _ => None,
+                });
+        let mut all = 0;
+        let mut of_client = 0;
+        for owner in sessions
+            .map(|owner| owner.map(|owner| owner.id()))
+            .chain(wlr_frames)
+        {
+            all += 1;
+            if owner.as_ref() == Some(client) {
+                of_client += 1;
+            }
+        }
+        of_client < MAX_CAPTURE_SESSIONS_PER_CLIENT && all < MAX_CAPTURE_SESSIONS
+    }
+}
+
 impl ImageCaptureSourceHandler for State {}
 
 impl OutputCaptureSourceHandler for State {
@@ -238,15 +271,7 @@ impl ImageCopyCaptureHandler for State {
             );
             return;
         }
-        let kept = self
-            .screencopy
-            .sessions
-            .iter()
-            .filter(|(s, _, _)| s.client().is_some_and(|c| c.id() == client.id()))
-            .count();
-        if kept >= MAX_CAPTURE_SESSIONS_PER_CLIENT
-            || self.screencopy.sessions.len() >= MAX_CAPTURE_SESSIONS
-        {
+        if !self.may_hold_another_capture(&client.id()) {
             tracing::debug!(
                 seat = seat.0,
                 "a capture session past the bounds is stopped"
