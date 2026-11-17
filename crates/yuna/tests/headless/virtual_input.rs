@@ -354,3 +354,36 @@ fn modifiers_go_with_their_keyboard_and_no_keymap_is_the_seats() {
     on_a.roundtrip(&mut compositor);
     assert_eq!(on_a.state.typed, "Xxxaq");
 }
+
+/// A keyboard that sends a second keymap has its keys read with it from then on.
+#[test]
+fn a_keyboards_new_keymap_reads_its_next_keys() {
+    let (mut compositor, a, _) = two_seats();
+    let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    open(&mut on_a, &mut compositor);
+    settle(&mut compositor);
+    let mut driver = VirtualDriver::connect(&mut compositor, a);
+    let keyboard = driver.add_keyboard("agent-2", "us");
+    driver.key(keyboard, KEY_Q, true);
+    driver.key(keyboard, KEY_Q, false);
+    driver.change_keymap(keyboard, "fr");
+    driver.key(keyboard, KEY_Q, true);
+    driver.key(keyboard, KEY_Q, false);
+    driver.roundtrip(&mut compositor);
+    on_a.roundtrip(&mut compositor);
+    assert_eq!(on_a.state.typed, "qa");
+}
+
+/// An absolute motion at the very end of its extent lands on the seat's output's last unit, not
+/// past it, where no output is.
+#[test]
+fn an_absolute_motion_at_the_extents_end_stays_on_the_output() {
+    let (mut compositor, a, _) = two_seats();
+    let mut driver = VirtualDriver::connect(&mut compositor, a);
+    let pointer = driver.add_pointer(None);
+    driver.move_to(pointer, EXTENT, EXTENT);
+    driver.roundtrip(&mut compositor);
+    let at = compositor.pointer(a);
+    assert!(at.output.is_some(), "{at:?}");
+    assert_eq!((at.x, at.y), (1919.0, 1079.0));
+}

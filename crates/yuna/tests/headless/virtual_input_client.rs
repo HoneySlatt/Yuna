@@ -173,26 +173,10 @@ impl VirtualDriver {
             .as_ref()
             .expect("zwp_virtual_keyboard_manager_v1 is offered");
         let keyboard = manager.create_virtual_keyboard(&seat, &self.queue.handle(), ());
-        let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
-        let keymap = xkb::Keymap::new_from_names(
-            &context,
-            "evdev",
-            "pc105",
-            layout,
-            "",
-            None,
-            xkb::KEYMAP_COMPILE_NO_FLAGS,
-        )
-        .expect("the layout compiles")
-        .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
         // A file of its own: tests of one process run at once, and a named file would be shared.
-        let fd = memfd_create("yuna-test-keymap", MemfdFlags::CLOEXEC).expect("a memfd");
-        let mut file = File::from(fd);
-        file.write_all(keymap.as_bytes())
-            .expect("the keymap is written");
-        file.write_all(&[0]).expect("the keymap is written");
+        let file = keymap_file(layout);
         let size = claimed.unwrap_or_else(|| {
-            u32::try_from(keymap.len() + 1).expect("a keymap of a few hundred kB")
+            u32::try_from(keymap_text(layout).len() + 1).expect("a keymap of a few hundred kB")
         });
         keyboard.keymap(KEYMAP_FORMAT_XKB_V1, file.as_fd(), size);
         self.keyboards.push(keyboard);
@@ -224,6 +208,13 @@ impl VirtualDriver {
     /// Destroys keyboard `index`, as a driver that leaves does.
     pub fn destroy_keyboard(&self, index: usize) {
         self.keyboards[index].destroy();
+    }
+
+    /// Sends keyboard `index` a new keymap, of XKB's `layout`.
+    pub fn change_keymap(&self, index: usize, layout: &str) {
+        let file = keymap_file(layout);
+        let size = u32::try_from(keymap_text(layout).len() + 1).expect("a keymap of a few kB");
+        self.keyboards[index].keymap(KEYMAP_FORMAT_XKB_V1, file.as_fd(), size);
     }
 
     /// Presses or releases evdev key `key` on keyboard `index`.
@@ -292,3 +283,29 @@ delegate_noop!(DriverState: ignore zwlr_virtual_pointer_manager_v1::ZwlrVirtualP
 delegate_noop!(DriverState: ignore zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1);
 delegate_noop!(DriverState: ignore zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1);
 delegate_noop!(DriverState: ignore zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1);
+
+/// XKB's text of the keymap of `layout`.
+fn keymap_text(layout: &str) -> String {
+    let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
+    xkb::Keymap::new_from_names(
+        &context,
+        "evdev",
+        "pc105",
+        layout,
+        "",
+        None,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .expect("the layout compiles")
+    .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1)
+}
+
+/// A memfd holding the keymap of `layout`, NUL-terminated, as the protocol sends it.
+fn keymap_file(layout: &str) -> File {
+    let fd = memfd_create("yuna-test-keymap", MemfdFlags::CLOEXEC).expect("a memfd");
+    let mut file = File::from(fd);
+    file.write_all(keymap_text(layout).as_bytes())
+        .expect("the keymap is written");
+    file.write_all(&[0]).expect("the keymap is written");
+    file
+}

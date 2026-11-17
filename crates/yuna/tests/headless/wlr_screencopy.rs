@@ -335,3 +335,25 @@ fn the_capture_bounds_count_both_protocols_together() {
     assert!(!same.events(kept).failed);
     assert!(same.events(past).failed, "a 5th capture of one client");
 }
+
+/// A client that leaves with a frame waiting takes it with it: nothing waits, and Yuna rests.
+#[test]
+fn a_client_that_leaves_with_a_frame_waiting_leaves_nothing() {
+    let (mut compositor, _client) = compositor_with_a_window(RED);
+    let mut capture = WlrCaptureClient::connect(&mut compositor, OWNER_SEAT);
+    let first = capture.frame("HEADLESS-1", None);
+    capture.copy(first, Format::Xrgb8888, WHOLE, true);
+    capture.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    capture.roundtrip(&mut compositor);
+    let waiting = capture.frame("HEADLESS-1", None);
+    capture.copy(waiting, Format::Xrgb8888, WHOLE, true);
+    capture.roundtrip(&mut compositor);
+    assert_eq!(compositor.pending_captures(), 1);
+    drop(capture);
+    compositor
+        .dispatch(Some(std::time::Duration::ZERO))
+        .expect("the compositor dispatches");
+    assert_eq!(compositor.pending_captures(), 0);
+    assert_rests(&mut compositor);
+}
