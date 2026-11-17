@@ -1300,8 +1300,9 @@ own thread, both `took_us`.
   ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
 - `.github/workflows/slimeengine.yml`: SlimeEngine's `window`, `editor` and `interface`
-  examples in Yuna, weekly, on demand and when the drawing path or what the agent's story uses
-  changes, built at a pinned revision with their data cooked, and cached.
+  examples in Yuna, weekly, on demand and on a push that changes anything its test builds or
+  reads (`scripts/test_workflows.py`), built at a pinned revision with their data cooked, and
+  cached.
 - `crates/yuna/examples/frame_time.rs`: a frame's cost while `vkcube` draws, read from outside
   the program: its frames and `took_us` from its log, each thread's CPU time from `/proc`, the
   GPU's from the kernel's DRM usage statistics

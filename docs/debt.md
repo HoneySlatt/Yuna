@@ -281,10 +281,6 @@ with games' VRR:
   `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
   `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
   would serve the tests, and the example could include it with `#[path]`. Paid in M1.12's audit.
-- SlimeEngine's job (`.github/workflows/slimeengine.yml`) runs on a push that changes a file of
-  its list, kept by hand: `yuna-motion`, `render/x11_surface.rs` and `process.rs`, on the drawing
-  path or the programs' start, are missing, so a change to them waits for Thursday's run. A list
-  of what is left out would not rot. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
 
 ## XWayland
 

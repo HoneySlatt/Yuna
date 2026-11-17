@@ -13,7 +13,8 @@ cd "$(dirname "$0")/.."
 step() { printf '\n==> %s\n' "$*"; }
 
 # The checks of the Markdown files alone: their links, the length of those read at every session,
-# the ADRs' index and the changelog's fragments, and the tests of the scripts that check those.
+# the ADRs' index and the changelog's fragments, the tests of the scripts that check those, and
+# the test of SlimeEngine's job's path filter (scripts/test_workflows.py), which needs git alone.
 check_documents() {
     step "Links between the Markdown files"
     git ls-files -z '*.md' | xargs -0 lychee --offline --include-fragments --no-progress
@@ -41,7 +42,7 @@ check_documents() {
     step "ADRs' index and changelog fragments"
     python3 -I scripts/adr-index.py
     python3 -I scripts/changelog.py
-    step "Tests of the documents' scripts"
+    step "Tests of the scripts: the documents' and the workflows' path filter"
     python3 -I -B -m unittest discover --start-directory scripts --pattern 'test_*.py'
 }
 

@@ -261,7 +261,8 @@ links, the length of those read at every session, the ADRs' index, the changelog
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
-changes the drawing path or what the agent's story uses; it builds the examples and cooks their
+changes anything its test builds or reads: it names what it leaves out, and
+`scripts/test_workflows.py` checks that nothing it needs is among them; it builds the examples and cooks their
 data once per pinned revision and keeps the folder in GitHub's cache
 ([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md),
 [ADR-0043](docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)). Its
