@@ -92,7 +92,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted |
 | [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Superseded by 0075 |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
-| [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063; superseded in part by 0080 |
+| [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063; superseded in part by 0080 and 0084 |
 | [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Superseded by 0082 |
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
@@ -103,3 +103,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Accepted; supersedes in part 0039 |
 | [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074 |
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
+| [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Accepted; supersedes in part 0073 |

@@ -80,7 +80,9 @@ Severity first, then urgency; each with where it is followed.
    Decided: [ADR-0083](../adr/0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md).
 8. **uwui's hosting has no contract**: its task, its own commands, a timeout on its GPU work, its
    accessibility tree. ADR-0073 lends it the host's encoder, which leaves no way to time it out;
-   uwui wins every conflict (ADR-0003). Open decision D7, before Stage 2's renderer.
+   uwui wins every conflict (ADR-0003). Decided:
+   [ADR-0084](../adr/0084-uwui-hosted-on-its-own-task-commands-and-images.md), uwui's side to
+   accept.
 9. **Bounds stated but not enforced, and smaller drifts** (low): the encoders' bound, the
    unbounded log of a failing frame, retired globals on real time, `keyboard tap` on an error,
    SlimeEngine's path list, two sources for a window's output, GLES beyond `render.rs`. Each is
@@ -130,12 +132,13 @@ Taken by the owner on 2026-11-17:
   faulty edges corrected.
 - [ADR-0083](../adr/0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md): a window's last
   `wl_shm` buffer kept until its next, so that a GPU reset loses no window's content.
+- [ADR-0084](../adr/0084-uwui-hosted-on-its-own-task-commands-and-images.md): uwui on its own
+  task, commands and images, Yuna compositing the last image done; its accessibility tree out.
 
 Open, in order, each put to the owner one at a time:
 
 | | Decision | Due before |
 |---|---|---|
-| D7 | uwui's hosting: its task, commands, timeout and accessibility | Stage 2's renderer |
 | D8 | Outside contributions before 0.1, and how they are reviewed | M1.12 |
 
 ## Fixed during the audit

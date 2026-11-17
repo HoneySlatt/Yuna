@@ -22,8 +22,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   on the owner's go.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 - An [audit of the architecture](audits/2026-11-17-architecture.md) on 2026-11-17: ADR-0078 to
-  ADR-0083 decided, Stage 2 now in three gated parts; two decisions left, D7 and D8, put to the
-  owner before the dates it gives.
+  ADR-0084 decided, Stage 2 now in three gated parts; one decision left, D8, put to the owner
+  before M1.12.
 
 ## Status
 

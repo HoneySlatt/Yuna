@@ -155,7 +155,7 @@ audit.
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
 | Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
-| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
+| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws, on its own task, commands and images ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md), [ADR-0084](adr/0084-uwui-hosted-on-its-own-task-commands-and-images.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
 | Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; several seats in one Yuna frozen until Stage 2's core ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md), [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)) |
