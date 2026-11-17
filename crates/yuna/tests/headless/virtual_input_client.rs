@@ -199,6 +199,33 @@ impl VirtualDriver {
         self.keyboards.len() - 1
     }
 
+    /// A virtual keyboard for the `wl_seat` named `seat` that sends `no_keymap`: its keys are read
+    /// with the seat's own keymap; its index.
+    pub fn add_keyboard_without_keymap(&mut self, seat: &str) -> usize {
+        let seat = self.seat(seat);
+        let manager = self
+            .state
+            .keyboard_manager
+            .as_ref()
+            .expect("zwp_virtual_keyboard_manager_v1 is offered");
+        let keyboard = manager.create_virtual_keyboard(&seat, &self.queue.handle(), ());
+        let fd = memfd_create("yuna-test-no-keymap", MemfdFlags::CLOEXEC).expect("a memfd");
+        // `no_keymap`, format 0, takes any file and a size of 0.
+        keyboard.keymap(0, File::from(fd).as_fd(), 0);
+        self.keyboards.push(keyboard);
+        self.keyboards.len() - 1
+    }
+
+    /// Sets keyboard `index`'s modifiers, as `pluto-input` does around a key with Shift.
+    pub fn modifiers(&self, index: usize, depressed: u32, latched: u32, locked: u32) {
+        self.keyboards[index].modifiers(depressed, latched, locked, 0);
+    }
+
+    /// Destroys keyboard `index`, as a driver that leaves does.
+    pub fn destroy_keyboard(&self, index: usize) {
+        self.keyboards[index].destroy();
+    }
+
     /// Presses or releases evdev key `key` on keyboard `index`.
     pub fn key(&self, index: usize, key: u32, pressed: bool) {
         self.keyboards[index].key(0, key, u32::from(pressed));

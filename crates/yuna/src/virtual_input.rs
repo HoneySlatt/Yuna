@@ -13,7 +13,9 @@
 //!
 //! A virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it
 //! before them, its clients told of the new keymap, and switches back to the seat's own before
-//! Yuna's keys (`State::key`). Its `modifiers` request sets the modifiers under its keymap. A
+//! Yuna's keys (`State::key`); one that sent `no_keymap` uses the seat's own. Its `modifiers`
+//! request sets the modifiers under its keymap, and those it set are released when it goes. The
+//! seat's keyboard has one state for all its devices, Yuna's own keys included. A
 //! virtual pointer's absolute motion is a fraction of its seat's outputs together, or of the
 //! output it names; its relative motion moves from where the pointer is, or from the seat's first
 //! output's corner before it ever moved, and stops at the edge of the seat's outputs, as
@@ -54,6 +56,9 @@ pub(crate) struct VirtualInputState {
     _pointers: VirtualPointerManagerState,
     keyboards: HashMap<VirtualKeyboardDevice, Acting>,
     pointers: HashMap<VirtualPointerDevice, Acting>,
+    /// The modifiers each keyboard last set through its `modifiers` request, depressed, latched
+    /// and locked: released when it goes.
+    modifiers: HashMap<VirtualKeyboardDevice, (u32, u32, u32)>,
 }
 
 /// A device that acts: its seat and its client.
@@ -70,6 +75,7 @@ impl VirtualInputState {
             _pointers: VirtualPointerManagerState::new::<State, _>(display, of_an_agents_seat),
             keyboards: HashMap::new(),
             pointers: HashMap::new(),
+            modifiers: HashMap::new(),
         }
     }
 
@@ -130,7 +136,11 @@ impl VirtualKeyboardHandler for State {
                 }
             }
             InputEvent::DeviceRemoved { device } => {
-                self.virtual_input.keyboards.remove(&device);
+                let acting = self.virtual_input.keyboards.remove(&device);
+                let set = self.virtual_input.modifiers.remove(&device);
+                if let (Some(acting), Some(set)) = (acting, set) {
+                    self.release_modifiers(acting.seat, &device, set);
+                }
             }
             InputEvent::Keyboard { event } => {
                 let device = event.device();
@@ -154,6 +164,8 @@ impl VirtualKeyboardHandler for State {
                 let Some(seat) = self.virtual_input.keyboards.get(&device).map(|a| a.seat) else {
                     return;
                 };
+                let set = (mods_depressed, mods_latched, mods_locked);
+                self.virtual_input.modifiers.insert(device.clone(), set);
                 let result = self.use_device_keymap(seat, &device).and_then(|()| {
                     let keyboard = self.agent_keyboard(seat)?;
                     keyboard.with_xkb_state(self, |mut context| {
@@ -172,15 +184,46 @@ impl VirtualKeyboardHandler for State {
 }
 
 impl State {
-    /// Switches `seat`'s keyboard to the keymap of `device`, unless it uses the seat's.
+    /// Switches `seat`'s keyboard to the keymap of `device`, or to the seat's own for a device
+    /// that sent `no_keymap`, whatever keymap another device left.
     fn use_device_keymap(
         &mut self,
         seat: SeatId,
         device: &VirtualKeyboardDevice,
     ) -> Result<(), crate::Error> {
-        match device.keymap() {
-            Some(keymap) => self.use_keymap(seat, &keymap),
-            None => Ok(()),
+        let keymap = match device.keymap() {
+            Some(keymap) => keymap,
+            None => self
+                .seat(seat)
+                .map(|data| data.own_keymap.clone())
+                .ok_or_else(|| crate::Error::Refused(format!("no seat {}", seat.0)))?,
+        };
+        self.use_keymap(seat, &keymap)
+    }
+
+    /// Releases the modifiers `device` set, `set` as depressed, latched and locked masks of its
+    /// keymap, when it goes: the others' stay.
+    fn release_modifiers(
+        &mut self,
+        seat: SeatId,
+        device: &VirtualKeyboardDevice,
+        (depressed, latched, locked): (u32, u32, u32),
+    ) {
+        let result = self.use_device_keymap(seat, device).and_then(|()| {
+            let keyboard = self.agent_keyboard(seat)?;
+            let now = keyboard.modifier_state().serialized;
+            keyboard.with_xkb_state(self, |mut context| {
+                context.set_modifier_mask(
+                    now.depressed & !depressed,
+                    now.latched & !latched,
+                    now.locked & !locked,
+                    now.layout_effective,
+                );
+            });
+            Ok(())
+        });
+        if let Err(error) = result {
+            tracing::debug!(%error, seat = seat.0, "a virtual keyboard's modifiers stay");
         }
     }
 

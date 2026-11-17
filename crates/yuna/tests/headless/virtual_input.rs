@@ -313,3 +313,44 @@ fn a_keymap_told_larger_than_its_file_is_refused() {
     on_a.roundtrip(&mut compositor);
     assert_eq!(on_a.state.typed, "x");
 }
+
+/// XKB's modifier masks in a `us` keymap: Shift and Caps Lock.
+const SHIFT: u32 = 1;
+const CAPS_LOCK: u32 = 2;
+
+/// A virtual keyboard's `modifiers` request sets its seat's modifiers, as `pluto-input` sends
+/// Shift around a key; a keyboard that leaves with Caps Lock on takes it with it, and Yuna's own
+/// keys type small letters again. A keyboard with `no_keymap` reads its keys with the seat's own
+/// keymap, whatever keymap another keyboard left.
+#[test]
+fn modifiers_go_with_their_keyboard_and_no_keymap_is_the_seats() {
+    let (mut compositor, a, _) = two_seats();
+    let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    open(&mut on_a, &mut compositor);
+    settle(&mut compositor);
+    let mut driver = VirtualDriver::connect(&mut compositor, a);
+    let keyboard = driver.add_keyboard("agent-2", "us");
+    driver.modifiers(keyboard, SHIFT, 0, 0);
+    driver.key(keyboard, KEY_X, true);
+    driver.key(keyboard, KEY_X, false);
+    driver.modifiers(keyboard, 0, 0, 0);
+    driver.key(keyboard, KEY_X, true);
+    driver.key(keyboard, KEY_X, false);
+    driver.modifiers(keyboard, 0, 0, CAPS_LOCK);
+    driver.roundtrip(&mut compositor);
+    driver.destroy_keyboard(keyboard);
+    driver.roundtrip(&mut compositor);
+    compositor.tap_keys(a, "x").expect("Yuna's own key");
+    on_a.roundtrip(&mut compositor);
+    assert_eq!(on_a.state.typed, "Xxx");
+
+    let french = driver.add_keyboard("agent-2", "fr");
+    driver.key(french, KEY_Q, true);
+    driver.key(french, KEY_Q, false);
+    let plain = driver.add_keyboard_without_keymap("agent-2");
+    driver.key(plain, KEY_Q, true);
+    driver.key(plain, KEY_Q, false);
+    driver.roundtrip(&mut compositor);
+    on_a.roundtrip(&mut compositor);
+    assert_eq!(on_a.state.typed, "Xxxaq");
+}
