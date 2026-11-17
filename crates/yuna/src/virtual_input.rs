@@ -15,8 +15,9 @@
 //! before them, its clients told of the new keymap, and switches back to the seat's own before
 //! Yuna's keys (`State::key`). Its `modifiers` request sets the modifiers under its keymap. A
 //! virtual pointer's absolute motion is a fraction of its seat's outputs together, or of the
-//! output it names; its relative motion moves from where the pointer is, and a motion off every
-//! output of the seat is dropped. Its buttons and scrolls go where Yuna's own go
+//! output it names; its relative motion moves from where the pointer is, or from the seat's first
+//! output's corner before it ever moved, and stops at the edge of the seat's outputs, as
+//! wlroots' cursor does. Its buttons and scrolls go where Yuna's own go
 //! (`input.rs`), a press focusing the window under it.
 
 use std::collections::HashMap;
@@ -241,7 +242,10 @@ impl VirtualPointerHandler for State {
                 };
                 self.pointer_location(seat).and_then(|location| {
                     let moved = location + Point::from((event.delta_x(), event.delta_y()));
-                    self.pointer_move_to(seat, moved)
+                    match self.closest_on_seat(seat, moved) {
+                        Some(on_seat) => self.pointer_move_to(seat, on_seat),
+                        None => Ok(()),
+                    }
                 })
             }
             InputEvent::PointerButton { event } => {

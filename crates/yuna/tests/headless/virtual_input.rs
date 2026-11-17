@@ -141,8 +141,10 @@ fn a_virtual_keyboard_and_pointer_drive_their_own_seat_alone() {
 }
 
 /// A spy of seat A, shown B's `wl_seat`, makes a keyboard and a pointer for it: they do nothing,
-/// on B or on A. Relative motion moves from where the pointer is, and a motion off every
-/// output of the seat is dropped.
+/// on B or on A. Relative motion moves from where the pointer is, and stops at the edge of the
+/// seat's outputs, as wlroots' cursor does; a seat's pointer that never moved starts at its
+/// first output's top-left corner, so that relative moves on B, whose output is right of A's,
+/// stay on B.
 #[test]
 fn a_device_for_another_seat_does_nothing_and_motion_stays_on_its_seat() {
     let (mut compositor, a, b) = two_seats();
@@ -191,7 +193,20 @@ fn a_device_for_another_seat_does_nothing_and_motion_stays_on_its_seat() {
         .find(|description| description.seat == a)
         .expect("A's output");
     assert_eq!(at.output, Some(output.id));
-    assert_eq!((at.x, at.y), (f64::from(x) + 5.0, f64::from(y) + 7.0));
+    assert_eq!((at.x, at.y), (0.0, f64::from(y) + 7.0));
+
+    let mut on_b_driver = VirtualDriver::connect(&mut compositor, b);
+    let relative = on_b_driver.add_pointer(None);
+    on_b_driver.move_by(relative, 30.0, 40.0);
+    on_b_driver.roundtrip(&mut compositor);
+    let at = compositor.pointer(b);
+    let output_b = compositor
+        .output_descriptions()
+        .into_iter()
+        .find(|description| description.seat == b)
+        .expect("B's output");
+    assert_eq!(at.output, Some(output_b.id));
+    assert_eq!((at.x, at.y), (30.0, 40.0));
 }
 
 /// A driver that leaves with a button and a key held lets them go: its window gets their

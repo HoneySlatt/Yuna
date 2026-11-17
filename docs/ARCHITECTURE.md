@@ -846,7 +846,8 @@ pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's
    virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it,
    its clients told, and back to the seat's own before Yuna's keys. An absolute motion is a
    fraction of the seat's outputs together, or of the output the device names; a relative one
-   moves from where the pointer is; a motion off every output of the seat is dropped.
+   moves from where the pointer is, or from the seat's first output's corner before it ever
+   moved, and stops at the closest point of the seat's outputs, as wlroots' cursor does.
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
 (`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).

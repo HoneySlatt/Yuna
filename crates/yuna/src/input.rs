@@ -423,9 +423,47 @@ impl State {
         Ok(())
     }
 
-    /// Where `seat`'s pointer is, in the layout's logical coordinates.
+    /// Where `seat`'s pointer is, in the layout's logical coordinates; one that never moved is
+    /// at its seat's first output's top-left corner, where a relative motion starts from.
     pub(crate) fn pointer_location(&self, seat: SeatId) -> Result<Point<f64, Logical>, Error> {
-        Ok(self.agent_pointer(seat)?.current_location())
+        let pointer = self.agent_pointer(seat)?;
+        if self.seat(seat).is_some_and(|data| data.pointer_moved) {
+            return Ok(pointer.current_location());
+        }
+        let first = self
+            .layout
+            .outputs(seat)
+            .ok()
+            .and_then(|outputs| outputs.first().copied())
+            .and_then(|id| self.outputs.iter().find(|output| output.id == id))
+            .ok_or_else(|| Error::Refused(format!("seat {} has no output", seat.0)))?;
+        Ok(Point::from((first.rect.x, first.rect.y)))
+    }
+
+    /// The point of `seat`'s outputs closest to `location`, in the layout's logical coordinates,
+    /// as wlroots keeps its cursor on its outputs; none for a seat without an output.
+    pub(crate) fn closest_on_seat(
+        &self,
+        seat: SeatId,
+        location: Point<f64, Logical>,
+    ) -> Option<Point<f64, Logical>> {
+        // Inside an output's last unit, which `output_at` takes as on it.
+        const INSIDE: f64 = 1e-3;
+        self.outputs
+            .iter()
+            .filter(|output| output.seat == seat)
+            .map(|output| {
+                let rect = output.rect;
+                let x = location.x.clamp(rect.x, rect.right() - INSIDE);
+                let y = location.y.clamp(rect.y, rect.bottom() - INSIDE);
+                Point::from((x, y))
+            })
+            .min_by(|a: &Point<f64, Logical>, b: &Point<f64, Logical>| {
+                let distance = |p: &Point<f64, Logical>| {
+                    (p.x - location.x).powi(2) + (p.y - location.y).powi(2)
+                };
+                distance(a).total_cmp(&distance(b))
+            })
     }
 
     /// Presses or releases `button` of `seat`'s pointer where it is. A press focuses the window
