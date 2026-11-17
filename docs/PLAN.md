@@ -165,7 +165,8 @@ milestone first needs it.
   dependency put to the owner; outputs plugged and unplugged, scale and mode changed, a slow or
   stuck client, keyboard layouts, clipboard and drag and drop between programs, X11's and
   Wayland's ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); a call that waits
-  for an event; a rest auditor naming what wakes Yuna or makes it draw.
+  for an event; a rest auditor naming what wakes Yuna or makes it draw; on a panic of its state,
+  its programs ended and its folder removed ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - **Done when.** Through MCP alone, an agent finds a protocol error and a button by its name, and
   checks a window across an output unplugged.
 - **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N

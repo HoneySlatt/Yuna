@@ -366,7 +366,7 @@ impl Compositor {
                             }
                             Ok(None) => return Ok(PostAction::Continue),
                             // Out of descriptors, most often: one seat's programs must not stop
-                            // Yuna (ADR-0007). The socket rests a moment rather than spin.
+                            // Yuna (ADR-0080). The socket rests a moment rather than spin.
                             Err(error) => {
                                 tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
                                 state.paused_sockets.push(seat);

@@ -1,4 +1,4 @@
-//! Random sequences of requests (ADR-0007, ADR-0025), with proptest: up to three clients send any
+//! Random sequences of requests (ADR-0080, ADR-0025), with proptest: up to three clients send any
 //! request in any order, with any values, extremes and nonsense included, while the test moves
 //! the clock, changes the layout as key bindings would, and focuses windows. A request that breaks
 //! the protocol ends its client, which is allowed; its slot connects a new client at its next

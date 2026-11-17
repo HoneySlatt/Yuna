@@ -115,7 +115,7 @@ const TMPFS_MAGIC: FsWord = 0x0102_1994;
 /// Whether every plane of `dmabuf` lies in a file that the renderer may always read. A renderer
 /// may map a plane's file and read it each time it draws; Smithay checks the plane against the
 /// file's size at `create` only, and catches SIGBUS for `wl_shm` alone. A file shrunk since
-/// would kill Yuna with SIGBUS at drawing (ADR-0007). llvmpipe takes a plain memfd as a plane.
+/// would kill Yuna with SIGBUS at drawing (ADR-0080). llvmpipe takes a plain memfd as a plane.
 fn planes_are_safe_to_read(dmabuf: &Dmabuf) -> bool {
     dmabuf.handles().all(file_is_safe_to_read)
 }

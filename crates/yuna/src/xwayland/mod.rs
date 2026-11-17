@@ -323,7 +323,8 @@ impl Xwayland {
 
     /// Gives `seat` an X display, its Xauthority file in `folder`, and watches its sockets. A
     /// display that cannot be made is logged, and the seat goes without: X11 programs never stop
-    /// a seat ([ADR-0007](../../../../docs/adr/0007-surviving-a-crash.md)).
+    /// a seat
+    /// ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
     pub(crate) fn add_seat(
         &mut self,
         seat: SeatId,

@@ -1,5 +1,5 @@
 //! Bad input: stale ids, nonsense numbers, duplicates. Every one is an error that changes
-//! nothing, never a panic (ADR-0007).
+//! nothing, never a panic (ADR-0080).
 
 use crate::harness::*;
 use yuna_layout::geometry::Point;

@@ -39,8 +39,8 @@ GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](ad
 4. **Games and films first**: no effect or animation may cost a game a frame or a film its
    cadence. Agents' work never holds back for a game: the owner's activity sets the priority
    ([ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)).
-5. **The owner's session is sacred**: an agent never reaches the owner's seat, and a crash costs at
-   most a second.
+5. **The owner's session is sacred**: an agent never reaches the owner's seat, and a crash brings
+   Yuna back within a second, losing only what [ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md) says.
 6. **Measured, not claimed**: every budget has its measure, kept in `docs/measurements.md`.
 
 ## 3. Quality bar
@@ -90,7 +90,7 @@ until it is met.
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
 | Memory | at rest, each at most the best peer's at equal work, the same day: the process's own 102.5 MiB with 15 windows and 0.0063 MiB a window; its GPU's 115.4 MiB and 2.31 MiB a window, on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); the process's growth a window missed, debt | the process's `Pss_Anon` + `Pss_File`, and the kernel's DRM resident memory, at rest with 1, 15 and 150 windows |
 | Start | from launch to the first frame, set from the rivals' at Stage 2 | the log's times |
-| A crash | back within 1 s; no window lost of an application that reconnects; the others reopened in place | a test that kills Yuna and counts the windows |
+| A crash | back within 1 s, no black screen; the windows of applications that reconnect kept; the others that restore their session, or whose command is known, started again in place; every X11 program and game ended ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)) | a test that kills Yuna and counts, by kind, what survives and what starts again |
 | VRR flicker | none on the desktop; in games, measured on the owner's monitor | a light sensor on the screen |
 | HDR | the output's luminance and colours as the colour description says, against KWin on the same content | captures of the output buffer in CI; the owner's monitor by eye and by sensor |
 | The laptop | every feature, effects lighter, no missed frame at its refresh rate | the same measures on the laptop |
@@ -149,7 +149,7 @@ audit.
 | Scope | The compositor alone, a shell on top ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)) |
 | Layouts | Scrolling columns, dwindle, floating, special workspaces ([ADR-0005](adr/0005-the-layouts.md)) |
 | Machines | Linux; AMD and Intel first ([ADR-0006](adr/0006-machines-and-gpus.md)) |
-| Crashes | Socket kept, restart within 1 s, windows restored ([ADR-0007](adr/0007-surviving-a-crash.md)) |
+| Failures | A promise for each kind: a client's error ends it alone; a crash restarts Yuna within 1 s by its keeper; a GPU reset keeps every window; a panic of Yuna's state is fatal, of uwui's contained ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)) |
 | Configuration | KDL, reloaded live ([ADR-0008](adr/0008-configuration-in-kdl.md)) |
 | Licence | GPL-3.0-or-later, public ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |

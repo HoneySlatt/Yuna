@@ -748,7 +748,7 @@ file is refused: the client is told `failed`, or, for `create_immed`, gets the p
 error. llvmpipe would take a plain memfd, and the renderer reads a plane's file each time it
 draws, while Smithay checks the plane against the file's size only when the buffer is created: a
 file shrunk in between would kill Yuna with SIGBUS, which Smithay catches only for `wl_shm`
-([ADR-0007](adr/0007-surviving-a-crash.md)).
+([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 
 ### Selections
 
@@ -836,7 +836,7 @@ clock's time.
    ([An X11 window's life](#an-x11-windows-life)).
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
-(`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0007](adr/0007-surviving-a-crash.md)).
+(`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 
 Removing a seat (`Compositor::remove_seat`), in order: the keys and buttons it holds are
 released, its popup grab ends, and its focus leaves every surface; those events are sent; its

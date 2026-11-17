@@ -200,7 +200,8 @@ with games' VRR:
   each client speaks, Claude Code's included, is not recorded.
 - A `yuna mcp` killed by SIGKILL, or one that panics, a bug unwinding past its stopping, leaves
   its programs running, their Wayland connection closed, and its folder of logs, up to 128 MiB,
-  in `XDG_RUNTIME_DIR`: nothing ends or removes them.
+  in `XDG_RUNTIME_DIR`: nothing ends or removes them. The panic's case is paid at M1.11, by
+  [ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)'s fatal path; SIGKILL's stays.
   Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
   client may kill Yuna sooner.
 - An agent reads presentation times only through a capture: its frame's `boundary` and

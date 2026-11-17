@@ -1,7 +1,7 @@
 //! What an Xwayland that crashes leaves on screen: nothing. Its menus drawn alone leave the output
 //! whether Yuna was idle or busy when it died
 //! ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md),
-//! [ADR-0007](../../../../docs/adr/0007-surviving-a-crash.md)).
+//! [ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 
 use std::time::{Duration, Instant};
 

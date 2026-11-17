@@ -77,8 +77,9 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
   the final drawing is Vulkan ([ADR-0073](docs/adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
 - Everything runs headless; the DRM backend is one backend among others.
 - An agent's seat never reaches the owner's seat ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
-- One client's error never takes Yuna down; a configuration error never stops it
-  ([ADR-0007](docs/adr/0007-surviving-a-crash.md), [ADR-0008](docs/adr/0008-configuration-in-kdl.md)).
+- One client's protocol error ends that client alone; a panic of Yuna's state is fatal, and Yuna
+  comes back by its keeper; a configuration error never stops it
+  ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), [ADR-0008](docs/adr/0008-configuration-in-kdl.md)).
 - Stage 2's core meets [ADR-0074](docs/adr/0074-the-requirements-of-stage-2s-core.md) from its first
   commit: owned state, crates whose dependencies `scripts/check.sh` checks, bounded queues, tasks
   with an owner and a stop order, versioned public contracts. Nothing new is built on today's

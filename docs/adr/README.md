@@ -26,7 +26,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0004](0004-the-compositor-alone-under-a-shell.md) | The compositor alone, a shell on top | Accepted; amended by 0057 and 0063 |
 | [0005](0005-the-layouts.md) | The layouts: scrolling columns, dwindle, floating, special workspaces | Accepted; amended by 0062 |
 | [0006](0006-machines-and-gpus.md) | Machines and GPUs | Accepted |
-| [0007](0007-surviving-a-crash.md) | Surviving a crash | Accepted; amended by 0058 and 0061 |
+| [0007](0007-surviving-a-crash.md) | Surviving a crash | Superseded by 0080; amended by 0058 and 0061 |
 | [0008](0008-configuration-in-kdl.md) | Configuration in KDL | Accepted |
 | [0009](0009-gpl-private-until-ready.md) | GPL-3.0-or-later, private until ready; the logo apart | Accepted; amended by 0036 |
 | [0010](0010-animations-and-effects.md) | Animations and effects | Accepted; amended by 0058, 0061 and 0062 |
@@ -77,7 +77,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0055](0055-what-moves-first-and-animations-off-headless.md) | What moves first, and animations off headless | Accepted; amends 0033; amended by 0059 |
 | [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) | Motion's budget judged on the GPU, against a still baseline | Accepted |
 | [0057](0057-what-yuna-does-and-what-the-shell-does.md) | What Yuna does itself, and what it leaves to the shell | Accepted; amends 0004; amended by 0063 and 0064 |
-| [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; amends 0007, 0010, 0016, 0023 and 0046; amended by 0061 |
+| [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) | What Yuna takes from the owner's other projects | Accepted; superseded in part by 0080; amends 0007, 0010, 0016, 0023 and 0046; amended by 0061 |
 | [0059](0059-reduced-motion-nothing-slides-fades-stay.md) | Reduced motion: nothing slides, fades stay | Accepted; amends 0055 |
 | [0060](0060-development-first-agents-in-their-own-yuna.md) | Development first: agents never hold back for a game, each in its own Yuna | Accepted; amends 0003 and 0015 |
 | [0061](0061-yunas-uses.md) | Yuna's uses: creation, capture, games, HDR per display, development | Accepted; amends 0007, 0010 and 0058 |
@@ -92,10 +92,11 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted |
 | [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Superseded by 0075 |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
-| [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063 |
+| [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063; superseded in part by 0080 |
 | [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Accepted |
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
 | [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
 | [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Accepted; supersedes 0035 |
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
+| [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |

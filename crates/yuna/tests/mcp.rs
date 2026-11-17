@@ -703,7 +703,7 @@ fn answers_wayland(stream: &mut std::os::unix::net::UnixStream) -> bool {
 }
 
 /// A seat's programs that open connections until Yuna runs out of descriptors never stop Yuna
-/// (ADR-0007): its seat's socket rests, Yuna keeps answering, and once they close, a new client
+/// (ADR-0080): its seat's socket rests, Yuna keeps answering, and once they close, a new client
 /// connects again.
 #[test]
 fn running_out_of_descriptors_pauses_a_seats_socket_and_stops_nothing() {

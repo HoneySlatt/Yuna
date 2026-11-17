@@ -1,6 +1,6 @@
 # 0007. Surviving a crash
 
-- Status: Accepted; amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md), [0061](0061-yunas-uses.md)
+- Status: Superseded by [0080](0080-what-survives-a-failure-and-yunas-own-panics.md); amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md), [0061](0061-yunas-uses.md)
 - Date: 2026-11-11
 
 ## Context

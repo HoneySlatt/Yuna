@@ -1,4 +1,4 @@
-//! Misbehaving clients (ADR-0007, ADR-0025): clients that ignore their size, send absurd values,
+//! Misbehaving clients (ADR-0080, ADR-0025): clients that ignore their size, send absurd values,
 //! break the protocol, leave mid-frame or flood. None takes Yuna down, nor another client's
 //! frames.
 //!

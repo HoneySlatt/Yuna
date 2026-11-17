@@ -1,6 +1,7 @@
 # 0073. Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures
 
-- Status: Accepted; supersedes [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)
+- Status: Accepted; supersedes [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md); superseded in part
+  by [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) (uwui's crash boundary)
 - Date: 2026-11-16
 
 ## Context
