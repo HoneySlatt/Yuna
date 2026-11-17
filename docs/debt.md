@@ -113,6 +113,12 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
+- A frame that fails to draw logs a warning each time (`frames.rs`, `State::draw`), with no
+  bound on their rate: a renderer that keeps failing writes one a frame. Found by the
+  [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
+- Removed outputs' globals are destroyed 10 s after their removal on `Instant::now()`
+  (`output.rs`), not on Yuna's clock: on the manual clock they do not follow the time a test
+  steps. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
 
 ## Colours
 
@@ -192,6 +198,9 @@ with games' VRR:
   comes with the desktop ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)).
 - A capture waiting for its frame times out after 50 s; no test waits that long.
 - `png` and `flate2` build two versions of `miniz_oxide`, 0.8 and 0.9, until `png` moves to 0.9.
+- `MAX_ENCODERS` is checked when a capture is asked (`mcp/mod.rs`), not when its encoder starts:
+  captures still being copied are not counted, so more than four encoders may run, one a seat at
+  most. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.11.
 
 ## The MCP server
 
@@ -226,6 +235,9 @@ with games' VRR:
   not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.
+- `keyboard tap` (`input.rs`, `tap_keys`) stops at the first key that fails to press or release,
+  leaving the keys pressed before it held. Its keys are checked first, so no case is known.
+  Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.11.
 
 ## Motion
 
@@ -271,6 +283,10 @@ with games' VRR:
   `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
   `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
   would serve the tests, and the example could include it with `#[path]`. Paid in M1.12's audit.
+- SlimeEngine's job (`.github/workflows/slimeengine.yml`) runs on a push that changes a file of
+  its list, kept by hand: `yuna-motion`, `render/x11_surface.rs` and `process.rs`, on the drawing
+  path or the programs' start, are missing, so a change to them waits for Thursday's run. A list
+  of what is left out would not rot. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
 
 ## XWayland
 
@@ -403,3 +419,9 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated.
+- GLES types reach three modules beside `render.rs`: `state.rs` holds the renderer, `output.rs`
+  each output's buffer and damage tracker, `dmabuf.rs` the import. Stage 2's Vulkan renderer
+  replaces all four.
+- Two places say which output shows a window: `scale.rs` reads the last arrangement, `colour/`
+  the layout as it is; between a change and the next arrangement they may differ. Stage 2's core
+  gives each fact one owner. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md).

@@ -14,10 +14,11 @@
 //! [ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 //!
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
-//! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer, the only part that knows OpenGL (`render.rs`); the
+//! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer
+//! (`render.rs`), whose GLES types `state.rs`, `output.rs` and `dmabuf.rs` hold too; the
 //! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`) and their
-//! pointer and keyboard input (`input.rs`); `xdg-shell` and
-//! `xdg-decoration` in front of the layout (`shell.rs`), with popups (`popups.rs`),
+//! pointer and keyboard input (`input.rs`); `xdg-shell` and `xdg-decoration` in front of the
+//! layout (`shell.rs`), with popups (`popups.rs`),
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
 //! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);

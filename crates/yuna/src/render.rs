@@ -2,8 +2,10 @@
 //! draws ([ADR-0012](../../../docs/adr/0012-opengl-first.md),
 //! [ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)).
 //!
-//! This is the only module that knows OpenGL; the layout and the frame loop do not. X11 windows'
-//! surfaces have an element of Yuna's own, in `render/x11_surface.rs`.
+//! This module draws. GLES reaches three others: `state.rs` holds the renderer, `output.rs` each
+//! output's buffer and damage tracker, `dmabuf.rs` imports clients' dmabufs into it; the frame
+//! loop builds this module's elements without naming GLES, and the layout knows none of it. X11
+//! windows' surfaces have an element of Yuna's own, in `render/x11_surface.rs`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};

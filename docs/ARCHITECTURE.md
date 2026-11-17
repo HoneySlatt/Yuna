@@ -268,7 +268,9 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
   damage tracker; their refresh boundaries; their removal.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
-  the only module that knows OpenGL ([ADR-0012](adr/0012-opengl-first.md)); `read_pixels` is the
+  the module that draws ([ADR-0012](adr/0012-opengl-first.md)), though GLES types reach
+  `state.rs` (the renderer), `output.rs` (each output's buffer and damage tracker) and
+  `dmabuf.rs` (the import); `read_pixels` is the
   only place pixels are read back. It keeps each EGL
   display it opens until the process ends, so that compositors started and dropped on several
   threads, as tests run them, never lose the display Smithay shares among them.
