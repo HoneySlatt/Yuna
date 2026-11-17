@@ -8,7 +8,7 @@ use crate::colour::ColourState;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::Duration;
 
 use smithay::backend::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -77,9 +77,9 @@ pub(crate) struct State {
     pub max_output_side: u32,
     pub outputs: Vec<VirtualOutput>,
     next_output_id: u64,
-    /// The disabled globals of removed outputs, with when each was removed: destroyed later
-    /// (`output.rs`).
-    pub retired_globals: Vec<(Instant, GlobalId)>,
+    /// The disabled globals of removed outputs and closed seats, with when each was removed on
+    /// Yuna's clock: destroyed later (`output.rs`).
+    pub retired_globals: Vec<(Duration, GlobalId)>,
     /// Every `xdg_toplevel`, by its surface's id.
     pub toplevels: HashMap<ObjectId, Toplevel>,
     /// The surface of each window the layout holds.

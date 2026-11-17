@@ -761,3 +761,40 @@ fn activation_and_the_clipboard_keep_to_their_seat() {
     assert!(!spy.state.globals.contains(&data_control));
     assert!(owner.state.globals.contains(&data_control));
 }
+
+/// A closed seat's `wl_seat` global stays, disabled, for [`yuna::RETIRED_GLOBAL_LIFETIME`] of
+/// Yuna's clock, then is destroyed, as a removed output's is.
+#[test]
+fn a_closed_seats_global_is_destroyed_after_its_lifetime_on_yunas_clock() {
+    let (mut compositor, a, _) = two_seats();
+    let mut spy = Client::connect_seeing_every_seat(&mut compositor, OWNER_SEAT);
+    spy.state.removed_globals.clear();
+    compositor.remove_seat(a).expect("the seat closes");
+    spy.roundtrip(&mut compositor);
+    // The seat's `wl_seat` and its output's `wl_output`; the seat's is bound as a seat.
+    assert_eq!(spy.state.removed_globals.len(), 2);
+    let names = spy.state.removed_globals.clone();
+    let lifetime = yuna::RETIRED_GLOBAL_LIFETIME;
+
+    compositor
+        .advance(lifetime - std::time::Duration::from_millis(1))
+        .expect("the manual clock moves");
+    let seat = spy
+        .state
+        .announced_globals
+        .iter()
+        .find(|(name, interface)| names.contains(name) && interface == "wl_seat")
+        .map(|(name, _)| *name)
+        .expect("the removed seat's global");
+    spy.bind_seat(seat);
+    spy.roundtrip(&mut compositor);
+
+    compositor
+        .advance(std::time::Duration::from_millis(1))
+        .expect("the manual clock moves");
+    spy.bind_seat(seat);
+    assert!(
+        spy.try_roundtrip(&mut compositor).is_err(),
+        "the global was destroyed: binding it is a protocol error"
+    );
+}

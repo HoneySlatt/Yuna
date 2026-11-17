@@ -21,7 +21,6 @@
 use std::collections::BTreeSet;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::time::Instant;
 
 use smithay::input::keyboard::{KeyboardHandle, XkbConfig, xkb};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
@@ -364,7 +363,7 @@ impl State {
         let mut removed = self.seats.remove(index);
         if let Some(global) = removed.seat.global() {
             self.display_handle.disable_global::<State>(global.clone());
-            self.retired_globals.push((Instant::now(), global));
+            self.retired_globals.push((self.clock.now(), global));
         }
         removed.seat.remove_keyboard();
         removed.seat.remove_pointer();

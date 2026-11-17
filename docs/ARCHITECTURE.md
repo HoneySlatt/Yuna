@@ -857,8 +857,9 @@ removed output's workspaces go to its seat's active output, which keeps showing 
 workspace switch shows them ([ADR-0018](adr/0018-workspaces.md)). Its windows' surfaces leave
 it at once, and enter an output again once one shows them; the presentation feedback it
 held for a frame not yet at its boundary is discarded; its two deadlines are disarmed. Its global
-is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
-to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
+is disabled at once and destroyed 10 s later on Yuna's clock, at the end of a round, so that a
+client that asked to bind it before it learnt of the removal is not ended for it; a closed seat's
+`wl_seat` goes the same way. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
 ### XWayland

@@ -116,9 +116,6 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - A frame that fails to draw logs a warning each time (`frames.rs`, `State::draw`), with no
   bound on their rate: a renderer that keeps failing writes one a frame. Found by the
   [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
-- Removed outputs' globals are destroyed 10 s after their removal on `Instant::now()`
-  (`output.rs`), not on Yuna's clock: on the manual clock they do not follow the time a test
-  steps. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
 
 ## Colours
 

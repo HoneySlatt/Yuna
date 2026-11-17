@@ -122,6 +122,7 @@ enum SurfaceOwner {
 pub struct Client {
     connection: Connection,
     queue: EventQueue<ClientState>,
+    registry: wl_registry::WlRegistry,
     pub state: ClientState,
     /// Its end of the socket, kept to shut the connection down when it drops.
     socket: std::os::unix::net::UnixStream,
@@ -159,6 +160,8 @@ pub struct ClientState {
     pub output_names: Vec<(u32, String)>,
     /// The registry names of the globals removed (`wl_registry.global_remove`).
     pub removed_globals: Vec<u32>,
+    /// Every global announced, by its registry name and interface.
+    pub announced_globals: Vec<(u32, String)>,
     seat: Option<wl_seat::WlSeat>,
     pub windows: Vec<Window>,
     pub subsurfaces: Vec<Subsurface>,
@@ -213,10 +216,11 @@ impl Client {
         let socket = stream.try_clone().expect("a copy of the client's socket");
         let connection = Connection::from_socket(stream).expect("a connection");
         let queue = connection.new_event_queue();
-        connection.display().get_registry(&queue.handle(), ());
+        let registry = connection.display().get_registry(&queue.handle(), ());
         let mut client = Client {
             connection,
             queue,
+            registry,
             state: ClientState::default(),
             socket,
         };
@@ -411,6 +415,19 @@ impl Client {
         let toplevel = &self.state.windows[window].toplevel;
         toplevel.set_app_id(app_id.to_owned());
         toplevel.set_title(title.to_owned());
+    }
+
+    /// Binds `wl_output` by its registry `name` again, as a client that has not yet read the
+    /// global's removal does; its events then reach [`ClientState::outputs`].
+    pub fn bind_output(&mut self, name: u32) {
+        let output = self.registry.bind(name, 4, &self.queue.handle(), name);
+        self.state.outputs.push((name, output));
+    }
+
+    /// Binds `wl_seat` by its registry `name`, as [`Client::bind_output`] does an output.
+    pub fn bind_seat(&mut self, name: u32) {
+        let seat: wl_seat::WlSeat = self.registry.bind(name, 1, &self.queue.handle(), ());
+        self.state.seat = Some(seat);
     }
 
     /// The registry name of the output that called itself `name`.
@@ -682,6 +699,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ClientState {
             }
             _ => return,
         };
+        state.announced_globals.push((name, interface.clone()));
         match interface.as_str() {
             "wl_compositor" => {
                 state.compositor = Some(registry.bind(name, version.min(6), qh, ()));

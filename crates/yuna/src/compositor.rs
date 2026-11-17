@@ -694,8 +694,8 @@ impl Compositor {
     }
 
     /// Removes `output`: its windows go to another output of its seat, its global is disabled at
-    /// once and destroyed [`RETIRED_GLOBAL_LIFETIME`](crate::RETIRED_GLOBAL_LIFETIME) later.
-    /// Refused for an output that does not exist, and for its seat's last one.
+    /// once and destroyed [`RETIRED_GLOBAL_LIFETIME`](crate::RETIRED_GLOBAL_LIFETIME) later on
+    /// Yuna's clock. Refused for an output that does not exist, and for its seat's last one.
     pub fn remove_output(&mut self, output: OutputId) -> Result<(), Error> {
         self.state.remove_output(output)
     }
