@@ -27,8 +27,10 @@ failures=()
 # that a step failing for another, a network down for instance, is not taken for a stop.
 expect_stopped() {
     local step=$1 what=$2 reason=$3 breaking=$4
-    (cd "$scratch" && eval "$breaking")
-    if (cd "$scratch" && scripts/check.sh only "$step") >"$work/log" 2>&1; then
+    if ! (cd "$scratch" && eval "$breaking"); then
+        echo "NOT BROKEN: the command that breaks the clone for $what failed"
+        failures+=("$what (not broken)")
+    elif (cd "$scratch" && scripts/check.sh only "$step") >"$work/log" 2>&1; then
         echo "NOT STOPPED: $what passes the step $step"
         failures+=("$what ($step)")
     elif ! grep -Eq -- "$reason" "$work/log"; then
@@ -65,7 +67,7 @@ expect_stopped dependencies "a crate under a licence GPL-3.0-or-later cannot tak
 expect_stopped links "a broken link between Markdown files" "nowhere.md" \
     "printf '\n[Nowhere](docs/nowhere.md)\n' >> README.md"
 expect_stopped lengths "AGENTS.md past its length" "too long" \
-    "yes 'word' | head -n 2000 | tr '\n' ' ' >> AGENTS.md"
+    "printf 'word %.0s' \$(seq 2000) >> AGENTS.md"
 expect_stopped indexes "an ADR missing from the index" "9999" \
     "printf '# 9999. A decision\n\n- Status: Accepted\n- Date: 2026-11-17\n' > docs/adr/9999-a-decision.md"
 expect_stopped indexes "a changelog fragment badly named" "something.md" \
