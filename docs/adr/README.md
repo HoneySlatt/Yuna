@@ -98,3 +98,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
 | [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
 | [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Accepted; supersedes 0035 |
+| [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |

@@ -290,9 +290,25 @@ pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own.
 
+## Contracts
+
+What other programs and projects rely on
+([ADR-0079](docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
+
+- the command line: `yuna --headless`, `yuna mcp`, their options, the `WAYLAND_DISPLAY=<socket>`
+  line printed at start, the exit codes;
+- the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`) and gives its programs (`YUNA_SEAT`);
+- the MCP server: its revisions, its tools' names, arguments and results;
+- the Nix package's outputs, once it exists (M1.10).
+
+Until 1.0 a contract may change, never silently: a change that breaks a consumer adds a
+`changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
+instead; an addition, an `added-…` one. The logs' text and the library's API are not contracts.
+
 ## Making a change
 
 1. Pick the current milestone in [`docs/PLAN.md`](docs/PLAN.md).
 2. Make the change, with its tests and its documentation.
 3. Run `scripts/check.sh`; measure what the milestone touches.
-4. Commit one logical change at a time, in English, the subject in the imperative.
+4. A change to a [contract](#contracts) adds its changelog fragment.
+5. Commit one logical change at a time, in English, the subject in the imperative.

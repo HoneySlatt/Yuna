@@ -151,7 +151,8 @@ milestone first needs it.
   they are given, tested never to reach the owner's, with no rule between two agents' seats
   ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)); `docs/client-needs.md` completed, Hollow's needs in it
   already; `docs/protocols.md` and its
-  test against the globals announced; `scripts/test-check.sh`.
+  test against the globals announced; `scripts/test-check.sh`; `tools/list` and `--help` held by
+  tests, the consumers pinned ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)).
 - **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna as in sway, without
   changing their repositories; both tests run in `check.sh`.
 - **Measured.** A program's presentation times in Yuna against headless sway's.
