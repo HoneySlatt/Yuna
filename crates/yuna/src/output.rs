@@ -27,7 +27,7 @@ use crate::clock::Deadline;
 use crate::colour::Record;
 use crate::colour::description::{Monitor, sdr_description};
 use crate::compositor::OutputDescription;
-use crate::frames::Drawings;
+use crate::frames::{Drawings, FailedDrawings};
 use crate::state::State;
 use crate::vrr::Panel;
 
@@ -244,6 +244,8 @@ pub(crate) struct VirtualOutput {
     /// all outside the output: from two, refreshes are paced again, so that a client that
     /// keeps doing so never loops.
     pub content_misses: u32,
+    /// Its frames that failed to draw, so that a renderer that keeps failing logs a few lines.
+    pub failed_drawings: FailedDrawings,
     /// The latest refresh a refresh of it aimed at or was presented at; refresh 0, its
     /// creation, at first.
     pub last_refresh: RefreshAt,
@@ -383,6 +385,7 @@ impl State {
             content_pending: false,
             armed_for_content: false,
             content_misses: 0,
+            failed_drawings: FailedDrawings::default(),
             last_refresh: creation,
             held_feedback: Vec::new(),
             drawings: Drawings::default(),

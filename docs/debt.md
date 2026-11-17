@@ -113,9 +113,10 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
-- A frame that fails to draw logs a warning each time (`frames.rs`, `State::draw`), with no
-  bound on their rate: a renderer that keeps failing writes one a frame. Found by the
-  [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
+- A client's capture whose copy fails logs a warning each time (`capture.rs`), at most one a
+  refresh for each of the 16 capture sessions: a copy that keeps failing while drawing works
+  writes one a frame. A failed drawing fails its captures without a copy, so a lost renderer
+  does not reach it. Found at M1.10, beside the failed drawings' bound (`FailedDrawings`).
 
 ## Colours
 
