@@ -84,7 +84,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0062](0062-the-compositors-comfort-and-look.md) | The compositor's comfort and look | Accepted; amends 0005 and 0010 |
 | [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md) | Vulkan alone, and uwui for what Yuna draws and for Hollow | Superseded by 0073; supersedes 0041; amends 0004, 0012 and 0057 |
 | [0064](0064-what-the-best-desktops-taught-yuna.md) | What the best desktops taught Yuna | Accepted; amends 0019 and 0057; amended by 0065 |
-| [0065](0065-what-hollow-asks-of-yuna.md) | What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief | Accepted; amends 0064 |
+| [0065](0065-what-hollow-asks-of-yuna.md) | What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief | Accepted; superseded in part by 0086; amends 0064 |
 | [0066](0066-yunas-own-x11-window-manager-on-x11rb.md) | Yuna's own X11 window manager, on x11rb | Accepted |
 | [0067](0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md) | One XWayland per seat, on demand, behind a cookie | Accepted |
 | [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Accepted |
@@ -105,3 +105,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Accepted; supersedes in part 0073 |
 | [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |
+| [0086](0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md) | The lock begun by Yuna, relieved by the locker, and logind's `Unlock` | Accepted; supersedes in part 0065 |

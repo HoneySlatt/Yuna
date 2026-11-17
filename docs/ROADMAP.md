@@ -249,7 +249,8 @@ pass.
 
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; VKMS studied first; one
   output at a fixed rate, with no VRR flicker.
-- The lock; the crash restart by the keeper; a crash report kept on the machine; recovery from a
+- The lock, begun by Yuna and relieved by the locker, logind's `Unlock` when no locker lives
+  ([ADR-0086](adr/0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md)); the crash restart by the keeper; a crash report kept on the machine; recovery from a
   GPU reset without a restart ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - The configuration read; the package's NixOS and home-manager modules; Amane on top through
   standard protocols.
@@ -284,7 +285,7 @@ on the KMS mock pass. The owner then sets 2c's scope from 2a's and 2b's figures.
   Hollow's interface of commands and events.
 - What Hollow asks ([ADR-0065](adr/0065-what-hollow-asks-of-yuna.md),
   [client needs](client-needs.md)): the programs that capture told to the shell; a greeter mode
-  under greetd; a new locker relieving a dead one.
+  under greetd.
 
 **Exit.** The owner uses Yuna for a week in place of niri; the budgets of rest, motion, input and
 power are met on the high tier and the laptop; the architecture and stability scenarios pass;

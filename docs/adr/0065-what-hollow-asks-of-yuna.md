@@ -1,7 +1,7 @@
 # 0065. What Hollow asks of Yuna: a sharing event, a greeter mode, a locker's relief
 
 - Status: Accepted; amends [0064](0064-what-the-best-desktops-taught-yuna.md) (the shell's
-  sharing indicator, the dead locker)
+  sharing indicator, the dead locker); superseded in part by [0086](0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md) (a locker's relief)
 - Date: 2026-11-14
 
 ## Context
