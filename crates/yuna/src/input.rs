@@ -744,7 +744,8 @@ impl State {
     /// the others are held ("ctrl+shift+t", "Return"). Besides XKB's names, `ctrl`, `shift`,
     /// `alt`, `super` and `altgr` name the left modifiers. Each key is pressed in order, then
     /// released in the reverse order. Refused, with nothing pressed, for a name no key has, a
-    /// key named twice, or a key held already.
+    /// key named twice, or a key held already; a key that fails to press or release leaves no
+    /// key of the tap held ([`tap_in_order`]).
     pub(crate) fn tap_keys(&mut self, seat: SeatId, combination: &str) -> Result<(), Error> {
         let mut keys = Vec::new();
         for name in combination.split('+') {
@@ -771,13 +772,7 @@ impl State {
                 "a key of {combination:?} is held already"
             )));
         }
-        for &key in &keys {
-            self.key(seat, key, true)?;
-        }
-        for &key in keys.iter().rev() {
-            self.key(seat, key, false)?;
-        }
-        Ok(())
+        tap_in_order(&keys, |key, pressed| self.key(seat, key, pressed))
     }
 
     /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its key in
@@ -891,6 +886,33 @@ impl State {
     }
 }
 
+/// Presses `keys` in order, then releases them in the reverse order, each through `key` (the key,
+/// and whether it is pressed). When one fails to press or release, every key the tap still holds
+/// is released, in the reverse order, each even if another fails, before the first error is
+/// returned: a tap that fails leaves no key held.
+fn tap_in_order(
+    keys: &[Keycode],
+    mut key: impl FnMut(Keycode, bool) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut result = Ok(());
+    let mut held = Vec::with_capacity(keys.len());
+    for &pressed in keys {
+        if let Err(error) = key(pressed, true) {
+            result = Err(error);
+            break;
+        }
+        held.push(pressed);
+    }
+    while let Some(released) = held.pop() {
+        if let Err(error) = key(released, false)
+            && result.is_ok()
+        {
+            result = Err(error);
+        }
+    }
+    result
+}
+
 /// The client of a drag's source: a `wl_data_source`, or, for a drag within one client, its
 /// origin surface.
 fn source_seat<S: Source>(source: &S) -> Option<SeatId> {
@@ -936,3 +958,87 @@ impl WaylandDndGrabHandler for State {
 
 /// A drag's end: Smithay tells the source and the target themselves.
 impl DndGrabHandler for State {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tap's keys pressed and released through a keyboard that fails the call numbered
+    /// `failing` (from 0), if any: returns the tap's result and the calls made, each a key and
+    /// whether it is pressed.
+    fn tap(keys: &[u32], failing: Option<usize>) -> (Result<(), Error>, Vec<(u32, bool)>) {
+        let keys: Vec<Keycode> = keys.iter().map(|&raw| Keycode::new(raw)).collect();
+        let mut calls = Vec::new();
+        let result = tap_in_order(&keys, |key, pressed| {
+            let call = calls.len();
+            calls.push((key.raw(), pressed));
+            if Some(call) == failing {
+                Err(Error::Keyboard(format!("call {call} fails")))
+            } else {
+                Ok(())
+            }
+        });
+        (result, calls)
+    }
+
+    #[test]
+    fn a_tap_presses_in_order_and_releases_in_reverse() {
+        let (result, calls) = tap(&[37, 50, 28], None);
+        assert!(result.is_ok());
+        assert_eq!(
+            calls,
+            [
+                (37, true),
+                (50, true),
+                (28, true),
+                (28, false),
+                (50, false),
+                (37, false)
+            ]
+        );
+    }
+
+    /// The third key fails to press: the two held are released, and the press's error returned.
+    #[test]
+    fn a_key_that_fails_to_press_releases_those_pressed_before() {
+        let (result, calls) = tap(&[37, 50, 28], Some(2));
+        assert!(
+            matches!(&result, Err(Error::Keyboard(why)) if why == "call 2 fails"),
+            "{result:?}"
+        );
+        assert_eq!(
+            calls,
+            [(37, true), (50, true), (28, true), (50, false), (37, false)]
+        );
+    }
+
+    /// The first key fails: nothing was pressed, nothing is released.
+    #[test]
+    fn a_first_key_that_fails_releases_nothing() {
+        let (result, calls) = tap(&[37, 50], Some(0));
+        assert!(result.is_err());
+        assert_eq!(calls, [(37, true)]);
+    }
+
+    /// The middle key fails to release: the first is released all the same, and the release's
+    /// error returned.
+    #[test]
+    fn a_key_that_fails_to_release_leaves_the_others_released() {
+        let (result, calls) = tap(&[37, 50, 28], Some(4));
+        assert!(
+            matches!(&result, Err(Error::Keyboard(why)) if why == "call 4 fails"),
+            "{result:?}"
+        );
+        assert_eq!(
+            calls,
+            [
+                (37, true),
+                (50, true),
+                (28, true),
+                (28, false),
+                (50, false),
+                (37, false)
+            ]
+        );
+    }
+}

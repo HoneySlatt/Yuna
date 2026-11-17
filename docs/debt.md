@@ -240,9 +240,6 @@ with games' VRR:
   not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.
-- `keyboard tap` (`input.rs`, `tap_keys`) stops at the first key that fails to press or release,
-  leaving the keys pressed before it held. Its keys are checked first, so no case is known.
-  Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.11.
 
 ## Motion
 
