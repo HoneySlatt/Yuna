@@ -20,7 +20,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
 - [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077.
 - [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089. Next:
-  M1.11, on the owner's go.
+  M1.11.
+- From M1.11, the owner chose on 2026-11-17 to work on `main` directly, without a milestone's
+  branch: push only a state where `scripts/check.sh` passes, and follow CI to green after each
+  push; the closing review reads the milestone's commits on `main`, and its fixes follow there.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 - An [audit of the architecture](audits/2026-11-17-architecture.md) on 2026-11-17: ADR-0078 to
   ADR-0085 decided: Stage 2 in three gated parts, outside pull requests from 0.1.
