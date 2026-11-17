@@ -14,6 +14,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
 };
+use smithay::reexports::rustix::process::{Pid, WaitStatus};
 use smithay::reexports::wayland_server::{BindError, Display, ListeningSocket};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
@@ -414,6 +415,17 @@ impl Compositor {
     /// found, and for a seat without a socket.
     pub fn x11_display(&self, seat: SeatId) -> Option<X11Display> {
         self.xwayland.as_ref()?.display(seat)
+    }
+
+    /// Tells the compositor that the process it runs in reaped its child `pid`, which ended
+    /// with `status`. A process that reaps every child of its own, as `yuna mcp` does, gives it
+    /// each child it reaped that is not one of its own programs: an Xwayland's end is then known
+    /// as it was, a crash counted as one, though the compositor's own wait on it finds it
+    /// reaped. Any other pid is ignored. Handled at the next round, which does not wait.
+    pub fn child_reaped(&mut self, pid: Pid, status: WaitStatus) {
+        if let Some(xwayland) = &self.xwayland {
+            xwayland.child_reaped(pid, status, &mut self.state);
+        }
     }
 
     /// Removes agent seat `seat` ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)):

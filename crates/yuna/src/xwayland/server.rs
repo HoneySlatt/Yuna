@@ -16,9 +16,11 @@
 //! makes its opener its master. X11 programs that need OpenGL get it with `--gpu` alone.
 //!
 //! Its exit is read through a pidfd, which the event loop watches and which reaps it, in both
-//! headless modes and in tests alike: Yuna handles SIGCHLD only in `yuna mcp`, whose reaping of
-//! every child may take Xwayland first, and then its status is unknown. A pidfd names this one
-//! process, so that a signal sent through it never reaches a process that took its pid.
+//! headless modes and in tests alike. Yuna handles SIGCHLD only in `yuna mcp`, whose reaping of
+//! every child may take Xwayland first: that reaping then gives the compositor its status
+//! ([`Compositor::child_reaped`](crate::Compositor::child_reaped)), and the pidfd finds it
+//! reaped, its end then unknown and come after. A pidfd names this one process, so that a signal
+//! sent through it never reaches a process that took its pid.
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -31,7 +33,7 @@ use smithay::reexports::rustix;
 use smithay::reexports::rustix::io::{Errno, FdFlags};
 use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
 use smithay::reexports::rustix::process::{
-    Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, pidfd_open,
+    Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, WaitStatus, pidfd_open,
 };
 
 use super::display::Display;
@@ -152,8 +154,20 @@ pub(crate) enum End {
     Exited(i32),
     /// This signal ended it.
     Killed(i32),
-    /// Another reaped it first: `yuna mcp`'s reaping of every child.
+    /// Another reaped it first: `yuna mcp`'s reaping of every child, which gave its status
+    /// to the compositor before.
     Unknown,
+}
+
+impl End {
+    /// The end `status` tells, as `wait` gave it; none for a process stopped or continued.
+    pub(crate) fn of(status: WaitStatus) -> Option<End> {
+        match (status.exit_status(), status.terminating_signal()) {
+            (Some(code), _) => Some(End::Exited(code)),
+            (None, Some(signal)) => Some(End::Killed(signal)),
+            (None, None) => None,
+        }
+    }
 }
 
 /// Reaps the process of `pidfd` if it has ended: none while it runs.

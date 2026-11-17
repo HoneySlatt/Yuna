@@ -285,8 +285,9 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `process.rs`: what every program Yuna starts shares, MCP's and Xwayland: the descriptors it
   does not inherit.
 - `mcp/`: the MCP server, [below](#the-mcp-server).
-- `main.rs` and `stop_signal.rs`: the program alone: its command line, its logs, SIGTERM, and
-  SIGCHLD for `yuna mcp`.
+- `main.rs`, `stop_signal.rs` and `fatal.rs`: the program alone: its command line, its logs,
+  SIGTERM, SIGCHLD for `yuna mcp`, and its stop after a panic of its state
+  ([The program](#the-program)).
 
 ### Time and deadlines
 
@@ -940,12 +941,13 @@ Xwayland ends itself `-terminate`'s delay after its last X11 client leaves, its 
 connected, with status 0. It may also crash or be killed; Yuna ends it, with SIGKILL through its
 pidfd, when its start fails, when its manager fails or its thread panics, when it outlives its
 manager's connection by 5 s (`MANAGER_GRACE`), and with its seat. Its pidfd, which the loop
-watches, reaps it in both modes and in tests: Yuna handles SIGCHLD only in `yuna mcp`, whose
-reaping of every child may take it first, its status then unknown. Its Wayland client goes, its
+watches, reaps it in both modes and in tests. Yuna handles SIGCHLD only in `yuna mcp`, whose
+reaping of every child may take it first: that reaping hands its status to the compositor
+(`Compositor::child_reaped`), which notes the end it was; the pidfd, finding it reaped, then
+notes an end unknown, which comes after and finds it gone. Its Wayland client goes, its
 manager's thread ends, and the display is watched again. A failure is an Xwayland that ends
-before its manager owns `WM_S0`, or with another status than 0; in `yuna mcp`, an Xwayland whose
-status was taken by the programs' reaping ends unknown, and counts as a failure only before
-`WM_S0` ([debt](debt.md#xwayland)). After a clean end or a first failure, the display is watched
+before its manager owns `WM_S0`, or with another status than 0, in both modes. After a clean end
+or a first failure, the display is watched
 again at once. Each further failure within 60 s of the one before (`FAILURE_MEMORY`) pauses it:
 1 s, then twice as long each time, up to 30 s (`FIRST_PAUSE`, `LONGEST_PAUSE`). A program that
 connects meanwhile waits in the backlog; at the longest pause, the connections waiting are
@@ -1003,8 +1005,9 @@ the frame its buffer holds. Nothing is drawn for a capture.
 3. The MCP server encodes it on a thread of its own (`mcp/image.rs`): at the logical size each
    pixel is the average of the physical pixels its unit covers, weighted by how much of each;
    then a PNG with fdeflate's fast compression, then base64. Over 8,000 pixels a side or 5 MB of
-   base64, it is refused. Four encoders run at most, those of captures cancelled included; a
-   panic in one fails its capture. The reply goes once the image is encoded and the clock has
+   base64, it is refused. Four encoders run at most, those of captures cancelled included, each
+   counted as it starts: a capture copied while four run keeps its frame until one ends, oldest
+   first, and a capture asked meanwhile is refused; a panic in one fails its capture. The reply goes once the image is encoded and the clock has
    reached the frame's boundary; on the real clock a timer wakes the loop for it. It gives the image, the
    mapping and an id; `pointer` maps a point of one of the seat's last 16 images to its output.
 4. A Wayland client's capture (`screencopy.rs`) sees the globals whatever its seat, and captures
@@ -1049,7 +1052,8 @@ standard input, one per line, and writes the replies to its standard output, not
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
 of SIGCHLD, of the waiting calls' timers and of the encoders' channel only note what came; after each round,
-`Server::dispatch` reaps the programs that ended, reads one chunk of input, answers each whole
+`Server::dispatch` reaps the children that ended, handing the compositor the status of each that
+is not a program ([XWayland](#xwayland)), reads one chunk of input, answers each whole
 line, answers the calls whose window came or whose time is up, starts encoding the captures copied
 and answers those encoded whose frame's boundary came, sends the compositor's events and
 writes the replies. While 16 MiB of replies wait, no further line is answered and the client's
@@ -1123,6 +1127,17 @@ through `/proc`, gets SIGTERM, then SIGKILL 2 s later, while the compositor stil
 clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` in
 `XDG_RUNTIME_DIR`, is removed.
 
+A panic of the server's thread, Yuna's state thread, is fatal
+([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). The program's panic hook
+writes the panic's message, then ends what Yuna started, as when it stops, without the event
+loop: every process under Yuna gets SIGTERM, those left SIGKILL 2 s later, each reaped as it
+ends, 3 s at most, their clients unanswered meanwhile; at once when none runs
+(`mcp::end_after_panic`, which reads `/proc` every 10 ms while it waits). The folder is removed,
+and Yuna exits with status 101 ([The program](#the-program)). The replies not yet written are
+lost. In a debug build, `YUNA_PANIC_ON_TOOL=<tool>`, read when the server starts, makes each call
+of that tool panic, for the tests of this path (`mcp::PANIC_ON_TOOL`); a release build has
+neither the variable nor the panic.
+
 ### The program
 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
@@ -1147,7 +1162,15 @@ RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG3
 order, each once. With `mcp`, it is each new seat's output. A mode refused, an item unknown,
 repeated or malformed, is a usage error: the program prints why and its help, and exits with 2.
 The signal handler writes to a pipe the event loop watches, so that the loop returns and the
-socket is removed. At the `debug` level, it logs
+socket is removed. A panic of the thread that runs the compositor, its state thread, stops either
+mode at once ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): the panic hook
+(`fatal.rs`), installed first, keeps the standard library's message, then `yuna mcp` ends its
+programs and removes its folder ([The MCP server](#the-mcp-server)), and both exit with status
+101, what Rust gives a panic that leaves `main`, through `_exit`: no destructor and no `atexit`
+handler runs on a state left half changed. `yuna --headless`'s Xwaylands end with their Wayland
+connection; its socket and its lock, its Xauthority file and its X displays' lock and file
+socket in `/tmp` are left, which the next server takes as stale ([debt](debt.md#the-headless-compositor)).
+A panic on another thread, an X11 manager's or an encoder's, is handled as before. At the `debug` level, it logs
 `window opened` when a window maps, `frame drawn` for each frame, and, after each round of its
 loop that woke, its counters in a line whose message is `counters`: what a test outside the
 process reads. `frame drawn` gives the frame's time, `took_us`: from when its elements begin to be
@@ -1174,7 +1197,8 @@ own thread, both `took_us`.
   `us` committed, text composed, long text in pieces, and no seat's text in another's field.
   `captures.rs` in it captures through MCP: an output's logical image, its edges on whole units, a frame on its way answered
   at its boundary, a window, a region and the physical size with `pointer` aimed through them,
-  the refusals, a closed seat, the last 16 ids, images too large. `screencopy.rs` captures
+  the refusals, a closed seat, the last 16 ids, images too large, and five seats' captures
+  copied in one round encoded four at a time. `screencopy.rs` captures
   through `ext-image-copy-capture-v1`, with `capture_client.rs`: both formats, a later frame
   waiting for new content at rest, another seat's output stopped, buffers that do not fit, a
   removed output, the bound on sessions, a client that leaves with a frame waiting.
@@ -1184,7 +1208,10 @@ own thread, both `took_us`.
   or with another seat's, refused; Xwayland ended when idle, the manager connected, and again
   on the next connection; a crash, and a second one in a row paused; a number whose abstract
   name is taken skipped; no display when XWayland is off or Xwayland is missing; no GPU driver
-  on llvmpipe; and Yuna at rest before and after. `x11_windows.rs` in it opens X11 windows,
+  on llvmpipe; and Yuna at rest before and after. `x11_crash.rs` in it kills Xwayland: a
+  crashed Xwayland's lone menu leaves the output, Yuna idle or busy; and two crashes in a row
+  once its manager is in charge, each reaped by the test before Yuna's pidfd can and handed over
+  as `yuna mcp` hands it, still pause the display. `x11_windows.rs` in it opens X11 windows,
   with `x11_client.rs`'s x11rb client, which reads `Xft.dpi`, draws with `PutImage` and sets a
   mode through RandR: a window tiled and focused at the tile × S, its own configure answered with
   its place; sharp at 1.5, area-filtered at 1 within a level of `axis_taps`' reference, and moved
@@ -1290,6 +1317,8 @@ own thread, both `took_us`.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
+  a panic of its state, in a debug build, that ends a tree ignoring SIGTERM within 3 s, at once
+  with no program, removes its folder and exits with 101,
   and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its
   shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` and `consumers.rs` share,

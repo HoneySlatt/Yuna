@@ -56,6 +56,13 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - On llvmpipe, Smithay logs `Erroneous EGL call didn't set EGLError` once at start (seen since
   M1.4's B1); its cause is not read.
 - Every output draws one background frame when it is created, even with no client.
+- A panic of Yuna's state stops it through `_exit`, no destructor run
+  ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): `yuna --headless`
+  leaves its socket and its lock in `XDG_RUNTIME_DIR`, and its Xauthority folder beside them;
+  the hook removes the X displays' locks and file sockets in `/tmp`, which name its pid. The next
+  server takes the Wayland socket as stale by its lock, but the Xauthority folder of a socket
+  name no later Yuna takes stays. The fatal path of `yuna --headless` has no test, its trigger being an MCP tool's: it was run by hand on Smithay's own
+  panic when libEGL is missing.
 - The development shell's `LD_LIBRARY_PATH` (libglvnd, for EGL) applies to every program run in
   it.
 - Without libEGL on its library path, `yuna --headless` panics inside Smithay `8fd9fe0`
@@ -203,21 +210,19 @@ with games' VRR:
   comes with the desktop ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)).
 - A capture waiting for its frame times out after 50 s; no test waits that long.
 - `png` and `flate2` build two versions of `miniz_oxide`, 0.8 and 0.9, until `png` moves to 0.9.
-- `MAX_ENCODERS` is checked when a capture is asked (`mcp/mod.rs`), not when its encoder starts:
-  captures still being copied are not counted, so more than four encoders may run, one a seat at
-  most. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.11.
 
 ## The MCP server
 
 - Claude Code 2.1.318 ran the done-when's story through `yuna mcp` alone
   ([measurements](measurements.md)); Codex and OpenCode are untested, and which revision of MCP
   each client speaks, Claude Code's included, is not recorded.
-- A `yuna mcp` killed by SIGKILL, or one that panics, a bug unwinding past its stopping, leaves
-  its programs running, their Wayland connection closed, and its folder of logs, up to 128 MiB,
-  in `XDG_RUNTIME_DIR`: nothing ends or removes them. The panic's case is paid at M1.11, by
-  [ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)'s fatal path; SIGKILL's stays.
-  Stopping can take 4 s, a second for the last replies and three for the programs, and an MCP
-  client may kill Yuna sooner.
+- A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
+  and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them. So
+  does one that aborts, overflows its stack or panics inside its panic hook: no hook runs then,
+  or it cannot finish. A panic of its state ends them
+  ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). Stopping can take 4 s,
+  a second for the last replies and three for the programs, and an MCP client may kill Yuna
+  sooner.
 - An agent reads presentation times only through a capture: its frame's `boundary` and
   `presented_ns`. No tool gives a program's presentation feedback, which the program reads
   itself through `wp_presentation`.
@@ -320,10 +325,6 @@ with games' VRR:
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
 - No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
   key, until Stage 2.
-- In `yuna mcp`, the programs' reaping (`wait` on any child) may take an Xwayland's status before
-  its pidfd does: a crash after `WM_S0` then counts as a clean end, and starts no pause. A crash
-  loop in `yuna mcp` restarts Xwayland at each new X11 connection. Paid at M1.11, which reworks
-  what `yuna mcp` sees of its programs.
 - A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
   while an Xwayland with one small window runs, and keeps 22 MiB of it once Xwayland has ended
   ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. Whether that memory

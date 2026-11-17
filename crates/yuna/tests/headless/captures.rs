@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use yuna::mcp::RECENT_CAPTURES;
+use yuna::mcp::{MAX_ENCODERS, RECENT_CAPTURES};
 use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, OutputMode};
 
@@ -680,4 +680,57 @@ fn a_capture_waiting_on_a_removed_output_fails() {
     assert_eq!(failed["isError"], json!(true));
     let reason = failed["content"][0]["text"].as_str().expect("a reason");
     assert!(reason.contains("removed"), "{reason}");
+}
+
+/// Never more than [`MAX_ENCODERS`] captures encode at once, however many a round copies: one
+/// more seat than that asks a capture in the same round, each copied at once from its output at
+/// rest; four encoders start, the last capture's frame waits for one of them to end, and every
+/// capture is answered with its image. On the real clock, since a manual-clock Yuna holds one
+/// seat.
+#[test]
+fn captures_copied_in_one_round_encode_four_at_a_time() {
+    let mut mcp = Mcp::new(ClockMode::Real);
+    let seats: Vec<u64> = (0..=MAX_ENCODERS)
+        .map(|_| {
+            let created = mcp.call(
+                "seat",
+                json!({"action": "create", "width": 640, "height": 360, "scale": 1}),
+            );
+            created["structuredContent"]["seat"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{created}"))
+        })
+        .collect();
+    // A first capture of each waits for its output's first frame: its output then rests, and
+    // the next capture of it is copied at once.
+    for (n, &seat) in seats.iter().enumerate() {
+        let first = capture_reply(&mut mcp, 960 + n as u64, json!({"seat": seat}));
+        assert_eq!(first["isError"], json!(false), "{first}");
+    }
+    assert_eq!(mcp.server.encoders_running(), 0);
+
+    // Sent together, read in one round.
+    let ids: Vec<u64> = (970..).take(seats.len()).collect();
+    for (&id, &seat) in ids.iter().zip(&seats) {
+        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                         "params": modern(json!({"name": "capture", "arguments": {"seat": seat}}))}));
+    }
+    let mut answers = std::collections::HashMap::new();
+    let mut most = 0;
+    let until = Instant::now() + Duration::from_secs(30);
+    while answers.len() < ids.len() {
+        assert!(Instant::now() < until, "answered: {answers:?}");
+        for reply in mcp.replies() {
+            if let Some(id) = reply["id"].as_u64() {
+                answers.insert(id, reply["result"].clone());
+            }
+        }
+        most = most.max(mcp.server.encoders_running());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(most, MAX_ENCODERS);
+    for id in ids {
+        let (width, height, _) = image_of(&answers[&id]);
+        assert_eq!((width, height), (640, 360));
+    }
 }

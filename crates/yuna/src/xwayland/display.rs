@@ -406,6 +406,35 @@ pub(crate) fn xauthority_entry(number: u32, cookie: &[u8; 16]) -> Vec<u8> {
     entry
 }
 
+/// Removes the files of every X display this process holds, `/tmp/.X11-unix/X<n>` then
+/// `/tmp/.X<n>-lock`, read from the locks that name this process: what the displays' drops
+/// would remove, for a Yuna that stops after a panic of its state and runs no drop
+/// ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). It
+/// reads no state and logs nothing: an error leaves the file, which the next server takes as
+/// stale once this process is gone.
+pub fn remove_displays_after_panic() {
+    let Ok(entries) = fs::read_dir("/tmp") else {
+        return;
+    };
+    let own = rustix::process::getpid().as_raw_nonzero().get().to_string();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(number) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(".X")?.strip_suffix("-lock"))
+            .and_then(|number| number.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let lock = entry.path();
+        if fs::read_to_string(&lock).is_ok_and(|text| text.trim() == own) {
+            // The socket first: while the lock stays, no other server takes the number.
+            let _ = fs::remove_file(socket_path(number));
+            let _ = fs::remove_file(&lock);
+        }
+    }
+}
+
 /// Removes a file Yuna made; one already gone is no error, any other is logged.
 fn remove_quietly(path: &Path) {
     if let Err(error) = fs::remove_file(path)

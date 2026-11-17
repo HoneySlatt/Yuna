@@ -21,8 +21,15 @@
 //! under it gets SIGTERM, then SIGKILL [`END_GRACE`] later if it is still there, while Yuna still
 //! serves its Wayland clients (`mod.rs`). When a seat closes, the processes that belong to it
 //! are ended the same way ([`Programs::seat_processes`]). Exits are read when SIGCHLD arrives,
-//! never polled. The folder that holds the seats' sockets, the logs and the programs' runtime
-//! folders is removed when Yuna stops.
+//! never polled: every child is reaped there, and the status of one that is not a program, an
+//! Xwayland's, goes back to the compositor, whose own wait on it then finds it reaped. The folder
+//! that holds the seats' sockets, the logs and the programs' runtime folders is removed when Yuna
+//! stops.
+//!
+//! A panic of Yuna's state stops it at once
+//! ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): its
+//! panic hook, which cannot run the event loop, ends the programs and removes the folder through
+//! [`end_after_panic`], the same signals and the same walk through `/proc`, its waits slept.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
@@ -35,13 +42,13 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::rustix;
 use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions};
+use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions, WaitStatus};
 
 use yuna_layout::SeatId;
 
@@ -107,6 +114,10 @@ pub const END_GRACE: Duration = Duration::from_secs(2);
 
 /// How long Yuna waits, after SIGKILL, for the killed to be reaped.
 pub const KILL_WAIT: Duration = Duration::from_secs(1);
+
+/// How often the fatal path, which has no event loop to wake it, looks again whether the
+/// processes it signalled have ended: each look reads `/proc`.
+const ENDING_POLL: Duration = Duration::from_millis(10);
 
 /// How much of a program's output is read at a time.
 const READ_SIZE: usize = 64 * 1024;
@@ -230,6 +241,11 @@ impl Programs {
     /// Where seat `seat`'s Wayland socket goes, in the folder.
     pub fn socket_path(&self, seat: SeatId) -> PathBuf {
         self.folder.join(format!("seat-{}", seat.0))
+    }
+
+    /// The folder of the seats' sockets, the programs' logs and their runtime folders.
+    pub fn folder(&self) -> &Path {
+        &self.folder
     }
 
     /// The programs of `seat` remembered, in the order they started.
@@ -389,35 +405,30 @@ impl Programs {
         }
     }
 
-    /// Reaps every child that ended, programs and orphans Yuna adopted, and records how each
-    /// program ended. Run when SIGCHLD has come.
-    pub fn reap(&mut self) {
-        loop {
-            // `wait`, POSIX's `waitpid(-1)`: any child. rustix's `waitpid(None)` is `waitpid(0)`,
-            // the children of Yuna's own process group alone, and each program leads its own.
-            match rustix::process::wait(WaitOptions::NOHANG) {
-                Ok(Some((pid, status))) => {
-                    let end = match (status.exit_status(), status.terminating_signal()) {
-                        (Some(code), _) => End::Exited(code),
-                        (None, Some(signal)) => End::Killed(signal),
-                        // Stopped or continued: not an end.
-                        (None, None) => continue,
-                    };
-                    if let Some(program) = self
-                        .list
-                        .iter_mut()
-                        .find(|p| p.pid == pid && p.end.is_none())
-                    {
-                        tracing::info!(program = program.id, ?end, "program ended");
-                        program.end = Some(end);
-                    }
+    /// Reaps every child that ended, programs, orphans Yuna adopted and Xwaylands alike, and
+    /// records how each program ended. Gives `not_a_program` the pid and status of every other
+    /// child, so that the compositor learns how an Xwayland ended, which this reaping took
+    /// before its own wait on it could. Run when SIGCHLD has come.
+    pub fn reap(&mut self, mut not_a_program: impl FnMut(Pid, WaitStatus)) {
+        reap_children(|pid, status| {
+            let end = match (status.exit_status(), status.terminating_signal()) {
+                (Some(code), _) => End::Exited(code),
+                (None, Some(signal)) => End::Killed(signal),
+                // Stopped or continued: not an end.
+                (None, None) => return,
+            };
+            match self
+                .list
+                .iter_mut()
+                .find(|p| p.pid == pid && p.end.is_none())
+            {
+                Some(program) => {
+                    tracing::info!(program = program.id, ?end, "program ended");
+                    program.end = Some(end);
                 }
-                Ok(None) => return,
-                Err(rustix::io::Errno::INTR) => continue,
-                // ECHILD: no child left.
-                Err(_) => return,
+                None => not_a_program(pid, status),
             }
-        }
+        });
     }
 
     /// Whether an output source waits for the end of a [`THROTTLE`].
@@ -432,20 +443,6 @@ impl Programs {
                 let _ = handle.enable(&token);
             }
         }
-    }
-
-    /// Sends `signal` to every living process under Yuna, found through `/proc`, and returns how
-    /// many there were. A process that ended since its parent was read is not reaped yet: its
-    /// pid is not reused.
-    pub fn signal_all(&self, signal: Signal) -> usize {
-        let living = living_descendants(rustix::process::getpid());
-        if !living.is_empty() {
-            tracing::info!(processes = living.len(), ?signal, "ending the programs");
-        }
-        for &pid in &living {
-            let _ = rustix::process::kill_process(pid, signal);
-        }
-        living.len()
     }
 
     /// The living processes under Yuna that belong to `seat`, whose Wayland clients have the
@@ -537,24 +534,9 @@ impl Programs {
         });
     }
 
-    /// The processes living under Yuna now.
-    pub fn living(&self) -> Vec<Pid> {
-        living_descendants(rustix::process::getpid())
-    }
-
-    /// Whether a process still runs under Yuna.
-    pub fn any_alive(&self) -> bool {
-        !living_descendants(rustix::process::getpid()).is_empty()
-    }
-
     /// Removes the folder of logs and runtime folders, once every program has ended.
     pub fn remove_folder(self) {
-        if self.any_alive() {
-            tracing::warn!("programs outlive Yuna");
-        }
-        if let Err(error) = fs::remove_dir_all(&self.folder) {
-            tracing::warn!(%error, folder = ?self.folder, "the programs' folder cannot be removed");
-        }
+        remove_folder(&self.folder);
     }
 
     /// Forgets the oldest programs that ended while more than [`MAX_KEPT`] are remembered, and
@@ -569,6 +551,93 @@ impl Programs {
             let _ = fs::remove_dir_all(self.folder.join("runtime").join(program.id.to_string()));
         }
     }
+}
+
+/// Sends `signal` to every living process under Yuna, found through `/proc`, and returns how
+/// many there were. A child of Yuna's that ended since it was read is not reaped yet, so its pid
+/// is not reused; a deeper process may be reaped by its own parent in between, its pid then
+/// free for another ([debt](../../../../docs/debt.md#the-mcp-server)).
+pub fn signal_all(signal: Signal) -> usize {
+    let living = living();
+    if !living.is_empty() {
+        tracing::info!(processes = living.len(), ?signal, "ending the programs");
+    }
+    for &pid in &living {
+        let _ = rustix::process::kill_process(pid, signal);
+    }
+    living.len()
+}
+
+/// The processes living under Yuna now.
+pub fn living() -> Vec<Pid> {
+    living_descendants(rustix::process::getpid())
+}
+
+/// Whether a process still runs under Yuna.
+pub fn any_alive() -> bool {
+    !living().is_empty()
+}
+
+/// Reaps every child of Yuna's that has ended, without waiting, and gives `ended` each one's pid
+/// and status.
+fn reap_children(mut ended: impl FnMut(Pid, WaitStatus)) {
+    loop {
+        // `wait`, POSIX's `waitpid(-1)`: any child. rustix's `waitpid(None)` is `waitpid(0)`, the
+        // children of Yuna's own process group alone, and each program leads its own.
+        match rustix::process::wait(WaitOptions::NOHANG) {
+            Ok(Some((pid, status))) => ended(pid, status),
+            Ok(None) => return,
+            Err(rustix::io::Errno::INTR) => continue,
+            // ECHILD: no child left.
+            Err(_) => return,
+        }
+    }
+}
+
+/// Removes `folder`, the programs' folder, warning when a process under Yuna outlives it. A
+/// folder already gone, by a panic after Yuna's stopping removed it, is no failure.
+fn remove_folder(folder: &Path) {
+    if any_alive() {
+        tracing::warn!("programs outlive Yuna");
+    }
+    match fs::remove_dir_all(folder) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(%error, ?folder, "the programs' folder cannot be removed"),
+    }
+}
+
+/// Ends every process under Yuna, then removes `folder`, the programs' folder: what `yuna mcp`
+/// does when it stops on purpose, for its fatal path, on the thread whose panic stops Yuna
+/// ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+/// It touches neither the compositor nor the server, which the panic may have left half
+/// changed: with no event loop to serve the programs' clients or to wake it, it sleeps 10 ms
+/// (`ENDING_POLL`) between looks. SIGTERM first, then SIGKILL [`END_GRACE`] later to those left, sent again at each look,
+/// each reaped as it ends; it returns once none is left, [`KILL_WAIT`] after SIGKILL at most, at
+/// once when none ran.
+pub fn end_after_panic(folder: &Path) {
+    'stages: for (signal, wait) in [(Signal::TERM, END_GRACE), (Signal::KILL, KILL_WAIT)] {
+        if signal_all(signal) == 0 {
+            break;
+        }
+        let until = Instant::now() + wait;
+        loop {
+            // A process may fork between the walk and its own SIGKILL: each look kills again.
+            if signal == Signal::KILL {
+                signal_all(Signal::KILL);
+            }
+            reap_children(|_, _| {});
+            if !any_alive() {
+                break 'stages;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(left.min(ENDING_POLL));
+        }
+    }
+    remove_folder(folder);
 }
 
 /// A program's environment: the variables of `inherited` that [`KEPT_VARIABLES`] and

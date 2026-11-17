@@ -1,8 +1,10 @@
 //! The `yuna` program: reads its command line, and runs the headless compositor until SIGTERM or
 //! SIGINT, or, as `yuna mcp`, an MCP server of its own until its client closes its input
-//! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md)). The desktop session does not exist yet
-//! (Stage 2); the work in progress is in `docs/PLAN.md`.
+//! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md)). A panic of the thread that runs
+//! either stops it at once (`fatal.rs`). The desktop session does not exist yet (Stage 2); the
+//! work in progress is in `docs/PLAN.md`.
 
+mod fatal;
 mod stop_signal;
 
 use std::ffi::{OsStr, OsString};
@@ -282,6 +284,8 @@ fn usage_error(reason: &str) -> ExitCode {
 }
 
 fn run_headless(headless: Headless) -> ExitCode {
+    // Nothing of its own to end: a panic of this thread, which runs the compositor, stops it.
+    fatal::install();
     start_logging();
     // Before the compositor starts, so that a SIGTERM during its start-up is kept in the pipe and
     // stops it as soon as its loop runs, rather than killing it half started.
@@ -394,8 +398,10 @@ fn start(config: Config) -> Result<Compositor, ExitCode> {
 
 /// `yuna mcp`: the MCP server on standard input and output, until its input closes or a signal
 /// stops it. Yuna becomes its children's subreaper, so that every process its programs start
-/// stays under it, to be reaped and ended.
+/// stays under it, to be reaped and ended, on purpose or after a panic of this thread, which
+/// runs the server.
 fn run_mcp(headless: Headless) -> ExitCode {
+    let on_panic = fatal::install();
     start_logging();
     let signals = stop_signal::install().and_then(|stop| {
         let children = stop_signal::install_children()?;
@@ -446,6 +452,10 @@ fn run_mcp(headless: Headless) -> ExitCode {
     let server = match Server::new(compositor, input, output, Some(children)) {
         Ok(mut server) => {
             server.set_seat_output(seat_output);
+            // No program can start before the server, so none outlives a panic before this.
+            if let Some(folder) = server.programs_folder() {
+                on_panic.end_programs_of(folder.to_owned());
+            }
             server
         }
         Err(error) => {

@@ -67,6 +67,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   that compositors that draw more are compared on the same work
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
+- **Fatal path**: what Yuna does when its state thread panics: it stops at once, never unwinding
+  through a state left half changed; `yuna mcp` first ends its programs and removes its folder
+  ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - **Floor** (bench): the figures of the rivals that draw least, sway and dwl, recorded beside
   the budgets, never a budget ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
@@ -191,6 +194,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   as for captures; choosing is the consent
   ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - **Special workspace**: a hidden workspace shown over the current one by a key.
+- **State thread**: the thread that runs Yuna's event loop and owns its state; a panic there is
+  fatal, unlike one on the X11 manager's or an encoder's thread.
 - **Strip**: in scrolling columns, the row of columns of a workspace; the **view** is the part of
   it the output shows, and scrolls to keep the focused column whole.
 - **Suspended**: an `xdg_toplevel` state telling a client its window cannot be seen; Yuna sends it

@@ -16,8 +16,9 @@
 //!   charge (`manager.rs`); once it owns `WM_S0`, Xwayland accepts the waiting program. A start
 //!   that has not reached that point within [`START_TIMEOUT`] is ended. Xwayland ends itself
 //!   [`XwaylandConfig::idle_seconds`] after its last X11 client leaves; it may also crash, be
-//!   killed, or be ended by Yuna when its manager fails. Its pidfd reaps it, its Wayland client
-//!   goes, and the display is watched again.
+//!   killed, or be ended by Yuna when its manager fails. Its pidfd reaps it, or, in `yuna mcp`,
+//!   the reaping of every child gives its status ([`Xwayland::child_reaped`]); its Wayland
+//!   client goes, and the display is watched again.
 //! - **Paused**: after starts that fail in a row, the display waits before it is watched again
 //!   ([`pause_after`]); programs that connect meanwhile wait in the backlog.
 //!
@@ -56,14 +57,14 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::rustix;
 use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::process::Pid;
+use smithay::reexports::rustix::process::{Pid, WaitStatus};
 use yuna_layout::SeatId;
 
 use crate::render::Device;
 use crate::state::State;
 pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
 use display::Display;
-pub use display::MAX_DISPLAYS;
+pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
 use manager::{Commands, ManagerEvent, Stop};
 pub(crate) use menus::ShownMenus;
 pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
@@ -460,6 +461,18 @@ impl Xwayland {
         !state.xwayland_notes.is_empty()
     }
 
+    /// The process Yuna runs in reaped its child `pid`, which ended with `status`: if it was
+    /// an Xwayland, its end is noted, before the end its pidfd, finding it reaped, will note
+    /// unknown, and that second note finds it gone already.
+    pub(crate) fn child_reaped(&self, pid: Pid, status: WaitStatus, state: &mut State) {
+        let Some(end) = End::of(status) else {
+            return;
+        };
+        if let Some((&id, _)) = self.servers.iter().find(|(_, xserver)| xserver.pid == pid) {
+            state.xwayland_notes.push(Note::Exited { server: id, end });
+        }
+    }
+
     /// Reads the managers' channels, or stops reading them while a backlog waits.
     fn read_managers(&mut self, read: bool, handle: &LoopHandle<'static, State>) {
         if self.reading_managers == read {
@@ -702,8 +715,9 @@ impl Xwayland {
         };
         xserver.release(handle);
         state.x11_server_gone(id);
-        // `-terminate` exits with 0; another process may have reaped it, in `yuna mcp`, and then
-        // its end is known only to be after its start.
+        // `-terminate` exits with 0. An end unknown comes from a pidfd that found its process
+        // reaped by another, which gave its status first (`child_reaped`): it is known only to be
+        // after its start.
         let failed = !xserver.ready || !matches!(end, End::Exited(0) | End::Unknown);
         let seat = xserver.seat;
         if failed {

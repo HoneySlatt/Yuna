@@ -21,9 +21,13 @@
 //! Bounds: a line over [`stdio::MAX_LINE`] ends the connection; while more than
 //! [`MAX_QUEUED_OUTPUT`] of replies wait, because the client does not read them, no further
 //! request is answered and its input is not read; at most [`tools::MAX_WAITING_CALLS`] calls wait
-//! at once. The protocol is in
+//! at once; at most [`MAX_ENCODERS`] captures are encoded at once. The protocol is in
 //! `protocol.rs`, the framing in `stdio.rs`, the tools' schemas and results in `tools.rs`, the
 //! programs in `programs.rs`.
+//!
+//! A panic of the server's thread is fatal: the program's panic hook ends the programs and
+//! removes their folder ([`Server::programs_folder`], [`end_after_panic`]), then stops Yuna. In a
+//! debug build, `PANIC_ON_TOOL` makes a tool's call panic, for the tests of that path.
 
 mod image;
 mod programs;
@@ -34,7 +38,7 @@ mod tools;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -52,7 +56,7 @@ use crate::colour::description::PG32UCDM;
 use crate::compositor::{Compositor, WindowDescription};
 use crate::output::{InvalidOutput, OutputMode};
 use crate::state::OWNER_SEAT;
-use crate::{CaptureMapping, CaptureTicket, ClockMode, Error};
+use crate::{CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error};
 use image::Encoded;
 use programs::{Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
@@ -65,7 +69,7 @@ use tools::{
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use programs::{
     END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
-    SEAT_VARIABLE,
+    SEAT_VARIABLE, end_after_panic,
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
@@ -80,8 +84,16 @@ pub const MAX_QUEUED_OUTPUT: usize = 16 << 20;
 pub const RECENT_CAPTURES: usize = 16;
 
 /// How many captures' images may be encoded at once, each on a thread of its own with its
-/// pixels, about 33 MB at 4K's physical size.
+/// pixels, about 33 MB at 4K's physical size. An encoder is counted when it starts: a capture
+/// copied while this many run waits for one to end, and a capture asked meanwhile is refused.
 pub const MAX_ENCODERS: usize = 4;
+
+/// The variable that, in a debug build, names a tool whose every call makes the server's thread,
+/// Yuna's state thread, panic: what the tests of Yuna's fatal path use
+/// ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). It is
+/// read when the server starts. A release build has neither the variable nor the panic.
+#[cfg(debug_assertions)]
+pub const PANIC_ON_TOOL: &str = "YUNA_PANIC_ON_TOOL";
 
 /// How much of the client's input is read at a time.
 const READ_SIZE: usize = 64 * 1024;
@@ -132,6 +144,8 @@ struct CaptureWait {
 enum CaptureStage {
     /// Waiting for its frame, at most [`MAX_WAIT`]: the timer that fails it.
     Copying(RegistrationToken),
+    /// Copied: its image is made on an encoder's thread, or its frame waits for one among the
+    /// server's `waiting_encoders`.
     Encoding(CopiedCapture),
     /// Encoded; `woken` once a timer will wake the loop at its boundary.
     Encoded {
@@ -187,8 +201,12 @@ pub struct Server {
     recent_captures: HashMap<SeatId, VecDeque<(u64, CaptureMapping)>>,
     /// The next capture's id: ids increase and are never reused.
     next_capture: u64,
-    /// The encoders' threads running, those of captures cancelled included.
+    /// The encoders' threads running, those of captures cancelled included: counted when each
+    /// starts, until its image comes back.
     encoders_running: usize,
+    /// The frames of captures copied while [`MAX_ENCODERS`] encoders ran, by capture key, oldest
+    /// first: each starts its encoder when one ends. One a seat at most, as its capture.
+    waiting_encoders: VecDeque<(u64, CapturedFrame)>,
     /// The mode of a new seat's output, unless `seat create` says.
     seat_output: OutputMode,
     /// The programs, when the server may start some, with SIGCHLD's pipe.
@@ -197,6 +215,9 @@ pub struct Server {
     throttle_armed: bool,
     /// Why the server stops, once it does.
     stopping: Option<Stop>,
+    /// The tool whose calls panic, from [`PANIC_ON_TOOL`].
+    #[cfg(debug_assertions)]
+    panic_on_tool: Option<String>,
 }
 
 /// Why the server stops.
@@ -329,10 +350,13 @@ impl Server {
             recent_captures: HashMap::new(),
             next_capture: 1,
             encoders_running: 0,
+            waiting_encoders: VecDeque::new(),
             seat_output: OutputMode::default(),
             programs,
             throttle_armed: false,
             stopping: None,
+            #[cfg(debug_assertions)]
+            panic_on_tool: std::env::var(PANIC_ON_TOOL).ok(),
         })
     }
 
@@ -358,6 +382,20 @@ impl Server {
         self.input_paused
     }
 
+    /// How many encoders' threads run, as the server counts them. For tests.
+    #[doc(hidden)]
+    pub fn encoders_running(&self) -> usize {
+        self.encoders_running
+    }
+
+    /// The folder of its seats' sockets and its programs' logs, `yuna-mcp-<pid>` in
+    /// `XDG_RUNTIME_DIR`, when it may start programs: what the fatal path removes.
+    pub fn programs_folder(&self) -> Option<&Path> {
+        self.programs
+            .as_ref()
+            .map(|(programs, _)| programs.folder())
+    }
+
     /// Why it stops, once it does: nothing more is read, and [`Server::finish`] ends it.
     pub fn stopping(&self) -> Option<&Stop> {
         self.stopping.as_ref()
@@ -377,7 +415,8 @@ impl Server {
             && let Some((programs, children)) = &mut self.programs
         {
             programs::drain(children.as_fd());
-            programs.reap();
+            let compositor = &mut self.compositor;
+            programs.reap(|pid, status| compositor.child_reaped(pid, status));
         }
         for key in events.closings_due {
             self.closing_stage_up(key);
@@ -391,8 +430,9 @@ impl Server {
         for key in events.timed_out {
             self.answer_timed_out(key);
         }
-        self.encode_copied_captures();
+        // The encoders that ended first, so that the captures copied take their places.
         self.note_encoded(events.encoded);
+        self.encode_copied_captures();
         self.answer_captures_due();
         // A window is told once it is placed: after the arrangement that follows its mapping.
         if !self.waits.is_empty() && !self.compositor.arrangement_pending() {
@@ -516,13 +556,18 @@ impl Server {
     /// so that a program answering SIGTERM with a last roundtrip gets its answer.
     fn end_programs(&mut self, programs: &mut Programs, children: &OwnedFd) {
         for (signal, wait) in [(Signal::TERM, END_GRACE), (Signal::KILL, KILL_WAIT)] {
-            if programs.signal_all(signal) == 0 {
+            if programs::signal_all(signal) == 0 {
                 return;
             }
             let until = Instant::now() + wait;
             loop {
-                programs.reap();
-                if !programs.any_alive() {
+                // A process may fork between the walk and its own SIGKILL: each look kills again.
+                if signal == Signal::KILL {
+                    programs::signal_all(Signal::KILL);
+                }
+                let compositor = &mut self.compositor;
+                programs.reap(|pid, status| compositor.child_reaped(pid, status));
+                if !programs::any_alive() {
                     return;
                 }
                 let left = until.saturating_duration_since(Instant::now());
@@ -607,6 +652,8 @@ impl Server {
             Call::Ping => json!({}),
             Call::ListTools => protocol::tools_list_result(revision, tools::definitions()),
             Call::Tool { name, arguments } => {
+                #[cfg(debug_assertions)]
+                self.panic_if_asked(&name);
                 let result = match name.as_str() {
                     "seat" => match self.seat(&id, revision, arguments) {
                         Some(result) => result,
@@ -643,6 +690,15 @@ impl Server {
             }
         };
         self.queue.push(&protocol::response(id, result));
+    }
+
+    /// Panics when [`PANIC_ON_TOOL`] names `tool`: the state thread's panic that the tests of
+    /// the fatal path ask for, in a debug build alone.
+    #[cfg(debug_assertions)]
+    fn panic_if_asked(&self, tool: &str) {
+        if self.panic_on_tool.as_deref() == Some(tool) {
+            panic!("{PANIC_ON_TOOL} asks Yuna's state thread to panic when `{tool}` is called");
+        }
     }
 
     /// The agent seat `seat`, while it exists; a failure that says so otherwise.
@@ -973,12 +1029,14 @@ impl Server {
         }
     }
 
-    /// The processes living under Yuna; none without programs.
+    /// The processes living under Yuna; none without programs, in a test's process, whose
+    /// children are not the server's.
     fn living_under_yuna(&self) -> Vec<Pid> {
-        self.programs
-            .as_ref()
-            .map(|(programs, _)| programs.living())
-            .unwrap_or_default()
+        if self.programs.is_some() {
+            programs::living()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Answers each closing whose processes have all ended, or left Yuna.
@@ -1507,8 +1565,8 @@ impl Server {
         None
     }
 
-    /// Starts encoding each capture whose pixels the compositor copied, on a thread of its own;
-    /// answers those it failed.
+    /// Starts encoding each capture whose pixels the compositor copied, on a thread of its own,
+    /// or queues its frame while [`MAX_ENCODERS`] run; answers those it failed.
     fn encode_copied_captures(&mut self) {
         for (ticket, copied) in self.compositor.take_captures() {
             let Some(index) = self.captures.iter().position(|capture| {
@@ -1541,8 +1599,20 @@ impl Server {
                 );
                 continue;
             }
-            let copied = CopiedCapture::of(&frame);
-            let key = self.captures[index].key;
+            self.captures[index].stage = CaptureStage::Encoding(CopiedCapture::of(&frame));
+            self.waiting_encoders
+                .push_back((self.captures[index].key, frame));
+        }
+        self.start_encoders();
+    }
+
+    /// Starts an encoder for each frame waiting, oldest first, while fewer than
+    /// [`MAX_ENCODERS`] run: each is counted as it starts, so that never more run, however many
+    /// captures a round copies.
+    fn start_encoders(&mut self) {
+        while self.encoders_running < MAX_ENCODERS
+            && let Some((key, frame)) = self.waiting_encoders.pop_front()
+        {
             let results = self.encoder_results.clone();
             let started = std::thread::Builder::new()
                 .name("yuna-capture".to_owned())
@@ -1562,14 +1632,17 @@ impl Server {
                     let _ = results.send((key, encoded));
                 });
             match started {
-                Ok(_) => {
-                    self.encoders_running += 1;
-                    self.captures[index].stage = CaptureStage::Encoding(copied);
+                Ok(_) => self.encoders_running += 1,
+                Err(error) => {
+                    if let Some(index) = self.captures.iter().position(|c| c.key == key) {
+                        self.answer_capture(
+                            index,
+                            ToolResult::failed(format!(
+                                "the capture could not be encoded: {error}"
+                            )),
+                        );
+                    }
                 }
-                Err(error) => self.answer_capture(
-                    index,
-                    ToolResult::failed(format!("the capture could not be encoded: {error}")),
-                ),
             }
         }
     }
@@ -1653,13 +1726,19 @@ impl Server {
         ));
     }
 
-    /// Drops the capture at `index`, unanswered: its frame no longer waited for, its image
-    /// discarded when it comes.
+    /// Drops the capture at `index`, unanswered: its frame no longer waited for, or no longer
+    /// waiting for an encoder, its image discarded when it comes.
     fn drop_capture(&mut self, index: usize) -> CaptureWait {
         let capture = self.captures.remove(index);
-        if let CaptureStage::Copying(timer) = capture.stage {
-            self.compositor.loop_handle().remove(timer);
-            self.compositor.cancel_capture(capture.ticket);
+        match capture.stage {
+            CaptureStage::Copying(timer) => {
+                self.compositor.loop_handle().remove(timer);
+                self.compositor.cancel_capture(capture.ticket);
+            }
+            CaptureStage::Encoding(_) => self
+                .waiting_encoders
+                .retain(|(waiting, _)| *waiting != capture.key),
+            CaptureStage::Encoded { .. } => {}
         }
         capture
     }

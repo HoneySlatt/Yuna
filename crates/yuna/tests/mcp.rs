@@ -58,6 +58,12 @@ impl Yuna {
 
     /// Starts `yuna mcp` with no seat, and at most `descriptors` open files when given.
     fn start_with(name: &str, descriptors: Option<u32>) -> Yuna {
+        Yuna::launch(name, descriptors, &[])
+    }
+
+    /// Starts `yuna mcp` with no seat, at most `descriptors` open files when given, and
+    /// `variables` added to its environment.
+    fn launch(name: &str, descriptors: Option<u32>, variables: &[(&str, &str)]) -> Yuna {
         let folder =
             std::env::temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
         fs::DirBuilder::new()
@@ -85,6 +91,7 @@ impl Yuna {
             .env("YUNA_LOG", "info")
             .env("DISPLAY", ":99")
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+            .envs(variables.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(fs::File::create(folder.join("yuna.log")).expect("Yuna's log"))
@@ -116,8 +123,8 @@ impl Yuna {
         self.folder.join("runtime")
     }
 
-    /// Calls a tool in 2026-07-28 and returns its result.
-    fn call(&mut self, tool: &str, arguments: Value) -> Value {
+    /// Sends a call of a tool in 2026-07-28, without waiting for its reply; returns its id.
+    fn send(&mut self, tool: &str, arguments: Value) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({
@@ -133,6 +140,26 @@ impl Yuna {
         });
         let input = self.input.as_mut().expect("its input is open");
         writeln!(input, "{request}").expect("the request is sent");
+        id
+    }
+
+    /// Waits for it to exit by itself, its input left open; returns its status. Only a debug
+    /// build's Yuna, which a panic can be asked of, exits so.
+    #[cfg(debug_assertions)]
+    fn wait_for_exit(&mut self) -> std::process::ExitStatus {
+        let until = Instant::now() + PATIENCE;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("the process is waited for") {
+                return status;
+            }
+            assert!(Instant::now() < until, "yuna did not stop\n{}", self.log());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Calls a tool in 2026-07-28 and returns its result.
+    fn call(&mut self, tool: &str, arguments: Value) -> Value {
+        let id = self.send(tool, arguments);
         let until = Instant::now() + PATIENCE;
         loop {
             let left = until.saturating_duration_since(Instant::now());
@@ -730,4 +757,108 @@ fn running_out_of_descriptors_pauses_a_seats_socket_and_stops_nothing() {
     assert!(answers_wayland(&mut client), "{}", yuna.log());
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The variables that make a debug build's Yuna panic on `clock`'s call
+/// ([`yuna::mcp::PANIC_ON_TOOL`]), with no backtrace, which a debug build takes a while to write:
+/// the time measured is the fatal path's alone.
+#[cfg(debug_assertions)]
+const PANIC_ON_CLOCK: &[(&str, &str)] =
+    &[(yuna::mcp::PANIC_ON_TOOL, "clock"), ("RUST_BACKTRACE", "0")];
+
+/// Whether Yuna's errors hold the panic `clock`'s call asked for, as the standard hook writes it.
+#[cfg(debug_assertions)]
+fn holds_the_panic(log: &str) -> bool {
+    log.contains("panicked at")
+        && log.contains("asks Yuna's state thread to panic when `clock` is called")
+}
+
+/// A panic of Yuna's state thread stops it at once, with status 101
+/// ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): every
+/// process under it ends first, a program whose whole tree ignores SIGTERM included, an orphan
+/// Yuna adopted with it, SIGKILL coming `END_GRACE` after SIGTERM; its folder in
+/// `XDG_RUNTIME_DIR` goes; and its errors hold the panic's message. The panic is asked through
+/// `YUNA_PANIC_ON_TOOL`, which a debug build alone has.
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_of_the_state_ends_every_program_and_removes_the_folder() {
+    use yuna::mcp::{END_GRACE, KILL_WAIT};
+    let mut yuna = Yuna::launch("panic", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c",
+            "trap '' TERM; sleep 600 & echo child=$!; (sleep 600 & echo orphan=$!); \
+             echo shell=$$; wait"
+        ]}),
+    );
+    assert_eq!(started["isError"], json!(false), "{started}");
+    let log = PathBuf::from(
+        started["structuredContent"]["program"]["log"]
+            .as_str()
+            .expect("a log"),
+    );
+    let tree = [
+        printed(&log, "shell"),
+        printed(&log, "child"),
+        printed(&log, "orphan"),
+    ];
+    let yuna_pid = yuna.child.id() as i32;
+    wait_for("the orphan's adoption", || {
+        (parent_of(tree[2]) == Some(yuna_pid)).then_some(())
+    });
+    let folder = yuna.runtime_dir().join(format!("yuna-mcp-{yuna_pid}"));
+    assert!(folder.is_dir(), "{}", folder.display());
+
+    let began = Instant::now();
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    let took = began.elapsed();
+    eprintln!("Yuna stopped {} ms after the call", took.as_millis());
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    // The tree ignores SIGTERM: it ends at SIGKILL, END_GRACE later, and is reaped at once.
+    assert!(
+        took >= END_GRACE && took < END_GRACE + KILL_WAIT + Duration::from_secs(1),
+        "{took:?}"
+    );
+    for pid in tree {
+        assert!(!alive(pid), "process {pid} outlived Yuna");
+    }
+    assert!(!folder.exists(), "{} is left", folder.display());
+    assert!(holds_the_panic(&yuna.log()), "{}", yuna.log());
+}
+
+/// A panic with no program running stops Yuna at once, with nothing to wait for; its folder,
+/// which holds a seat's socket, goes.
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_with_no_program_stops_yuna_at_once() {
+    use yuna::mcp::END_GRACE;
+    let mut yuna = Yuna::launch("panic-alone", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    let socket = PathBuf::from(
+        created["structuredContent"]["socket"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{created}")),
+    );
+    let folder = yuna
+        .runtime_dir()
+        .join(format!("yuna-mcp-{}", yuna.child.id()));
+    assert!(socket.starts_with(&folder), "{}", socket.display());
+
+    let began = Instant::now();
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    let took = began.elapsed();
+    eprintln!("Yuna stopped {} ms after the call", took.as_millis());
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    assert!(took < END_GRACE / 2, "{took:?}");
+    assert!(!folder.exists(), "{} is left", folder.display());
+    assert!(holds_the_panic(&yuna.log()), "{}", yuna.log());
 }
