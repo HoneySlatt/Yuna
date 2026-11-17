@@ -299,7 +299,9 @@ What other programs and projects rely on
   line printed at start, the exit codes;
 - the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`) and gives its programs (`YUNA_SEAT`);
 - the MCP server: its revisions, its tools' names, arguments and results;
-- the Nix package's outputs, once it exists (M1.10).
+- the Nix package's outputs, once it exists (M1.10);
+- Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
+  `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 
 Until 1.0 a contract may change, never silently: a change that breaks a consumer adds a
 `changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
