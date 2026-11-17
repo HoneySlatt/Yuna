@@ -1271,6 +1271,8 @@ own thread, both `took_us`.
   `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
   included, with `--agent-seat` too.
+- `crates/yuna/tests/headless/protocols.rs`: the rows `Offered` of [`protocols.md`](protocols.md)
+  are the globals a client of the owner's seat and one of an agent's are shown.
 - `crates/yuna/tests/contracts.rs`: `yuna --help` and `tools/list` compared with the files of
   `tests/contracts/` ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)).
 - `crates/yuna/tests/consumers.rs`: the owner's other projects' own drivers against `yuna

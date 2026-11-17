@@ -22,6 +22,7 @@ mod motion;
 mod motion_pacing;
 mod outputs;
 mod popups;
+mod protocols;
 mod random_requests;
 mod scale;
 mod screencopy;
