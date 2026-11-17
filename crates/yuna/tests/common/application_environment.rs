@@ -1,6 +1,7 @@
 //! The environment the tests give a real application: only what is listed here, so that it reads
 //! neither the machine's settings nor the user's (`tests/applications.rs` says what still reads
-//! the machine). Shared by the tests that start applications, `applications.rs` and `mcp.rs`.
+//! the machine). Shared by the tests that start applications, `applications.rs`, `mcp.rs` and
+//! `consumers.rs`.
 
 use std::ffi::OsString;
 use std::path::Path;

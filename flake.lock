@@ -16,11 +16,30 @@
         "type": "github"
       }
     },
+    "pluto": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794905999,
+        "narHash": "sha256-vfqbrnP7LidSg9cFIvtZi5XMxeY0lOouTa26IRwEBSg=",
+        "owner": "HoneySlatt",
+        "repo": "Pluto",
+        "rev": "4624243566575387ec80a9a41e164f6d1112711c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "HoneySlatt",
+        "repo": "Pluto",
+        "rev": "4624243566575387ec80a9a41e164f6d1112711c",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
+        "pluto": "pluto",
         "rust-overlay": "rust-overlay",
-        "umbriel": "umbriel"
+        "umbriel": "umbriel",
+        "uwui": "uwui"
       }
     },
     "rust-overlay": {
@@ -57,6 +76,23 @@
         "owner": "noctalia-dev",
         "repo": "umbriel",
         "rev": "d171ccb31628da65b1beee3221b37a2758d553b3",
+        "type": "github"
+      }
+    },
+    "uwui": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794921405,
+        "narHash": "sha256-auS4TuC7PZFpDI17ZWLWPqHX6KkVzPYeBGmOmj1Bjos=",
+        "owner": "HoneySlatt",
+        "repo": "uwui",
+        "rev": "fb77f0d90c06fb6ef89aef3529239e5d4b70eefd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "HoneySlatt",
+        "repo": "uwui",
+        "rev": "fb77f0d90c06fb6ef89aef3529239e5d4b70eefd",
         "type": "github"
       }
     }

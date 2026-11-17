@@ -1270,13 +1270,23 @@ own thread, both `took_us`.
   measured again since the two tests with animations on came.
   `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
-  included.
+  included, with `--agent-seat` too.
+- `crates/yuna/tests/contracts.rs`: `yuna --help` and `tools/list` compared with the files of
+  `tests/contracts/` ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)).
+- `crates/yuna/tests/consumers.rs`: the owner's other projects' own drivers against `yuna
+  --headless --agent-seat`, at the revisions `flake.nix` pins
+  ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)): Pluto's `pluto-input`, built from
+  Pluto's lock, clicks and types into a window of the test's, which gets each event; uwui's
+  `measure.py --display` moves and clicks with its virtual pointer and counts `vkcube`'s frames
+  through `wlr-screencopy`. Its check that no game runs answers none, and `sway` and
+  `swaymsg`, which `--display` never runs, are stubs that fail.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
   and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its
   shell runs the command typed. Applications get the environment of
-  `tests/common/application_environment.rs`, which `applications.rs` shares.
+  `tests/common/application_environment.rs`, which `applications.rs` and `consumers.rs` share,
+  with `tests/common/dies_with_test.rs`.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless` or
   `yuna mcp`, as agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
   [ADR-0029](adr/0029-the-rest-of-animated-applications.md)). One `yuna` per application, all at

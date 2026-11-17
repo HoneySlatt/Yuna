@@ -33,7 +33,9 @@ The shell gives:
   tests give them: `YUNA_XWAYLAND_PATH` (Xwayland's folder, Yuna's own `PATH` in the tests),
   `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
-  is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
+  is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads);
+- the sources of the owner's projects whose drivers the tests run, `YUNA_UWUI_SOURCE` and
+  `YUNA_PLUTO_SOURCE`, at the revisions `flake.nix` names in their inputs' URLs.
 
 A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths, in
 `YUNA_BENCH_*` variables: sway, KWin, dwl and mango (each also built without XWayland, for equal
@@ -194,6 +196,11 @@ Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATION
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
 in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's
 tests (`mcp.rs` and `seats.rs` there).
+`crates/yuna/tests/consumers.rs` runs uwui's `measure.py` and Pluto's `pluto-input` against
+`yuna --headless --agent-seat`, in about 5 s once `pluto-input` is built, about 10 s, in
+`target/consumers/`; its crates come from crates.io the first time. A consumer's revision is
+raised in a commit of its own: the input's URL in `flake.nix`, then `nix flake lock`, then
+these tests ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md)).
 SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on
 `interface`, given a folder that holds them, as the weekly job runs them:
 

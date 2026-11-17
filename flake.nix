@@ -18,6 +18,17 @@
       url = "github:noctalia-dev/umbriel/d171ccb31628da65b1beee3221b37a2758d553b3";
       flake = false;
     };
+    # The owner's projects whose drivers Yuna's tests run against `yuna --headless --agent-seat`,
+    # each pinned to the revision read, raised in a commit of its own (ADR-0079, ADR-0089): uwui's
+    # scripts/measure.py, and Pluto's pluto-input. Their sources alone.
+    uwui = {
+      url = "github:HoneySlatt/uwui/fb77f0d90c06fb6ef89aef3529239e5d4b70eefd";
+      flake = false;
+    };
+    pluto = {
+      url = "github:HoneySlatt/Pluto/4624243566575387ec80a9a41e164f6d1112711c";
+      flake = false;
+    };
   };
 
   outputs =
@@ -25,6 +36,8 @@
       nixpkgs,
       rust-overlay,
       umbriel,
+      uwui,
+      pluto,
       ...
     }:
     let
@@ -80,6 +93,9 @@
           pkgs.wine64Packages.stable
           pkgs.coreutils
         ];
+        # The consumers' sources, which crates/yuna/tests/consumers.rs runs (ADR-0089).
+        YUNA_UWUI_SOURCE = "${uwui}";
+        YUNA_PLUTO_SOURCE = "${pluto}";
         # Yuna's own PATH in those tests: Xwayland alone, which it looks for there (ADR-0067).
         YUNA_XWAYLAND_PATH = pkgs.lib.makeBinPath [ pkgs.xwayland ];
         # Mesa's Vulkan driver for the CPU, lavapipe, the only one Vulkan's loader is let load.
