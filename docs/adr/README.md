@@ -106,3 +106,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Accepted; supersedes in part 0073 |
 | [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |
 | [0086](0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md) | The lock begun by Yuna, relieved by the locker, and logind's `Unlock` | Accepted; supersedes in part 0065 |
+| [0087](0087-a-locker-that-stops-answering-counts-as-dead.md) | A locker that stops answering counts as dead | Accepted |
