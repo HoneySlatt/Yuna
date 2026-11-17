@@ -80,10 +80,11 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - One client's protocol error ends that client alone; a panic of Yuna's state is fatal, and Yuna
   comes back by its keeper; a configuration error never stops it
   ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), [ADR-0008](docs/adr/0008-configuration-in-kdl.md)).
-- Stage 2's core meets [ADR-0074](docs/adr/0074-the-requirements-of-stage-2s-core.md) from its first
-  commit: owned state, crates whose dependencies `scripts/check.sh` checks, bounded queues, tasks
-  with an owner and a stop order, versioned public contracts. Nothing new is built on today's
-  shared `State` that Stage 2 would have to undo.
+- Stage 2's core meets
+  [ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+  from its first commit: owned state, crates whose dependencies `scripts/check.sh` checks,
+  bounded queues, tasks with an owner and a stop order, versioned public contracts. Nothing new
+  is built on today's shared `State` that Stage 2 would have to undo.
 
 ## Rules the code depends on
 

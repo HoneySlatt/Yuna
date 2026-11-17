@@ -22,7 +22,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   on the owner's go.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 - An [audit of the architecture](audits/2026-11-17-architecture.md) on 2026-11-17: ADR-0078 to
-  ADR-0081 decided, Stage 2 now in three gated parts; four decisions left, D5 to D8, put to the
+  ADR-0082 decided, Stage 2 now in three gated parts; three decisions left, D6 to D8, put to the
   owner before the dates it gives.
 
 ## Status
@@ -144,7 +144,7 @@ milestone first needs it.
   [debt](debt.md#architecture)). Frames, latency and watts on real displays, with Yuna, come at
   Stage 2's exit ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md));
   the tour's command waits on branch `m1.9-tour`. Stage 2's core is decided
-  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 
 ### M1.10 — Yuna for the owner's other projects
 

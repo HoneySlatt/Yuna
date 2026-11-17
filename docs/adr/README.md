@@ -93,7 +93,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Superseded by 0075 |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
 | [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Accepted; supersedes 0063; superseded in part by 0080 |
-| [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Accepted |
+| [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Superseded by 0082 |
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
 | [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
@@ -101,3 +101,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
 | [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Accepted; supersedes in part 0039 |
+| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074 |

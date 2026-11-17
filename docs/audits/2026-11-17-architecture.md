@@ -73,7 +73,8 @@ Severity first, then urgency; each with where it is followed.
    eviction, the message catalogue, the fallback to the previous binary (on NixOS, holding the
    running build is simpler) and "ten instances at full rate" as an exit, which a headless test
    without `--gpu` cannot pass. Two edges of the map are wrong already: input needs the session's
-   devices, and that D-Bus call would block the state thread. Open decision D5.
+   devices, and that D-Bus call would block the state thread. Decided:
+   [ADR-0082](../adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md).
 7. **Two rules pull against each other on `wl_shm` buffers**: releasing them once uploaded
    ([debt](../debt.md#architecture)) against keeping a copy to recover from a GPU reset. Open
    decision D6, with Stage 2's renderer.
@@ -124,12 +125,14 @@ Taken by the owner on 2026-11-17:
   kind of failure; a panic of the state thread fatal, of a contained task caught.
 - [ADR-0081](../adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md): Stage 2 in
   three gated parts, Smithay left along a written path, parity at every step.
+- [ADR-0082](../adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md):
+  ADR-0074's requirements kept, its bets made rules of interfaces or deferred, its map's two
+  faulty edges corrected.
 
 Open, in order, each put to the owner one at a time:
 
 | | Decision | Due before |
 |---|---|---|
-| D5 | ADR-0074 lightened where it bets | Stage 2's opening |
 | D6 | `wl_shm` buffers: released once uploaded, or copied for a GPU reset | Stage 2's renderer |
 | D7 | uwui's hosting: its task, commands, timeout and accessibility | Stage 2's renderer |
 | D8 | Outside contributions before 0.1, and how they are reviewed | M1.12 |

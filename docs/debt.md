@@ -397,7 +397,7 @@ with games' VRR:
 
 ## Architecture
 
-Today's code against [ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md); Stage 2's core
+Today's code against [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md); Stage 2's core
 replaces it, and nothing new is built on it that Stage 2 would undo.
 
 - One `State` of 52 fields, 43 public, implements 22 of Smithay's handler traits: any handler can

@@ -1,6 +1,6 @@
 # 0074. The requirements of Stage 2's core
 
-- Status: Accepted
+- Status: Superseded by [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
 - Date: 2026-11-16
 
 ## Context
