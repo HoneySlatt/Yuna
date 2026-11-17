@@ -37,7 +37,7 @@
       # The default shell's settings, which the bench's shell extends.
       shell = {
         packages = [
-          (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
+          toolchain
           # Licences, advisories and sources of the dependencies.
           pkgs.cargo-deny
           # Links between the Markdown files.
@@ -108,8 +108,71 @@
           pkgs.fontconfig
         ];
       };
+      toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = toolchain;
+        rustc = toolchain;
+      };
+
+      # Yuna's package (ADR-0058, ADR-0089): `yuna` alone, built with the pinned toolchain from the
+      # workspace's sources, and wrapped to draw with the package's own Mesa through libglvnd, as
+      # the shell does, and to find Xwayland: it runs the same on NixOS, on another distribution
+      # with Nix and in a CI on Ubuntu. Its outputs are a contract (CONTRIBUTING.md). The tests
+      # run in scripts/check.sh, not here: they need the shell's applications.
+      yuna = rustPlatform.buildRustPackage {
+        pname = "yuna";
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./crates
+          ];
+        };
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+          # Yuna's fork of Smithay, a git dependency: its hash changes with the revision
+          # Cargo.toml pins (docs/smithay-patches.md).
+          outputHashes = {
+            "smithay-0.7.0" = "sha256-SfsE7BTjHeKYO18ktZ1J2p2VzW3PfpKFC4JFvwR2Uzw=";
+          };
+        };
+        cargoBuildFlags = [
+          "--package"
+          "yuna"
+          "--bin"
+          "yuna"
+        ];
+        doCheck = false;
+        # The standard library's sources are named in the binary's panic messages: remapped,
+        # so that the toolchain, 1.4 GB, stays out of the package's closure, and refused if a
+        # reference to it comes back.
+        env.RUSTFLAGS = "--remap-path-prefix=${toolchain}=/rust";
+        disallowedReferences = [ toolchain ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        buildInputs = [ pkgs.libxkbcommon ];
+        postInstall = ''
+          wrapProgram $out/bin/yuna \
+            --prefix LD_LIBRARY_PATH : ${pkgs.libglvnd}/lib \
+            --set __EGL_VENDOR_LIBRARY_FILENAMES ${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json \
+            --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.xwayland ]}
+        '';
+        meta = {
+          description = "A Wayland compositor for Linux";
+          homepage = "https://github.com/HoneySlatt/Yuna";
+          license = pkgs.lib.licenses.gpl3Plus;
+          mainProgram = "yuna";
+          platforms = [ system ];
+        };
+      };
     in
     {
+      packages.${system} = {
+        inherit yuna;
+        default = yuna;
+      };
+
       devShells.${system} = {
         default = pkgs.mkShell shell;
 

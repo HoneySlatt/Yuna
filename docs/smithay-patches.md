@@ -29,5 +29,7 @@ and release builds.
 
 Copy the patches onto a new branch `yuna-<upstream commit's first 8 characters>` from the new
 revision, make it the fork's default, run Smithay's tests with the features Yuna uses, then Yuna's
-checks, and update the base and the commits above. The old branch stays, so that every commit a
+checks, and update the base and the commits above. A new pin of the fork, a patch added
+included, changes the hash `flake.nix` gives Smithay's sources for the package: `nix build .#yuna`
+names the new one. The old branch stays, so that every commit a
 Yuna pinned stays reachable.

@@ -17,8 +17,9 @@ scale; real applications (Alacritty, GTK 4, Qt 6, Vulkan) run in it in CI, and i
 they do. `yuna mcp` serves agents through MCP: each creates a seat of its own, with its outputs,
 its Wayland socket, its pointer and its keyboard, starts programs on it, finds their windows,
 clicks and types, as an input method too, captures what they show, and steps the clock. Emulated
-VRR and HDR, and animations, are done; XWayland comes next; the desktop session does not exist
-yet.
+VRR and HDR, animations and X11 programs through Xwayland are done. Other projects drive their
+programs in `yuna --headless --agent-seat` as in a headless sway, through a virtual keyboard and
+pointer and `wlr-screencopy`. The desktop session does not exist yet.
 
 ## Build
 
@@ -28,6 +29,12 @@ On Linux, with Nix:
 nix develop -c scripts/check.sh    # build, test and check everything
 nix develop -c cargo run -- --help
 nix develop -c cargo run -- --headless    # prints WAYLAND_DISPLAY=<socket>; Ctrl-C stops it
+```
+
+Yuna's package runs without the shell, with its own Mesa and Xwayland:
+
+```sh
+nix run github:HoneySlatt/Yuna -- --headless --agent-seat
 ```
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) gives the detail.

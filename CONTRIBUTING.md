@@ -300,7 +300,8 @@ What other programs and projects rely on
   line printed at start, the exit codes;
 - the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`) and gives its programs (`YUNA_SEAT`);
 - the MCP server: its revisions, its tools' names, arguments and results;
-- the Nix package's outputs, once it exists (M1.10);
+- the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
+  draws with its own Mesa and finds Xwayland ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md));
 - Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
   `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 

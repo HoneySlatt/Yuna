@@ -1321,8 +1321,10 @@ own thread, both `took_us`.
 
 ## The tools around the code
 
-- `flake.nix`: the development shell; `rust-toolchain.toml`: the toolchain
-  ([ADR-0016](adr/0016-the-rust-toolchain.md)).
+- `flake.nix`: the development shell, and Yuna's package, `bin/yuna` wrapped to draw with the
+  package's own Mesa and find Xwayland, which CI builds and starts from an empty environment
+  ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); `rust-toolchain.toml`: the
+  toolchain ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
 - `.github/workflows/slimeengine.yml`: SlimeEngine's `window`, `editor` and `interface`
   examples in Yuna, weekly, on demand and on a push that changes anything its test builds or
