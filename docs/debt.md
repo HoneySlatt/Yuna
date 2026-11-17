@@ -167,6 +167,10 @@ with games' VRR:
 
 ## Captures
 
+- `wlr-screencopy` frames are `wl_shm` alone, their damage the whole frame: a tool that asks a
+  dmabuf, or reads the damage to copy less, gets none (ADR-0089). Each frame of a region reads
+  its region apart, where `ext-image-copy-capture-v1`'s frames of one output share one read.
+
 - Smithay `8fd9fe0` asks a session's buffer constraints (`capture_constraints`) without naming
   its client: a client of another seat is told that output's size and formats before Yuna stops
   its session. It learns no more than that output's `wl_output` tells it already.
@@ -270,6 +274,24 @@ with games' VRR:
   its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
   shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):
   it matters for motion on agents' VRR outputs only.
+
+## The owner's other projects
+
+- `crates/yuna/tests/consumers.rs` loads uwui's `measure.py` with its check that no game runs
+  answering none, and puts on the `PATH` a `sway` and a `swaymsg` that fail, which `--display`
+  checks for and never runs: a later `measure.py` that runs either in `--display` would fail
+  the test, as it should, and need the test changed.
+- `ext-data-control-v1` is offered to the owner's seat alone, so `yuna --headless --agent-seat`
+  has none: SlimeEngine's check of it runs in `yuna --headless` instead, where no virtual input
+  is offered. A test of both together waits for Stage 2's decision on seats
+  ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
+- A virtual keyboard with its own keymap switches its seat's keyboard to it at each of its keys,
+  and Yuna's own keys switch it back: an agent's `keyboard` tool and a virtual keyboard used in
+  turn send a keymap to the focused client at each change.
+- `scripts/test-check.sh` runs by hand, after a change of `check.sh` or before a release, not in
+  CI: it takes about as long as the check twice.
+- Most rows of [`protocols.md`](protocols.md) not yet offered say `Not decided`; Stage 2's
+  opening settles each that an application needs.
 
 ## The examples
 
