@@ -269,3 +269,32 @@ fn devices_past_a_clients_cap_do_nothing() {
     on_a.roundtrip(&mut compositor);
     assert_eq!(presses(&on_a.take_events()), 1);
 }
+
+/// A keymap whose size is told larger than its file, or larger than any keymap, is refused, and
+/// Yuna serves on: it never reads past the client's file, which would end Yuna with SIGBUS, and
+/// another keyboard of the same driver types.
+#[test]
+fn a_keymap_told_larger_than_its_file_is_refused() {
+    let (mut compositor, a, _) = two_seats();
+    let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    open(&mut on_a, &mut compositor);
+    settle(&mut compositor);
+    let mut driver = VirtualDriver::connect(&mut compositor, a);
+    let lying = driver.add_keyboard_claiming("agent-2", "us", Some(1 << 20));
+    let huge = driver.add_keyboard_claiming("agent-2", "us", Some(u32::MAX));
+    driver.roundtrip(&mut compositor);
+    for keyboard in [lying, huge] {
+        driver.key(keyboard, KEY_X, true);
+        driver.key(keyboard, KEY_X, false);
+    }
+    // The protocol ends a client whose keyboard has no keymap and sends a key: the driver's
+    // own error, not Yuna's.
+    let _ = driver.client.try_roundtrip(&mut compositor);
+    let mut driver = VirtualDriver::connect(&mut compositor, a);
+    let keyboard = driver.add_keyboard("agent-2", "us");
+    driver.key(keyboard, KEY_X, true);
+    driver.key(keyboard, KEY_X, false);
+    driver.roundtrip(&mut compositor);
+    on_a.roundtrip(&mut compositor);
+    assert_eq!(on_a.state.typed, "x");
+}

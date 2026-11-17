@@ -10,6 +10,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 
 use smithay::input::keyboard::xkb;
+use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
@@ -154,6 +155,17 @@ impl VirtualDriver {
     /// A virtual keyboard for the `wl_seat` named `seat`, with the keymap of XKB's `layout`
     /// sent through a file, as `pluto-input` sends its own; its index.
     pub fn add_keyboard(&mut self, seat: &str, layout: &str) -> usize {
+        self.add_keyboard_claiming(seat, layout, None)
+    }
+
+    /// As [`VirtualDriver::add_keyboard`], its keymap's size told as `claimed` bytes when given,
+    /// whatever the file holds: a client that lies about it.
+    pub fn add_keyboard_claiming(
+        &mut self,
+        seat: &str,
+        layout: &str,
+        claimed: Option<u32>,
+    ) -> usize {
         let seat = self.seat(seat);
         let manager = self
             .state
@@ -173,23 +185,15 @@ impl VirtualDriver {
         )
         .expect("the layout compiles")
         .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
-        let path = std::env::temp_dir().join(format!(
-            "yuna-test-keymap-{}-{}",
-            std::process::id(),
-            self.keyboards.len()
-        ));
-        let mut file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .expect("a keymap file");
-        let _ = std::fs::remove_file(&path);
+        // A file of its own: tests of one process run at once, and a named file would be shared.
+        let fd = memfd_create("yuna-test-keymap", MemfdFlags::CLOEXEC).expect("a memfd");
+        let mut file = File::from(fd);
         file.write_all(keymap.as_bytes())
             .expect("the keymap is written");
         file.write_all(&[0]).expect("the keymap is written");
-        let size = u32::try_from(keymap.len() + 1).expect("a keymap of a few hundred kB");
+        let size = claimed.unwrap_or_else(|| {
+            u32::try_from(keymap.len() + 1).expect("a keymap of a few hundred kB")
+        });
         keyboard.keymap(KEYMAP_FORMAT_XKB_V1, file.as_fd(), size);
         self.keyboards.push(keyboard);
         self.keyboards.len() - 1
