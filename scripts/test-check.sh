@@ -68,7 +68,7 @@ expect_stopped links "a broken link between Markdown files" "nowhere.md" \
     "printf '\n[Nowhere](docs/nowhere.md)\n' >> README.md"
 expect_stopped lengths "AGENTS.md past its length" "too long" \
     "printf 'word %.0s' \$(seq 2000) >> AGENTS.md"
-expect_stopped indexes "an ADR missing from the index" "9999" \
+expect_stopped indexes "an ADR missing from the index" "index is not the one the ADRs give" \
     "printf '# 9999. A decision\n\n- Status: Accepted\n- Date: 2026-11-17\n' > docs/adr/9999-a-decision.md"
 expect_stopped indexes "a changelog fragment badly named" "something.md" \
     "printf -- '- Something.\n' > changelog.d/something.md"
