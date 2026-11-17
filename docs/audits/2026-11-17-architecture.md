@@ -28,9 +28,9 @@ whether an outside contributor can work on it.
   [ADR-0074](../adr/0074-the-requirements-of-stage-2s-core.md) already replace it at Stage 2.
   Refactoring it now would be wasted: the `Compositor` facade and the protocol-level tests are the
   boundary worth keeping.
-- What makes Stage 2 risky is not today's code but three gaps: no path from today's core to
+- What made Stage 2 risky was not today's code but three gaps: no path from today's core to
   Stage 2's, a stage of about seventy items with one exit, and robustness promises written
-  without conditions (the last now decided, below).
+  without conditions; all three are now decided, below.
 - Outside contributors can build, test and read Yuna, but the process is written for agents and
   the owner. M1.12 already plans most of the fix.
 - Not knowable without running: stability over long runs, how often a dependency panics, the
@@ -49,12 +49,14 @@ Severity first, then urgency; each with where it is followed.
    boundary implemented over Smithay first, the scene and renderer behind it, the protocols from
    the top down, the root swapped behind a build switch, Smithay removed; each step merged with
    the tests unchanged, a WLCS baseline, the applications and the budgets no worse, reverted when
-   one regresses. Open decision D4.
+   one regresses. Decided:
+   [ADR-0081](../adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md).
 2. **Stage 2 is one stage with one exit** (high, due at Stage 2's opening). Its own core, its
    Vulkan renderer hosting uwui, DRM, input and the session, and about seventy features end on
    "a week in place of niri". Real hardware's first answer comes after everything rests on the
    core. Proposed: 2a, Yuna's own base headless, Smithay gone; 2b, a desktop the owner can log
-   in to; then the owner's choice of scope; 2c, the features. Open decision D4.
+   in to; then the owner's choice of scope; 2c, the features. Decided:
+   [ADR-0081](../adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md).
 3. **Robustness promises without conditions** (high). Most of the owner's applications do not
    reconnect; a GPU reset may lose the windows' pixels; only an unwinding panic can be caught in
    one process; nothing caught a panic but the captures' encoders. Decided:
@@ -120,12 +122,13 @@ Taken by the owner on 2026-11-17:
   listed; in 0.x every change announced; `tools/list` and `--help` held by tests.
 - [ADR-0080](../adr/0080-what-survives-a-failure-and-yunas-own-panics.md): a promise for each
   kind of failure; a panic of the state thread fatal, of a contained task caught.
+- [ADR-0081](../adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md): Stage 2 in
+  three gated parts, Smithay left along a written path, parity at every step.
 
 Open, in order, each put to the owner one at a time:
 
 | | Decision | Due before |
 |---|---|---|
-| D4 | Stage 2 in gated parts, and the path from today's core to its own | Stage 2's opening |
 | D5 | ADR-0074 lightened where it bets | Stage 2's opening |
 | D6 | `wl_shm` buffers: released once uploaded, or copied for a GPU reset | Stage 2's renderer |
 | D7 | uwui's hosting: its task, commands, timeout and accessibility | Stage 2's renderer |

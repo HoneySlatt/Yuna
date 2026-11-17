@@ -153,7 +153,7 @@ audit.
 | Configuration | KDL, reloaded live ([ADR-0008](adr/0008-configuration-in-kdl.md)) |
 | Licence | GPL-3.0-or-later, public ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
-| Base | Smithay, left step by step, gone by the end of Stage 2 ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
 | Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
@@ -222,33 +222,57 @@ other projects can add Yuna to their shells and drive programs in it as they dri
 ### Stage 2 — The desktop → 0.2
 
 **Goal.** Yuna replaces niri as the owner's daily compositor, without HDR yet, on a base of its
-own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)).
+own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)). In three parts, each closed by a
+review at its gate ([ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)).
 
-- First, Yuna's own core: surfaces, xdg-shell, seats and popups, its scene and damage tracking,
-  its Vulkan renderer hosting uwui, on wayland-rs; WLCS run against it
-  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)); in crates with checked
-  dependencies, meeting the core's requirements from its first commit
-  ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
-- DRM and KMS on drm-rs, libinput and the session, written by Yuna; several outputs at different rates, hotplug with workspaces put back, mirroring.
-- The desktop at a fixed rate: no VRR flicker.
-- XWayland crisp at 1.5 and the right size on every output.
-- Amane on top through standard protocols.
+#### 2a — Yuna's own base, headless
+
+- First, the parity net on today's core: the `Compositor` interface free of Smithay's types,
+  typed commands in place of `change_layout`, direct dependencies in place of Smithay's
+  re-exports, WLCS's baseline recorded.
+- Then Yuna's own core, along [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)'s path: a temporary boundary over Smithay; the scene and
+  damage tracking, the Vulkan renderer hosting uwui
+  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md));
+  seats and input, xdg-shell and popups, the other protocols; the surfaces and the queue of
+  commits last, on wayland-rs; in crates with checked dependencies, meeting the core's
+  requirements from its first commit ([ADR-0074](adr/0074-the-requirements-of-stage-2s-core.md)).
+  XWayland, crisp at 1.5 and the right size on every output, carried across.
+- Parity at every step: the tests unchanged, WLCS at or above its baseline, the real
+  applications, protocol traces and captures compared between the cores, rest, memory and a
+  frame's cost no worse; a step that regresses is reverted.
+- The clients' messages fuzzed weekly; the GPU's loss on demand for agents.
+
+**Gate.** Smithay is no longer in `Cargo.lock`; parity holds; the headless scenarios of the bar
+pass.
+
+#### 2b — A desktop the owner can log in to
+
+- DRM and KMS on drm-rs, libinput and the session, written by Yuna; VKMS studied first; one
+  output at a fixed rate, with no VRR flicker.
+- The lock; the crash restart by the keeper; a crash report kept on the machine; recovery from a
+  GPU reset without a restart ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+- The configuration read; the package's NixOS and home-manager modules; Amane on top through
+  standard protocols.
+
+**Gate.** The owner works in Yuna an evening, by the steps its milestone writes; the scenarios
+on the KMS mock pass. The owner then sets 2c's scope from 2a's and 2b's figures.
+
+#### 2c — The features
+
+- Several outputs at different rates, hotplug with workspaces put back, mirroring.
 - What Yuna takes from the shell's tools ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)):
   idle with dimming and the lock started; the wallpaper; the theme file and variants; the
   fullscreen state for the shell; `yuna-portal` with screen sharing, screenshots, global shortcuts,
   inhibition and the wallpaper; the share picker; captures and recording; a night light in SDR.
 - The touchpad's gestures; the configuration live; per-application rules, terminal swallowing;
   input methods (`input-method-v2`).
-- The crash restart and session restore; a crash report kept on the machine; recovery from a GPU
-  reset without a restart ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
+- Session restore ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - The protocols games and the owner's applications need, as `docs/protocols.md` sets them:
   pointer constraints and relative pointer, `fifo-v1` and `commit-timing-v1`, a hidden game paced
   at its configured rate.
-- The package's NixOS and home-manager modules; the clients' messages fuzzed weekly.
 - The owner's uses ([ADR-0061](adr/0061-yunas-uses.md)): tablets, pointer warp, `xdg-foreign`, Wine's and plugins'
   windows placed; `keyboard-shortcuts-inhibit`; windows never captured; a test output in a
-  window; picture in picture; windows back in place after a reboot, on by default; the GPU's loss
-  on demand for agents; VKMS studied first.
+  window; picture in picture; windows back in place after a reboot, on by default.
 - Hot corners; tabbed columns; focus following the mouse and floating windows' sizes remembered,
   as settings ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - What the best desktops taught

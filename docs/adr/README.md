@@ -58,7 +58,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009 and 0021 |
 | [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
-| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; amends 0011 and 0013 |
+| [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; superseded in part by 0081; amends 0011 and 0013 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Superseded by 0063; amends 0012 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; supersedes 0027; amends 0021 and 0035; amended by 0045 |
@@ -100,3 +100,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Accepted; supersedes 0035 |
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
+| [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Accepted; supersedes in part 0039 |
