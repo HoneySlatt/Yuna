@@ -54,7 +54,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0032](0032-input-to-present-read-by-mode.md) | Input to present, read by mode | Superseded by 0076 |
 | [0033](0033-the-mcp-server.md) | The MCP server: a private Yuna on stdio, its own MCP layer | Accepted; amended by 0049, 0054 and 0055 |
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
-| [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Accepted; amended by 0042 |
+| [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Superseded by 0078; amended by 0042 |
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009 and 0021 |
 | [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
@@ -97,3 +97,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
 | [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
+| [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Accepted; supersedes 0035 |

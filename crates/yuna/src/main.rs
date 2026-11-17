@@ -373,7 +373,7 @@ fn run_mcp(headless: Headless) -> ExitCode {
         }
     };
     // No output, no socket and no `wl_seat` for the owner's seat: everything is on the seats
-    // agents create (ADR-0035, ADR-0037).
+    // agents create (ADR-0078, ADR-0037).
     let seat_output = headless.outputs.first().copied().unwrap_or_default();
     let config = Config {
         outputs: Vec::new(),

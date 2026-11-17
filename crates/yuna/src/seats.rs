@@ -1,5 +1,5 @@
 //! Seats ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md),
-//! [ADR-0035](../../../docs/adr/0035-agents-seats.md),
+//! [ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
 //! [ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)): the owner's, and one for
 //! each agent.
 //!

@@ -381,7 +381,7 @@ impl State {
         let limits = (options.min_size, options.max_size);
         let owner = self.owner_of(root);
         let window = WindowId(self.next_window_id);
-        // On its client's seat: the one whose socket it came through (ADR-0035).
+        // On its client's seat: the one whose socket it came through (ADR-0078).
         if let Err(error) = self
             .layout
             .open_window(seat_of_surface(root), window, options)

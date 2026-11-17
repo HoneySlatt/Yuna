@@ -50,7 +50,7 @@ pub struct Config {
     pub listen: bool,
     /// Whether the owner's seat is announced as a `wl_seat` global. `yuna mcp` announces none,
     /// so that an agent's programs see only agents' seats
-    /// ([ADR-0035](../../../docs/adr/0035-agents-seats.md)).
+    /// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     pub announce_owner_seat: bool,
     /// How the layout's changes move on screen. Off by default, as in both headless modes: an
     /// operation shows its result at once; `--animations` turns them on

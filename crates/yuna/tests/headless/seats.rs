@@ -1,4 +1,5 @@
-//! Agents' seats ([ADR-0035](../../../../docs/adr/0035-agents-seats.md),
+//! Agents' seats
+//! ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
 //! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): each seat's windows
 //! open on its own outputs, a client sees its own seat's globals alone, its pointer and keyboard reach its own clients alone, a click
 //! focuses, text types through the keymap its client reads, a popup grab and a drag take a
@@ -150,7 +151,7 @@ fn a_client_sees_its_own_seat_and_its_outputs_alone() {
     assert_eq!(output_names(&bs), ["HEADLESS-3", "HEADLESS-4"]);
 }
 
-/// The test ADR-0015 and ADR-0035 ask for: an agent's input never reaches another seat. Seat A's
+/// The test ADR-0015 and ADR-0078 ask for: an agent's input never reaches another seat. Seat A's
 /// pointer, buttons, wheel and keys reach A's client alone: not B's, not the owner's, and not a
 /// client of B that bound A's `wl_seat`, a spy the filter of ADR-0042 would never show it, made
 /// here to check the layer below: every focus is on a seat's own clients. B's input

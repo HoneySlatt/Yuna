@@ -57,7 +57,7 @@ use crate::selection::Selections;
 use crate::shell::Toplevel;
 
 /// The owner's seat, which always exists; agents' seats come after it, from 2
-/// ([ADR-0035](../../../docs/adr/0035-agents-seats.md)).
+/// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
 pub const OWNER_SEAT: SeatId = SeatId(1);
 
 /// A hook run when a frame's drawing has ended, before Yuna reads the time it ended at.

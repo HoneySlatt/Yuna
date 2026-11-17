@@ -1,9 +1,10 @@
 //! `yuna mcp` as an agent's MCP client runs it: requests on its standard input, replies on its
 //! standard output, nothing else there, and the programs it starts
 //! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md),
-//! [ADR-0035](../../../docs/adr/0035-agents-seats.md)). The protocol's exchanges are tested in
-//! the test's own process (`tests/headless/mcp.rs`); here, what needs a process of its own: the
-//! programs' environment, their logs, and a whole tree of processes ended when Yuna stops.
+//! [ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
+//! The protocol's exchanges are tested in the test's own process (`tests/headless/mcp.rs`);
+//! here, what needs a process of its own: the programs' environment, their logs, and a whole
+//! tree of processes ended when Yuna stops.
 
 #[path = "common/application_environment.rs"]
 mod application_environment;

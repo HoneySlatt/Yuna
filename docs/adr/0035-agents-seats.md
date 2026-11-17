@@ -1,6 +1,6 @@
 # 0035. Agents' seats in one Yuna
 
-- Status: Accepted; amended by [0042](0042-main-on-smithays-fork.md) (the seat filter comes at M1.6)
+- Status: Superseded by [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md); amended by [0042](0042-main-on-smithays-fork.md) (the seat filter comes at M1.6)
 - Date: 2026-11-13
 
 ## Context

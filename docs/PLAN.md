@@ -147,8 +147,9 @@ milestone first needs it.
 
 - **Goal.** The owner's other projects measure and drive their programs in Yuna as in a headless
   sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
-- **Delivers.** A Nix package, built in CI; the virtual keyboard and pointer on agents' seats
-  only, tested never to reach the owner's; `docs/client-needs.md` completed, Hollow's needs in it
+- **Delivers.** A Nix package, built in CI; the virtual keyboard and pointer on the agent's seat
+  they are given, tested never to reach the owner's, with no rule between two agents' seats
+  ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)); `docs/client-needs.md` completed, Hollow's needs in it
   already; `docs/protocols.md` and its
   test against the globals announced; `scripts/test-check.sh`.
 - **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna as in sway, without
@@ -166,7 +167,9 @@ milestone first needs it.
   for an event; a rest auditor naming what wakes Yuna or makes it draw.
 - **Done when.** Through MCP alone, an agent finds a protocol error and a button by its name, and
   checks a window across an output unplugged.
-- **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets.
+- **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N
+  `yuna mcp` against one with N seats, up to 10, for Stage 2's choice of
+  [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md).
 
 ### M1.12 — The stage's audit
 

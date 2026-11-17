@@ -158,7 +158,7 @@ audit.
 | Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
-| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
+| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; several seats in one Yuna frozen until Stage 2's core ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md), [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
 | Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md`; main on it from M1.6 ([ADR-0021](adr/0021-smithays-fork.md), [ADR-0042](adr/0042-main-on-smithays-fork.md)) |

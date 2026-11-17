@@ -786,7 +786,9 @@ its clients start no drag. The drag's icon is not drawn ([debt](debt.md)).
 
 A seat (`seats.rs`) is a Smithay seat with a keyboard, and for an agent a pointer, its own
 keyboard focus, popup grab, selections, cursor and clients, and its branch of the layout
-([ADR-0035](adr/0035-agents-seats.md), [ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md), [ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+Seats isolate focus and input, not processes: a program may reach another seat's socket of the
+same Yuna. Nothing new depends on several seats in one Yuna until Stage 2's core decides.
 The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` global, no output
 and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
 and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat

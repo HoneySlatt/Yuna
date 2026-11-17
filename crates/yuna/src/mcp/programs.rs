@@ -1,6 +1,6 @@
 //! The programs an agent starts through `spawn`, in `yuna mcp`
 //! ([ADR-0033](../../../../docs/adr/0033-the-mcp-server.md),
-//! [ADR-0035](../../../../docs/adr/0035-agents-seats.md)).
+//! [ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
 //!
 //! Each program gets an environment of its own: the few variables of Yuna's own that a program
 //! needs to find itself, its libraries, its locale and its drivers ([`KEPT_VARIABLES`],

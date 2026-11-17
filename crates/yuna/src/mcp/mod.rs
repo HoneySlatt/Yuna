@@ -11,7 +11,7 @@
 //! `notifications/cancelled` drops a waiting call unanswered.
 //!
 //! Everything an agent does is on a seat of its own, which `seat create` makes
-//! ([ADR-0035](../../../../docs/adr/0035-agents-seats.md),
+//! ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
 //! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): every tool but
 //! `clock` names it, and an id of another seat's output, window or program is unknown there.
 //! `seat close` releases what the seat holds, removes its socket, ends its clients, its outputs
@@ -870,7 +870,7 @@ impl Server {
 
     /// Answers the `windows` and `capture` calls that wait on `seat`, which closed, and forgets
     /// its captures: a stale handle fails plainly
-    /// ([ADR-0035](../../../../docs/adr/0035-agents-seats.md)).
+    /// ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
         self.recent_captures.remove(&seat);
         while let Some(index) = self
