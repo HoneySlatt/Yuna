@@ -237,20 +237,32 @@ PROPTEST_CASES=2500 nix develop -c cargo test -p yuna --test headless random_req
 The timings are measured on an idle machine, one measurement at a time, and go to
 [`docs/measurements.md`](docs/measurements.md).
 
-`scripts/check.sh` runs, in order, and stops at the first failure:
+`scripts/check.sh` runs these steps, in order, and stops at the first failure; `scripts/check.sh
+only <step>` runs one:
 
-1. the workspace's own rules: `rust-version` in `Cargo.toml` equals the toolchain's version, and
-   every crate takes the workspace's lints;
-2. formatting, `cargo fmt --check`;
-3. clippy over every target, warnings as errors;
-4. the build and the tests;
-5. the documentation, `cargo doc`, warnings as errors;
-6. `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory and every yanked
-   crate, on any dependency, direct or not; the sources of the dependencies. It reads the advisory
-   database from the network;
-7. the links between the tracked Markdown files, offline, anchors included;
-8. the length of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
-   session.
+1. `rules`, the workspace's own: `rust-version` in `Cargo.toml` equals the toolchain's version,
+   and every crate takes the workspace's lints;
+2. `format`, `cargo fmt --check`;
+3. `lints`, clippy over every target, warnings as errors;
+4. `tests`, the build and the tests;
+5. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
+6. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
+   and every yanked crate, on any dependency, direct or not; the sources of the dependencies. It
+   reads the advisory database from the network;
+7. `links`, between the tracked Markdown files, offline, anchors included;
+8. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
+   session;
+9. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
+10. `script-tests`: the tests of those scripts, and of SlimeEngine's job's path filter.
+
+`scripts/test-check.sh` proves that each step stops what it guards against
+([ADR-0058](docs/adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): it clones the last
+commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
+warning, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
+without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
+fragment misnamed, SlimeEngine's job leaving out the drawing path), and expects the step that
+guards against it to fail, for that reason. Run it after changing `check.sh` or a check, and
+before a release; it takes about as long as `check.sh` twice, building in `target/test-check`.
 
 Every cargo command of the check passes `--locked`: `Cargo.lock` changes only on purpose.
 
