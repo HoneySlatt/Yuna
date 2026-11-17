@@ -1,6 +1,7 @@
 # 0077. The budgets of a frame, memory and rest, set from the rivals
 
-- Status: Accepted
+- Status: Accepted; superseded in part by [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) (the clients' buffers
+  Yuna holds)
 - Date: 2026-11-16
 
 ## Context

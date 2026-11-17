@@ -96,9 +96,10 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0074](0074-the-requirements-of-stage-2s-core.md) | The requirements of Stage 2's core | Superseded by 0082 |
 | [0075](0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md) | The rivals measured: costs headless by agents now, frames, latency and watts on a real display at Stage 2's exit | Accepted; supersedes 0071 |
 | [0076](0076-input-to-present-read-by-mode.md) | Input to present, read by mode | Accepted; supersedes 0032 |
-| [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted |
+| [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) | The budgets of a frame, memory and rest, set from the rivals | Accepted; superseded in part by 0083 |
 | [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Accepted; supersedes 0035 |
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
 | [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Accepted; supersedes in part 0039 |
 | [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074 |
+| [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |

@@ -76,8 +76,8 @@ Severity first, then urgency; each with where it is followed.
    devices, and that D-Bus call would block the state thread. Decided:
    [ADR-0082](../adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md).
 7. **Two rules pull against each other on `wl_shm` buffers**: releasing them once uploaded
-   ([debt](../debt.md#architecture)) against keeping a copy to recover from a GPU reset. Open
-   decision D6, with Stage 2's renderer.
+   ([debt](../debt.md#architecture)) against keeping a copy to recover from a GPU reset.
+   Decided: [ADR-0083](../adr/0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md).
 8. **uwui's hosting has no contract**: its task, its own commands, a timeout on its GPU work, its
    accessibility tree. ADR-0073 lends it the host's encoder, which leaves no way to time it out;
    uwui wins every conflict (ADR-0003). Open decision D7, before Stage 2's renderer.
@@ -128,12 +128,13 @@ Taken by the owner on 2026-11-17:
 - [ADR-0082](../adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md):
   ADR-0074's requirements kept, its bets made rules of interfaces or deferred, its map's two
   faulty edges corrected.
+- [ADR-0083](../adr/0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md): a window's last
+  `wl_shm` buffer kept until its next, so that a GPU reset loses no window's content.
 
 Open, in order, each put to the owner one at a time:
 
 | | Decision | Due before |
 |---|---|---|
-| D6 | `wl_shm` buffers: released once uploaded, or copied for a GPU reset | Stage 2's renderer |
 | D7 | uwui's hosting: its task, commands, timeout and accessibility | Stage 2's renderer |
 | D8 | Outside contributions before 0.1, and how they are reviewed | M1.12 |
 

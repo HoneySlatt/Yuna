@@ -412,10 +412,6 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   survives a fast pointer is not measured yet (ADR-0074, chosen at Stage 2's opening).
 - No crate forbids `unsafe` code; `yuna` has 8 `unsafe` sites, `yuna-bench` one, `yuna-layout`
   and `yuna-motion` none.
-- Yuna keeps each client's `wl_shm` buffer mapped until the client replaces it, where the wlroots
-  rivals release it once copied: 30.4 MiB at rest with 15 windows, 0.31 MiB a window
-  ([measurements](measurements.md#m19--the-rivals-headless-at-equal-work-2026-11-16)), from code
-  reading and these figures. Paid by releasing a buffer once uploaded, at Stage 2 (ADR-0074).
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated.
