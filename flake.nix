@@ -168,8 +168,14 @@
         disallowedReferences = [ toolchain ];
         nativeBuildInputs = [ pkgs.makeWrapper ];
         buildInputs = [ pkgs.libxkbcommon ];
+        # The variables set here are Yuna's alone: the programs `yuna mcp` starts get the caller's
+        # own values back, kept in YUNA_CALLER_<name> (crates/yuna/src/mcp/programs.rs).
         postInstall = ''
           wrapProgram $out/bin/yuna \
+            --run 'if [ -n "''${PATH+x}" ]; then export YUNA_CALLER_PATH="$PATH"; fi' \
+            --run 'if [ -n "''${LD_LIBRARY_PATH+x}" ]; then export YUNA_CALLER_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"; fi' \
+            --run 'if [ -n "''${__EGL_VENDOR_LIBRARY_FILENAMES+x}" ]; then export YUNA_CALLER___EGL_VENDOR_LIBRARY_FILENAMES="$__EGL_VENDOR_LIBRARY_FILENAMES"; fi' \
+            --set YUNA_WRAPPED_VARIABLES "PATH LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES" \
             --prefix LD_LIBRARY_PATH : ${pkgs.libglvnd}/lib \
             --set __EGL_VENDOR_LIBRARY_FILENAMES ${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json \
             --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.xwayland ]}

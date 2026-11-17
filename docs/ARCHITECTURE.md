@@ -1336,7 +1336,10 @@ own thread, both `took_us`.
 ## The tools around the code
 
 - `flake.nix`: the development shell, and Yuna's package, `bin/yuna` wrapped to draw with the
-  package's own Mesa and find Xwayland, which CI builds and starts from an empty environment
+  package's own Mesa and find Xwayland, for Yuna alone: the wrapper keeps the caller's own
+  `PATH`, `LD_LIBRARY_PATH` and `__EGL_VENDOR_LIBRARY_FILENAMES` in `YUNA_CALLER_*`, which the
+  programs `yuna mcp` starts get back (`mcp/programs.rs`). CI builds it and starts it from an
+  empty environment
   ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); `rust-toolchain.toml`: the
   toolchain ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
