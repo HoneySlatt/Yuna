@@ -252,7 +252,7 @@ pass.
 - The lock, begun by Yuna and relieved by the locker, logind's `Unlock` when no locker lives
   ([ADR-0086](adr/0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md)), a
   locker that stops answering counted dead
-  ([ADR-0087](adr/0087-a-locker-that-stops-answering-counts-as-dead.md)); the crash restart by
+  ([ADR-0088](adr/0088-a-locker-that-stops-answering-counts-as-dead-its-answer-from-the-thread-that-draws-it.md)); the crash restart by
   the keeper; a crash report kept on the machine; recovery from a GPU reset without a restart ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - The configuration read; the package's NixOS and home-manager modules; Amane on top through
   standard protocols.

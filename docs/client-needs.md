@@ -34,8 +34,9 @@ stage. Stated on 2026-11-14, rows 14 to 18 on 2026-11-17; Hollow's copy is `docs
 | 17 | At the lock command and before sleep, Yuna holds logind's sleep delay inhibitor and blanks every output itself, before any client; the locker then takes over | Decided: Yuna begins every lock, the locker relieves it ([ADR-0086](adr/0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md)), Stage 2b |
 | 18 | The dead-locker screen says how to unlock from a virtual terminal | Decided ([ADR-0086](adr/0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md)), Stage 2b |
 
-Yuna asks of Hollow: its locker binds `xdg_wm_base` and answers its ping from a thread that never
-blocks; a locker that does not answer is counted dead ([ADR-0087](adr/0087-a-locker-that-stops-answering-counts-as-dead.md)). Asked on 2026-11-17.
+Yuna asks of Hollow: its locker binds `xdg_wm_base` and answers its ping from the thread that
+draws the lock screen, never from one kept apart; a locker that does not answer is counted dead
+([ADR-0088](adr/0088-a-locker-that-stops-answering-counts-as-dead-its-answer-from-the-thread-that-draws-it.md)). Asked and accepted on 2026-11-17 (Hollow's ADR-0019).
 
 Already decided, as Hollow needs them: workspaces, the focus, outputs and the primary output, the
 fullscreen state (a game, a film), urgent windows, the bell, the wallpaper shown, brightness and

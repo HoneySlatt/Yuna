@@ -1,6 +1,6 @@
 # 0087. A locker that stops answering counts as dead
 
-- Status: Accepted
+- Status: Superseded by [0088](0088-a-locker-that-stops-answering-counts-as-dead-its-answer-from-the-thread-that-draws-it.md)
 - Date: 2026-11-17
 
 ## Context
