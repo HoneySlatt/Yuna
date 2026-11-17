@@ -223,7 +223,10 @@ impl State {
             popups: PopupManager::default(),
             xdg_activation_state: XdgActivationState::new::<State>(dh),
             _xdg_dialog_state: XdgDialogState::new::<State>(dh),
-            screencopy: ScreencopyState::new(dh),
+            screencopy: {
+                crate::wlr_screencopy::manager_global(dh);
+                ScreencopyState::new(dh)
+            },
             _text_input_state: crate::text_input::text_input_global(dh),
             virtual_input: crate::virtual_input::VirtualInputState::new(dh),
             pending_captures: Vec::new(),

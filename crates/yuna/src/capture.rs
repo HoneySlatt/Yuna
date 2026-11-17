@@ -29,6 +29,7 @@ use crate::output::{OutputMode, to_i32};
 use crate::screencopy::ClientFrame;
 use crate::seats::seat_of_surface;
 use crate::state::State;
+use crate::wlr_screencopy::WlrFrame;
 
 /// What an agent captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +168,17 @@ fn area(
         return Err("it holds no whole pixel of its output".to_owned());
     }
     Ok(area)
+}
+
+/// The physical pixels of an output of `mode` that show `rect`, logical units from its top-left
+/// corner, cut to the output and widened to whole pixels: what a `wlr-screencopy` region reads.
+/// Refused as [`area`] is.
+pub(crate) fn physical_area(
+    output: OutputId,
+    mode: &OutputMode,
+    rect: Rect,
+) -> Result<Rectangle<i32, Physical>, String> {
+    area(output, mode, rect, CaptureSize::Physical).map(|area| area.read)
 }
 
 /// The area of an output of `mode` that shows `rect`, logical units from the output's top-left
@@ -368,8 +380,10 @@ pub(crate) enum Destination {
         target: CaptureTarget,
         size: CaptureSize,
     },
-    /// A Wayland client's frame (`screencopy.rs`).
+    /// A Wayland client's frame of `ext-image-copy-capture-v1` (`screencopy.rs`).
     Client(ClientFrame),
+    /// A Wayland client's frame of `wlr-screencopy-unstable-v1` (`wlr_screencopy.rs`).
+    Wlr(WlrFrame),
 }
 
 /// A capture waiting for its output's refresh.
@@ -666,6 +680,25 @@ impl State {
                         }
                     }
                 }
+                Destination::Wlr(frame) => {
+                    let began = Instant::now();
+                    let read = frame.read();
+                    let pixels = crate::render::read_pixels(
+                        &mut self.renderer,
+                        &mut self.outputs[index],
+                        read,
+                    );
+                    log_copy(id, read, began);
+                    match pixels {
+                        Ok(pixels) => {
+                            self.finish_wlr_frame(frame, &pixels, presented_at, drawn_frames);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, output = id.0, "a client's capture failed");
+                            frame.fail(Failure::ForNow);
+                        }
+                    }
+                }
             }
         }
     }
@@ -729,6 +762,7 @@ fn fail(
     match destination {
         Destination::Agent { ticket, .. } => captured.push((ticket, Err(why.to_owned()))),
         Destination::Client(frame) => frame.fail(failure),
+        Destination::Wlr(frame) => frame.fail(failure),
     }
 }
 

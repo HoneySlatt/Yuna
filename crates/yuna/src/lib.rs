@@ -22,7 +22,8 @@
 //! layout (`shell.rs`), with popups (`popups.rs`),
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
-//! and `ext-image-copy-capture-v1` on them (`screencopy.rs`); clients' dmabufs (`dmabuf.rs`);
+//! and `ext-image-copy-capture-v1` (`screencopy.rs`) and `wlr-screencopy-unstable-v1`
+//! (`wlr_screencopy.rs`) on them; clients' dmabufs (`dmabuf.rs`);
 //! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
 //! surfaces declare of their colours (`colour/`); each seat's X display, its Xwayland and its
 //! X11 window manager (`xwayland/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md`
@@ -51,6 +52,7 @@ mod state;
 mod text_input;
 mod virtual_input;
 mod vrr;
+mod wlr_screencopy;
 mod xwayland;
 
 use std::fmt;

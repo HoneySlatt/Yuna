@@ -1014,6 +1014,16 @@ the frame its buffer holds. Nothing is drawn for a capture.
    it is presented at. A frame that could not be drawn or read fails as one the client may ask
    again; a removed output stops its sessions. A client keeps 4 sessions at most, all clients
    16.
+5. `wlr-screencopy-unstable-v1` (`wlr_screencopy.rs`, [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)),
+   which uwui's measures speak, takes the same path under the same rules: every client sees it,
+   a frame of another seat's output fails at once. A frame is one copy of the whole output or
+   of a region in its logical units, cut to it and read at its physical size, into a `wl_shm`
+   buffer; a buffer of another size or format, or a second copy of one frame, is the client's
+   protocol error. `copy` takes the newest frame; `copy_with_damage` takes it too when the
+   output drew since that manager object's last copy of it, or for its first, and otherwise
+   waits for a refresh that draws something; its damage is the whole frame. `ready` gives the
+   time of the boundary the frame is presented at. Its frames waiting count among the 4 a client
+   keeps and the 16 of all clients.
 
 ### The MCP server
 
