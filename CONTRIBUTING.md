@@ -33,7 +33,9 @@ The shell gives:
   tests give them: `YUNA_XWAYLAND_PATH` (Xwayland's folder, Yuna's own `PATH` in the tests),
   `YUNA_LAVAPIPE_ICD` (Mesa's Vulkan on the CPU),
   `YUNA_FONTS_CONF` (DejaVu alone), `YUNA_QT_PLUGINS` and `YUNA_QML_IMPORTS` (for `qml`, which
-  is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads).
+  is not wrapped), and `YUNA_CLIENT_LIBRARY_PATH` (the libraries SlimeEngine's example loads);
+- the sources of the owner's projects whose drivers the tests run, `YUNA_UWUI_SOURCE` and
+  `YUNA_PLUTO_SOURCE`, at the revisions `flake.nix` names in their inputs' URLs.
 
 A second shell, `nix develop .#bench`, adds what the rivals' bench runs, by their store paths, in
 `YUNA_BENCH_*` variables: sway, KWin, dwl and mango (each also built without XWayland, for equal
@@ -194,6 +196,11 @@ Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATION
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
 in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's
 tests (`mcp.rs` and `seats.rs` there).
+`crates/yuna/tests/consumers.rs` runs uwui's `measure.py` and Pluto's `pluto-input` against
+`yuna --headless --agent-seat`, in about 5 s once `pluto-input` is built, about 10 s, in
+`target/consumers/`; its crates come from crates.io the first time. A consumer's revision is
+raised in a commit of its own: the input's URL in `flake.nix`, then `nix flake lock`, then
+these tests ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md)).
 SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on
 `interface`, given a folder that holds them, as the weekly job runs them:
 
@@ -230,20 +237,32 @@ PROPTEST_CASES=2500 nix develop -c cargo test -p yuna --test headless random_req
 The timings are measured on an idle machine, one measurement at a time, and go to
 [`docs/measurements.md`](docs/measurements.md).
 
-`scripts/check.sh` runs, in order, and stops at the first failure:
+`scripts/check.sh` runs these steps, in order, and stops at the first failure; `scripts/check.sh
+only <step>` runs one:
 
-1. the workspace's own rules: `rust-version` in `Cargo.toml` equals the toolchain's version, and
-   every crate takes the workspace's lints;
-2. formatting, `cargo fmt --check`;
-3. clippy over every target, warnings as errors;
-4. the build and the tests;
-5. the documentation, `cargo doc`, warnings as errors;
-6. `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory and every yanked
-   crate, on any dependency, direct or not; the sources of the dependencies. It reads the advisory
-   database from the network;
-7. the links between the tracked Markdown files, offline, anchors included;
-8. the length of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
-   session.
+1. `rules`, the workspace's own: `rust-version` in `Cargo.toml` equals the toolchain's version,
+   and every crate takes the workspace's lints;
+2. `format`, `cargo fmt --check`;
+3. `lints`, clippy over every target, warnings as errors;
+4. `tests`, the build and the tests;
+5. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
+6. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
+   and every yanked crate, on any dependency, direct or not; the sources of the dependencies. It
+   reads the advisory database from the network;
+7. `links`, between the tracked Markdown files, offline, anchors included;
+8. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
+   session;
+9. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
+10. `script-tests`: the tests of those scripts, and of SlimeEngine's job's path filter.
+
+`scripts/test-check.sh` proves that each step stops what it guards against
+([ADR-0058](docs/adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): it clones the last
+commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
+warning, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
+without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
+fragment misnamed, SlimeEngine's job leaving out the drawing path), and expects the step that
+guards against it to fail, for that reason. Run it after changing `check.sh` or a check, and
+before a release; it takes about as long as `check.sh` twice, building in `target/test-check`.
 
 Every cargo command of the check passes `--locked`: `Cargo.lock` changes only on purpose.
 
@@ -261,7 +280,8 @@ links, the length of those read at every session, the ADRs' index, the changelog
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.
 [`.github/workflows/slimeengine.yml`](.github/workflows/slimeengine.yml) runs SlimeEngine's
 `window`, `editor` and `interface` examples in Yuna every Thursday, on demand, and on a push that
-changes the drawing path or what the agent's story uses; it builds the examples and cooks their
+changes anything its test builds or reads: it names what it leaves out, and
+`scripts/test_workflows.py` checks that nothing it needs is among them; it builds the examples and cooks their
 data once per pinned revision and keeps the folder in GitHub's cache
 ([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md),
 [ADR-0043](docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)). Its
@@ -299,13 +319,19 @@ What other programs and projects rely on
   line printed at start, the exit codes;
 - the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`) and gives its programs (`YUNA_SEAT`);
 - the MCP server: its revisions, its tools' names, arguments and results;
-- the Nix package's outputs, once it exists (M1.10);
+- the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
+  draws with its own Mesa and finds Xwayland ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md));
 - Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
   `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 
 Until 1.0 a contract may change, never silently: a change that breaks a consumer adds a
 `changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
 instead; an addition, an `added-…` one. The logs' text and the library's API are not contracts.
+
+[`crates/yuna/tests/contracts.rs`](crates/yuna/tests/contracts.rs) holds `yuna --help` and the MCP
+server's `tools/list` as files in `crates/yuna/tests/contracts/`: a change to either fails it until
+the file is rewritten, `YUNA_WRITE_CONTRACTS=1 cargo test -p yuna --test contracts`, and the
+rewrite shows in the diff beside its fragment.
 
 ## From outside the project
 

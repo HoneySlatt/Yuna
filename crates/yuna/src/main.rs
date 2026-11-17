@@ -15,13 +15,15 @@ use smithay::reexports::rustix;
 use tracing::level_filters::LevelFilter;
 use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
+use yuna::yuna_layout::SeatId;
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
-Usage: yuna --headless [--gpu] [--animations | --reduced-motion] [--output MODE]...
+Usage: yuna --headless [--agent-seat] [--gpu] [--animations | --reduced-motion]
+                       [--output MODE]...
        yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
        yuna -h | --help
        yuna -V | --version
@@ -41,6 +43,11 @@ Options:
                      WAYLAND_DISPLAY=<socket> on standard output, then, when Xwayland is
                      found, DISPLAY=:<number> and XAUTHORITY=<file> for X11 programs; logs
                      to standard error, and stops on SIGTERM or SIGINT.
+      --agent-seat   With --headless: serve an agent's seat on the socket rather than the
+                     owner's, as an agent's seat of mcp is: a us keyboard, a pointer, Yuna
+                     as input method, and the virtual keyboard and pointer for its programs
+                     (zwp_virtual_keyboard_v1, zwlr_virtual_pointer_v1), which drive them
+                     as in a headless sway.
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
       --animations   Move windows, the view and workspaces on springs, and fade the special
                      workspace, rather than show each change at once, as without it.
@@ -91,6 +98,8 @@ struct Headless {
     animations: bool,
     /// Animations on under reduced motion (ADR-0059): `--reduced-motion`.
     reduced_motion: bool,
+    /// `--headless`'s socket serves an agent's seat rather than the owner's (ADR-0089).
+    agent_seat: bool,
 }
 
 /// Reads the arguments that follow the program's name. They are `OsString`s, so that an argument
@@ -114,6 +123,7 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
     let mut manual_clock = false;
     let mut animations = false;
     let mut reduced_motion = false;
+    let mut agent_seat = false;
     let mut outputs = Vec::new();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
@@ -134,13 +144,19 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
                 );
             }
             Some("--manual-clock") if mcp && !manual_clock => manual_clock = true,
+            Some("--agent-seat") if mcp => {
+                return Request::Invalid(
+                    "mcp's seats are agents' already: drop --agent-seat".to_owned(),
+                );
+            }
+            Some("--agent-seat") if !agent_seat => agent_seat = true,
             Some("--headless") if mcp => {
                 return Request::Invalid("mcp is headless already: drop --headless".to_owned());
             }
             Some("--manual-clock") if !mcp => {
                 return Request::Invalid("--manual-clock is mcp's".to_owned());
             }
-            Some(flag @ ("--headless" | "--gpu" | "--manual-clock")) => {
+            Some(flag @ ("--headless" | "--gpu" | "--manual-clock" | "--agent-seat")) => {
                 return Request::Invalid(format!("{flag} is given twice"));
             }
             Some("--output") => match arguments.next().map(|mode| read_output(mode)) {
@@ -161,7 +177,8 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
     }
     if !headless {
         return Request::Invalid(
-            "--gpu, --animations, --reduced-motion and --output need --headless".to_owned(),
+            "--agent-seat, --gpu, --animations, --reduced-motion and --output need --headless"
+                .to_owned(),
         );
     }
     if mcp && outputs.len() > 1 {
@@ -179,6 +196,7 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
         manual_clock,
         animations,
         reduced_motion,
+        agent_seat,
     };
     if mcp {
         Request::Mcp(headless)
@@ -274,13 +292,13 @@ fn run_headless(headless: Headless) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut compositor = match start_compositor(headless) {
-        Ok(compositor) => compositor,
+    let (mut compositor, seat, socket) = match start_compositor(headless) {
+        Ok(started) => started,
         Err(exit) => return exit,
     };
-    if let Some(name) = compositor.socket_name() {
-        let mut lines = format!("WAYLAND_DISPLAY={}\n", name.to_string_lossy()).into_bytes();
-        if let Some(x11) = compositor.x11_display(OWNER_SEAT) {
+    {
+        let mut lines = format!("WAYLAND_DISPLAY={}\n", socket.to_string_lossy()).into_bytes();
+        if let Some(x11) = compositor.x11_display(seat) {
             lines.extend_from_slice(format!("DISPLAY={}\nXAUTHORITY=", x11.name()).as_bytes());
             // The path as it is, which may not be UTF-8.
             lines.extend_from_slice(x11.xauthority.as_os_str().as_bytes());
@@ -298,19 +316,51 @@ fn run_headless(headless: Headless) -> ExitCode {
     }
 }
 
-/// Starts the compositor `yuna --headless` asks for, its outputs on the owner's seat, listening on
-/// a socket; reports why it cannot.
-fn start_compositor(headless: Headless) -> Result<Compositor, ExitCode> {
+/// Starts the compositor `yuna --headless` asks for, listening on a socket in `XDG_RUNTIME_DIR`
+/// for the owner's seat, its outputs on it, or with `--agent-seat` for an agent's seat, its
+/// outputs on that seat and the owner's seat without output, socket or `wl_seat`, as in `yuna
+/// mcp`. Returns it with the seat it serves and the socket's name; reports why it cannot.
+fn start_compositor(headless: Headless) -> Result<(Compositor, SeatId, OsString), ExitCode> {
     let config = Config {
         device: device_of(&headless),
         animations: animations_of(&headless),
-        outputs: headless.outputs,
+        outputs: if headless.agent_seat {
+            Vec::new()
+        } else {
+            headless.outputs.clone()
+        },
         clock: ClockMode::Real,
-        listen: true,
-        announce_owner_seat: true,
+        listen: !headless.agent_seat,
+        announce_owner_seat: !headless.agent_seat,
         xwayland: Some(XwaylandConfig::default()),
     };
-    start(config)
+    let mut compositor = start(config)?;
+    if !headless.agent_seat {
+        let socket = compositor.socket_name().map(OsStr::to_os_string);
+        return match socket {
+            Some(socket) => Ok((compositor, OWNER_SEAT, socket)),
+            None => {
+                print_error("yuna: the compositor has no socket\n");
+                Err(ExitCode::FAILURE)
+            }
+        };
+    }
+    let serve = |compositor: &mut Compositor| -> Result<(SeatId, OsString), Error> {
+        let seat = compositor.add_seat()?;
+        for mode in &headless.outputs {
+            compositor.add_output(seat, *mode)?;
+        }
+        let socket = compositor.listen_for_seat_in_runtime_dir(seat)?;
+        Ok((seat, socket))
+    };
+    match serve(&mut compositor) {
+        Ok((seat, socket)) => Ok((compositor, seat, socket)),
+        Err(Error::InvalidOutput(reason)) => Err(usage_error(&reason.to_string())),
+        Err(error) => {
+            print_error(&format!("yuna: {error}\n"));
+            Err(ExitCode::FAILURE)
+        }
+    }
 }
 
 fn device_of(headless: &Headless) -> Device {
@@ -524,6 +574,7 @@ mod tests {
                 manual_clock: false,
                 animations: false,
                 reduced_motion: false,
+                agent_seat: false,
             })
         );
     }
@@ -545,8 +596,31 @@ mod tests {
                 manual_clock: false,
                 animations: false,
                 reduced_motion: false,
+                agent_seat: false,
             })
         );
+    }
+
+    #[test]
+    fn the_agent_seat_is_headless_alone() {
+        assert_eq!(
+            request(&["--headless", "--agent-seat"]),
+            Request::Headless(Headless {
+                gpu: false,
+                outputs: vec![mode(3840, 2160, 240.0, 1.5)],
+                manual_clock: false,
+                animations: false,
+                reduced_motion: false,
+                agent_seat: true,
+            })
+        );
+        for bad in [
+            &["--agent-seat"][..],
+            &["--headless", "--agent-seat", "--agent-seat"],
+            &["mcp", "--agent-seat"],
+        ] {
+            assert!(matches!(request(bad), Request::Invalid(_)), "{bad:?}");
+        }
     }
 
     #[test]
@@ -559,6 +633,7 @@ mod tests {
                 manual_clock: false,
                 animations: false,
                 reduced_motion: false,
+                agent_seat: false,
             })
         );
         assert_eq!(
@@ -575,6 +650,7 @@ mod tests {
                 manual_clock: true,
                 animations: false,
                 reduced_motion: false,
+                agent_seat: false,
             })
         );
         for bad in [
@@ -644,6 +720,7 @@ mod tests {
                     manual_clock: false,
                     animations: false,
                     reduced_motion: false,
+                    agent_seat: false,
                 }),
                 "{text}"
             );
@@ -656,6 +733,7 @@ mod tests {
                 manual_clock: false,
                 animations: false,
                 reduced_motion: false,
+                agent_seat: false,
             })
         );
     }
@@ -706,6 +784,7 @@ mod tests {
                 manual_clock: false,
                 animations: true,
                 reduced_motion: false,
+                agent_seat: false,
             };
             let expected = if mcp {
                 Request::Mcp(expected)
@@ -738,6 +817,7 @@ mod tests {
             request(&["mcp", "--reduced-motion"]),
             Request::Mcp(Headless {
                 reduced_motion: true,
+                agent_seat: false,
                 ..
             })
         ));

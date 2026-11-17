@@ -18,6 +18,17 @@
       url = "github:noctalia-dev/umbriel/d171ccb31628da65b1beee3221b37a2758d553b3";
       flake = false;
     };
+    # The owner's projects whose drivers Yuna's tests run against `yuna --headless --agent-seat`,
+    # each pinned to the revision read, raised in a commit of its own (ADR-0079, ADR-0089): uwui's
+    # scripts/measure.py, and Pluto's pluto-input. Their sources alone.
+    uwui = {
+      url = "github:HoneySlatt/uwui/fb77f0d90c06fb6ef89aef3529239e5d4b70eefd";
+      flake = false;
+    };
+    pluto = {
+      url = "github:HoneySlatt/Pluto/4624243566575387ec80a9a41e164f6d1112711c";
+      flake = false;
+    };
   };
 
   outputs =
@@ -25,6 +36,8 @@
       nixpkgs,
       rust-overlay,
       umbriel,
+      uwui,
+      pluto,
       ...
     }:
     let
@@ -37,7 +50,7 @@
       # The default shell's settings, which the bench's shell extends.
       shell = {
         packages = [
-          (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
+          toolchain
           # Licences, advisories and sources of the dependencies.
           pkgs.cargo-deny
           # Links between the Markdown files.
@@ -80,6 +93,9 @@
           pkgs.wine64Packages.stable
           pkgs.coreutils
         ];
+        # The consumers' sources, which crates/yuna/tests/consumers.rs runs (ADR-0089).
+        YUNA_UWUI_SOURCE = "${uwui}";
+        YUNA_PLUTO_SOURCE = "${pluto}";
         # Yuna's own PATH in those tests: Xwayland alone, which it looks for there (ADR-0067).
         YUNA_XWAYLAND_PATH = pkgs.lib.makeBinPath [ pkgs.xwayland ];
         # Mesa's Vulkan driver for the CPU, lavapipe, the only one Vulkan's loader is let load.
@@ -108,8 +124,77 @@
           pkgs.fontconfig
         ];
       };
+      toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = toolchain;
+        rustc = toolchain;
+      };
+
+      # Yuna's package (ADR-0058, ADR-0089): `yuna` alone, built with the pinned toolchain from the
+      # workspace's sources, and wrapped to draw with the package's own Mesa through libglvnd, as
+      # the shell does, and to find Xwayland: it runs the same on NixOS, on another distribution
+      # with Nix and in a CI on Ubuntu. Its outputs are a contract (CONTRIBUTING.md). The tests
+      # run in scripts/check.sh, not here: they need the shell's applications.
+      yuna = rustPlatform.buildRustPackage {
+        pname = "yuna";
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./crates
+          ];
+        };
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+          # Yuna's fork of Smithay, a git dependency: its hash changes with the revision
+          # Cargo.toml pins (docs/smithay-patches.md).
+          outputHashes = {
+            "smithay-0.7.0" = "sha256-eGaRSNtFHytTJP1q3XTtiMZJUA5Cy11khHBg1p01h/s=";
+          };
+        };
+        cargoBuildFlags = [
+          "--package"
+          "yuna"
+          "--bin"
+          "yuna"
+        ];
+        doCheck = false;
+        # The standard library's sources are named in the binary's panic messages: remapped,
+        # so that the toolchain, 1.4 GB, stays out of the package's closure, and refused if a
+        # reference to it comes back.
+        env.RUSTFLAGS = "--remap-path-prefix=${toolchain}=/rust";
+        disallowedReferences = [ toolchain ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        buildInputs = [ pkgs.libxkbcommon ];
+        # The variables set here are Yuna's alone: the programs `yuna mcp` starts get the caller's
+        # own values back, kept in YUNA_CALLER_<name> (crates/yuna/src/mcp/programs.rs).
+        postInstall = ''
+          wrapProgram $out/bin/yuna \
+            --run 'if [ -n "''${PATH+x}" ]; then export YUNA_CALLER_PATH="$PATH"; fi' \
+            --run 'if [ -n "''${LD_LIBRARY_PATH+x}" ]; then export YUNA_CALLER_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"; fi' \
+            --run 'if [ -n "''${__EGL_VENDOR_LIBRARY_FILENAMES+x}" ]; then export YUNA_CALLER___EGL_VENDOR_LIBRARY_FILENAMES="$__EGL_VENDOR_LIBRARY_FILENAMES"; fi' \
+            --set YUNA_WRAPPED_VARIABLES "PATH LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES" \
+            --prefix LD_LIBRARY_PATH : ${pkgs.libglvnd}/lib \
+            --set __EGL_VENDOR_LIBRARY_FILENAMES ${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json \
+            --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.xwayland ]}
+        '';
+        meta = {
+          description = "A Wayland compositor for Linux";
+          homepage = "https://github.com/HoneySlatt/Yuna";
+          license = pkgs.lib.licenses.gpl3Plus;
+          mainProgram = "yuna";
+          platforms = [ system ];
+        };
+      };
     in
     {
+      packages.${system} = {
+        inherit yuna;
+        default = yuna;
+      };
+
       devShells.${system} = {
         default = pkgs.mkShell shell;
 

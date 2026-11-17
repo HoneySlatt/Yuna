@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use yuna::yuna_layout::{OutputId, WindowId};
-use yuna::{Error, MAX_OUTPUTS, OWNER_SEAT, OutputMode};
+use yuna::{Error, MAX_OUTPUTS, OWNER_SEAT, OutputMode, RETIRED_GLOBAL_LIFETIME};
 
 use crate::client::{Client, Feedback};
 use crate::{BLUE, LEAD, OUTPUT, RED, manual_compositor, open_and_commit, run_armed_deadlines};
@@ -161,5 +161,40 @@ fn outputs_past_the_cap_are_refused() {
             .add_output(OWNER_SEAT, small)
             .expect("room again"),
         OutputId(MAX_OUTPUTS as u64 + 1)
+    );
+}
+
+/// A removed output's global stays, disabled, for [`RETIRED_GLOBAL_LIFETIME`] of Yuna's clock,
+/// then is destroyed: a client that binds it before it reads the removal is answered until then,
+/// and ended for it after. On the manual clock that lifetime is the time a test steps, whatever
+/// real time passed.
+#[test]
+fn a_removed_outputs_global_is_destroyed_after_its_lifetime_on_yunas_clock() {
+    let mut compositor = manual_compositor();
+    let second = compositor
+        .add_output(OWNER_SEAT, full_hd())
+        .expect("an output is added");
+    let mut client = Client::connect(&mut compositor);
+    compositor
+        .remove_output(second)
+        .expect("the output is removed");
+    client.roundtrip(&mut compositor);
+    let [name] = client.state.removed_globals[..] else {
+        panic!("one global removed: {:?}", client.state.removed_globals);
+    };
+
+    compositor
+        .advance(RETIRED_GLOBAL_LIFETIME - Duration::from_millis(1))
+        .expect("the manual clock moves");
+    client.bind_output(name);
+    client.roundtrip(&mut compositor);
+
+    compositor
+        .advance(Duration::from_millis(1))
+        .expect("the manual clock moves");
+    client.bind_output(name);
+    assert!(
+        client.try_roundtrip(&mut compositor).is_err(),
+        "the global was destroyed: binding it is a protocol error"
     );
 }

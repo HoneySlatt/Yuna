@@ -18,8 +18,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - M1.1 to M1.7 are done (2026-11-11 to 14). Hollow's needs are in
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
-- [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077. Next: M1.10,
-  on the owner's go.
+- [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077.
+- [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089. Next:
+  M1.11, on the owner's go.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 - An [audit of the architecture](audits/2026-11-17-architecture.md) on 2026-11-17: ADR-0078 to
   ADR-0085 decided: Stage 2 in three gated parts, outside pull requests from 0.1.
@@ -37,7 +38,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.7](#m17--animations) | Motion on springs and curves, checked frame by frame | Done |
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
-| [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Planned |
+| [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Done |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
 | [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
@@ -149,15 +150,16 @@ milestone first needs it.
 
 - **Goal.** The owner's other projects measure and drive their programs in Yuna as in a headless
   sway ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)).
-- **Delivers.** A Nix package, built in CI; the virtual keyboard and pointer on the agent's seat
-  they are given, tested never to reach the owner's, with no rule between two agents' seats
-  ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)); `docs/client-needs.md` completed, Hollow's needs in it
-  already; `docs/protocols.md` and its
-  test against the globals announced; `scripts/test-check.sh`; `tools/list` and `--help` held by
-  tests, the consumers pinned ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)).
-- **Done when.** uwui's `measure.py` and Pluto's bench drive a program in Yuna as in sway, without
-  changing their repositories; both tests run in `check.sh`.
-- **Measured.** A program's presentation times in Yuna against headless sway's.
+- **Result.** Done on 2026-11-17 ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)):
+  `yuna --headless --agent-seat`; the virtual keyboard and pointer on agents' seats, never the
+  owner's; `wlr-screencopy` v3; a Nix package with its own Mesa, built and started in CI. uwui's
+  `measure.py` and Pluto's bench's driver, `pluto-input`, pinned in `flake.nix`, drive a program
+  in it in `check.sh`; sway's IPC, which the rest of Pluto's bench reads, has no equivalent ([consumers](../crates/yuna/tests/consumers.rs)). [`protocols.md`](protocols.md)
+  and its test, [`client-needs.md`](client-needs.md) complete, `--help` and `tools/list` held by
+  tests, `scripts/test-check.sh`. The audit's three debts paid.
+  Measured by uwui's `measure.py`, `vkcube` on the GPU at 4K and 240 Hz: Yuna presents 240.0
+  frames a second, every interval 4.17 ms; a headless sway 244, not on a grid
+  ([measurements](measurements.md)).
 
 ### M1.11 — The agents' toolbox
 

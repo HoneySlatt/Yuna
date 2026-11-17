@@ -800,9 +800,9 @@ own seat's `wl_seat` and its seat's outputs' `wl_output`s alone, through the fil
 Yuna's fork of Smithay ([ADR-0042](adr/0042-main-on-smithays-fork.md)); a client that held
 another seat's would still get no input, since that seat's focus is never on its surfaces.
 
-Input (`input.rs`) reaches an agent's seat only through the compositor's calls, which the MCP
-server makes for the seat an agent names; the owner's seat takes none. Its events carry Yuna's
-clock's time.
+Input (`input.rs`) reaches an agent's seat through the compositor's calls, which the MCP
+server makes for the seat an agent names, and through its own clients' virtual keyboards and
+pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's time.
 
 1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
    is found among the windows that output draws at the event's time, or at the time its last
@@ -836,6 +836,20 @@ clock's time.
 6. X11 windows take the same input through their seat's Xwayland: the keyboard on an X11
    window's surface also gives it the X input focus, which its manager sets
    ([An X11 window's life](#an-x11-windows-life)).
+7. A client of an agent's seat may drive it as a test driver drives a headless sway, through
+   `zwp_virtual_keyboard_v1` and `zwlr_virtual_pointer_v1` (`virtual_input.rs`,
+   [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); the owner's seat's clients are
+   not shown their globals. A device acts on its client's own seat, read when it is made and
+   kept while it lives, so that the keys and buttons Smithay releases when its client dies
+   reach that seat; one made for another seat's `wl_seat` does nothing, and a client keeps 8
+   that act (`MAX_VIRTUAL_DEVICES_PER_CLIENT`). Its events take the paths of points 1 to 3. A
+   virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it,
+   its clients told, and back to the seat's own before Yuna's keys; one that sent `no_keymap`
+   uses the seat's own. The modifiers a keyboard set through its `modifiers` request are
+   released when it goes; the seat's keyboard keeps one state for all its devices. An absolute motion is a
+   fraction of the seat's outputs together, or of the output the device names; a relative one
+   moves from where the pointer is, or from the seat's first output's corner before it ever
+   moved, and stops at the closest point of the seat's outputs, as wlroots' cursor does.
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
 (`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
@@ -857,8 +871,9 @@ removed output's workspaces go to its seat's active output, which keeps showing 
 workspace switch shows them ([ADR-0018](adr/0018-workspaces.md)). Its windows' surfaces leave
 it at once, and enter an output again once one shows them; the presentation feedback it
 held for a frame not yet at its boundary is discarded; its two deadlines are disarmed. Its global
-is disabled at once and destroyed 10 s later, at the end of a round, so that a client that asked
-to bind it before it learnt of the removal is not ended for it. A seat's last output is removed
+is disabled at once and destroyed 10 s later on Yuna's clock, at the end of a round, so that a
+client that asked to bind it before it learnt of the removal is not ended for it; a closed seat's
+`wl_seat` goes the same way. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
 
 ### XWayland
@@ -1000,8 +1015,19 @@ the frame its buffer holds. Nothing is drawn for a capture.
    `Argb8888` or `Xrgb8888`, the renderer's R, G, B, A swapped to B, G, R, A; the frame is ready
    as soon as it is copied, as the protocol asks, with full damage and the time of the boundary
    it is presented at. A frame that could not be drawn or read fails as one the client may ask
-   again; a removed output stops its sessions. A client keeps 4 sessions at most, all clients
-   16.
+   again; a removed output stops its sessions. A client keeps 4 sessions and `wlr-screencopy`
+   frames waiting together at most, all clients 16; a session or a frame past them is stopped.
+5. `wlr-screencopy-unstable-v1` (`wlr_screencopy.rs`, [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)),
+   which uwui's measures speak, takes the same path under the same rules: every client sees it,
+   a frame of another seat's output fails at once. A frame is one copy of the whole output or
+   of a region in its logical units, cut to it and read at its physical size, into a `wl_shm`
+   buffer; a buffer of another size or format, or a second copy of one frame, is the client's
+   protocol error. `copy` takes the newest frame; `copy_with_damage` takes it too when the
+   output drew since that manager object's last copy of it, or for its first, and otherwise
+   waits for a refresh that draws something; its damage is the whole frame. `ready` gives the
+   time of the boundary the frame is presented at. Its frames waiting count among the 4 a client
+   keeps and the 16 of all clients, with the sessions of point 4; an area read for one client's
+   frame of a refresh, the whole output or a region, is read once for all.
 
 ### The MCP server
 
@@ -1102,7 +1128,11 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
 `XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, then, when Xwayland
 is on `PATH`, `DISPLAY=:<n>` and `XAUTHORITY=<file>`, the owner's seat's X display
-([XWayland](#xwayland)), and runs until SIGTERM or SIGINT. `yuna mcp` starts the same compositor
+([XWayland](#xwayland)), and runs until SIGTERM or SIGINT. With `--agent-seat`, the owner's seat
+has no output, socket or `wl_seat`, as in `yuna mcp`, and one agent's seat takes the outputs and
+a socket of its own in `XDG_RUNTIME_DIR`, named `wayland-<n>` as the owner's would be, whose
+name and X display are printed: what the owner's other projects drive with a virtual keyboard
+and pointer ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)). `yuna mcp` starts the same compositor
 without an output or a socket, on the manual clock with `--manual-clock`, and serves MCP until its
 input closes or SIGTERM or SIGINT comes. Both turn XWayland on.
 Both run with animations off, each change shown at once; `--animations` turns them on, with
@@ -1244,13 +1274,26 @@ own thread, both `took_us`.
   measured again since the two tests with animations on came.
   `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
-  included.
+  included, with `--agent-seat` too.
+- `crates/yuna/tests/headless/protocols.rs`: the rows `Offered` of [`protocols.md`](protocols.md)
+  are the globals a client of the owner's seat and one of an agent's are shown.
+- `crates/yuna/tests/contracts.rs`: `yuna --help` and `tools/list` compared with the files of
+  `tests/contracts/` ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)).
+- `crates/yuna/tests/consumers.rs`: the owner's other projects' own drivers against `yuna
+  --headless --agent-seat`, at the revisions `flake.nix` pins
+  ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)): Pluto's `pluto-input`, built from
+  Pluto's lock, clicks and types into a window of the test's, which gets each event; uwui's
+  `measure.py --display` runs its steps to the end, its virtual pointer moving and clicking
+  without an error, and counts `vkcube`'s frames through `wlr-screencopy`. Its check that no
+  game runs answers none, and `sway` and `swaymsg`, which `--display` never runs, are stubs that
+  fail and leave a mark the test checks is absent.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
   and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its
   shell runs the command typed. Applications get the environment of
-  `tests/common/application_environment.rs`, which `applications.rs` shares.
+  `tests/common/application_environment.rs`, which `applications.rs` and `consumers.rs` share,
+  with `tests/common/dies_with_test.rs`.
 - `crates/yuna/tests/applications.rs`: real applications in the program, `yuna --headless` or
   `yuna mcp`, as agents run it ([ADR-0025](adr/0025-applications-in-ci.md),
   [ADR-0029](adr/0029-the-rest-of-animated-applications.md)). One `yuna` per application, all at
@@ -1295,12 +1338,18 @@ own thread, both `took_us`.
 
 ## The tools around the code
 
-- `flake.nix`: the development shell; `rust-toolchain.toml`: the toolchain
-  ([ADR-0016](adr/0016-the-rust-toolchain.md)).
+- `flake.nix`: the development shell, and Yuna's package, `bin/yuna` wrapped to draw with the
+  package's own Mesa and find Xwayland, for Yuna alone: the wrapper keeps the caller's own
+  `PATH`, `LD_LIBRARY_PATH` and `__EGL_VENDOR_LIBRARY_FILENAMES` in `YUNA_CALLER_*`, which the
+  programs `yuna mcp` starts get back (`mcp/programs.rs`). CI builds it and starts it from an
+  empty environment
+  ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); `rust-toolchain.toml`: the
+  toolchain ([ADR-0016](adr/0016-the-rust-toolchain.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`).
 - `.github/workflows/slimeengine.yml`: SlimeEngine's `window`, `editor` and `interface`
-  examples in Yuna, weekly, on demand and when the drawing path or what the agent's story uses
-  changes, built at a pinned revision with their data cooked, and cached.
+  examples in Yuna, weekly, on demand and on a push that changes anything its test builds or
+  reads (`scripts/test_workflows.py`), built at a pinned revision with their data cooked, and
+  cached.
 - `crates/yuna/examples/frame_time.rs`: a frame's cost while `vkcube` draws, read from outside
   the program: its frames and `took_us` from its log, each thread's CPU time from `/proc`, the
   GPU's from the kernel's DRM usage statistics

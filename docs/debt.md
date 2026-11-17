@@ -113,12 +113,14 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
-- A frame that fails to draw logs a warning each time (`frames.rs`, `State::draw`), with no
-  bound on their rate: a renderer that keeps failing writes one a frame. Found by the
-  [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
-- Removed outputs' globals are destroyed 10 s after their removal on `Instant::now()`
-  (`output.rs`), not on Yuna's clock: on the manual clock they do not follow the time a test
-  steps. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
+- The bound on a failing renderer's log is tested on `FailedDrawings` alone: no test makes a
+  drawing fail (`frames.rs`, `State::draw`), which needs a renderer a test can break.
+- On the manual clock, removed outputs' and closed seats' globals wait until the clock is
+  stepped 10 s; a test that makes and removes many and never steps keeps them all, disabled.
+- A client's capture whose copy fails logs a warning each time (`capture.rs`), at most one a
+  refresh for each of the 16 capture sessions: a copy that keeps failing while drawing works
+  writes one a frame. A failed drawing fails its captures without a copy, so a lost renderer
+  does not reach it. Found at M1.10, beside the failed drawings' bound (`FailedDrawings`).
 
 ## Colours
 
@@ -168,6 +170,9 @@ with games' VRR:
 - The owner's seat has no input method: a real one, `input-method-v2`, comes with the desktop.
 
 ## Captures
+
+- `wlr-screencopy` frames are `wl_shm` alone, their damage the whole frame: a tool that asks a
+  dmabuf, or reads the damage to copy less, gets none (ADR-0089).
 
 - Smithay `8fd9fe0` asks a session's buffer constraints (`capture_constraints`) without naming
   its client: a client of another seat is told that output's size and formats before Yuna stops
@@ -273,6 +278,27 @@ with games' VRR:
   shortest refresh. The desktop runs at a fixed rate ([ADR-0014](adr/0014-vrr-without-flicker.md)):
   it matters for motion on agents' VRR outputs only.
 
+## The owner's other projects
+
+- `crates/yuna/tests/consumers.rs` loads uwui's `measure.py` with its check that no game runs
+  answering none, and puts on the `PATH` a `sway` and a `swaymsg` that fail, which `--display`
+  checks for and never runs: a later `measure.py` that runs either in `--display` would fail
+  the test, as it should, and need the test changed.
+- `ext-data-control-v1` is offered to the owner's seat alone, so `yuna --headless --agent-seat`
+  has none: SlimeEngine's check of it runs in `yuna --headless` instead, where no virtual input
+  is offered. A test of both together waits for Stage 2's decision on seats
+  ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
+- A virtual keyboard with its own keymap switches its seat's keyboard to it at each of its keys,
+  and Yuna's own keys switch it back: an agent's `keyboard` tool and a virtual keyboard used in
+  turn send a keymap to the focused client at each change.
+- A seat's keyboard has one state for all its devices: a virtual keyboard's Caps Lock makes
+  Yuna's own keys capitals while it lives, where wlroots keeps a state for each keyboard. Its
+  modifiers are released when it goes. Stage 2's input chain decides the state per device.
+- `scripts/test-check.sh` runs by hand, after a change of `check.sh` or before a release, not in
+  CI: it takes about as long as the check twice.
+- Most rows of [`protocols.md`](protocols.md) not yet offered say `Not decided`; Stage 2's
+  opening settles each that an application needs.
+
 ## The examples
 
 - `agent_time.rs` keeps its own copies of what `examples/common/` now shares with `frame_time`
@@ -283,10 +309,6 @@ with games' VRR:
   `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
   `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
   would serve the tests, and the example could include it with `#[path]`. Paid in M1.12's audit.
-- SlimeEngine's job (`.github/workflows/slimeengine.yml`) runs on a push that changes a file of
-  its list, kept by hand: `yuna-motion`, `render/x11_surface.rs` and `process.rs`, on the drawing
-  path or the programs' start, are missing, so a change to them waits for Thursday's run. A list
-  of what is left out would not rot. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md); paid at M1.10.
 
 ## XWayland
 

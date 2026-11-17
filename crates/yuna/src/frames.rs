@@ -508,7 +508,7 @@ impl State {
             ));
         }
         let output = &mut self.outputs[index];
-        match render::draw(&mut self.renderer, output, &elements) {
+        let drawing = match render::draw(&mut self.renderer, output, &elements) {
             Ok(Some(damaged)) => {
                 self.counters.frames_drawn += 1;
                 self.outputs[index].drawn_frames += 1;
@@ -519,10 +519,24 @@ impl State {
             }
             Ok(None) => Drawing::Unchanged,
             Err(error) => {
-                tracing::warn!(%error, "a frame could not be drawn");
-                Drawing::Failed
+                let now = self.clock.now();
+                let output = &mut self.outputs[index];
+                if let Some(not_logged) = output.failed_drawings.failed(now) {
+                    tracing::warn!(
+                        %error,
+                        output = output.id.0,
+                        failed_since_last_line = not_logged,
+                        "a frame could not be drawn"
+                    );
+                }
+                return Drawing::Failed;
             }
+        };
+        let output = &mut self.outputs[index];
+        if let Some(failed) = output.failed_drawings.drew() {
+            tracing::info!(output = output.id.0, failed, "frames are drawn again");
         }
+        drawing
     }
 
     /// The windows output `index` calls back at its refresh, at full rate: those its frame
@@ -822,8 +836,51 @@ enum Drawing {
     Drawn { started: Instant, damaged: usize },
     /// Nothing was damaged.
     Unchanged,
-    /// The renderer failed: logged, and the content updates are not shown.
+    /// The renderer failed: logged, at most a line a [`FAILED_DRAWINGS_LOG_PERIOD`], and the
+    /// content updates are not shown.
     Failed,
+}
+
+/// How often an output whose frames keep failing to draw logs it again, on Yuna's clock.
+pub const FAILED_DRAWINGS_LOG_PERIOD: Duration = Duration::from_secs(10);
+
+/// What is logged of an output's frames that fail to draw: the first failure of a run, then at
+/// most one line a [`FAILED_DRAWINGS_LOG_PERIOD`], which counts the failures not logged since,
+/// and the run's end. A renderer that keeps failing so writes a line every 10 s, not one a frame.
+#[derive(Debug, Default)]
+pub(crate) struct FailedDrawings {
+    /// When the run's last line was logged; `None` outside a run.
+    logged_at: Option<Duration>,
+    /// The failures since that line.
+    not_logged: u64,
+    /// The run's failures.
+    run: u64,
+}
+
+impl FailedDrawings {
+    /// A frame failed to draw at `now`: `Some` with the failures not logged since the last line
+    /// if this one is logged, `None` if it is only counted.
+    pub(crate) fn failed(&mut self, now: Duration) -> Option<u64> {
+        self.run = self.run.saturating_add(1);
+        let due = self
+            .logged_at
+            .is_none_or(|logged_at| now.saturating_sub(logged_at) >= FAILED_DRAWINGS_LOG_PERIOD);
+        if !due {
+            self.not_logged = self.not_logged.saturating_add(1);
+            return None;
+        }
+        self.logged_at = Some(now);
+        Some(std::mem::take(&mut self.not_logged))
+    }
+
+    /// A frame was drawn, or found unchanged: `Some` with the run's failures if a run of them
+    /// ends.
+    pub(crate) fn drew(&mut self) -> Option<u64> {
+        self.logged_at?;
+        let run = self.run;
+        *self = FailedDrawings::default();
+        Some(run)
+    }
 }
 
 /// An output's recent drawings, from which its lead is predicted.
@@ -997,6 +1054,25 @@ mod tests {
 
     const MS: Duration = Duration::from_millis(1);
     const PERIOD_240_HZ: Duration = Duration::from_nanos(4_166_666);
+
+    /// A renderer that fails at each of 4,803 refreshes of 240 Hz, just over 20 s, logs three
+    /// lines, the first failure and one each 10 s, then one when it draws again; the next
+    /// failure begins a new run, logged at once.
+    #[test]
+    fn a_run_of_failed_drawings_logs_a_line_a_period_and_its_end() {
+        let mut failures = FailedDrawings::default();
+        let mut logged = Vec::new();
+        for refresh in 0..4803 {
+            let now = PERIOD_240_HZ * refresh;
+            if let Some(not_logged) = failures.failed(now) {
+                logged.push((refresh, not_logged));
+            }
+        }
+        assert_eq!(logged, vec![(0, 0), (2401, 2400), (4802, 2400)]);
+        assert_eq!(failures.drew(), Some(4803));
+        assert_eq!(failures.drew(), None);
+        assert_eq!(failures.failed(30 * 1000 * MS), Some(0));
+    }
 
     #[test]
     fn with_no_drawing_the_lead_is_the_floor_and_the_margin() {

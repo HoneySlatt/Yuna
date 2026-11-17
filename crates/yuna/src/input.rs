@@ -28,7 +28,9 @@ use smithay::desktop::WindowSurfaceType;
 use smithay::desktop::utils::under_from_surface_tree;
 use smithay::input::Seat;
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
-use smithay::input::keyboard::{FilterResult, Keycode, Keysym, xkb};
+use smithay::input::keyboard::{
+    FilterResult, KeyboardHandle, KeyboardSource, Keycode, KeymapFile, Keysym, xkb,
+};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorImageStatus, Focus, MotionEvent, PointerHandle,
 };
@@ -402,6 +404,68 @@ impl State {
         Ok(self.describe_pointer(seat))
     }
 
+    /// Moves `seat`'s pointer to `location`, in the layout's logical coordinates. Refused for a
+    /// place on none of the seat's outputs.
+    pub(crate) fn pointer_move_to(
+        &mut self,
+        seat: SeatId,
+        location: Point<f64, Logical>,
+    ) -> Result<(), Error> {
+        let pointer = self.agent_pointer(seat)?;
+        if self.output_at(seat, location).is_none() {
+            return Err(Error::Refused(format!(
+                "({}, {}) is on none of seat {}'s outputs",
+                location.x, location.y, seat.0
+            )));
+        }
+        let under = self.surface_under(seat, location);
+        self.move_pointer(seat, &pointer, location, under);
+        Ok(())
+    }
+
+    /// Where `seat`'s pointer is, in the layout's logical coordinates; one that never moved is
+    /// at its seat's first output's top-left corner, where a relative motion starts from.
+    pub(crate) fn pointer_location(&self, seat: SeatId) -> Result<Point<f64, Logical>, Error> {
+        let pointer = self.agent_pointer(seat)?;
+        if self.seat(seat).is_some_and(|data| data.pointer_moved) {
+            return Ok(pointer.current_location());
+        }
+        let first = self
+            .layout
+            .outputs(seat)
+            .ok()
+            .and_then(|outputs| outputs.first().copied())
+            .and_then(|id| self.outputs.iter().find(|output| output.id == id))
+            .ok_or_else(|| Error::Refused(format!("seat {} has no output", seat.0)))?;
+        Ok(Point::from((first.rect.x, first.rect.y)))
+    }
+
+    /// The point of `seat`'s outputs closest to `location`, in the layout's logical coordinates,
+    /// as wlroots keeps its cursor on its outputs; none for a seat without an output.
+    pub(crate) fn closest_on_seat(
+        &self,
+        seat: SeatId,
+        location: Point<f64, Logical>,
+    ) -> Option<Point<f64, Logical>> {
+        // Inside an output's last unit, which `output_at` takes as on it.
+        const INSIDE: f64 = 1e-3;
+        self.outputs
+            .iter()
+            .filter(|output| output.seat == seat)
+            .map(|output| {
+                let rect = output.rect;
+                let x = location.x.clamp(rect.x, rect.right() - INSIDE);
+                let y = location.y.clamp(rect.y, rect.bottom() - INSIDE);
+                Point::from((x, y))
+            })
+            .min_by(|a: &Point<f64, Logical>, b: &Point<f64, Logical>| {
+                let distance = |p: &Point<f64, Logical>| {
+                    (p.x - location.x).powi(2) + (p.y - location.y).powi(2)
+                };
+                distance(a).total_cmp(&distance(b))
+            })
+    }
+
     /// Presses or releases `button` of `seat`'s pointer where it is. A press focuses the window
     /// under it, and is recorded with that window, for a popup grab or an activation token it
     /// may carry. A press of a button held, or a release of one not held, is refused.
@@ -508,7 +572,6 @@ impl State {
                 "a scroll takes 1 to {MAX_SCROLL_STEPS} steps on an axis"
             )));
         }
-        self.focus_what_is_drawn(seat);
         let time = self.input_time();
         let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
         for (axis, steps) in [(Axis::Horizontal, dx), (Axis::Vertical, dy)] {
@@ -518,9 +581,20 @@ impl State {
                     .v120(axis, (steps * 120.0).round() as i32);
             }
         }
+        self.send_axis(seat, &pointer, frame);
+        Ok(self.describe_pointer(seat))
+    }
+
+    /// Sends `frame`, a scroll, to what `seat`'s pointer is on as drawn now.
+    pub(crate) fn send_axis(
+        &mut self,
+        seat: SeatId,
+        pointer: &PointerHandle<State>,
+        frame: AxisFrame,
+    ) {
+        self.focus_what_is_drawn(seat);
         pointer.axis(self, frame);
         pointer.frame(self);
-        Ok(self.describe_pointer(seat))
     }
 
     /// Where `seat`'s pointer is, and what is under it.
@@ -597,28 +671,67 @@ impl State {
             })
     }
 
-    /// Presses or releases `key` on `seat`'s keyboard, to the surface it is on. A press of a key
-    /// held, or a release of one not held, is refused.
+    /// Presses or releases `key` on `seat`'s keyboard, to the surface it is on, read with the
+    /// seat's own keymap. A press of a key held, or a release of one not held, is refused.
     pub(crate) fn key(&mut self, seat: SeatId, key: Keycode, pressed: bool) -> Result<(), Error> {
         self.agent_pointer(seat)?;
-        let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
+        let Some((keyboard, own_keymap)) = self
+            .seat(seat)
+            .map(|data| (data.keyboard.clone(), data.own_keymap.clone()))
+        else {
             return Err(Error::Refused(format!("no seat {}", seat.0)));
         };
         if keyboard.pressed_keys().contains(&key) == pressed {
             let state = if pressed { "held already" } else { "not held" };
             return Err(Error::Refused(format!("that key is {state}")));
         }
-        let serial = SERIAL_COUNTER.next_serial();
+        self.use_keymap(seat, &own_keymap)?;
         let state = if pressed {
             KeyState::Pressed
         } else {
             KeyState::Released
         };
+        self.send_key(seat, KeyboardSource::MAIN, key, state)
+    }
+
+    /// Switches `seat`'s keyboard to `keymap` unless it has it: its clients are sent the new
+    /// keymap. A virtual keyboard's keys are read with its own keymap, Yuna's with the seat's.
+    pub(crate) fn use_keymap(&mut self, seat: SeatId, keymap: &KeymapFile) -> Result<(), Error> {
+        let keyboard = self.agent_keyboard(seat)?;
+        if keyboard.keymap_file().id() != keymap.id() {
+            keyboard
+                .set_keymap_from_keymap_file(self, keymap.clone())
+                .map_err(|e| Error::Keyboard(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// The agent seat `seat`'s keyboard; refused for the owner's seat, as its pointer is.
+    pub(crate) fn agent_keyboard(&self, seat: SeatId) -> Result<KeyboardHandle<State>, Error> {
+        self.agent_pointer(seat)?;
+        self.seat(seat)
+            .map(|data| data.keyboard.clone())
+            .ok_or_else(|| Error::Refused(format!("no seat {}", seat.0)))
+    }
+
+    /// Sends `key` from `source` to the surface `seat`'s keyboard is on, with the keymap it has,
+    /// and records a press with that surface, for an activation token or a popup grab. Smithay
+    /// counts each key's presses by source, so that a key two sources hold is released by the
+    /// last of them.
+    pub(crate) fn send_key(
+        &mut self,
+        seat: SeatId,
+        source: KeyboardSource,
+        key: Keycode,
+        state: KeyState,
+    ) -> Result<(), Error> {
+        let keyboard = self.agent_keyboard(seat)?;
+        let serial = SERIAL_COUNTER.next_serial();
         let time = self.input_time();
-        keyboard.input::<(), _>(self, key, state, serial, time, |_, _, _| {
+        keyboard.input_from_source::<(), _>(source, self, key, state, serial, time, |_, _, _| {
             FilterResult::Forward
         });
-        if pressed
+        if state == KeyState::Pressed
             && let Some(focus) = keyboard.current_focus()
             && let Some(data) = self.seat_mut(seat)
         {

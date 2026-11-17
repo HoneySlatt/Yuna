@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesRenderbuffer;
@@ -27,7 +27,7 @@ use crate::clock::Deadline;
 use crate::colour::Record;
 use crate::colour::description::{Monitor, sdr_description};
 use crate::compositor::OutputDescription;
-use crate::frames::Drawings;
+use crate::frames::{Drawings, FailedDrawings};
 use crate::state::State;
 use crate::vrr::Panel;
 
@@ -244,6 +244,8 @@ pub(crate) struct VirtualOutput {
     /// all outside the output: from two, refreshes are paced again, so that a client that
     /// keeps doing so never loops.
     pub content_misses: u32,
+    /// Its frames that failed to draw, so that a renderer that keeps failing logs a few lines.
+    pub failed_drawings: FailedDrawings,
     /// The latest refresh a refresh of it aimed at or was presented at; refresh 0, its
     /// creation, at first.
     pub last_refresh: RefreshAt,
@@ -383,6 +385,7 @@ impl State {
             content_pending: false,
             armed_for_content: false,
             content_misses: 0,
+            failed_drawings: FailedDrawings::default(),
             last_refresh: creation,
             held_feedback: Vec::new(),
             drawings: Drawings::default(),
@@ -459,7 +462,8 @@ impl State {
         }
         self.display_handle
             .disable_global::<State>(removed.global.clone());
-        self.retired_globals.push((Instant::now(), removed.global));
+        self.retired_globals
+            .push((self.clock.now(), removed.global));
         tracing::info!(output = id.0, "virtual output removed");
         // Its seat's outputs, which take its workspaces, show the change at once (ADR-0052); the
         // other seats' motions go on (ADR-0015).
@@ -480,14 +484,15 @@ impl State {
             .collect()
     }
 
-    /// Destroys the globals of outputs removed at least [`RETIRED_GLOBAL_LIFETIME`] ago. Run at
-    /// the end of each round: at rest, a disabled global waits for the next round, which costs
-    /// a little memory and no wake-up.
+    /// Destroys the globals of outputs and seats removed at least [`RETIRED_GLOBAL_LIFETIME`]
+    /// ago on Yuna's clock, so that on the manual clock they follow the time a test steps. Run
+    /// at the end of each round: at rest, a disabled global waits for the next round, which
+    /// costs a little memory and no wake-up.
     pub(crate) fn destroy_retired_globals(&mut self) {
-        let now = Instant::now();
+        let now = self.clock.now();
         let display_handle = &self.display_handle;
         self.retired_globals.retain(|(retired_at, global)| {
-            let keep = now.duration_since(*retired_at) < RETIRED_GLOBAL_LIFETIME;
+            let keep = now.saturating_sub(*retired_at) < RETIRED_GLOBAL_LIFETIME;
             if !keep {
                 display_handle.remove_global::<State>(global.clone());
             }

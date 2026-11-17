@@ -64,6 +64,8 @@
 
 #[path = "common/application_environment.rs"]
 mod application_environment;
+#[path = "common/dies_with_test.rs"]
+mod dies_with_test;
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -73,7 +75,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::net::{SocketAddr, UnixStream};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -81,11 +82,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
+use dies_with_test::dies_with_test;
 use serde_json::{Value, json};
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::process::{
-    Pid, Signal, getppid, kill_process, set_parent_process_death_signal,
-};
+use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder};
 use x11rb::rust_connection::{DefaultStream, RustConnection};
@@ -1217,26 +1216,6 @@ fn application(yuna: &Yuna, program: impl AsRef<std::ffi::OsStr>) -> Command {
         .stdin(Stdio::null());
     dies_with_test(&mut command);
     command
-}
-
-/// Makes `command`'s process end with SIGKILL when the thread that starts it ends, so that a test
-/// killed, or stopped at CI's time limit, leaves no Yuna or application running. Every run drops
-/// its processes before its thread ends.
-fn dies_with_test(command: &mut Command) {
-    let parent = std::process::id();
-    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
-    // calls are sound: it makes two system calls, `prctl` and `getppid`, and allocates nothing,
-    // an `Errno` turning into an `io::Error` without a box.
-    unsafe {
-        command.pre_exec(move || {
-            set_parent_process_death_signal(Some(Signal::KILL))?;
-            // The parent may have ended before the signal was set: then it never comes.
-            if u32::try_from(Pid::as_raw(getppid())) != Ok(parent) {
-                return Err(Errno::SRCH.into());
-            }
-            Ok(())
-        });
-    }
 }
 
 /// What Yuna counted, from its last `counters` line (`Compositor::counters`).

@@ -4,7 +4,8 @@
 //!
 //! Each program gets an environment of its own: the few variables of Yuna's own that a program
 //! needs to find itself, its libraries, its locale and its drivers ([`KEPT_VARIABLES`],
-//! [`KEPT_PREFIXES`]); `WAYLAND_DISPLAY`, the full path of its seat's socket; `DISPLAY` and
+//! [`KEPT_PREFIXES`]), with the caller's own values of those Yuna's package set for Yuna alone
+//! ([`WRAPPED_VARIABLES`]); `WAYLAND_DISPLAY`, the full path of its seat's socket; `DISPLAY` and
 //! `XAUTHORITY`, its seat's X display and cookie, when the seat has one
 //! ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md));
 //! and an `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor
@@ -76,6 +77,14 @@ pub const KEPT_VARIABLES: &[&str] = &[
     "__EGL_VENDOR_LIBRARY_FILENAMES",
     "__EGL_VENDOR_LIBRARY_DIRS",
 ];
+
+/// The variable in which Yuna's package names, separated by spaces, the variables it set for
+/// Yuna alone: its own libraries and Xwayland (`flake.nix`).
+pub const WRAPPED_VARIABLES: &str = "YUNA_WRAPPED_VARIABLES";
+
+/// The prefix of the variables in which Yuna's package keeps the caller's own value of each
+/// variable [`WRAPPED_VARIABLES`] names, when the caller had one: a program gets it back.
+pub const CALLER_PREFIX: &str = "YUNA_CALLER_";
 
 /// The prefixes of the variables a program keeps: the locale's categories, and the settings of
 /// Vulkan's loader and of Mesa.
@@ -579,8 +588,23 @@ pub fn program_environment(
             KEPT_VARIABLES.contains(&name) || KEPT_PREFIXES.iter().any(|p| name.starts_with(p))
         })
     };
-    let mut environment: BTreeMap<OsString, OsString> =
-        inherited.filter(|(name, _)| kept(name)).collect();
+    let inherited: BTreeMap<OsString, OsString> = inherited.collect();
+    let mut environment: BTreeMap<OsString, OsString> = inherited
+        .iter()
+        .filter(|(name, _)| kept(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    // The variables Yuna's package set for Yuna alone (flake.nix) go back to the caller's own.
+    let wrapped = inherited
+        .get(OsStr::new(WRAPPED_VARIABLES))
+        .and_then(|names| names.to_str())
+        .unwrap_or_default();
+    for name in wrapped.split_whitespace() {
+        match inherited.get(OsStr::new(&format!("{CALLER_PREFIX}{name}"))) {
+            Some(value) => environment.insert(name.into(), value.clone()),
+            None => environment.remove(OsStr::new(name)),
+        };
+    }
     environment.insert("XDG_RUNTIME_DIR".into(), runtime_dir.into());
     environment.insert("WAYLAND_DISPLAY".into(), wayland_display.into());
     environment.insert("XDG_SESSION_TYPE".into(), "wayland".into());
@@ -752,6 +776,45 @@ fn read_stat(stat: &str) -> Option<ProcessStat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Yuna's package sets its own libraries and Xwayland for Yuna alone, and names in
+    /// `YUNA_WRAPPED_VARIABLES` what it changed, with the caller's own value of each it found:
+    /// a program gets the caller's values back, and none where the caller had none.
+    #[test]
+    fn a_program_gets_back_what_the_package_changed_for_yuna() {
+        let inherited = [
+            ("PATH", "/package/xwayland/bin:/usr/bin"),
+            ("LD_LIBRARY_PATH", "/package/libglvnd/lib"),
+            (
+                "__EGL_VENDOR_LIBRARY_FILENAMES",
+                "/package/mesa/50_mesa.json",
+            ),
+            (
+                "YUNA_WRAPPED_VARIABLES",
+                "PATH LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES",
+            ),
+            ("YUNA_CALLER_PATH", "/usr/bin"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        let environment = program_environment(
+            inherited,
+            Path::new("/run/user/1000/yuna-mcp-7/runtime/1"),
+            Path::new("/run/user/1000/yuna-mcp-7/seat-3"),
+            None,
+            SeatId(3),
+            &BTreeMap::new(),
+        );
+        assert_eq!(environment[OsStr::new("PATH")], "/usr/bin");
+        for gone in [
+            "LD_LIBRARY_PATH",
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "YUNA_WRAPPED_VARIABLES",
+            "YUNA_CALLER_PATH",
+        ] {
+            assert!(!environment.contains_key(OsStr::new(gone)), "{gone}");
+        }
+    }
 
     #[test]
     fn a_program_keeps_only_the_variables_it_needs_and_gets_its_own() {

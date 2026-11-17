@@ -1,6 +1,7 @@
 # Runs scripts/check.sh, every automated check of the definition of done (AGENTS.md), in the same Nix
-# development shell that agents and the owner use: one job while one is enough (ADR-0036). Actions
-# are pinned to commit SHAs, their release in a comment.
+# development shell that agents and the owner use (ADR-0036), and builds Yuna's Nix package beside
+# it, a contract the owner's other projects use (ADR-0058, ADR-0089). Actions are pinned to commit
+# SHAs, their release in a comment.
 name: CI
 
 on:
@@ -38,3 +39,28 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       # Without the flag, an incomplete flake.lock would be completed with an unpinned revision.
       - run: nix develop --no-update-lock-file --command scripts/check.sh
+
+  # The package, built in a job of its own so that its release build runs beside the checks.
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      # Built, then run from an empty environment as a consumer's CI would: it must find its own
+      # Mesa and Xwayland, print its socket, and stop cleanly on SIGTERM.
+      - run: nix build --no-update-lock-file --print-build-logs .#yuna
+      - run: |
+          runtime=$(mktemp -d)
+          env -i XDG_RUNTIME_DIR="$runtime" result/bin/yuna --headless --agent-seat \
+            --output 1280x720@60,1 > "$runtime/out" &
+          pid=$!
+          for _ in $(seq 100); do grep -q '^XAUTHORITY=' "$runtime/out" && break; sleep 0.1; done
+          grep '^WAYLAND_DISPLAY=' "$runtime/out"
+          grep '^DISPLAY=' "$runtime/out"
+          kill -TERM "$pid"
+          wait "$pid"

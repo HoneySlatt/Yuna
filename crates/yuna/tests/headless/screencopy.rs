@@ -20,13 +20,13 @@ use crate::capture_client::{CaptureClient, FailureReason, Format};
 use crate::client::Client;
 use crate::{BLUE, RED, assert_rests, run_armed_deadlines};
 
-fn small_output() -> OutputMode {
+pub(crate) fn small_output() -> OutputMode {
     OutputMode::new(640, 360, 60.0, 1.0).expect("a mode")
 }
 
 /// A manual-clock compositor of one small output on the owner's seat, with a window of `colour`
 /// drawn on it.
-fn compositor_with_a_window(colour: u32) -> (Compositor, Client) {
+pub(crate) fn compositor_with_a_window(colour: u32) -> (Compositor, Client) {
     let mut compositor = Compositor::new(Config {
         outputs: vec![small_output()],
         clock: ClockMode::Manual,
@@ -51,7 +51,7 @@ fn compositor_with_a_window(colour: u32) -> (Compositor, Client) {
 }
 
 /// Pixel (`x`, `y`) of output 1 as the renderer holds it: R, G, B, A.
-fn output_pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
+pub(crate) fn output_pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
     let pixel = compositor
         .read_pixels(OutputId(1), Rectangle::new((x, y).into(), (1, 1).into()))
         .expect("a pixel");

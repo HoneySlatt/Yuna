@@ -4,6 +4,35 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.10 — A program's presentation in Yuna against a headless sway (2026-11-17)
+
+uwui's own `scripts/measure.py`, at the revision `flake.nix` pins (`fb77f0d`), measures `vkcube`
+in each compositor, from outside, as uwui measures its programs: the frames the compositor
+presents, counted through `wlr-screencopy`'s copies with damage, each timed by the compositor's
+`ready`; its threads' CPU from `/proc`; the GPU's load and power from amdgpu. In sway, its
+default mode: a headless sway 1.12 of its own, GLES2 on the GPU. In Yuna, `--display`, on `yuna
+--headless --agent-seat --gpu`, release build of commit `d8ef6d1`. Both at 3840 × 2160, 240 Hz,
+scale 1.5; `vkcube --wsi wayland` on RADV, its window alone on the output; 2 s, then 10 s
+measured. Machine as in M1.9: Ryzen 7 5800X, RX 6900 XT, Linux 7.3.1, Mesa 26.2.6. Two runs,
+from the bench's shell (`nix develop .#bench`): the processor idle at 99 to 100 % by `vmstat`
+before each, no game, the GPU at 0 %; another session's `cargo test` was started but idle.
+
+| Run | Compositor | Frames in 10 s | Rate | p50 | p95 | p99 | Longest | Compositor's CPU | GPU busy | GPU power |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | sway | 2,439 | 243.9 Hz | 4.10 ms | 4.11 ms | 4.13 ms | 4.39 ms | 5.8 % of a core | 3.9 % | 36.2 W |
+| 1 | Yuna | 2,400 | 240.0 Hz | 4.17 ms | 4.17 ms | 4.17 ms | 4.17 ms | 5.2 % | 5.4 % | 35.6 W |
+| 2 | sway | 2,442 | 244.2 Hz | 4.09 ms | 4.11 ms | 4.13 ms | 4.70 ms | 5.4 % | 2.8 % | 36.7 W |
+| 2 | Yuna | 2,400 | 240.0 Hz | 4.17 ms | 4.17 ms | 4.17 ms | 4.17 ms | 5.0 % | 3.4 % | 35.5 W |
+
+- Yuna presents at its output's rate exactly, every interval one refresh of 240 Hz, on its own
+  clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)). wlroots' headless output, sway's,
+  draws whole milliseconds after each commit, 4 ms at 240 Hz, so about 244 frames a second
+  ([survey](survey.md#the-rivals-measured)), which uwui's measurements record as 243 Hz.
+- The compositor's CPU includes the copies `measure.py` asks, one a frame, of a single pixel;
+  its share is close in both. The GPU figures are the card's whole, a few percent either way.
+- Not measured: a program at its own rate below the output's, a pointer in motion, Xwayland's
+  programs; the figures of one machine.
+
 ## M1.9 — The rivals headless, at equal work (2026-11-16)
 
 The bench (`crates/yuna-bench`, [ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)),

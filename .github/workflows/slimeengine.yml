@@ -2,7 +2,7 @@
 # ADR-0043): `window` draws its frames and leaves, `editor` rests with its window open, and an
 # agent, through `yuna mcp` alone, types and clicks in `interface` and checks it by capture. A
 # workflow of its own, beside CI's one job, since it runs on other events: weekly, on demand, and
-# when Yuna's drawing path or what the agent's story uses changes. The examples are built at the
+# on a push that changes anything its test builds or reads. The examples are built at the
 # SlimeEngine revision below, in Yuna's development shell, so that they link the shell's own
 # libraries, and their data cooked; the folder is cached per revision. SlimeEngine pins Rust
 # 1.99.0; Yuna's 1.99.1 builds it. Actions are pinned to commit SHAs, their release in a comment.
@@ -11,39 +11,26 @@ name: SlimeEngine
 on:
   push:
     branches: [main]
-    # The drawing path: the renderer, the outputs, the frame loop, the buffers, the clock; the
-    # commits and wl_shm, the configures and the scale a client is told; the event loop and the
-    # program, whose log the test reads; what the agent's story uses: the MCP server, seats,
-    # input, text input, captures, and the layout that places the story's window; the tests that
-    # run the examples and their environment; what builds Yuna and the shell.
-    paths:
-      - "crates/yuna/src/render.rs"
-      - "crates/yuna/src/output.rs"
-      - "crates/yuna/src/frames.rs"
-      - "crates/yuna/src/dmabuf.rs"
-      - "crates/yuna/src/clock.rs"
-      - "crates/yuna/src/compositor.rs"
-      - "crates/yuna/src/main.rs"
-      - "crates/yuna/src/state.rs"
-      - "crates/yuna/src/shell.rs"
-      - "crates/yuna/src/scale.rs"
-      - "crates/yuna/src/seats.rs"
-      - "crates/yuna/src/input.rs"
-      - "crates/yuna/src/text_input.rs"
-      - "crates/yuna/src/capture.rs"
-      - "crates/yuna/src/mcp/**"
-      - "crates/yuna/tests/applications.rs"
-      - "crates/yuna/Cargo.toml"
-      - "crates/yuna/src/lib.rs"
-      - "crates/yuna/src/stop_signal.rs"
-      - "Cargo.toml"
-      - "crates/yuna/tests/common/application_environment.rs"
-      - "crates/yuna-layout/**"
-      - "Cargo.lock"
-      - "flake.nix"
-      - "flake.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/slimeengine.yml"
+    # Every push to main runs it but one that changes only what its test can neither build nor
+    # read: documents, other workflows and scripts, the other tests and the examples. What is
+    # left out is named, so that a new file runs the job until someone says it cannot matter;
+    # scripts/test_workflows.py checks that nothing the test builds or reads is left out.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "changelog.d/**"
+      - "logo/**"
+      - "LICENSE"
+      - "deny.toml"
+      - ".gitignore"
+      - "scripts/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/docs.yml"
+      - "crates/yuna/examples/**"
+      - "crates/yuna/tests/headless/**"
+      - "crates/yuna/tests/fixtures/**"
+      - "crates/yuna/tests/command_line.rs"
+      - "crates/yuna/tests/mcp.rs"
   # Every Thursday at 06:43 UTC, apart from CI's Monday run. Off the hour, when GitHub delays
   # scheduled runs.
   schedule:

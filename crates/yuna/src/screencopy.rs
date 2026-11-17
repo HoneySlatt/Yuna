@@ -16,6 +16,7 @@
 use std::time::Duration;
 
 use smithay::output::Output;
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm::Format;
 use smithay::utils::{Rectangle, Transform};
 use smithay::wayland::image_capture_source::{
@@ -33,6 +34,7 @@ use crate::capture::{Destination, Failure};
 use crate::output::to_i32;
 use crate::seats::seat_of_client;
 use crate::state::State;
+use smithay::reexports::wayland_server::backend::ClientId;
 
 /// The most capture sessions one client keeps; past it, a new one is stopped at once
 /// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)). A recorder or
@@ -45,7 +47,7 @@ pub const MAX_CAPTURE_SESSIONS: usize = 16;
 
 /// The `wl_shm` formats a client's buffer may have: those every compositor's `wl_shm` takes,
 /// and Yuna's offers alone, B, G, R, A in memory; the renderer's R, G, B, A are swapped into it.
-const FORMATS: [Format; 2] = [Format::Argb8888, Format::Xrgb8888];
+pub(crate) const FORMATS: [Format; 2] = [Format::Argb8888, Format::Xrgb8888];
 
 /// The three protocol states, kept by [`State`].
 pub(crate) struct ScreencopyState {
@@ -117,40 +119,7 @@ impl State {
         drawn_frames: u64,
     ) {
         let ClientFrame { frame, session } = frame;
-        let written = with_buffer_contents_mut(&frame.buffer(), |memory, length, data| {
-            let row = width as usize * 4;
-            let (offset, stride) = (data.offset.max(0) as usize, data.stride.max(0) as usize);
-            let fits = data.width as u32 >= width
-                && data.height as u32 >= height
-                && stride >= row
-                && offset + stride * (height as usize).saturating_sub(1) + row <= length;
-            if !fits || !FORMATS.contains(&data.format) {
-                return false;
-            }
-            let mut converted = vec![0u8; row];
-            for (y, source) in pixels.chunks_exact(row).take(height as usize).enumerate() {
-                converted.copy_from_slice(source);
-                converted
-                    .as_chunks_mut::<4>()
-                    .0
-                    .iter_mut()
-                    .for_each(|p| p.swap(0, 2));
-                // SAFETY: Smithay gives `memory` as the client's pool, `length` bytes long, mapped
-                // while this closure runs, and turns a SIGBUS while it is written into an error;
-                // the row written, `row` bytes at `offset + y × stride`, lies within it, checked
-                // above. No reference into the pool is made, so a client writing it meanwhile
-                // spoils only its own buffer.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        converted.as_ptr(),
-                        memory.add(offset + y * stride),
-                        row,
-                    );
-                }
-            }
-            true
-        });
-        if !matches!(written, Ok(true)) {
+        if !copy_into_shm(&frame.buffer(), pixels, (width, height)) {
             frame.fail(CaptureFailureReason::BufferConstraints);
             return;
         }
@@ -174,6 +143,78 @@ impl State {
         self.screencopy
             .sessions
             .retain(|(_, output, _)| *output != id);
+    }
+}
+
+/// Copies `pixels`, R, G, B, A rows of `width` × `height`, into the client's `wl_shm` `buffer`,
+/// in its format, one of [`FORMATS`]; false, with nothing written, when the buffer is not
+/// `wl_shm`, is smaller, has another format, or its pool no longer holds it.
+pub(crate) fn copy_into_shm(buffer: &WlBuffer, pixels: &[u8], (width, height): (u32, u32)) -> bool {
+    let written = with_buffer_contents_mut(buffer, |memory, length, data| {
+        let row = width as usize * 4;
+        let (offset, stride) = (data.offset.max(0) as usize, data.stride.max(0) as usize);
+        let fits = data.width as u32 >= width
+            && data.height as u32 >= height
+            && stride >= row
+            && offset + stride * (height as usize).saturating_sub(1) + row <= length;
+        if !fits || !FORMATS.contains(&data.format) {
+            return false;
+        }
+        let mut converted = vec![0u8; row];
+        for (y, source) in pixels.chunks_exact(row).take(height as usize).enumerate() {
+            converted.copy_from_slice(source);
+            converted
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .for_each(|p| p.swap(0, 2));
+            // SAFETY: Smithay gives `memory` as the client's pool, `length` bytes long, mapped
+            // while this closure runs, and turns a SIGBUS while it is written into an error;
+            // the row written, `row` bytes at `offset + y × stride`, lies within it, checked
+            // above. No reference into the pool is made, so a client writing it meanwhile
+            // spoils only its own buffer.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    converted.as_ptr(),
+                    memory.add(offset + y * stride),
+                    row,
+                );
+            }
+        }
+        true
+    });
+    matches!(written, Ok(true))
+}
+
+impl State {
+    /// Whether `client` may hold one more capture: an `ext-image-copy-capture-v1` session or a
+    /// `wlr-screencopy` frame waiting, counted together, within
+    /// [`MAX_CAPTURE_SESSIONS_PER_CLIENT`] for it and [`MAX_CAPTURE_SESSIONS`] for all clients.
+    pub(crate) fn may_hold_another_capture(&self, client: &ClientId) -> bool {
+        let sessions = self
+            .screencopy
+            .sessions
+            .iter()
+            .map(|(session, _, _)| session.client());
+        let wlr_frames =
+            self.pending_captures
+                .iter()
+                .filter_map(|pending| match &pending.destination {
+                    Destination::Wlr(frame) => Some(frame.client()),
+                    _ => None,
+                });
+        let mut all = 0;
+        let mut of_client = 0;
+        for owner in sessions
+            .map(|owner| owner.map(|owner| owner.id()))
+            .chain(wlr_frames)
+        {
+            all += 1;
+            if owner.as_ref() == Some(client) {
+                of_client += 1;
+            }
+        }
+        of_client < MAX_CAPTURE_SESSIONS_PER_CLIENT && all < MAX_CAPTURE_SESSIONS
     }
 }
 
@@ -230,15 +271,7 @@ impl ImageCopyCaptureHandler for State {
             );
             return;
         }
-        let kept = self
-            .screencopy
-            .sessions
-            .iter()
-            .filter(|(s, _, _)| s.client().is_some_and(|c| c.id() == client.id()))
-            .count();
-        if kept >= MAX_CAPTURE_SESSIONS_PER_CLIENT
-            || self.screencopy.sessions.len() >= MAX_CAPTURE_SESSIONS
-        {
+        if !self.may_hold_another_capture(&client.id()) {
             tracing::debug!(
                 seat = seat.0,
                 "a capture session past the bounds is stopped"
