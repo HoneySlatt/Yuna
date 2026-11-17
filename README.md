@@ -32,6 +32,12 @@ nix develop -c cargo run -- --headless    # prints WAYLAND_DISPLAY=<socket>; Ctr
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) gives the detail.
 
+## Contributing
+
+Issues are welcome: bugs, protocols an application needs, ideas. Pull requests are taken from
+0.1 on, as [`CONTRIBUTING.md`](CONTRIBUTING.md#from-outside-the-project) says
+([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md)).
+
 ## Read next
 
 - [`docs/ROADMAP.md`](docs/ROADMAP.md): what Yuna is, its quality bar and its stages.

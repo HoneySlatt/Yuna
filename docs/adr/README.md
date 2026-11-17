@@ -104,3 +104,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074 |
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Accepted; supersedes in part 0073 |
+| [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |

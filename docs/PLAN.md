@@ -22,8 +22,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   on the owner's go.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it (ROADMAP).
 - An [audit of the architecture](audits/2026-11-17-architecture.md) on 2026-11-17: ADR-0078 to
-  ADR-0084 decided, Stage 2 now in three gated parts; one decision left, D8, put to the owner
-  before M1.12.
+  ADR-0085 decided: Stage 2 in three gated parts, outside pull requests from 0.1.
 
 ## Status
 
@@ -182,7 +181,8 @@ milestone first needs it.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
   `v0.1.0` on the owner's go. For contributors: the X11 manager and the MCP server split into
   smaller modules; a README that says what to read for each part; `SECURITY.md`; issue and pull
-  request templates holding the definition of done; a newcomer test, an agent new to Yuna making a
+  request templates holding the definition of done and
+  [ADR-0085](adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md)'s process; a newcomer test, an agent new to Yuna making a
   small change, its stumbles fixed; the chains of ADRs that amend one another (ADR-0001 to
   ADR-0070) consolidated, one ADR read for each topic.
 

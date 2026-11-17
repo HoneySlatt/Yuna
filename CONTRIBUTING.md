@@ -305,6 +305,25 @@ Until 1.0 a contract may change, never silently: a change that breaks a consumer
 `changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
 instead; an addition, an `added-…` one. The logs' text and the library's API are not contracts.
 
+## From outside the project
+
+([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md))
+
+- **Issues** are welcome now: bugs, with the steps and the test data that show them; protocols an
+  application needs; ideas.
+- **Pull requests** are taken from 0.1 on. Open an issue first for a change that touches an ADR,
+  a [contract](#contracts) or a dependency.
+- A pull request passes `scripts/check.sh` and meets the definition of done in
+  [`AGENTS.md`](AGENTS.md#definition-of-done): its tests and its documents come with it.
+- A reviewing agent prepares the review; the owner decides.
+- An ADR you propose is numbered `NNNN`; it takes its number when merged.
+- Pull requests are squashed. The commit's message is written as the repository's are, and holds
+  no AI attribution; you stay its author.
+- While Stage 2a replaces the core ([ROADMAP](docs/ROADMAP.md)), the code it is replacing takes
+  fixes only.
+- Your contribution comes under GPL-3.0-or-later, as the rest of Yuna; there is no licence
+  agreement to sign.
+
 ## Making a change
 
 1. Pick the current milestone in [`docs/PLAN.md`](docs/PLAN.md).

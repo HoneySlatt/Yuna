@@ -94,7 +94,8 @@ Severity first, then urgency; each with where it is followed.
     the detail in each module's documentation.
 11. **The outside contributor's path**: no process for a pull request from outside, no
     `SECURITY.md` (planned at M1.12), dependencies "asked of the owner", ADR numbers reserved by
-    hand between sessions. Open decision D8: whether outside contributions are taken before 0.1.
+    hand between sessions. Decided:
+   [ADR-0085](../adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md).
 
 ## Scenarios
 
@@ -117,7 +118,7 @@ a program may reach another seat's socket (ADR-0078).
 
 ## Decisions
 
-Taken by the owner on 2026-11-17:
+Taken by the owner on 2026-11-17, in this order:
 
 - [ADR-0078](../adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md): several seats
   in one Yuna frozen; M1.11 measures N Yunas against N seats; Stage 2's core decides.
@@ -134,12 +135,11 @@ Taken by the owner on 2026-11-17:
   `wl_shm` buffer kept until its next, so that a GPU reset loses no window's content.
 - [ADR-0084](../adr/0084-uwui-hosted-on-its-own-task-commands-and-images.md): uwui on its own
   task, commands and images, Yuna compositing the last image done; its accessibility tree out.
+- [ADR-0085](../adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md): issues
+  welcome now, pull requests from 0.1 under a light process, no licence agreement.
 
-Open, in order, each put to the owner one at a time:
-
-| | Decision | Due before |
-|---|---|---|
-| D8 | Outside contributions before 0.1, and how they are reviewed | M1.12 |
+Each was put to the owner one at a time, and none is left open. uwui's side of ADR-0084 is asked
+in [uwui's issue 3](https://github.com/HoneySlatt/uwui/issues/3).
 
 ## Fixed during the audit
 
