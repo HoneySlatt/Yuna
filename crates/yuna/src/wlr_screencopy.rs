@@ -42,7 +42,7 @@ use smithay::wayland::shm::with_buffer_contents;
 use yuna_layout::OutputId;
 use yuna_layout::geometry::Rect;
 
-use crate::capture::{Destination, Failure, physical_area};
+use crate::capture::{Destination, physical_area};
 use crate::screencopy::{FORMATS, copy_into_shm};
 use crate::seats::seat_of_client;
 use crate::state::State;
@@ -113,7 +113,7 @@ impl WlrFrame {
     }
 
     /// Tells the client its frame failed, however it failed: the protocol has one event.
-    pub(crate) fn fail(self, _failure: Failure) {
+    pub(crate) fn fail(self) {
         self.frame.failed();
     }
 }

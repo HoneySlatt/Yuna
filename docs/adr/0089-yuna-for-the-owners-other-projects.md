@@ -53,7 +53,7 @@ The owner chose, on 2026-11-17, one decision at a time:
   libglvnd, llvmpipe without `--gpu`, the GPU's driver with it, and to find Xwayland, so that it
   runs the same on NixOS, on another distribution with Nix, and in a consumer's CI on Ubuntu,
   drawing what Yuna's own tests draw. It costs about 1.4 GB to fetch once a revision of nixpkgs,
-  Mesa 1.0 GB of it. The desktop's session takes the system's drivers through the NixOS module
+  Mesa's 1.1 GB of it. The desktop's session takes the system's drivers through the NixOS module
   at Stage 2.
 - **The consumers are flake inputs, pinned by revision.** uwui and Pluto are `flake = false`
   inputs of Yuna's flake, their revision in the URL, given to the development shell by a
@@ -76,8 +76,9 @@ keys switch its seat's keyboard to the device's keymap, and Yuna's own keys swit
 - **The system's drivers in the package**: a light package, the desktop's form, but it does
   not start where no driver is installed, a CI on Ubuntu among them, and draws differently from
   one machine to the next. **Both outputs**: two to keep and test, one unused before Stage 2.
-- **A clone of each consumer inside the test**: a lighter shell, but the test needs the network,
-  and without it would fail or be skipped. **The consumers built by Nix**: the most
+- **A clone of each consumer inside the test**: a lighter shell, but the test needs the network
+  at every new revision, and without it would fail or be skipped; the flake inputs need it once,
+  with the shell, and `pluto-input`'s crates once, from crates.io, as Yuna's own. **The consumers built by Nix**: the most
   reproducible, but Nix would fetch the 597 crates of Pluto's lock to build six.
 
 ## Consequences
@@ -95,7 +96,8 @@ keys switch its seat's keyboard to the device's keymap, and Yuna's own keys swit
 
 ## Validation and reconsideration
 
-Checked by the tests that run uwui's `measure.py --display` and Pluto's `pluto-input` against
+Checked by the tests that run uwui's `measure.py --display` and Pluto's bench's driver,
+`pluto-input`, against
 `yuna --headless --agent-seat` (`crates/yuna/tests/consumers.rs`), by the stories of virtual
 input (`tests/headless/virtual_input.rs`) and of wlr-screencopy (`tests/headless/wlr_screencopy.rs`),
 and by CI's build of the package. Proposed again when uwui leaves wlr-screencopy, when Stage 2's

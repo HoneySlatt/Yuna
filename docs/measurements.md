@@ -28,7 +28,7 @@ before each, no game, the GPU at 0 %; another session's `cargo test` was started
   clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)). wlroots' headless output, sway's,
   draws whole milliseconds after each commit, 4 ms at 240 Hz, so about 244 frames a second
   ([survey](survey.md#the-rivals-measured)), which uwui's measurements record as 243 Hz.
-- The compositor's CPU includes the copies `measure.py` asks, one a frame of the whole 4K output;
+- The compositor's CPU includes the copies `measure.py` asks, one a frame, of a single pixel;
   its share is close in both. The GPU figures are the card's whole, a few percent either way.
 - Not measured: a program at its own rate below the output's, a pointer in motion, Xwayland's
   programs; the figures of one machine.

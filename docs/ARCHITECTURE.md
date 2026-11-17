@@ -844,7 +844,9 @@ pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's
    reach that seat; one made for another seat's `wl_seat` does nothing, and a client keeps 8
    that act (`MAX_VIRTUAL_DEVICES_PER_CLIENT`). Its events take the paths of points 1 to 3. A
    virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it,
-   its clients told, and back to the seat's own before Yuna's keys. An absolute motion is a
+   its clients told, and back to the seat's own before Yuna's keys; one that sent `no_keymap`
+   uses the seat's own. The modifiers a keyboard set through its `modifiers` request are
+   released when it goes; the seat's keyboard keeps one state for all its devices. An absolute motion is a
    fraction of the seat's outputs together, or of the output the device names; a relative one
    moves from where the pointer is, or from the seat's first output's corner before it ever
    moved, and stops at the closest point of the seat's outputs, as wlroots' cursor does.
@@ -1281,9 +1283,10 @@ own thread, both `took_us`.
   --headless --agent-seat`, at the revisions `flake.nix` pins
   ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)): Pluto's `pluto-input`, built from
   Pluto's lock, clicks and types into a window of the test's, which gets each event; uwui's
-  `measure.py --display` moves and clicks with its virtual pointer and counts `vkcube`'s frames
-  through `wlr-screencopy`. Its check that no game runs answers none, and `sway` and
-  `swaymsg`, which `--display` never runs, are stubs that fail.
+  `measure.py --display` runs its steps to the end, its virtual pointer moving and clicking
+  without an error, and counts `vkcube`'s frames through `wlr-screencopy`. Its check that no
+  game runs answers none, and `sway` and `swaymsg`, which `--display` never runs, are stubs that
+  fail and leave a mark the test checks is absent.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,

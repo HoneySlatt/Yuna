@@ -153,8 +153,8 @@ milestone first needs it.
 - **Result.** Done on 2026-11-17 ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)):
   `yuna --headless --agent-seat`; the virtual keyboard and pointer on agents' seats, never the
   owner's; `wlr-screencopy` v3; a Nix package with its own Mesa, built and started in CI. uwui's
-  `measure.py` and Pluto's `pluto-input`, pinned in `flake.nix`, drive a program in it in
-  `check.sh` ([consumers](../crates/yuna/tests/consumers.rs)). [`protocols.md`](protocols.md)
+  `measure.py` and Pluto's bench's driver, `pluto-input`, pinned in `flake.nix`, drive a program
+  in it in `check.sh`; sway's IPC, which the rest of Pluto's bench reads, has no equivalent ([consumers](../crates/yuna/tests/consumers.rs)). [`protocols.md`](protocols.md)
   and its test, [`client-needs.md`](client-needs.md) complete, `--help` and `tools/list` held by
   tests, `scripts/test-check.sh`. The audit's three debts paid.
   Measured by uwui's `measure.py`, `vkcube` on the GPU at 4K and 240 Hz: Yuna presents 240.0

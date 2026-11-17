@@ -113,6 +113,10 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - Smithay `8fd9fe0` departs from `wl_data_device` twice: an offer stays readable after its client
   loses the focus, and a device created after its client got the focus is told the selection
   only at the next change. Both are Smithay's; neither leaks across seats.
+- The bound on a failing renderer's log is tested on `FailedDrawings` alone: no test makes a
+  drawing fail (`frames.rs`, `State::draw`), which needs a renderer a test can break.
+- On the manual clock, removed outputs' and closed seats' globals wait until the clock is
+  stepped 10 s; a test that makes and removes many and never steps keeps them all, disabled.
 - A client's capture whose copy fails logs a warning each time (`capture.rs`), at most one a
   refresh for each of the 16 capture sessions: a copy that keeps failing while drawing works
   writes one a frame. A failed drawing fails its captures without a copy, so a lost renderer
@@ -287,6 +291,9 @@ with games' VRR:
 - A virtual keyboard with its own keymap switches its seat's keyboard to it at each of its keys,
   and Yuna's own keys switch it back: an agent's `keyboard` tool and a virtual keyboard used in
   turn send a keymap to the focused client at each change.
+- A seat's keyboard has one state for all its devices: a virtual keyboard's Caps Lock makes
+  Yuna's own keys capitals while it lives, where wlroots keeps a state for each keyboard. Its
+  modifiers are released when it goes. Stage 2's input chain decides the state per device.
 - `scripts/test-check.sh` runs by hand, after a change of `check.sh` or before a release, not in
   CI: it takes about as long as the check twice.
 - Most rows of [`protocols.md`](protocols.md) not yet offered say `Not decided`; Stage 2's

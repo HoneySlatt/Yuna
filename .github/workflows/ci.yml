@@ -59,7 +59,8 @@ jobs:
           env -i XDG_RUNTIME_DIR="$runtime" result/bin/yuna --headless --agent-seat \
             --output 1280x720@60,1 > "$runtime/out" &
           pid=$!
-          for _ in $(seq 100); do grep -q '^WAYLAND_DISPLAY=' "$runtime/out" && break; sleep 0.1; done
+          for _ in $(seq 100); do grep -q '^XAUTHORITY=' "$runtime/out" && break; sleep 0.1; done
           grep '^WAYLAND_DISPLAY=' "$runtime/out"
+          grep '^DISPLAY=' "$runtime/out"
           kill -TERM "$pid"
           wait "$pid"

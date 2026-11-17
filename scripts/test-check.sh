@@ -22,6 +22,15 @@ export CARGO_TARGET_DIR="$root/target/test-check"
 
 failures=()
 
+# Every step check.sh knows is in one of its lists: a step left out of them would no longer run
+# with the whole check, in CI, though `only` still runs it.
+known=$(sed -n 's/^    \([a-z-]*\)) check_.*/\1/p' "$root/scripts/check.sh" | sort)
+listed=$(sed -n 's/^[A-Z]*_STEPS=(\(.*\))$/\1/p' "$root/scripts/check.sh" | tr ' ' '\n' | sort)
+if [ -z "$known" ] || [ "$known" != "$listed" ]; then
+    echo "NOT RUN: check.sh's steps and the lists its whole run takes differ"
+    failures+=("a step outside check.sh's lists")
+fi
+
 # expect_stopped <step> <what is broken> <a pattern its failure prints> <command that breaks the
 # clone>: the step must fail, and for this reason, its output holding the pattern (grep -E), so
 # that a step failing for another, a network down for instance, is not taken for a stop.

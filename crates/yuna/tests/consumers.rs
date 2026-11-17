@@ -5,9 +5,11 @@
 //!
 //! - Pluto's `pluto-input`, its bench's virtual keyboard and pointer, built from Pluto's own
 //!   lock, clicks and types into a window, which gets each event;
-//! - uwui's `scripts/measure.py --display`, its measure of an application from outside, moves and
-//!   clicks with `scripts/wayland.py`'s virtual pointer and counts `vkcube`'s frames through
-//!   `wlr-screencopy`.
+//! - uwui's `scripts/measure.py --display`, its measure of an application from outside, runs its
+//!   steps to the end against Yuna: `scripts/wayland.py`'s virtual pointer is made and moves and
+//!   clicks without an error, and `vkcube`'s frames are counted through `wlr-screencopy`'s
+//!   copies with damage. That its clicks land is shown by Pluto's test and by the stories of
+//!   `tests/headless/virtual_input.rs`, which take the same path.
 //!
 //! The window that records what it gets is a client of this test, on a thread of its own. Two
 //! things stand between `measure.py` and Yuna, neither in its measure: it refuses to start while
@@ -346,7 +348,7 @@ fn build_pluto_input() -> PathBuf {
 /// it, as it does in a headless sway: the window gets the press and the release of the button,
 /// then `h`, `i` and Return, pressed in that order.
 #[test]
-fn plutos_bench_drives_a_window_in_yuna() {
+fn plutos_bench_driver_drives_a_window_in_yuna() {
     let pluto_input = build_pluto_input();
     let yuna = Yuna::start("pluto");
     let (got, shown) = Window::open(&yuna);
@@ -423,20 +425,26 @@ fn plutos_bench_drives_a_window_in_yuna() {
     let _ = driver.wait();
 }
 
-/// Writes `name` into `folder`, an executable that says it is not run under `--display`.
+/// Writes `name` into `folder`, an executable that fails and leaves the file `<name>.ran` there
+/// if it is ever run, which `--display` must not do.
 fn stub(folder: &Path, name: &str) {
     let path = folder.join(name);
+    let mark = folder.join(format!("{name}.ran"));
     fs::write(
         &path,
-        format!("#!/bin/sh\necho \"{name} is not run by measure.py --display\" >&2\nexit 1\n"),
+        format!(
+            "#!/bin/sh\n: > '{}'\necho \"{name} is not run by measure.py --display\" >&2\nexit 1\n",
+            mark.display()
+        ),
     )
     .expect("the stub is written");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("the stub runs");
 }
 
 /// uwui's `measure.py --display` measures `vkcube` in Yuna as on the session's own display:
-/// `wayland.py`'s virtual pointer moves and clicks, its copies with damage count the frames
-/// `vkcube` draws, and it reads the window's processes and memory. The figures are not kept:
+/// `wayland.py`'s virtual pointer moves and clicks without an error, its copies with damage
+/// count the frames `vkcube` draws, and it reads the window's processes and memory; `sway` and
+/// `swaymsg` are never run. The figures are not kept:
 /// llvmpipe and a debug build measure nothing of Yuna's.
 #[test]
 fn uwuis_measure_drives_and_counts_frames_in_yuna() {
@@ -504,7 +512,12 @@ fn uwuis_measure_drives_and_counts_frames_in_yuna() {
     )
     .expect("the results are JSON");
     let steps = &results["steps"];
-    assert_eq!(steps["window"], "1888x1048+16+16", "{results}");
+    for tool in ["sway", "swaymsg"] {
+        assert!(
+            !stubs.join(format!("{tool}.ran")).exists(),
+            "measure.py --display ran {tool}"
+        );
+    }
     let frames = steps["draw"]["frames"].as_u64().unwrap_or(0);
     assert!(
         frames >= 10,

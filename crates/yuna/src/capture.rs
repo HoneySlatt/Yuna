@@ -680,7 +680,7 @@ impl State {
                         }
                         Err(error) => {
                             tracing::warn!(%error, output = id.0, "a client's capture failed");
-                            frame.fail(Failure::ForNow);
+                            frame.fail();
                         }
                     }
                 }
@@ -769,7 +769,7 @@ fn fail(
     match destination {
         Destination::Agent { ticket, .. } => captured.push((ticket, Err(why.to_owned()))),
         Destination::Client(frame) => frame.fail(failure),
-        Destination::Wlr(frame) => frame.fail(failure),
+        Destination::Wlr(frame) => frame.fail(),
     }
 }
 

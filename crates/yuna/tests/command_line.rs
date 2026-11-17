@@ -59,13 +59,18 @@ fn a_bad_output_is_a_usage_error() {
 
 #[test]
 fn headless_without_a_runtime_folder_is_refused_clearly() {
-    let output = Command::new(env!("CARGO_BIN_EXE_yuna"))
-        .arg("--headless")
-        .env_remove("XDG_RUNTIME_DIR")
-        .output()
-        .expect("the yuna binary runs");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("XDG_RUNTIME_DIR is not set"));
+    for arguments in [&["--headless"][..], &["--headless", "--agent-seat"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_yuna"))
+            .args(arguments)
+            .env_remove("XDG_RUNTIME_DIR")
+            .output()
+            .expect("the yuna binary runs");
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("XDG_RUNTIME_DIR is not set"),
+            "{arguments:?}"
+        );
+    }
 }
 
 /// A `yuna --headless` process, killed if the test fails before it stops.
