@@ -308,6 +308,11 @@ Until 1.0 a contract may change, never silently: a change that breaks a consumer
 `changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
 instead; an addition, an `added-…` one. The logs' text and the library's API are not contracts.
 
+[`crates/yuna/tests/contracts.rs`](crates/yuna/tests/contracts.rs) holds `yuna --help` and the MCP
+server's `tools/list` as files in `crates/yuna/tests/contracts/`: a change to either fails it until
+the file is rewritten, `YUNA_WRITE_CONTRACTS=1 cargo test -p yuna --test contracts`, and the
+rewrite shows in the diff beside its fragment.
+
 ## From outside the project
 
 ([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md))

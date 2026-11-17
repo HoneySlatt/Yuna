@@ -1,0 +1,45 @@
+Yuna, a Wayland compositor for Linux.
+
+Usage: yuna --headless [--gpu] [--animations | --reduced-motion] [--output MODE]...
+       yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
+       yuna -h | --help
+       yuna -V | --version
+
+Without an argument, Yuna would start the desktop session, which does not exist yet.
+
+Commands:
+  mcp                An MCP server on standard input and output: a headless Yuna of its own,
+                     whose tools create seats, each with its own outputs, Wayland socket,
+                     X display, pointer and keyboard, start programs on them, list
+                     windows, give input, and read the clock. Logs to standard error;
+                     stops when its input closes, or on SIGTERM or SIGINT, and ends its
+                     programs then.
+
+Options:
+      --headless     Run without a screen, on virtual outputs drawn offscreen. Prints
+                     WAYLAND_DISPLAY=<socket> on standard output, then, when Xwayland is
+                     found, DISPLAY=:<number> and XAUTHORITY=<file> for X11 programs; logs
+                     to standard error, and stops on SIGTERM or SIGINT.
+      --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
+      --animations   Move windows, the view and workspaces on springs, and fade the special
+                     workspace, rather than show each change at once, as without it.
+      --reduced-motion
+                     Animations under reduced motion: nothing slides, each change shows at
+                     once, and the special workspace's fade is kept, shorter.
+      --output MODE  Add a virtual output. MODE is WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]:
+                     WIDTHxHEIGHT physical pixels, refreshed RATE times a second, at SCALE
+                     physical pixels per logical unit; with vrr=MIN, under VRR from MIN to
+                     RATE Hz, RATE at least twice MIN; with hdr, announcing the HDR colours
+                     of the owner's monitor, a PG32UCDM. Outputs are laid out left to right.
+                     Default: one output, 3840x2160@240,1.5. With mcp, given once at most:
+                     the mode of each new seat's output.
+      --manual-clock With mcp: time moves only when the clock tool advances it, never past
+                     real time.
+  -h, --help         Print this help
+  -V, --version      Print the version
+
+Environment:
+  XDG_RUNTIME_DIR    The folder the Wayland socket is created in; required.
+  PATH               Where Xwayland is looked for: the first X11 program to connect to a
+                     seat's display starts it. Without it, X11 programs get no display.
+  YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.

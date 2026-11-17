@@ -1,0 +1,469 @@
+[
+  {
+    "description": "Create a seat of your own, list the seats, or close one. A seat has its own pointer, keyboard, focus and clipboard, its own outputs and workspaces, and its own Wayland socket, which the programs it starts use; no input, focus or clipboard of one seat reaches another. Create one first: every other tool but clock takes its handle. Closing it releases what it holds, disconnects its windows, ends its programs (SIGTERM, then SIGKILL 2 s later) and removes its outputs; it answers once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "create",
+            "list",
+            "close"
+          ],
+          "type": "string"
+        },
+        "hdr": {
+          "description": "create: true announces the HDR colours of the owner's monitor, a PG32UCDM; false, SDR; by default as the server's default output",
+          "type": "boolean"
+        },
+        "height": {
+          "description": "create: physical pixels; default 2160",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rate": {
+          "description": "create: refreshes a second; default 240",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "number"
+        },
+        "scale": {
+          "description": "create: physical pixels per logical unit; default 1.5",
+          "maximum": 8,
+          "minimum": 0.25,
+          "type": "number"
+        },
+        "seat": {
+          "description": "close: its handle",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "vrr_min": {
+          "description": "create: run under VRR, from this many refreshes a second up to rate, which must be at least twice it; by default a fixed rate, or the server's default output's range when rate is left out too",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "number"
+        },
+        "width": {
+          "description": "create: its output's physical pixels; default 3840",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "seat",
+    "title": "Seats"
+  },
+  {
+    "description": "List, create or remove a seat's virtual outputs: screens no monitor shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's focused output. Coordinates are logical: physical pixels divided by the scale. A seat keeps one output at least. list gives each output's VRR range in Hz and the monitor whose HDR colours it announces, each null when it has none.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "create",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "hdr": {
+          "description": "create: true announces the HDR colours of the owner's monitor, a PG32UCDM; false, SDR; by default as the server's default output",
+          "type": "boolean"
+        },
+        "height": {
+          "description": "create: physical pixels; default 2160",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "output": {
+          "description": "remove: the output's id",
+          "type": "integer"
+        },
+        "rate": {
+          "description": "create: refreshes a second; default 240",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "number"
+        },
+        "scale": {
+          "description": "create: physical pixels per logical unit; default 1.5",
+          "maximum": 8,
+          "minimum": 0.25,
+          "type": "number"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "vrr_min": {
+          "description": "create: run under VRR, from this many refreshes a second up to rate, which must be at least twice it; by default a fixed rate, or the server's default output's range when rate is left out too",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "number"
+        },
+        "width": {
+          "description": "create: physical pixels; default 3840",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "outputs",
+    "title": "Virtual outputs"
+  },
+  {
+    "description": "List a seat's workspaces by output, with their windows; create or remove a named one; show one; or move a window to one, created if needed. A removed workspace keeps its windows, unnamed.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "create",
+            "remove",
+            "focus",
+            "move_window"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "create, remove, focus: the workspace's name",
+          "minLength": 1,
+          "type": "string"
+        },
+        "output": {
+          "description": "create: the output it lives on; the focused one by default",
+          "type": "integer"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "window": {
+          "description": "move_window: the window's id",
+          "type": "integer"
+        },
+        "workspace": {
+          "description": "move_window: the workspace's name",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "workspaces",
+    "title": "Workspaces"
+  },
+  {
+    "description": "Start a program on a seat, list a seat's programs, or stop one. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log file of its output and errors, whose path the result gives; its windows open on its seat. Logs go when the seat closes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "start",
+            "list",
+            "stop"
+          ],
+          "type": "string"
+        },
+        "command": {
+          "description": "start: the program, found in PATH, and its arguments",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "cwd": {
+          "description": "start: its working folder",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "start: variables added to its environment",
+          "type": "object"
+        },
+        "force": {
+          "description": "stop: SIGKILL rather than SIGTERM",
+          "type": "boolean"
+        },
+        "program": {
+          "description": "stop: the program's id",
+          "type": "integer"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "spawn",
+    "title": "Programs"
+  },
+  {
+    "description": "List a seat's windows, in the order they opened: id, seat, shell (xdg for a Wayland program's window, x11 for an X11 program's), application id (an X11 window's WM_CLASS class; null when its client gave none), title, process id, output, workspace (null for an unnamed one), rect: the logical rectangle it is drawn at now, or where its output's last frame drew it when that frame was sampled later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests once its motion ends (null when hidden), motion_ends_ns: when its output's motion ends, on the clock's scale (null at rest), focus, floating, fullscreen, unresponsive: an X11 window asked to close that left its ping unanswered 5 s. With neither --animations nor --reduced-motion, rect is place and motion_ends_ns null. With colour, each window also gives colours: one entry for each of its surfaces that declared its colours through color-management-v1, its own, then its subsurfaces' and its popups': the surface's role, transfer function, primaries (a protocol name, else their chromaticities), luminances in cd/m², target primaries and luminance, max_cll, max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches the filters, when none does yet.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "description": "only this application id",
+          "type": "string"
+        },
+        "colour": {
+          "description": "also give the colours each window's surfaces declared; false by default",
+          "type": "boolean"
+        },
+        "pid": {
+          "description": "only this client process",
+          "type": "integer"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "wait_ms": {
+          "description": "how long to wait for a match; 0 by default",
+          "maximum": 50000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "windows",
+    "title": "Windows"
+  },
+  {
+    "description": "Capture what one of a seat's outputs shows, as a PNG image of its newest frame: the one being drawn when a change is on its way, else the last one drawn. All of the output, its first by default, a region of it, or a window: what the output shows where the window is, what covers it included; a hidden window is refused. By default at the logical size, where a pixel is a logical unit, the units pointer takes; size physical gives every physical pixel. The result tells how the image maps to its output, logical = x + pixel × units_per_pixel, and gives a capture id: pointer takes it, with x and y in that image's pixels. One capture of a seat at a time. It comes once the clock reaches the boundary its frame is presented at: on a manual clock, advance it.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "description": "the output; the seat's first by default",
+          "type": "integer"
+        },
+        "region": {
+          "additionalProperties": false,
+          "description": "a rectangle of the output, in whole logical units from its top-left corner",
+          "properties": {
+            "height": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "width": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "x": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "size": {
+          "description": "logical by default",
+          "enum": [
+            "logical",
+            "physical"
+          ],
+          "type": "string"
+        },
+        "window": {
+          "description": "a window's id, instead of an output or a region",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "capture",
+    "title": "Capture"
+  },
+  {
+    "description": "Move, press, release, click or scroll a seat's pointer, or read where it is. x and y are logical units from the top-left corner of one of the seat's outputs, its first by default, which are a whole output's capture's pixels at the logical size; with capture, they are pixels of that capture's image, which Yuna maps to its output. press, release, click and scroll move first when x and y are given. A press focuses the window under it. Drag in several calls: press, move, release. The result tells where the pointer is, in the output's logical units whatever x and y were given in, the window under it and the position on its surface, and the cursor its client last asked for, before it handled this call's input.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "move",
+            "press",
+            "release",
+            "click",
+            "scroll"
+          ],
+          "type": "string"
+        },
+        "button": {
+          "description": "press, release, click: left by default",
+          "enum": [
+            "left",
+            "right",
+            "middle",
+            "back",
+            "forward"
+          ],
+          "type": "string"
+        },
+        "capture": {
+          "description": "a capture's id, among the seat's last 16: x and y are pixels of its image, instead of an output's units",
+          "type": "integer"
+        },
+        "dx": {
+          "description": "scroll: wheel steps, right positive",
+          "type": "number"
+        },
+        "dy": {
+          "description": "scroll: wheel steps, down positive",
+          "type": "number"
+        },
+        "output": {
+          "description": "the output x and y are on",
+          "type": "integer"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "pointer",
+    "title": "Pointer"
+  },
+  {
+    "description": "Press, release or tap keys on a seat's keyboard, type text, or show text being composed, to the window its keyboard is on, or read where it is. Keys are named as XKB names them: Return, a, F5, BackSpace, Left. tap takes keys joined by +, the last pressed while the others are held: ctrl+shift+t; ctrl, shift, alt, super and altgr name modifiers. type types text through the seat's us layout, any character included: one outside it is committed to the text field there when it speaks text-input-v3. preedit shows text being composed in that text field, as an input method does, until the next type replaces it; empty text clears it. The result tells the window the keyboard is on and whether a text field is enabled there. A click focuses a window; the keyboard follows it at the output's next refresh.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "press",
+            "release",
+            "tap",
+            "type",
+            "preedit"
+          ],
+          "type": "string"
+        },
+        "key": {
+          "description": "press, release: the key's name",
+          "minLength": 1,
+          "type": "string"
+        },
+        "keys": {
+          "description": "tap: keys joined by +",
+          "minLength": 1,
+          "type": "string"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "text": {
+          "description": "type: the text; preedit: the text being composed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "keyboard",
+    "title": "Keyboard"
+  },
+  {
+    "description": "Read Yuna's clock, on CLOCK_MONOTONIC's scale, in nanoseconds; or advance it, when Yuna was started with --manual-clock, running every frame due on the way. It never moves past real time. It is the whole Yuna's.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "now",
+            "advance"
+          ],
+          "type": "string"
+        },
+        "by_ms": {
+          "description": "advance: milliseconds, instead of by_ns",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "by_ns": {
+          "description": "advance: nanoseconds",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "clock",
+    "title": "Clock"
+  }
+]
