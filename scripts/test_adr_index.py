@@ -1,6 +1,6 @@
 """Tests of scripts/adr-index.py, on Python's standard library alone: ADR numbers read in links and
-plainly, supersessions named on both sides from ADR-0071, malformed ADRs named, never a traceback,
-and an index written whole or not at all.
+plainly, supersessions, whole or in part, named on both sides from ADR-0071, malformed ADRs named,
+never a traceback, and an index written whole or not at all.
 
     python3 -I -m unittest discover -s scripts -p 'test_*.py'
 """
@@ -104,6 +104,32 @@ class Index(unittest.TestCase):
         problems = adr_index.run(self.directory, write=True)
         self.assertIn("README.md was left as it was", problems[-1])
         self.assertEqual(self.readme(), README)
+
+    def test_an_adr_superseded_in_part_stays_in_force_and_both_sides_name_it(self):
+        self.adr("0073", "Accepted; supersedes 0072; superseded in part by 0080 (its failures)")
+        self.adr("0072", "Superseded by 0073")
+        self.adr("0074", "Accepted")
+        self.adr("0080", "Accepted; supersedes in part 0073 (its failures) and 0074 (the keeper)")
+        problems = adr_index.run(self.directory, write=True)
+        # "supersedes in part" is not read as "supersedes": 0074 is still in force, and says nothing.
+        self.assertEqual(problems[:1], ["0074-adr-0074.md: its status does not say that 0080 supersedes in part it"])
+        self.adr("0074", "Accepted; superseded in part by 0080 (the keeper)")
+        self.assertEqual(adr_index.run(self.directory, write=True), [])
+        self.assertEqual(
+            self.rows(),
+            [
+                "| [0072](0072-adr-0072.md) | The decision 0072 | Superseded by 0073 |",
+                "| [0073](0073-adr-0073.md) | The decision 0073 | Accepted; supersedes 0072; superseded in part by 0080 |",
+                "| [0074](0074-adr-0074.md) | The decision 0074 | Accepted; superseded in part by 0080 |",
+                "| [0080](0080-adr-0080.md) | The decision 0080 | Accepted; supersedes in part 0073 and 0074 |",
+            ],
+        )
+        # The newer side forgetting it fails as well.
+        self.adr("0080", "Accepted; supersedes in part 0073")
+        self.assertEqual(
+            adr_index.run(self.directory, write=False)[:1],
+            ["0080-adr-0080.md: its status does not say that it supersedes in part 0074"],
+        )
 
     def test_a_status_naming_an_adr_that_does_not_exist_is_refused(self):
         self.adr("0072", "Accepted; amends 0099")

@@ -3,9 +3,10 @@
 
 Each ADR's title is its heading; its status in the index is read from the `Status` lines. A status
 names another ADR by a link, `[0071](0071-….md)`, or plainly, `0071` or `ADR-0071`; a date's year
-is never read as one. A relation between two ADRs, one superseding the other, or amending it in a
-project that wrote amendments before, counts when either one's status names it. The check refuses
-a status that names an ADR that does not exist, and a supersession that both sides do not name
+is never read as one. A relation between two ADRs, one superseding the other, whole or in part, or
+amending it in a project that wrote amendments before, counts when either one's status names it;
+an ADR superseded in part stays in force for the rest. The check refuses a status that names an
+ADR that does not exist, and a supersession, whole or in part, that both sides do not name
 (docs/adr/README.md). An ADR it cannot read, or whose heading or status is malformed, is an error
 that names its file. The index is written through a temporary file and a rename, and only when
 there is no problem: otherwise the README is left as it was.
@@ -32,8 +33,11 @@ LINK = re.compile(r"\[(?:ADR-)?(\d{4})\]\([^)]*\)")
 PLAIN = re.compile(r"(?<![\w⟦-])(?:ADR-)?(\d{4})(?![\w⟧-])")
 # A number of an ADR, once made a token.
 TOKEN = re.compile(r"⟦(\d{4})⟧")
-# The words that start a list of ADRs in a status, longest first: "amended by" before "amended".
+# The words that start a list of ADRs in a status, longest first: "supersedes in part" before
+# "supersedes", "amended by" before "amended".
 RELATION_WORDS = [
+    ("superseded in part by", "superseded_in_part_by"),
+    ("supersedes in part", "supersedes_in_part"),
     ("superseded by", "superseded_by"),
     ("supersedes", "supersedes"),
     ("amended by", "amended_by"),
@@ -41,13 +45,28 @@ RELATION_WORDS = [
     ("amended", "amended_by"),
     ("amends", "amends"),
 ]
-RELATIONS = ["superseded_by", "supersedes", "amends", "amended_by"]
+RELATIONS = [
+    "superseded_by",
+    "supersedes",
+    "superseded_in_part_by",
+    "supersedes_in_part",
+    "amends",
+    "amended_by",
+]
 OPPOSITE = {
     "amends": "amended_by",
     "amended_by": "amends",
     "supersedes": "superseded_by",
     "superseded_by": "supersedes",
+    "supersedes_in_part": "superseded_in_part_by",
+    "superseded_in_part_by": "supersedes_in_part",
 }
+# Each supersession that both sides must name: the older side's relation, the newer side's, and
+# the words a problem uses.
+SUPERSESSIONS = [
+    ("superseded_by", "supersedes", "supersedes"),
+    ("superseded_in_part_by", "supersedes_in_part", "supersedes in part"),
+]
 
 
 class Malformed(Exception):
@@ -127,7 +146,13 @@ def index_status(adr, relations):
         parts = [f"Superseded by {first}{rest}"]
     else:
         parts = [adr.state]
-    for relation, words in (("supersedes", "supersedes"), ("amends", "amends"), ("amended_by", "amended by")):
+    for relation, words in (
+        ("supersedes", "supersedes"),
+        ("supersedes_in_part", "supersedes in part"),
+        ("superseded_in_part_by", "superseded in part by"),
+        ("amends", "amends"),
+        ("amended_by", "amended by"),
+    ):
         if relations[relation]:
             parts.append(f"{words} {listed(relations[relation])}")
     return "; ".join(parts)
@@ -151,12 +176,13 @@ def relations_of(adrs, unreadable, problems):
     for number, own in relations.items():
         own["amends"] -= own["supersedes"]
         own["amended_by"] -= own["superseded_by"]
-        for newer in own["superseded_by"]:
-            if int(newer) >= BOTH_SIDES_FROM:
-                if newer not in known[number].named["superseded_by"]:
-                    problems.append(f"{known[number].file}: its status does not say that {newer} supersedes it")
-                if number not in known[newer].named["supersedes"]:
-                    problems.append(f"{known[newer].file}: its status does not say that it supersedes {number}")
+        for older_side, newer_side, words in SUPERSESSIONS:
+            for newer in own[older_side]:
+                if int(newer) >= BOTH_SIDES_FROM:
+                    if newer not in known[number].named[older_side]:
+                        problems.append(f"{known[number].file}: its status does not say that {newer} {words} it")
+                    if number not in known[newer].named[newer_side]:
+                        problems.append(f"{known[newer].file}: its status does not say that it {words} {number}")
     return relations
 
 
