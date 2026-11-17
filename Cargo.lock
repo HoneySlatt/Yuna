@@ -596,7 +596,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 [[package]]
 name = "smithay"
 version = "0.7.0"
-source = "git+https://github.com/HoneySlatt/smithay.git?rev=e229954ae0d592c6ecfa3bd4932c16371310cf0a#e229954ae0d592c6ecfa3bd4932c16371310cf0a"
+source = "git+https://github.com/HoneySlatt/smithay.git?rev=57d423615aad6206d0483dbf4896274ba2c26207#57d423615aad6206d0483dbf4896274ba2c26207"
 dependencies = [
  "appendlist",
  "bitflags",
@@ -806,6 +806,7 @@ checksum = "eb04e52f7836d7c7976c78ca0250d61e33873c34156a2a1fc9474828ec268234"
 dependencies = [
  "bitflags",
  "wayland-backend",
+ "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
  "wayland-server",
@@ -912,6 +913,8 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
  "x11rb",
  "yuna-bench",
  "yuna-layout",

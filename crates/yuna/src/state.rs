@@ -138,6 +138,8 @@ pub(crate) struct State {
     pub screencopy: ScreencopyState,
     /// `text-input-v3` (`text_input.rs`).
     _text_input_state: TextInputManagerState,
+    /// The virtual keyboard and pointer of agents' seats (`virtual_input.rs`).
+    pub(crate) virtual_input: crate::virtual_input::VirtualInputState,
     /// The captures waiting for their output's refresh (`capture.rs`).
     pub pending_captures: Vec<PendingCapture>,
     /// The agents' captures copied or failed, until the compositor's user takes them.
@@ -223,6 +225,7 @@ impl State {
             _xdg_dialog_state: XdgDialogState::new::<State>(dh),
             screencopy: ScreencopyState::new(dh),
             _text_input_state: crate::text_input::text_input_global(dh),
+            virtual_input: crate::virtual_input::VirtualInputState::new(dh),
             pending_captures: Vec::new(),
             captured: Vec::new(),
             next_capture_ticket: 1,

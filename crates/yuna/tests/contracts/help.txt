@@ -1,6 +1,7 @@
 Yuna, a Wayland compositor for Linux.
 
-Usage: yuna --headless [--gpu] [--animations | --reduced-motion] [--output MODE]...
+Usage: yuna --headless [--agent-seat] [--gpu] [--animations | --reduced-motion]
+                       [--output MODE]...
        yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
        yuna -h | --help
        yuna -V | --version
@@ -20,6 +21,11 @@ Options:
                      WAYLAND_DISPLAY=<socket> on standard output, then, when Xwayland is
                      found, DISPLAY=:<number> and XAUTHORITY=<file> for X11 programs; logs
                      to standard error, and stops on SIGTERM or SIGINT.
+      --agent-seat   With --headless: serve an agent's seat on the socket rather than the
+                     owner's, as an agent's seat of mcp is: a us keyboard, a pointer, Yuna
+                     as input method, and the virtual keyboard and pointer for its programs
+                     (zwp_virtual_keyboard_v1, zwlr_virtual_pointer_v1), which drive them
+                     as in a headless sway.
       --gpu          Draw on the GPU's render node rather than on Mesa's llvmpipe.
       --animations   Move windows, the view and workspaces on springs, and fade the special
                      workspace, rather than show each change at once, as without it.

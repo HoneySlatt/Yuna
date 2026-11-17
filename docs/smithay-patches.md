@@ -7,7 +7,7 @@ never rewritten ([ADR-0021](adr/0021-smithays-fork.md),
 upstream ([ADR-0011](adr/0011-built-on-smithay.md)).
 
 Base: upstream `8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55` ([ADR-0017](adr/0017-smithays-revision.md)),
-branch `yuna`; main pins its head, `e229954a`, since M1.6
+branch `yuna`; main pins its head, `57d42361`, since M1.10; it pinned `e229954a` from M1.6
 ([ADR-0042](adr/0042-main-on-smithays-fork.md)).
 
 | # | Commit | What | Why | Used by |
@@ -15,6 +15,7 @@ branch `yuna`; main pins its head, `e229954a`, since M1.6
 | 1 | `69edf122`, `f1e7f88c` | `DrmSurface::set_connector_property(connector, name, raw value)`: an atomic surface keeps the value in its pending state, tests it with a modeset, sends it with every later test and modeset commit, never with page flips; changing it makes `commit_pending` true. Legacy DRM refuses it. Two unit tests. Its second commit, a fix found in review, checks the name before allocating the test buffer. | Smithay set only `CRTC_ID` on connectors; HDR needs `max bpc`, `Colorspace` and `HDR_OUTPUT_METADATA` (M1.3). | The HDR prototype (M1.3, deleted); Stage 5. Behind the `backend_drm` feature, which Yuna does not build yet. |
 | 2 | `47cef682` | `SeatState::new_wl_seat_with_filter` and `Output::create_global_with_filter`: a closure of the client, kept in the global's data and called by its `can_view`, decides which clients see the global and may bind it. The old constructors show it to every client. | Upstream shows each `wl_seat` and `wl_output` to every client: a program of one agent's seat saw and could bind another seat's ([ADR-0042](adr/0042-main-on-smithays-fork.md)). | `seats.rs`, `output.rs`; tested by Yuna's stories (`a_client_sees_its_own_seat_and_its_outputs_alone`): Smithay has no client to test globals with. |
 | 3 | `e229954a` | Saturating sums in `PositionerState`: `get_anchor_point`, `get_geometry`, `get_unconstrained_geometry` and `compute_offsets`. | A client's positioner values near `i32::MAX` overflowed there: a panic in a debug build, a wrap in release. It replaces [ADR-0027](adr/0027-smithay-without-overflow-checks.md)'s build setting. | Every popup; tested by Yuna's `a_positioner_past_i32_max_is_dismissed_not_a_panic`. |
+| 4 | `57d42361` | `VirtualPointerDevice::client()`, as `VirtualKeyboardDevice` has. | A `zwlr_virtual_pointer_v1` created without a seat is for its client's seat, which Yuna knows by its client alone; without it, Yuna could not tell which seat's pointer a request moves. | `virtual_input.rs`; tested by Yuna's stories of virtual input (M1.10). |
 
 Patch 1 gives the private `build_request` an eighth parameter and allows clippy's
 `too_many_arguments` there, as Smithay does on `AtomicDrmSurface::new`; the owner accepted it on

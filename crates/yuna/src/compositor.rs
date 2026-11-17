@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
@@ -207,16 +207,7 @@ impl Compositor {
         // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
         // starts.
         let socket = if config.listen {
-            Some(ListeningSocketSource::new_auto().map_err(|e| {
-                match e {
-                    BindError::RuntimeDirNotSet => Error::Socket(
-                        "XDG_RUNTIME_DIR is not set, or not an absolute path; \
-                     Yuna creates its Wayland socket there"
-                            .to_owned(),
-                    ),
-                    e => Error::Socket(e.to_string()),
-                }
-            })?)
+            Some(ListeningSocketSource::new_auto().map_err(socket_error)?)
         } else {
             None
         };
@@ -342,14 +333,47 @@ impl Compositor {
     /// `<path>.x11`. Refused for the owner's seat, a seat that does not exist or listens already,
     /// and a path where a socket cannot be made.
     pub fn listen_for_seat(&mut self, seat: SeatId, path: PathBuf) -> Result<(), Error> {
+        self.check_seat_may_listen(seat)?;
+        let socket = ListeningSocket::bind_absolute(path.clone())
+            .map_err(|e| Error::Socket(format!("{}: {e}", path.display())))?;
+        self.serve_seat_socket(seat, socket, &path)
+    }
+
+    /// Listens for agent seat `seat` on a Wayland socket of its own in `XDG_RUNTIME_DIR`, named
+    /// as the owner's would be, `wayland-1` to `wayland-32`, the first free: what `yuna
+    /// --headless --agent-seat` serves. Returns its name, for `WAYLAND_DISPLAY`. Refused as
+    /// [`Compositor::listen_for_seat`] is, and when `XDG_RUNTIME_DIR` is not set.
+    pub fn listen_for_seat_in_runtime_dir(&mut self, seat: SeatId) -> Result<OsString, Error> {
+        self.check_seat_may_listen(seat)?;
+        let socket = ListeningSocket::bind_auto("wayland", 1..33).map_err(socket_error)?;
+        let name = socket
+            .socket_name()
+            .map(OsStr::to_os_string)
+            .ok_or_else(|| Error::Socket("the socket has no name".to_owned()))?;
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+        let path = runtime.unwrap_or_default().join(&name);
+        self.serve_seat_socket(seat, socket, &path)?;
+        tracing::info!(socket = ?name, seat = seat.0, "listening for an agent's seat");
+        Ok(name)
+    }
+
+    fn check_seat_may_listen(&self, seat: SeatId) -> Result<(), Error> {
         if seat == OWNER_SEAT || self.state.seat(seat).is_none() {
             return Err(Error::Refused(format!("no agent seat {}", seat.0)));
         }
         if self.seat_sockets.contains_key(&seat) {
             return Err(Error::Refused(format!("seat {} listens already", seat.0)));
         }
-        let socket = ListeningSocket::bind_absolute(path.clone())
-            .map_err(|e| Error::Socket(format!("{}: {e}", path.display())))?;
+        Ok(())
+    }
+
+    /// Serves agent seat `seat` on `socket`, made at `path`, and gives it an X display beside.
+    fn serve_seat_socket(
+        &mut self,
+        seat: SeatId,
+        socket: ListeningSocket,
+        path: &Path,
+    ) -> Result<(), Error> {
         let token = self
             .event_loop
             .handle()
@@ -379,7 +403,7 @@ impl Compositor {
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         self.seat_sockets.insert(seat, token);
         if let Some(xwayland) = &mut self.xwayland {
-            let folder = crate::xwayland::folder_beside(&path);
+            let folder = crate::xwayland::folder_beside(path);
             xwayland.add_seat(seat, &folder, &self.event_loop.handle());
         }
         Ok(())
@@ -938,5 +962,17 @@ impl Compositor {
                     .dispatch_single_client(&mut self.state, client);
             }
         }
+    }
+}
+
+/// Why a socket in `XDG_RUNTIME_DIR` could not be made, for its user.
+fn socket_error(error: BindError) -> Error {
+    match error {
+        BindError::RuntimeDirNotSet => Error::Socket(
+            "XDG_RUNTIME_DIR is not set, or not an absolute path; Yuna creates its Wayland \
+             socket there"
+                .to_owned(),
+        ),
+        error => Error::Socket(error.to_string()),
     }
 }

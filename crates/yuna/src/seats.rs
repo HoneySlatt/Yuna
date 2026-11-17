@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
-use smithay::input::keyboard::{KeyboardHandle, XkbConfig, xkb};
+use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig, xkb};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
@@ -75,6 +75,9 @@ pub(crate) struct SeatData {
     pub pointer_origin: Option<Point<f64, Logical>>,
     /// An agent seat's keymap, compiled as its keyboard's, to find which key types a character.
     pub keymap: Option<xkb::Keymap>,
+    /// The keymap its keyboard was made with: a virtual keyboard's keys switch the keyboard to
+    /// that keyboard's own keymap, and Yuna's own keys switch it back (`virtual_input.rs`).
+    pub own_keymap: KeymapFile,
     /// The clients connected through its socket, or for it through `connect_client_to`, while
     /// they are served.
     pub clients: Vec<ClientId>,
@@ -153,9 +156,11 @@ impl SeatData {
         pointer: Option<PointerHandle<State>>,
     ) -> SeatData {
         seat.user_data().insert_if_missing(|| SeatTag(id));
+        let own_keymap = keyboard.keymap_file();
         SeatData {
             id,
             seat,
+            own_keymap,
             keyboard,
             pointer,
             popup_grab: None,

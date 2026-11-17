@@ -29,6 +29,8 @@ mod seats;
 mod selection;
 mod selection_client;
 mod text_input;
+mod virtual_input;
+mod virtual_input_client;
 mod vrr;
 mod window_cap;
 mod x11_client;

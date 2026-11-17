@@ -800,9 +800,9 @@ own seat's `wl_seat` and its seat's outputs' `wl_output`s alone, through the fil
 Yuna's fork of Smithay ([ADR-0042](adr/0042-main-on-smithays-fork.md)); a client that held
 another seat's would still get no input, since that seat's focus is never on its surfaces.
 
-Input (`input.rs`) reaches an agent's seat only through the compositor's calls, which the MCP
-server makes for the seat an agent names; the owner's seat takes none. Its events carry Yuna's
-clock's time.
+Input (`input.rs`) reaches an agent's seat through the compositor's calls, which the MCP
+server makes for the seat an agent names, and through its own clients' virtual keyboards and
+pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's time.
 
 1. A pointer moves to a place in logical units of one of its seat's outputs. What is under it
    is found among the windows that output draws at the event's time, or at the time its last
@@ -836,6 +836,17 @@ clock's time.
 6. X11 windows take the same input through their seat's Xwayland: the keyboard on an X11
    window's surface also gives it the X input focus, which its manager sets
    ([An X11 window's life](#an-x11-windows-life)).
+7. A client of an agent's seat may drive it as a test driver drives a headless sway, through
+   `zwp_virtual_keyboard_v1` and `zwlr_virtual_pointer_v1` (`virtual_input.rs`,
+   [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); the owner's seat's clients are
+   not shown their globals. A device acts on its client's own seat, read when it is made and
+   kept while it lives, so that the keys and buttons Smithay releases when its client dies
+   reach that seat; one made for another seat's `wl_seat` does nothing, and a client keeps 8
+   that act (`MAX_VIRTUAL_DEVICES_PER_CLIENT`). Its events take the paths of points 1 to 3. A
+   virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it,
+   its clients told, and back to the seat's own before Yuna's keys. An absolute motion is a
+   fraction of the seat's outputs together, or of the output the device names; a relative one
+   moves from where the pointer is; a motion off every output of the seat is dropped.
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
 (`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
@@ -1103,7 +1114,11 @@ clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` 
 `yuna --headless` starts the compositor with real time, its outputs and a socket in
 `XDG_RUNTIME_DIR` for the owner's seat, prints `WAYLAND_DISPLAY=<socket>`, then, when Xwayland
 is on `PATH`, `DISPLAY=:<n>` and `XAUTHORITY=<file>`, the owner's seat's X display
-([XWayland](#xwayland)), and runs until SIGTERM or SIGINT. `yuna mcp` starts the same compositor
+([XWayland](#xwayland)), and runs until SIGTERM or SIGINT. With `--agent-seat`, the owner's seat
+has no output, socket or `wl_seat`, as in `yuna mcp`, and one agent's seat takes the outputs and
+a socket of its own in `XDG_RUNTIME_DIR`, named `wayland-<n>` as the owner's would be, whose
+name and X display are printed: what the owner's other projects drive with a virtual keyboard
+and pointer ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)). `yuna mcp` starts the same compositor
 without an output or a socket, on the manual clock with `--manual-clock`, and serves MCP until its
 input closes or SIGTERM or SIGINT comes. Both turn XWayland on.
 Both run with animations off, each change shown at once; `--animations` turns them on, with

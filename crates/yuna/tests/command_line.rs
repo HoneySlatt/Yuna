@@ -132,16 +132,22 @@ impl Dispatch<wl_output::WlOutput, ()> for Globals {
     }
 }
 
-/// `yuna --headless` as an agent runs it: it prints its socket, a client sees the globals of
-/// M1.4 and the output asked, and SIGTERM stops it cleanly, its socket removed. `linux-dmabuf` is
-/// offered only when the renderer, llvmpipe here, imports a format: the program's log says which,
-/// and the globals must agree with it.
-#[test]
-fn headless_serves_its_globals_and_stops_on_sigterm() {
-    let runtime_dir = std::env::temp_dir().join(format!("yuna-test-{}", std::process::id()));
+/// `yuna --headless` with `arguments` started in a runtime folder of its own named after `name`,
+/// its log read on a thread, and the socket it printed: the process, its log's reader and the
+/// socket's path.
+fn start_headless(
+    name: &str,
+    arguments: &[&str],
+) -> (
+    Running,
+    std::thread::JoinHandle<std::io::Result<String>>,
+    PathBuf,
+) {
+    let runtime_dir = std::env::temp_dir().join(format!("yuna-test-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&runtime_dir).expect("a runtime folder");
     let child = Command::new(env!("CARGO_BIN_EXE_yuna"))
-        .args(["--headless", "--output", "1920x1080@60,1"])
+        .arg("--headless")
+        .args(arguments)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         // Info, for the line that says whether linux-dmabuf is offered: a few lines in all.
         .env("YUNA_LOG", "info")
@@ -169,8 +175,12 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         .unwrap_or_else(|| panic!("no socket printed: {line:?}"))
         .to_owned();
     let socket_path = running.runtime_dir.join(&socket);
+    (running, log_reader, socket_path)
+}
 
-    let stream = UnixStream::connect(&socket_path).expect("the socket accepts a client");
+/// The globals a client of the socket at `path` sees, with the first output's mode.
+fn globals_at(path: &std::path::Path) -> Globals {
+    let stream = UnixStream::connect(path).expect("the socket accepts a client");
     let connection = Connection::from_socket(stream).expect("a Wayland connection");
     let mut queue = connection.new_event_queue();
     connection.display().get_registry(&queue.handle(), ());
@@ -179,6 +189,34 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
     queue
         .roundtrip(&mut globals)
         .expect("the output's mode comes");
+    globals
+}
+
+/// Sends SIGTERM and waits for a clean exit, the socket at `socket_path` removed.
+fn stop_cleanly(running: &mut Running, socket_path: &std::path::Path) {
+    kill_process(Pid::from_child(&running.child), Signal::TERM).expect("SIGTERM is sent");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = running.child.try_wait().expect("the process is waited for") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "yuna did not stop on SIGTERM");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "{status}");
+    assert!(!socket_path.exists(), "the socket was left behind");
+}
+
+/// `yuna --headless` as an agent runs it: it prints its socket, a client sees the globals of
+/// M1.4 and the output asked, and SIGTERM stops it cleanly, its socket removed. `linux-dmabuf` is
+/// offered only when the renderer, llvmpipe here, imports a format: the program's log says which,
+/// and the globals must agree with it. Its socket serves the owner's seat, which is offered no
+/// virtual keyboard or pointer (ADR-0058).
+#[test]
+fn headless_serves_its_globals_and_stops_on_sigterm() {
+    let (mut running, log_reader, socket_path) =
+        start_headless("owner", &["--output", "1920x1080@60,1"]);
+    let globals = globals_at(&socket_path);
     for interface in [
         "wl_compositor",
         "wl_subcompositor",
@@ -206,20 +244,13 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         );
     }
     assert_eq!(globals.output_mode, Some((1920, 1080, 60_000)));
-    drop(queue);
-    drop(connection);
-
-    kill_process(Pid::from_child(&running.child), Signal::TERM).expect("SIGTERM is sent");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = running.child.try_wait().expect("the process is waited for") {
-            break status;
-        }
-        assert!(Instant::now() < deadline, "yuna did not stop on SIGTERM");
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert!(status.success(), "{status}");
-    assert!(!socket_path.exists(), "the socket was left behind");
+    for interface in VIRTUAL_INPUT {
+        assert!(
+            !globals.interfaces.contains(interface),
+            "{interface} is offered"
+        );
+    }
+    stop_cleanly(&mut running, &socket_path);
 
     let log = log_reader
         .join()
@@ -237,6 +268,34 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         "the globals {:?} disagree with the log: {log}",
         globals.interfaces
     );
+}
+
+/// The virtual keyboard's and pointer's globals.
+const VIRTUAL_INPUT: [&str; 2] = [
+    "zwp_virtual_keyboard_manager_v1",
+    "zwlr_virtual_pointer_manager_v1",
+];
+
+/// `yuna --headless --agent-seat` serves an agent's seat on its socket, its outputs on it: the
+/// virtual keyboard and pointer are offered there, and SIGTERM stops it cleanly, its socket
+/// removed (ADR-0089).
+#[test]
+fn headless_with_an_agent_seat_offers_virtual_input() {
+    let (mut running, _log, socket_path) =
+        start_headless("agent", &["--agent-seat", "--output", "1920x1080@60,1"]);
+    let globals = globals_at(&socket_path);
+    for interface in VIRTUAL_INPUT
+        .iter()
+        .chain(&["wl_seat", "xdg_wm_base", "wl_output"])
+    {
+        assert!(
+            globals.interfaces.contains(*interface),
+            "{interface} is missing from {:?}",
+            globals.interfaces
+        );
+    }
+    assert_eq!(globals.output_mode, Some((1920, 1080, 60_000)));
+    stop_cleanly(&mut running, &socket_path);
 }
 
 #[test]

@@ -16,8 +16,9 @@
 //! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
 //! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer
 //! (`render.rs`), whose GLES types `state.rs`, `output.rs` and `dmabuf.rs` hold too; the
-//! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`) and their
-//! pointer and keyboard input (`input.rs`); `xdg-shell` and `xdg-decoration` in front of the
+//! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`), their
+//! pointer and keyboard input (`input.rs`), and their clients' virtual keyboards and pointers
+//! (`virtual_input.rs`); `xdg-shell` and `xdg-decoration` in front of the
 //! layout (`shell.rs`), with popups (`popups.rs`),
 //! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
 //! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
@@ -48,6 +49,7 @@ mod selection;
 mod shell;
 mod state;
 mod text_input;
+mod virtual_input;
 mod vrr;
 mod xwayland;
 
@@ -76,6 +78,7 @@ pub use seats::AGENT_KEYBOARD_LAYOUT;
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;
 pub use text_input::MAX_TEXT_BYTES;
+pub use virtual_input::MAX_VIRTUAL_DEVICES_PER_CLIENT;
 pub use xwayland::{
     DrawnX11Menu, FAILURE_MEMORY, FIRST_PAUSE, IDLE_SECONDS, LONGEST_PAUSE, MANAGER_GRACE,
     MANAGER_SLICE, MAX_DISPLAYS, MAX_MENUS_PER_CLIENT, START_TIMEOUT, X11_PING_TIMEOUT,
