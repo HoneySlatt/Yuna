@@ -19,8 +19,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   [`client-needs.md`](client-needs.md), three decided in [ADR-0065](adr/0065-what-hollow-asks-of-yuna.md).
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
 - [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077.
-- [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089. Next:
-  M1.11.
+- [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089.
+- [M1.11](#m111--the-agents-toolbox) is in progress since 2026-11-17; the owner split X11's drag
+  and drop off into [M1.12](#m112--drag-and-drop-between-x11-and-wayland) on 2026-11-18.
 - From M1.11, the owner chose on 2026-11-17 to work on `main` directly, without a milestone's
   branch: push only a state where `scripts/check.sh` passes, and follow CI to green after each
   push; the closing review reads the milestone's commits on `main`, and its fixes follow there.
@@ -42,8 +43,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Done |
-| [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Planned |
-| [M1.12](#m112--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
+| [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | In progress |
+| [M1.12](#m112--drag-and-drop-between-x11-and-wayland) | Drag and drop between X11 and Wayland programs | Planned |
+| [M1.13](#m113--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
 ## Stage 1 — The headless core
 
@@ -110,16 +112,7 @@ milestone first needs it.
 ### M1.8 — XWayland
 
 - **Goal.** X11 applications run, crisp at scale 1.5 and the right size on every output.
-- **Design.** Decided with the owner on 2026-11-14: Yuna's own X11 window manager on x11rb, its
-  replies awaited on a thread of its own
-  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); one Xwayland per seat, started
-  on the first connection, stopped 10 s after the last client, behind a cookie
-  ([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)); the seat's largest
-  scale, fixed for an Xwayland's life, X11 surfaces drawn by Yuna and scaled down through an
-  area filter ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md));
-  fullscreen games through gamescope, Xwayland's emulated modes kept
-  ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
-  The clipboard and drag and drop between X11 and Wayland move to M1.11.
+- **Design.** Decided with the owner on 2026-11-14, ADR-0066 to ADR-0069.
 - **Result.** Done on 2026-11-15, its closing review's findings fixed or written as debt: Yuna's
   own X11 manager, one Xwayland per seat on demand, X11 windows and menus in the layout and the
   motion, drawn pixel for pixel at 1.5 and area-filtered at 1, the bounds of ADR-0070
@@ -127,12 +120,6 @@ milestone first needs it.
   Wayland at 1.5, Wine scaled by its `LogPixels`. Xwayland starts in 29 ms on llvmpipe, 76 ms on
   the GPU, and takes 36 to 61 MiB; the area filter costs 0.18 ms a 4K frame on the GPU
   ([measurements](measurements.md)). What is left is [debt](debt.md#xwayland).
-- **Done when.** An X11 test program and a Wine program run headless at 1.5, their captures sharp
-  against reference images; an X11 window moved between outputs at 1.5 and 1 keeps its size on
-  both; X11 windows slide, and menus with them, as Wayland's do; Xwayland starts on demand, stops
-  when idle, and its crash leaves Yuna running; one seat's X11 clients cannot reach another's.
-- **Measured.** XWayland's start time and memory; the area filter's cost at 4K on the GPU and on
-  llvmpipe.
 
 ### M1.9 — The rivals measured
 
@@ -170,8 +157,8 @@ milestone first needs it.
   ([ADR-0061](adr/0061-yunas-uses.md), [ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - **Delivers.** Through MCP: each program's protocol trace and log; the accessibility tree, its
   dependency put to the owner; outputs plugged and unplugged, scale and mode changed, a slow or
-  stuck client, keyboard layouts, clipboard and drag and drop between programs, X11's and
-  Wayland's ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); a call that waits
+  stuck client, keyboard layouts, the clipboard between programs, X11's and Wayland's
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)); a call that waits
   for an event; a rest auditor naming what wakes Yuna or makes it draw; on a panic of its state,
   its programs ended and its folder removed ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - **Done when.** Through MCP alone, an agent finds a protocol error and a button by its name, and
@@ -179,8 +166,20 @@ milestone first needs it.
 - **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N
   `yuna mcp` against one with N seats, up to 10, for Stage 2's choice of
   [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md).
+- **Status.** The owner chose on 2026-11-18: Yuna as the accessibility registry on a bus of each
+  seat's, off by default, D-Bus on `zvariant`; the trace from the client, protocol errors from
+  Yuna, no wayland-rs fork before Stage 2; layouts changed at run time; the auditor's command a
+  start option until `yuna-ipc`. Done on `main`: the fatal path, the debts of `keyboard tap`,
+  encoders and reaping.
 
-### M1.12 — The stage's audit
+### M1.12 — Drag and drop between X11 and Wayland
+
+- **Goal.** A drag from an X11 program drops into a Wayland one, and the reverse, through Yuna's
+  X11 manager ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- **Done when.** Headless tests drag text and a file's URI both ways, a drag cancelled and a
+  source gone mid-drag included.
+
+### M1.13 — The stage's audit
 
 - **Goal.** Stage 1 examined whole before 0.1.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag

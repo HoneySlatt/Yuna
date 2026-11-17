@@ -310,7 +310,7 @@ with games' VRR:
   `tests/applications.rs`, `tests/headless/x11_client.rs`, `tests/headless/xwayland.rs` and
   `examples/xwayland_time.rs`, and decoding base64 twice, `decode_base64` in
   `tests/applications.rs` and `tests/headless/captures.rs`. One copy of each in `tests/common/`
-  would serve the tests, and the example could include it with `#[path]`. Paid in M1.12's audit.
+  would serve the tests, and the example could include it with `#[path]`. Paid in the stage's audit.
 
 ## XWayland
 
@@ -328,7 +328,7 @@ with games' VRR:
 - A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
   while an Xwayland with one small window runs, and keeps 22 MiB of it once Xwayland has ended
   ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. Whether that memory
-  is in use or freed and kept by the allocator is not known. Looked at in M1.12's audit.
+  is in use or freed and kept by the allocator is not known. Looked at in the stage's audit.
 - On llvmpipe, Xwayland runs without GLX: Mesa's GLX for Xwayland loads the machine's own drivers
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render
@@ -377,13 +377,13 @@ with games' VRR:
 - An X11 window's minimum size is honoured up to X11's 32,767 pixels: a window asking that much
   is configured to it, Xwayland draws no buffer so large, and it never shows. A client can make
   such a window itself, without hints; Yuna does not bound X11 windows to its outputs. Looked at
-  in M1.12's audit.
+  in the stage's audit.
 - Unmapped X11 windows are tracked without a bound per client: each holds up to about 192 KiB of
   text, three titles of 64 KiB, twice, in its manager and in Yuna; Xwayland holds them too. A
-  client can so grow Yuna's memory: a bound per X11 client is to be added in M1.12's audit.
+  client can so grow Yuna's memory: a bound per X11 client is to be added in the stage's audit.
 - The orders in which a window and its surface pair, the serial before the surface's commit or
   after, around a map or an unmap, are not each forced by a test: the stories take the order
-  Xwayland gives. Tests to write in M1.12's audit.
+  Xwayland gives. Tests to write in the stage's audit.
 - Telling the windows at each arrangement asks the layout for each window shown
   (`Layout::window`), whose lookup walks the workspaces, and an arrangement walks every window:
   it is part of a flood's longest round
