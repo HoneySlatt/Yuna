@@ -23,6 +23,17 @@ use application_environment::{application_environment, shell_variable};
 use serde_json::{Value, json};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 
+/// A folder for the tests' runtime folders short enough that the sockets Yuna makes under it,
+/// an accessibility bus's the longest, fit a Unix socket's 107 bytes: CI's `TMPDIR` is too long.
+fn short_temp_dir() -> PathBuf {
+    let temp = std::env::temp_dir();
+    if temp.as_os_str().len() <= 16 {
+        temp
+    } else {
+        PathBuf::from("/tmp")
+    }
+}
+
 /// The longest a step may take: a debug build of Yuna starts llvmpipe, and CI's runners are slow.
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -65,8 +76,7 @@ impl Yuna {
     /// Starts `yuna mcp` with no seat, at most `descriptors` open files when given, and
     /// `variables` added to its environment.
     fn launch(name: &str, descriptors: Option<u32>, variables: &[(&str, &str)]) -> Yuna {
-        let folder =
-            std::env::temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
+        let folder = short_temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -1609,7 +1619,7 @@ fn a_frozen_program_ends_at_sigterm() {
 #[test]
 fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
     use yuna::mcp::LOCK_FILE;
-    let top = std::env::temp_dir().join(format!("yuna-mcp-test-stale-{}", std::process::id()));
+    let top = short_temp_dir().join(format!("yuna-mcp-test-stale-{}", std::process::id()));
     let runtime = top.join("runtime");
     // Above any pid Linux gives (`pid_max` is 2²² at most), and the test's own, which lives:
     // neither decides.

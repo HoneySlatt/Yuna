@@ -86,6 +86,23 @@ impl BusFiles {
     }
 }
 
+/// The longest path a Unix socket's address holds: `sun_path`'s 108 bytes, its last a NUL.
+pub(crate) const MAX_SOCKET_PATH: usize = 107;
+
+/// Refuses a socket path a Unix socket cannot hold, before a daemon is started that could not
+/// listen on it and would exit at once, and that no program could reach either.
+pub(crate) fn check_socket_path(socket: &Path) -> Result<(), String> {
+    let length = socket.as_os_str().len();
+    if length > MAX_SOCKET_PATH {
+        return Err(format!(
+            "the accessibility bus's socket, {}, is {length} bytes long, past the {MAX_SOCKET_PATH} \
+             a Unix socket's address holds: give Yuna a shorter XDG_RUNTIME_DIR",
+            socket.display()
+        ));
+    }
+    Ok(())
+}
+
 /// The bus's configuration, listening at `address`, which [`crate::dbus::unix_address`] wrote
 /// and which needs no escaping in XML: its bytes are letters, digits, `-_/.\*` and `%`.
 pub(crate) fn configuration(address: &str) -> String {
@@ -263,6 +280,18 @@ pub(crate) fn remove_folder(files: &BusFiles) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_socket_path_past_a_unix_sockets_address_is_refused() {
+        let fits = format!("/{}", "a".repeat(MAX_SOCKET_PATH - 1));
+        assert!(check_socket_path(Path::new(&fits)).is_ok());
+        let past = format!("/{}", "a".repeat(MAX_SOCKET_PATH));
+        let refused = check_socket_path(Path::new(&past)).expect_err("too long");
+        assert!(
+            refused.contains("108") || refused.contains("107"),
+            "{refused}"
+        );
+    }
 
     #[test]
     fn the_configuration_lowers_at_spis_limits_and_starts_no_service() {

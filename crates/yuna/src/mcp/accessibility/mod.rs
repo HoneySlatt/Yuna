@@ -292,6 +292,7 @@ impl Accessibility {
         }
         let program = crate::dbus::find_daemon()?;
         let files = BusFiles::in_folder(folder);
+        bus::check_socket_path(&files.socket)?;
         let address = unix_address(&files.socket);
         let started = bus::start(&program, &files, &address, environment, log)
             .map_err(|error| format!("{DAEMON} could not start: {error}"))?;
