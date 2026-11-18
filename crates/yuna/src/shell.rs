@@ -1050,4 +1050,8 @@ impl XdgDecorationHandler for State {
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
         self.decorate_on_server_side(&toplevel);
     }
+
+    /// Nothing to undo: Yuna draws no decorations in either mode (ADR-0024), and a client that
+    /// destroys its decoration object draws its own from then on.
+    fn decoration_destroyed(&mut self, _toplevel: ToplevelSurface) {}
 }

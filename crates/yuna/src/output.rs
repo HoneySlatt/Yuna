@@ -339,7 +339,7 @@ impl State {
         output.set_preferred(smithay_mode);
         // Shown to its seat's clients alone (ADR-0042).
         let global = output
-            .create_global_with_filter::<State>(&self.display_handle, move |client| {
+            .create_global_with_filter::<State, _>(&self.display_handle, move |client| {
                 crate::seats::belongs_to(client, seat)
             });
         let damage = OutputDamageTracker::from_output(&output);
