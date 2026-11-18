@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.0.0"
 edition = "2024"
 # The toolchain pinned in rust-toolchain.toml; raised with it (ADR-0016).
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 license = "GPL-3.0-or-later"
 publish = false
 
