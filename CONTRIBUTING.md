@@ -101,7 +101,9 @@ nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
 
 It runs alone among measurements, as `frame_time` does; on the owner's machine, inside
 `agent-headless`, under the agents' lock of exclusive runs. The measures share
-`crates/yuna/examples/common/`; the `vkcube` clients of these two are in its `vkcube.rs`.
+`crates/yuna/examples/common/`; beside its `mod.rs`, each included by the measures that need it,
+the `vkcube` clients of these two are in its `vkcube.rs`, the CPU and GPU time Yuna and its
+clients used in `usage.rs`, and the other programs' load in `load.rs`.
 
 XWayland's cost is measured with `crates/yuna/examples/xwayland_time.rs`: an X11 program's wait
 for Xwayland, cold and after an idle exit; Xwayland's memory and Yuna's with one X11 window; and,
@@ -123,6 +125,18 @@ gives the median and the longest:
 
 ```sh
 nix develop -c cargo run --release -p yuna --example layout_time
+```
+
+What agents' Yunas cost is measured with `crates/yuna/examples/instances.rs`
+([ADR-0078](docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)): one `yuna
+mcp`'s start to its seat's first frame and its memory at rest; N `yuna mcp` with a seat each
+against one with N seats, up to 10, each seat with Alacritty; and ten held at rest for 5 minutes,
+which must grow nothing. It reads the other programs' load beside each phase, as `xwayland_time`
+does. Its documentation gives its options, `--gpu` and `--phase` among them:
+
+```sh
+nix develop -c cargo build --release -p yuna --bin yuna --example instances
+nix develop -c target/release/examples/instances --phase start
 ```
 
 The rivals are measured with `crates/yuna-bench`

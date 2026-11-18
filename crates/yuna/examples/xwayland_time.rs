@@ -32,7 +32,7 @@
 //! other processes' files leaves it unknown, and says so. A phase is marked disturbed by that
 //! module's rule (`OTHERS_CPU_LIMIT`, `OTHERS_GPU_LIMIT`); their peak over one reading, this
 //! measure's own processor time and the busy percentage of the GPU behind `/dev/dri/renderD128`
-//! are printed beside it.
+//! are printed beside it (`common/load.rs`).
 //!
 //! Build it and Yuna for release, then run it in the development shell, alone among
 //! measurements; it needs no screen of its own:
@@ -51,6 +51,10 @@
 //! the machine and the commit.
 
 mod common;
+#[path = "common/load.rs"]
+mod load;
+#[path = "common/usage.rs"]
+mod usage;
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -60,8 +64,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, shell_variable};
+use common::{PATIENCE, Run, field, percentile, shell_variable};
+use load::{Load, LoadWatch};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use usage::{Usage, WARM_UP, print_usage};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeGCAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, PropMode, Rectangle,
@@ -69,9 +75,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
-use yuna_bench::machine::{self, MachineState, MachineWatch};
 use yuna_bench::procfs::{self, Proc};
-use yuna_bench::sandbox::RENDER_NODE;
 
 /// How long Yuna's log must stay the same for Yuna to count as quiet.
 const QUIET: Duration = Duration::from_millis(500);
@@ -759,88 +763,6 @@ impl Drop for Yuna {
     }
 }
 
-/// What the machine's other programs use over a phase: the bench's [`MachineWatch`], and the
-/// GPU's busy percentage before the phase, which it keeps only from the first second on.
-struct LoadWatch {
-    watch: MachineWatch,
-    gpu_busy_before: Option<u32>,
-}
-
-impl LoadWatch {
-    fn start() -> LoadWatch {
-        LoadWatch {
-            gpu_busy_before: MachineState::read(RENDER_NODE).gpu_busy_percent,
-            watch: MachineWatch::start(RENDER_NODE),
-        }
-    }
-
-    fn finish(self) -> Load {
-        let others = self.watch.finish();
-        let busy_after = others
-            .seconds
-            .last()
-            .and_then(|second| second.state.gpu_busy_percent);
-        let busy_at_most = others
-            .seconds
-            .iter()
-            .filter_map(|second| second.state.gpu_busy_percent)
-            .chain(self.gpu_busy_before)
-            .max();
-        Load {
-            others,
-            gpu_busy: (self.gpu_busy_before, busy_after, busy_at_most),
-        }
-    }
-}
-
-/// What the other programs used over a phase, as `yuna_bench::machine` reads it, and the busy
-/// percentage of the GPU behind `/dev/dri/renderD128`, at the phase's start, its end, and at most.
-struct Load {
-    others: machine::Load,
-    gpu_busy: (Option<u32>, Option<u32>, Option<u32>),
-}
-
-impl Load {
-    /// What the other programs' GPU time was, or why it is not known: no process's GPU files
-    /// could be read, which is not the same as nil.
-    fn others_gpu(&self) -> String {
-        match (
-            self.others.others_gpu_percent_mean,
-            self.others.others_gpu_percent_max,
-        ) {
-            (Some(mean), Some(max)) => format!(
-                "{mean:.1} % of the GPU's drawing on average, {max:.1} % at most, by {} processes",
-                self.others.others_gpu_processes
-            ),
-            _ => "no other process's GPU time could be read".to_owned(),
-        }
-    }
-}
-
-impl std::fmt::Display for Load {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cores = |cores: Option<f64>| cores.map_or("?".to_owned(), |c| format!("{c:.2}"));
-        let percent = |busy: Option<u32>| busy.map_or("?".to_owned(), |b| b.to_string());
-        write!(
-            f,
-            "other programs: {} cores on average, {} at most, and {}; this measure: {:.2} \
-             cores; the GPU {} % busy before, {} % after, {} % at most: {}",
-            cores(self.others.others_cpu_cores_mean),
-            cores(self.others.others_cpu_cores_max),
-            self.others_gpu(),
-            self.others.bench_cpu_cores_mean,
-            percent(self.gpu_busy.0),
-            percent(self.gpu_busy.1),
-            percent(self.gpu_busy.2),
-            match self.others.disturbed {
-                Some(true) => "disturbed",
-                Some(false) => "quiet",
-                None => "unknown",
-            }
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,63 +793,5 @@ mod tests {
         assert!(read(&["--runs", "0"]).is_err());
         assert!(read(&["--runs"]).is_err());
         assert!(read(&["--frames"]).is_err());
-    }
-
-    #[test]
-    fn a_load_says_what_the_other_programs_used() {
-        let others = machine::Load {
-            others_cpu_cores_mean: Some(1.0),
-            others_cpu_cores_max: Some(1.5),
-            others_gpu_percent_mean: Some(5.0),
-            others_gpu_percent_max: Some(10.0),
-            others_gpu_processes: 1,
-            bench_cpu_cores_mean: 1.5,
-            disturbed: Some(false),
-            ..machine::Load::default()
-        };
-        let load = Load {
-            others,
-            gpu_busy: (Some(5), Some(6), Some(7)),
-        };
-        let text = load.to_string();
-        assert!(
-            text.contains("1.00 cores on average, 1.50 at most"),
-            "{text}"
-        );
-        assert!(
-            text.contains("5.0 % of the GPU's drawing on average, 10.0 % at most, by 1 processes"),
-            "{text}"
-        );
-        assert!(text.contains("this measure: 1.50 cores"), "{text}");
-        assert!(
-            text.contains("the GPU 5 % busy before, 6 % after, 7 % at most: quiet"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn a_load_says_when_nothing_could_be_read() {
-        // No other process's GPU files read: unknown, not nil; and a verdict of none is unknown.
-        let load = Load {
-            others: machine::Load::default(),
-            gpu_busy: (None, None, None),
-        };
-        let text = load.to_string();
-        assert!(
-            text.contains("no other process's GPU time could be read"),
-            "{text}"
-        );
-        assert!(
-            text.contains("the GPU ? % busy before, ? % after, ? % at most: unknown"),
-            "{text}"
-        );
-        let disturbed = Load {
-            others: machine::Load {
-                disturbed: Some(true),
-                ..machine::Load::default()
-            },
-            gpu_busy: (None, None, None),
-        };
-        assert!(disturbed.to_string().ends_with(": disturbed"));
     }
 }

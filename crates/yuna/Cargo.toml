@@ -53,3 +53,7 @@ test = true
 [[example]]
 name = "xwayland_time"
 test = true
+
+[[example]]
+name = "instances"
+test = true

@@ -1897,7 +1897,12 @@ own thread, both `took_us`.
   in the example's own process on the real clock, `vkcube` covering the output, a still
   baseline then a scripted round of scrolls, moves, switches and the special workspace's fade;
   frames missed in each, where they fall, the heaviest frame, and the verdict.
-  `examples/common/` holds what it shares with `frame_time`.
+  `examples/common/` holds what it shares with `frame_time`: `usage.rs` the options and
+  their help, `load.rs` the reading of the machine's other programs.
+- `crates/yuna/examples/instances.rs`: what `yuna mcp` costs to start, from spawn to its seat's
+  first frame, and to hold at rest, and N `yuna mcp` against one with N seats, N up to 10, and
+  ten held five minutes ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md));
+  it keeps an MCP client of its own, which sends without waiting and times replies on arrival.
 - `crates/yuna/examples/layout_time.rs`: what a change of an agent's keyboard layout costs the
   state thread, with XKB's compiles alone beside it, in the example's own process.
 - `crates/yuna/examples/rest_cost.rs`: what the rest auditor costs at 10 and 100 clients:

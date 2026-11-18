@@ -43,6 +43,147 @@ five-minute average, 3.04, still fell from other sessions' builds before
   client ready at 0.47 µs and 0.68 µs at 10 clients (`.delegation/m1.11-rest-auditor/02`, `/11`,
   local).
 
+## M1.11 — `yuna mcp`, one and many (2026-11-18)
+
+What agents' Yunas cost: one `yuna mcp` alone, and N `yuna mcp` with a seat each against one
+`yuna mcp` with N seats, the figures Stage 2's choice of
+[ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) and the ROADMAP's
+budgets of `yuna mcp` rest on
+([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md), item
+25). Measured by `crates/yuna/examples/instances.rs`, whose documentation says how each figure is
+read, in a release build of `264087e`, the example uncommitted. Machine as in M1.9: Ryzen 7 5800X
+(16 threads), 32 GB, RX 6900 XT on amdgpu, Linux 7.3.1, Mesa 26.2.6. Each seat's output is
+1920 × 1080 at 60 Hz and scale 1; the starts and the seats together have one series more at
+Yuna's default, 3840 × 2160 at 240 Hz and scale 1.5. Yuna draws on llvmpipe, `yuna mcp`'s
+default, or with `--gpu` on the render node. Each seat's client is Alacritty 0.17.0, in the applications' tests' environment, its cursor
+still and its child `sleep infinity`: it draws its window and rests. It draws on llvmpipe on both
+of Yuna's devices, so that it is the same client in every run. No Xwayland started: Alacritty is a
+Wayland client.
+
+```sh
+nix develop -c cargo build --release -p yuna --bin yuna --example instances
+nix develop -c env TMPDIR=<folder> target/release/examples/instances --phase start
+nix develop -c env TMPDIR=<folder> target/release/examples/instances --gpu --phase together
+nix develop -c env TMPDIR=<folder> target/release/examples/instances --phase together --output 3840x2160@240,1.5
+nix develop -c env TMPDIR=<folder> target/release/examples/instances --phase soak
+```
+
+**Disturbed.** Other sessions' test suites ran through most of the runs, from 04:28 to 05:59 UTC,
+at times on all 16 threads. A window is disturbed when the other programs used more than 2 cores
+or 10 % of the GPU on average (`yuna_bench::machine`); each table says which. A disturbed window's
+times are not a budget's evidence. Its memory figures stand, with one caveat. `Pss` gives each
+process a share of the pages it maps with others, and other sessions' tests load the shell's Mesa
+from the same store path, so they lower Yuna's `Pss_File`. Each reading counts those processes,
+"others on its Mesa". `Pss_Anon`, which no other program shares, does not move with them. No page
+was swapped out at any reading that reads `SwapPss`, from run `06` on. The proofs are kept locally
+in `.delegation/m1.11-instances/`: each run's command, its output, and the machine's state before
+and after.
+
+### One start
+
+Each of the 20 starts of a kind is a new `yuna mcp`, its `seat create` written at once. The
+figures are the time from the spawn to the reply, read as it arrives, and to the end of the seat's
+output's first frame, at the time of Yuna's `frame drawn` log line. Then Yuna at rest with no
+client: its own memory (`Pss_Anon` + `Pss_File`,
+[ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)), of it the
+anonymous part, and its GPU memory (DRM `resident-vram` + `resident-gtt`). *Cold*: a new home each
+time, so Mesa's shader cache is empty, as an agent's thrown-away folders leave it (ADR-0082, item
+27). *Warm*: one home, which a first start filled.
+
+| Device, output | Start | Reply: median, longest | First frame: median, longest | Own memory, median (anonymous) | GPU memory | Others on its Mesa | Other programs | Run |
+|---|---|---|---|---|---|---|---|---|
+| llvmpipe, 1080p | cold | 75.3, 88.7 ms | 105.5, 113.5 ms | 116.6 MiB (40.7) | none | at 5 of 20 starts | 1.19 cores, quiet | `10` |
+| llvmpipe, 1080p | warm | 51.7, 70.6 ms | 67.2, 87.5 ms | 72.6 MiB (34.3) | none | 15 of 20 | 3.80, disturbed | `10` |
+| GPU, 1080p | cold | 46.8, 52.2 ms | 58.7, 60.9 ms | 83.3 MiB (19.4) | 26.5 MiB | 0 of 20 | 0.08, quiet | `14` |
+| GPU, 1080p | warm | 44.0, 430.7 ms | 56.6, 445.5 ms | 81.2 MiB (18.8) | 26.5 MiB | 5 of 20 | 3.61, disturbed | `14` |
+| llvmpipe, 4K | cold | 80.6, 88.6 ms | 102.2, 110.6 ms | 93.7 MiB (64.8) | none | 20 of 20 | 0.64, quiet | `15` |
+| llvmpipe, 4K | warm | 61.7, 124.1 ms | 68.3, 136.6 ms | 97.2 MiB (58.8) | none | 20 of 20 | 6.19, disturbed | `15` |
+| GPU, 4K | cold | 77.0, 119.7 ms | 79.9, 126.0 ms | 59.4 MiB (19.5) | 50.1 MiB | 20 of 20 | 9.90, disturbed | `16` |
+| GPU, 4K | warm | 45.5, 79.7 ms | 48.3, 84.7 ms | 51.9 MiB (18.8) | 50.1 MiB | 19 of 20 | 3.98, disturbed | `16` |
+
+- The quiet cold starts draw their first frame in 106 ms on llvmpipe at 1080p, 114 ms at the
+  longest; 102 ms at 4K; 59 ms on the GPU at 1080p, 61 ms at the longest. The reply comes 12 to
+  30 ms before the frame. An empty output's first frame is a clear, which costs llvmpipe no more
+  at 4K than at 1080p.
+- A warm shader cache saves llvmpipe 34 to 38 ms of the first frame and 6 MiB of anonymous
+  memory, though its warm runs were disturbed.
+- Alone on its Mesa at 15 of 20 starts on llvmpipe and at all 20 on the GPU, Yuna's own memory is
+  116.6 MiB on llvmpipe and 83.3 MiB on the GPU, at 1080p. In the other rows, the other processes'
+  shares lower it, to between 51.9 and 97.2 MiB; its anonymous part does not move with them. On
+  the GPU it equals the desktop Yuna's of M1.9, 83.6 to 84.0 MiB with 15 windows.
+- Earlier runs, disturbed by 2.0 to 15.6 cores, drew their cold first frames in 108 to 118 ms on
+  llvmpipe and in 73 to 185 ms on the GPU, at 1080p (`01`, `02`, `04`, `06`, `11`). Their
+  anonymous memory is the same within 0.4 MiB, in each run but `01`, which did not read it.
+
+### N seats together
+
+For N = 1, 2, 4, 6, 8 and 10, the N seats start together, as N `yuna mcp` with a seat each, then
+as one `yuna mcp` with N seats: N spawns, or N `seat create` written at once, then each seat's
+Alacritty through `spawn` once its seat has replied. The time runs from the first spawn to the end
+of the frame that first shows the last seat's Alacritty. Then 60 s at rest. † marks a disturbed
+case.
+
+| N | llvmpipe, 1080p: N Yunas | 1 Yuna | GPU, 1080p: N Yunas | 1 Yuna | llvmpipe, 4K: N Yunas | 1 Yuna | GPU, 4K: N Yunas | 1 Yuna |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 281 ms | 291 ms | 253 ms † | 548 ms † | 391 ms † | 372 ms † | 414 ms † | 334 ms † |
+| 2 | 294 ms | 308 ms † | 447 ms † | 477 ms † | 386 ms † | 418 ms † | 249 ms † | 357 ms † |
+| 4 | 411 ms | 356 ms † | 714 ms † | 546 ms † | 394 ms † | 552 ms | 395 ms † | 638 ms † |
+| 6 | 372 ms | 394 ms | 973 ms † | 1,753 ms † | 408 ms | 587 ms | 649 ms † | 329 ms † |
+| 8 | 355 ms | 450 ms | 4,202 ms † | 399 ms † | 455 ms | 767 ms † | 327 ms | 361 ms |
+| 10 | 410 ms | 521 ms † | 1,899 ms † | 547 ms † | 584 ms † | 1,399 ms † | 371 ms | 467 ms |
+
+Runs `17`, `09`, `12` and `13`, in the order of the columns; a first series on llvmpipe at 1080p,
+`05`, was disturbed in 11 of its 12 cases.
+
+- At N = 1 both columns are the same set-up: 281 and 291 ms give the noise. At 6 seats and more,
+  in each case quiet in both columns, N Yunas show every seat's client sooner than one Yuna, by
+  22 to 179 ms. They start side by side, where one Yuna makes its seats one after another: at 8
+  seats on llvmpipe at 1080p, one Yuna's last seat replied at 151 ms, the 8 Yunas' last at 81 ms
+  (`17`); at 10 seats on the GPU at 4K, 135 and 75 ms (`13`).
+- When other programs take the cores, the N Yunas compete for them, and some disturbed cases
+  turn the other way: on the GPU at 1080p, 8 Yunas took 4.2 s, one Yuna 0.4 s (`09`).
+
+The memory at rest. Per agent is the growth from 1 to 10, divided by 9.
+
+| Device, output | The Yunas' anonymous: N Yunas, 1 → 10 | 1 Yuna, 1 → 10 seats | Per agent: its own Yuna | a seat | Everything at 10, `Pss`: N Yunas, 1 Yuna | The GPU's: N Yunas, 1 → 10 | 1 Yuna, 1 → 10 seats |
+|---|---|---|---|---|---|---|---|
+| llvmpipe, 1080p (`17`) | 45.3 → 451.3 MiB | 45.3 → 155.1 MiB | 45.1 MiB | 12.2 MiB | 1,084.4, 784.9 MiB | none | none |
+| GPU, 1080p (`09`) | 20.1 → 205.5 MiB | 20.6 → 24.9 MiB | 20.6 MiB | 0.5 MiB | 852.7, 663.2 MiB | 36.9 → 368.9 MiB | 36.9 → 154.0 MiB |
+| llvmpipe, 4K (`12`) | 80.8 → 810.4 MiB | 80.9 → 507.5 MiB | 81.1 MiB | 47.4 MiB | 1,794.8, 1,446.0 MiB, the second beside 16 others on its Mesa | none | none |
+| GPU, 4K (`13`) | 20.8 → 203.1 MiB | 19.8 → 24.8 MiB | 20.3 MiB | 0.6 MiB | 1,197.4, 1,013.9 MiB | 83.6 → 835.6 MiB | 83.6 → 516.1 MiB |
+
+- "Everything" is the processes under the Yunas: the Yunas, each Alacritty and its `sleep`. Each
+  Alacritty holds about 46 MiB of anonymous memory, the same in both cases.
+- An agent's own Yuna costs more than a seat of a shared one. On llvmpipe it costs 33 to 34 MiB
+  more of anonymous memory, at both sizes. On the GPU it costs 20 MiB more of anonymous memory,
+  and 24 MiB at 1080p or 36 MiB at 4K more of the GPU's. At ten agents, everything's `Pss` is
+  300 MiB more on llvmpipe at 1080p, and 190 MiB more on the GPU with 215 MiB more of the GPU's
+  memory; at 4K, 184 and 320 MiB more on the GPU.
+- A seat of a shared Yuna costs 12 MiB at 1080p and 47 MiB at 4K of the process's memory on
+  llvmpipe, and 13 MiB and 48 MiB of the GPU's on the GPU: about its output's buffer and its
+  window's texture, by their sizes.
+- Shared library pages count once across the Yunas: at ten, each Yuna's `Pss` is 53.6 MiB on
+  llvmpipe and 28.9 MiB on the GPU at 1080p, against 90.6 and 63.6 MiB for a Yuna alone with its
+  client.
+- At rest, every one of the 60 windows of 60 s, in the five series, drew 0 frames, and everything
+  under the Yunas used 0.0 ms of CPU. The anonymous memory after the window equalled the memory
+  before it in 59 of them, and was 0.1 MiB less in the last.
+
+### Ten together for 5 minutes
+
+Ten `yuna mcp`, each with a seat and Alacritty, at 1080p, held at rest for 300 s, their memory read
+every 30 s. No other process mapped the shell's Mesa at any reading.
+
+| Device | Everything, `Pss` (anonymous): at 0 s, at 300 s | The Yunas' own: at 0 s, at 300 s | The GPU's | Furthest from 0 s at a reading | Frames, CPU | Other programs | Run |
+|---|---|---|---|---|---|---|---|
+| llvmpipe | 1,089.9 (915.2), 1,088.8 (915.2) MiB | 501.4, 500.7 MiB | none | −1.0 MiB | 0, 0.0 ms | 11.48 cores, disturbed | `07` |
+| GPU | 851.5 (666.7), 851.4 (666.7) MiB | 251.4, 251.3 MiB | 368.9 MiB at each reading | +0.5 MiB | 0, 0.0 ms | 15.41 cores, disturbed | `08` |
+
+Nothing grows: the anonymous memory and the GPU's are the same at every reading, and the file
+pages move by a megabyte at most. At rest the ten use nothing, so nothing they share is contended;
+started together, the last of ten quiet Yunas replied at 96 ms, against 70 ms for one alone
+(`17`).
+
 ## M1.11 — The events' look (2026-11-18)
 
 What `yuna mcp`'s look for events costs a round (`mcp/events.rs`), measured by

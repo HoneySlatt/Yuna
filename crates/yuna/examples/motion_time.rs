@@ -74,6 +74,8 @@
 //! Yuna breaks, which was not checked.
 
 mod common;
+#[path = "common/usage.rs"]
+mod usage;
 #[path = "common/vkcube.rs"]
 mod vkcube;
 
@@ -84,10 +86,11 @@ use std::process::{Child, ExitCode};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use common::{PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, text_field};
+use common::{PATIENCE, Run, field, percentile, text_field};
 use smithay::reexports::rustix::io::{FdFlags, fcntl_setfd};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::MakeWriter;
+use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
 use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_layout::{Direction, Layout, LayoutError, OutputId, WindowId};

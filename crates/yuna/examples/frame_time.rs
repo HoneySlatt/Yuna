@@ -41,6 +41,8 @@
 //! `docs/measurements.md` with the machine, its load and the commit.
 
 mod common;
+#[path = "common/usage.rs"]
+mod usage;
 #[path = "common/vkcube.rs"]
 mod vkcube;
 
@@ -51,8 +53,9 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use common::{PATIENCE, Run, Usage, WARM_UP, field, percentile, print_usage, shell_variable};
+use common::{PATIENCE, Run, field, percentile, shell_variable};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
 
 /// What the command line asks for.
