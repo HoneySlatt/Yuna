@@ -1735,6 +1735,11 @@ own thread, both `took_us`.
   without SIGCHLD waking Yuna, frozen programs ended at SIGTERM, an old Yuna's folder removed,
   a panic of its state, in a debug build, that ends a tree ignoring SIGTERM within 3 s, at once
   with no program, removes its folder and exits with 101,
+  M1.11's done-when in one `yuna mcp`, through tool calls alone: a program's protocol error told
+  by `events`, kept on `spawn list` and its log read; a GTK 4 button found by its name through
+  `accessibility` and pressed at its centre; a window moved to a second output, that output
+  unplugged, the window told `window_placed` once its workspace is shown on the first output, read
+  in `windows` inside it and captured; the seat closed, its processes listed,
   and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its
   shell runs the command typed. Applications get the environment of
   `tests/common/application_environment.rs`, which `applications.rs` and `consumers.rs` share,

@@ -2086,3 +2086,269 @@ fn a_bus_that_never_starts_fails_its_program_at_the_limit() {
     assert!(status.success(), "{status}\n{}", yuna.log());
     let _ = fs::remove_dir_all(&scripts);
 }
+
+/// The windows of seat [`SEAT`], as `windows` lists them.
+fn windows_of(yuna: &mut Yuna) -> Vec<Value> {
+    let listed = yuna.call("windows", json!({"seat": SEAT}));
+    assert_eq!(listed["isError"], json!(false), "{listed}");
+    listed["structuredContent"]["windows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Whether `rect`, as `windows` gives it, lies inside `output`, as `outputs` gives it.
+fn rect_inside(rect: &Value, output: &Value) -> bool {
+    let (Some(x), Some(y), Some(width), Some(height)) = (
+        rect["x"].as_f64(),
+        rect["y"].as_f64(),
+        rect["width"].as_f64(),
+        rect["height"].as_f64(),
+    ) else {
+        return false;
+    };
+    let area = &output["logical"];
+    let (Some(left), Some(top), Some(across), Some(down)) = (
+        area["x"].as_f64(),
+        area["y"].as_f64(),
+        area["width"].as_f64(),
+        area["height"].as_f64(),
+    ) else {
+        return false;
+    };
+    width > 0.0
+        && height > 0.0
+        && x >= left
+        && y >= top
+        && x + width <= left + across
+        && y + height <= top + down
+}
+
+/// M1.11's done-when, as an agent lives it, in one `yuna mcp`, every step a tool call and
+/// nothing read outside MCP's replies: the agent finds a program's protocol error and its log; it
+/// finds a GTK 4 button by its name and presses it at its centre; and it checks a window across
+/// an output unplugged, which `events` tells and `windows` and `capture` confirm; then it closes
+/// its seat, and the call lists what it ended.
+#[test]
+fn an_agent_lives_m1_11s_done_when_through_mcp_alone() {
+    let mut yuna = Yuna::start_without_seat("done-when");
+    let created = yuna.call(
+        "seat",
+        json!({"action": "create", "width": 1280, "height": 720, "rate": 60, "scale": 1}),
+    );
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let second = yuna.call(
+        "outputs",
+        json!({"action": "create", "seat": SEAT, "width": 1280, "height": 720, "rate": 60,
+               "scale": 1}),
+    );
+    assert_eq!(second["isError"], json!(false), "{second}");
+    let second = second["structuredContent"]["output"]["id"].clone();
+    let listed = yuna.call("outputs", json!({"action": "list", "seat": SEAT}));
+    let outputs = listed["structuredContent"]["outputs"].clone();
+    assert_eq!(outputs.as_array().map(Vec::len), Some(2), "{listed}");
+    let first = outputs[0].clone();
+    assert_ne!(first["id"], second, "{listed}");
+    let second_output = outputs[1].clone();
+    assert_eq!(second_output["id"], second, "{listed}");
+
+    // A protocol error: told with its interface, code and message, kept on the program, and the
+    // program's own log read.
+    let start = events(&mut yuna, json!({"seat": SEAT}))["next"].clone();
+    let broken = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["python3", "-I", "-c", ROLE_TWICE]}),
+    );
+    let broken_id = program_id(&broken);
+    let told = events(
+        &mut yuna,
+        json!({"seat": SEAT, "after": start, "kinds": ["client_left"], "wait_ms": 20_000}),
+    );
+    let left = &told["events"][0];
+    assert_eq!(left["reason"], json!("protocol_error"), "{told}");
+    assert_eq!(left["program"], json!(broken_id), "{told}");
+    assert_eq!(
+        left["error"]["interface"],
+        json!("wl_subcompositor"),
+        "{told}"
+    );
+    // `wl_subcompositor.error.bad_surface`.
+    assert_eq!(left["error"]["code"], json!(0), "{told}");
+    assert!(
+        left["error"]["message"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
+        "{told}"
+    );
+    assert_eq!(
+        program(&mut yuna, 0)["protocol_error"],
+        left["error"],
+        "{told}"
+    );
+    let log = wait_for("the broken program's log", || {
+        let read = yuna.call(
+            "spawn",
+            json!({"action": "log", "seat": SEAT, "program": broken_id}),
+        );
+        assert_eq!(read["isError"], json!(false), "{read}");
+        read["structuredContent"]["text"]
+            .as_str()
+            .filter(|text| text.contains("closed"))
+            .map(str::to_owned)
+    });
+    assert_eq!(log, "closed\n");
+
+    // A button, found by its name and pressed at its rectangle's centre; the dialog it opens is
+    // read back, then closed by its own button.
+    let env = pinned_environment(&yuna, &gtk_variables());
+    let sleeper = yuna.start_program(SEAT, &["sleep", "600"], &env, false);
+    let demo = yuna.start_program(SEAT, &["gtk4-demo", "--run=dialog"], &env, true);
+    let found = yuna.accessible_nodes(json!({
+        "seat": SEAT, "role": "button", "name": "message dialog", "wait_ms": 40_000
+    }));
+    let (button, x, y) = first_node_centre(&found, "the Message Dialog button");
+    assert_eq!(button["app"], demo["pid"], "{found}");
+    let window = button["window"].clone();
+    let windows_before = windows_of(&mut yuna).len();
+    let clicked = yuna.call(
+        "pointer",
+        json!({"action": "click", "seat": SEAT, "x": x, "y": y, "output": button["output"]}),
+    );
+    assert_eq!(
+        clicked["structuredContent"]["pointer"]["window"], window,
+        "{clicked}"
+    );
+    let dialog = yuna.accessible_nodes(json!({
+        "seat": SEAT, "name": "Test message", "wait_ms": 30_000
+    }));
+    assert!(
+        !dialog["nodes"].as_array().is_none_or(Vec::is_empty),
+        "{dialog}"
+    );
+    wait_for("the dialog's window", || {
+        (windows_of(&mut yuna).len() > windows_before).then_some(())
+    });
+    let cancel = yuna.accessible_nodes(json!({
+        "seat": SEAT, "role": "button", "name": "cancel", "wait_ms": 30_000
+    }));
+    let (cancel_button, x, y) = first_node_centre(&cancel, "the dialog's Cancel button");
+    yuna.call(
+        "pointer",
+        json!({"action": "click", "seat": SEAT, "x": x, "y": y, "output": cancel_button["output"]}),
+    );
+    wait_for("the dialog's end", || {
+        (windows_of(&mut yuna).len() == windows_before).then_some(())
+    });
+
+    // The window, moved to the second output, then that output unplugged.
+    let window_id = window.as_u64().expect("a window id");
+    let away = yuna.call(
+        "workspaces",
+        json!({"action": "create", "seat": SEAT, "name": "away", "output": second}),
+    );
+    assert_eq!(away["isError"], json!(false), "{away}");
+    let moved = yuna.call(
+        "workspaces",
+        json!({"action": "move_window", "seat": SEAT, "window": window, "workspace": "away"}),
+    );
+    assert_eq!(moved["isError"], json!(false), "{moved}");
+    let shown = yuna.call(
+        "workspaces",
+        json!({"action": "focus", "seat": SEAT, "name": "away"}),
+    );
+    assert_eq!(shown["isError"], json!(false), "{shown}");
+    let on_second = wait_for("the window on the second output", || {
+        let window = windows_of(&mut yuna)
+            .into_iter()
+            .find(|candidate| candidate["id"] == json!(window_id))?;
+        (window["output"] == second && window["rect"].is_object()).then_some(window)
+    });
+    assert!(
+        rect_inside(&on_second["rect"], &second_output),
+        "{on_second}"
+    );
+
+    let before_unplug = events(&mut yuna, json!({"seat": SEAT}))["next"].clone();
+    let removed = yuna.call(
+        "outputs",
+        json!({"action": "remove", "seat": SEAT, "output": second}),
+    );
+    assert_eq!(removed["isError"], json!(false), "{removed}");
+    let told = events(
+        &mut yuna,
+        json!({"seat": SEAT, "after": before_unplug, "kinds": ["output_removed"],
+               "wait_ms": 20_000}),
+    );
+    assert_eq!(told["events"][0]["kind"], json!("output_removed"), "{told}");
+    assert_eq!(told["events"][0]["output"], second, "{told}");
+    // Its workspace went to the first output with its window, which a workspace the output does
+    // not show hides: no output, no rectangle. The agent shows the workspace.
+    let hidden = windows_of(&mut yuna)
+        .into_iter()
+        .find(|candidate| candidate["id"] == json!(window_id))
+        .expect("the window is still there");
+    assert_eq!(hidden["output"], Value::Null, "{hidden}");
+    assert_eq!(hidden["workspace"], json!("away"), "{hidden}");
+    let shown = yuna.call(
+        "workspaces",
+        json!({"action": "focus", "seat": SEAT, "name": "away"}),
+    );
+    assert_eq!(shown["isError"], json!(false), "{shown}");
+    // The unplug told the window hidden, `window_placed` with no output; showing its workspace
+    // tells it placed on the first output.
+    let placed = wait_for("the window placed on the first output", || {
+        let told = events(
+            &mut yuna,
+            json!({"seat": SEAT, "after": before_unplug, "kinds": ["window_placed"]}),
+        );
+        told["events"]
+            .as_array()?
+            .iter()
+            .find(|event| event["window"] == window && event["output"] == first["id"])
+            .cloned()
+    });
+    assert!(rect_inside(&placed["place"], &first), "{placed}");
+    let on_first = windows_of(&mut yuna)
+        .into_iter()
+        .find(|candidate| candidate["id"] == json!(window_id))
+        .expect("the window is still there");
+    assert_eq!(on_first["output"], first["id"], "{on_first}");
+    assert!(
+        rect_inside(&on_first["rect"], &first),
+        "{on_first}\n{first}"
+    );
+    let captured = yuna.call("capture", json!({"seat": SEAT, "window": window_id}));
+    assert_eq!(captured["isError"], json!(false), "{captured}");
+    assert!(
+        captured["content"]
+            .as_array()
+            .is_some_and(|parts| parts.iter().any(|part| part["type"] == json!("image"))),
+        "{captured}"
+    );
+
+    // The seat's closing ends its programs, and lists what it ended.
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    assert_eq!(closed["isError"], json!(false), "{closed}");
+    let ended = closed["structuredContent"]["ended"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{closed}"));
+    // A program that ignores its display's end, and the seat's accessibility bus's daemon.
+    assert!(ended.contains(&sleeper["pid"]), "{closed}");
+    assert!(ended.len() >= 2, "{closed}");
+    assert_eq!(
+        closed["structuredContent"]["left_running"],
+        json!([]),
+        "{closed}"
+    );
+    assert_eq!(
+        closed["structuredContent"]["closed"],
+        json!(SEAT),
+        "{closed}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
