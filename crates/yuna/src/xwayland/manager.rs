@@ -12,11 +12,13 @@
 //!    was given ([ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
 //! 3. XSETTINGS: `Xft/DPI` with it, and a window scale of 1, since X11 programs draw in X11
 //!    pixels.
-//! 4. Composite's manual redirection of the root's windows, and SubstructureRedirect on the root:
+//! 4. XFixes' selection events on the manager's window, for `CLIPBOARD` and `PRIMARY`: no X11
+//!    client's selection goes unseen (`bridge.rs`).
+//! 5. Composite's manual redirection of the root's windows, and SubstructureRedirect on the root:
 //!    Yuna draws and places X11 windows.
-//! 5. `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK`, and the root's empty `_NET_CLIENT_LIST`,
+//! 6. `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK`, and the root's empty `_NET_CLIENT_LIST`,
 //!    `_NET_CLIENT_LIST_STACKING` and `_NET_ACTIVE_WINDOW`.
-//! 6. `WM_S0`, last: Xwayland listens on its sockets only from then on, so the first client
+//! 7. `WM_S0`, last: Xwayland listens on its sockets only from then on, so the first client
 //!    finds everything above in place.
 //!
 //! Then it serves. It follows each top-level window, a child of the root: it reads the
@@ -37,45 +39,53 @@
 //! `_XWAYLAND_ALLOW_COMMITS` if a sync request held it. `_NET_WM_MOVERESIZE` and
 //! `WM_CHANGE_STATE` are taken and logged: Yuna has no interactive move, and minimises nothing.
 //!
+//! It also carries the seat's clipboard and primary selection between X11 and Wayland, both ways
+//! (`bridge.rs`): it posts what X11 clients copy and ask, and takes Yuna's word of what Wayland
+//! clients copy, the pipes of their pastes, and the data of their selections.
+//!
 //! **No reparenting.** The manager never puts a window inside a frame of its own: Yuna draws no
 //! title bars ([ADR-0024](../../../../docs/adr/0024-no-title-bars.md)), so a frame would only
 //! cost a window and a round trip each. Its known consequence: Java's AWT, which waits for a
 //! reparenting manager unless told otherwise, needs `_JAVA_AWT_WM_NONREPARENTING=1`
 //! ([debt](../../../../docs/debt.md#xwayland)).
 //!
-//! The thread ends when Xwayland closes the connection, when Yuna lets the commands go, or on an
-//! error; its channel's end tells Yuna, which then ends that Xwayland, even when the thread
+//! Between them it sleeps in `poll` on its connection, its wake-up socket and the pipes its
+//! transfers wait on, until the first transfer's time limit: with no transfer, until something
+//! comes. The thread ends when Xwayland closes the connection, when Yuna lets the commands go, or
+//! on an error; its channel's end tells Yuna, which then ends that Xwayland, even when the thread
 //! panicked. Nothing an X11 client sends can make it panic: every value it reads is checked.
 
 use std::collections::HashMap;
 use std::io;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use smithay::reexports::calloop::channel::SyncSender;
 use smithay::reexports::rustix;
-use smithay::reexports::rustix::event::{PollFd, PollFlags};
+use smithay::reexports::rustix::event::{PollFd, PollFlags, Timespec};
 use smithay::reexports::rustix::io::Errno;
 use smithay::reexports::rustix::net::{RecvFlags, SendFlags};
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::errors::{ConnectionError, ReplyError};
-use x11rb::protocol::Event;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::res::{self, ClientIdMask, ClientIdSpec, ConnectionExt as _};
 use x11rb::protocol::sync::{
     self, Alarm, ConnectionExt as _, Counter, CreateAlarmAux, Int64, TESTTYPE, VALUETYPE,
 };
-use x11rb::protocol::xfixes::{ClientDisconnectFlags, ConnectionExt as _};
+use x11rb::protocol::xfixes::{ClientDisconnectFlags, ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigWindow,
     ConfigureNotifyEvent, ConfigureRequestEvent, ConfigureWindowAux, ConnectionExt as _,
     CreateWindowAux, EventMask, InputFocus, Place, PropMode, StackMode, Window, WindowClass,
 };
+use x11rb::protocol::{ErrorKind, Event};
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
 use yuna_layout::SeatId;
 
+use super::bridge::{Bridge, Selection};
 use super::properties::{
     self, MAX_EMULATED, MAX_LIST, MAX_STARTUP_ID_BYTES, MAX_TEXT_BYTES, Malformed, Properties,
     Protocols, Raw, TextTypes, WindowType, Wishes, X11Rect,
@@ -160,6 +170,28 @@ pub(crate) enum ManagerEvent {
     SyncCounter { window: Window, value: u64 },
     /// Its client answered a ping (`_NET_WM_PING`).
     PingAnswered(Window),
+    /// An X11 client took `selection`, the `owner`-th owner the manager saw. Its targets read,
+    /// it offers these MIME types: none when Wayland can read nothing of it. `wayland_serial` is
+    /// the serial of the last Wayland selection the manager was told of then.
+    SelectionTaken {
+        selection: Selection,
+        owner: u64,
+        mime_types: Vec<String>,
+        wayland_serial: u64,
+    },
+    /// No one owns `selection` any more: its X11 owner set none, or its window or its client
+    /// went.
+    SelectionDropped(Selection),
+    /// An X11 client reads the seat's Wayland `selection` as `mime_type`: Yuna answers transfer
+    /// `transfer` with [`Command::WaylandData`].
+    ReadWayland {
+        selection: Selection,
+        mime_type: String,
+        transfer: u64,
+    },
+    /// A transfer of [`Command::SendToWayland`] ended, whatever its outcome, refused at once
+    /// included: one fewer runs.
+    TransferToWaylandEnded,
     /// The thread ends, for this reason.
     Stopped(Stop),
 }
@@ -230,6 +262,28 @@ pub(crate) enum Command {
     /// Stacks these windows in this order, bottom to top: Xwayland finds the window under the
     /// pointer through X11's stacking, so the windows Yuna shows lie above those it hides.
     Restack(Vec<Window>),
+    /// The seat's Wayland `selection`, its `serial`-th, is a Wayland client's offering these MIME
+    /// types, for which the manager takes the X11 selection; or none, and the manager releases
+    /// it if it holds it.
+    OwnSelection {
+        selection: Selection,
+        serial: u64,
+        mime_types: Option<Vec<String>>,
+    },
+    /// A Wayland client reads `selection`, offered by X11 owner `owner`, as `mime_type`, into
+    /// `pipe`. Its end is posted, [`ManagerEvent::TransferToWaylandEnded`].
+    SendToWayland {
+        selection: Selection,
+        owner: u64,
+        mime_type: String,
+        pipe: OwnedFd,
+    },
+    /// The read end of the pipe the Wayland source writes into for transfer `transfer` of
+    /// [`ManagerEvent::ReadWayland`]; none when the source cannot be read.
+    WaylandData {
+        transfer: u64,
+        source: Option<OwnedFd>,
+    },
 }
 
 /// Yuna's side of a manager: its commands, and the socket that wakes its thread for them. When it
@@ -267,7 +321,7 @@ fn next_event(connection: &RustConnection) -> Result<Option<Event>, ConnectionEr
 }
 
 /// Why the manager stopped: an X11 error, an I/O error, or what it found wrong.
-type Failure = Box<dyn std::error::Error + Send + Sync>;
+pub(super) type Failure = Box<dyn std::error::Error + Send + Sync>;
 
 x11rb::atom_manager! {
     /// The atoms the manager names.
@@ -321,6 +375,12 @@ x11rb::atom_manager! {
         _XWAYLAND_ALLOW_COMMITS,
         _XSETTINGS_S0,
         _XSETTINGS_SETTINGS,
+        CLIPBOARD,
+        TARGETS,
+        TIMESTAMP,
+        INCR,
+        TEXT,
+        _YUNA_SELECTION,
     }
 }
 
@@ -378,8 +438,8 @@ fn run(
     if events.send(ManagerEvent::Ready).is_err() {
         return Ok(());
     }
-    let mut manager = Manager::new(&connection, atoms, own, events)?;
-    manager.serve(commands, woken)
+    let mut manager = Manager::new(&connection, atoms, own, events, commands)?;
+    manager.serve(woken)
 }
 
 /// Takes charge of Xwayland's root, in the order the module's documentation gives, and checks
@@ -438,6 +498,13 @@ fn take_charge(connection: &RustConnection, scale: f64) -> Result<(Atoms, Window
         &xsettings(0, &settings(scale)),
     )?;
     take_selection(connection, root, window, atoms._XSETTINGS_S0, &atoms)?;
+
+    let owners = SelectionEventMask::SET_SELECTION_OWNER
+        | SelectionEventMask::SELECTION_WINDOW_DESTROY
+        | SelectionEventMask::SELECTION_CLIENT_CLOSE;
+    for selection in [atoms.CLIPBOARD, AtomEnum::PRIMARY.into()] {
+        connection.xfixes_select_selection_input(window, selection, owners)?;
+    }
 
     connection.composite_query_version(0, 4)?.reply()?;
     connection
@@ -669,10 +736,13 @@ struct Manager<'a> {
     /// Whether `clients` or `stacking` changed since the root's lists were last set.
     lists_changed: bool,
     events: &'a SyncSender<ManagerEvent>,
+    commands: &'a mpsc::Receiver<Command>,
+    /// The seat's selections on X11's side.
+    bridge: Bridge<'a>,
 }
 
 /// Whether the manager goes on: false once Yuna's end of the events' channel has gone.
-type GoOn = bool;
+pub(super) type GoOn = bool;
 
 impl<'a> Manager<'a> {
     fn new(
@@ -680,6 +750,7 @@ impl<'a> Manager<'a> {
         atoms: Atoms,
         own: Window,
         events: &'a SyncSender<ManagerEvent>,
+        commands: &'a mpsc::Receiver<Command>,
     ) -> Result<Manager<'a>, Failure> {
         let setup = connection.setup();
         let root = setup
@@ -715,23 +786,19 @@ impl<'a> Manager<'a> {
             order: vec![own],
             lists_changed: false,
             events,
+            commands,
+            bridge: Bridge::new(connection, events, atoms, root, own),
         })
     }
 
-    /// Reads X11's events and Yuna's commands until Xwayland closes the connection or Yuna lets
-    /// the commands go. Sleeps in `poll` between them: nothing is polled on a timer.
-    fn serve(
-        &mut self,
-        commands: &mpsc::Receiver<Command>,
-        woken: &UnixStream,
-    ) -> Result<(), Failure> {
+    /// Reads X11's events and Yuna's commands, and moves the transfers of selections, until
+    /// Xwayland closes the connection or Yuna lets the commands go. Sleeps in `poll` between
+    /// them, woken by X11, by Yuna, by a transfer's pipe, or by a transfer's time limit: nothing
+    /// is polled on a timer, and with no transfer the sleep has no end but those.
+    fn serve(&mut self, woken: &UnixStream) -> Result<(), Failure> {
         loop {
-            loop {
-                match commands.try_recv() {
-                    Ok(command) => self.command(command)?,
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
-                }
+            if !self.take_commands()? || !self.bridge.run()? {
+                return Ok(());
             }
             // Flushed before the events are read: a flush that would block reads X11's packets
             // into x11rb's own queue, where `poll` would not see them, so that an event could
@@ -752,16 +819,42 @@ impl<'a> Manager<'a> {
                     break;
                 }
             }
-            let mut sleep = [
+            let timeout = self.bridge.next_deadline().and_then(|deadline| {
+                Timespec::try_from(deadline.saturating_duration_since(Instant::now())).ok()
+            });
+            let mut sleep = vec![
                 PollFd::new(self.connection.stream(), PollFlags::IN),
                 PollFd::new(woken, PollFlags::IN),
             ];
-            match rustix::event::poll(&mut sleep, None) {
+            sleep.extend(
+                self.bridge
+                    .waits()
+                    .into_iter()
+                    .map(|(pipe, flags)| PollFd::from_borrowed_fd(pipe, flags)),
+            );
+            match rustix::event::poll(&mut sleep, timeout.as_ref()) {
                 Ok(_) | Err(Errno::INTR) => {}
                 Err(error) => return Err(error.into()),
             }
+            drop(sleep);
             if !drain(woken)? {
                 return Ok(());
+            }
+        }
+    }
+
+    /// Carries out every command Yuna's loop sent so far; false once Yuna let them go.
+    fn take_commands(&mut self) -> Result<GoOn, Failure> {
+        let commands = self.commands;
+        loop {
+            match commands.try_recv() {
+                Ok(command) => {
+                    if !self.command(command)? {
+                        return Ok(false);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => return Ok(true),
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(false),
             }
         }
     }
@@ -774,9 +867,12 @@ impl<'a> Manager<'a> {
     /// Handles one X11 event.
     fn event(&mut self, event: Event) -> Result<GoOn, Failure> {
         // Any X11 client may send any event to any window (`SendEvent`): the server marks it as
-        // sent. Only client messages are meant to come so; another sent event, a made-up
-        // `DestroyNotify` or `MapRequest` of another program's window, is taken as nothing.
-        if event.sent_event() && !matches!(event, Event::ClientMessage(_)) {
+        // sent. Only client messages and a selection owner's answers are meant to come so;
+        // another sent event, a made-up `DestroyNotify` or `MapRequest` of another program's
+        // window, is taken as nothing.
+        if event.sent_event()
+            && !matches!(event, Event::ClientMessage(_) | Event::SelectionNotify(_))
+        {
             tracing::trace!(?event, "an event another X11 client made up, left");
             return Ok(true);
         }
@@ -803,7 +899,10 @@ impl<'a> Manager<'a> {
                     self.forget(moved.window)
                 }
             }
-            Event::DestroyNotify(destroyed) => self.forget(destroyed.window),
+            Event::DestroyNotify(destroyed) => {
+                self.bridge.window_destroyed(destroyed.window);
+                self.forget(destroyed.window)
+            }
             Event::MapRequest(request) => {
                 if let Some(tracked) = self.windows.get_mut(&request.window) {
                     tracked.override_redirect = false;
@@ -836,9 +935,17 @@ impl<'a> Manager<'a> {
             }
             Event::ConfigureRequest(request) => self.configure_request(&request),
             Event::PropertyNotify(changed) => {
-                self.property_changed(changed.window, changed.atom)?
+                self.bridge.property(&changed)?
+                    && self.property_changed(changed.window, changed.atom)?
             }
             Event::ClientMessage(message) => self.client_message(&message),
+            Event::XfixesSelectionNotify(changed) => self.bridge.owner_changed(&changed)?,
+            Event::SelectionNotify(answer) => self.bridge.converted(&answer)?,
+            // The keyboard may have come to one of the seat's X11 windows just before the
+            // request that follows from it: the commands sent so far are carried out first.
+            Event::SelectionRequest(request) => {
+                self.take_commands()? && self.bridge.requested(&request)?
+            }
             Event::SyncAlarmNotify(alarm) => match self.alarms.get(&alarm.alarm) {
                 Some(&window) => {
                     let value = alarm.counter_value;
@@ -851,7 +958,11 @@ impl<'a> Manager<'a> {
             Event::Error(error) => {
                 // A request on a window its client destroyed meanwhile, most often.
                 tracing::debug!(?error, "an X11 request of the manager failed");
-                true
+                if error.error_kind == ErrorKind::Window {
+                    self.bridge.window_failed(error.bad_value)?
+                } else {
+                    true
+                }
             }
             event => {
                 tracing::trace!(?event, "an X11 event the manager leaves");
@@ -907,6 +1018,7 @@ impl<'a> Manager<'a> {
 
     /// Forgets a window gone from the root, and tells Yuna.
     fn forget(&mut self, window: Window) -> GoOn {
+        self.bridge.window_left(window);
         let Some(tracked) = self.windows.remove(&window) else {
             return true;
         };
@@ -985,6 +1097,7 @@ impl<'a> Manager<'a> {
     /// `_NET_WM_STATE` goes, as EWMH asks of a manager at withdrawal: mapped again, the window
     /// starts from what its client sets then, not from the states it had.
     fn unmapped(&mut self, window: Window) -> Result<GoOn, Failure> {
+        self.bridge.window_left(window);
         let Some(tracked) = self.windows.get_mut(&window) else {
             return Ok(true);
         };
@@ -1183,9 +1296,9 @@ impl<'a> Manager<'a> {
         true
     }
 
-    /// Carries out one of Yuna's commands. A request on a window gone meanwhile fails in the
-    /// event queue, logged there.
-    fn command(&mut self, command: Command) -> Result<(), Failure> {
+    /// Carries out one of Yuna's commands; false once Yuna's loop is gone. A request on a window
+    /// gone meanwhile fails in the event queue, logged there.
+    fn command(&mut self, command: Command) -> Result<GoOn, Failure> {
         let connection = self.connection;
         let atoms = &self.atoms;
         match command {
@@ -1258,7 +1371,7 @@ impl<'a> Manager<'a> {
                     .get(&window)
                     .is_some_and(|tracked| tracked.managed)
                 {
-                    return Ok(());
+                    return Ok(true);
                 }
                 let mut names = Vec::new();
                 if state.fullscreen {
@@ -1284,7 +1397,7 @@ impl<'a> Manager<'a> {
                 // A window destroyed while the command was on its way: its id may already name
                 // another program's resource, which `KillClient` would end.
                 let Some(tracked) = self.windows.get(&window) else {
-                    return Ok(());
+                    return Ok(true);
                 };
                 if tracked.properties.protocols.delete_window {
                     let message = ClientMessageEvent::new(
@@ -1333,8 +1446,26 @@ impl<'a> Manager<'a> {
                     self.publish_lists();
                 }
             }
+            Command::OwnSelection {
+                selection,
+                serial,
+                mime_types,
+            } => self.bridge.own(selection, serial, mime_types)?,
+            Command::SendToWayland {
+                selection,
+                owner,
+                mime_type,
+                pipe,
+            } => {
+                return self
+                    .bridge
+                    .send_to_wayland(selection, owner, &mime_type, pipe);
+            }
+            Command::WaylandData { transfer, source } => {
+                return self.bridge.wayland_data(transfer, source);
+            }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Sends `window` a sync request of `value` (`_NET_WM_SYNC_REQUEST`), ahead of a configure,
@@ -1415,8 +1546,11 @@ impl<'a> Manager<'a> {
     /// Active windows, which take input, get `SetInputFocus`; Locally and Globally Active ones,
     /// which list `WM_TAKE_FOCUS`, are sent it; a No Input window gets neither. A window without
     /// `WM_HINTS` takes input, as most managers have it. With none, the focus goes to none.
-    /// `_NET_ACTIVE_WINDOW` names it.
-    fn focus(&self, window: Option<Window>) -> Result<(), Failure> {
+    /// `_NET_ACTIVE_WINDOW` names it. Yuna sends it whenever the seat's keyboard goes to one of
+    /// the seat's X11 windows or leaves them: the bridge reads Wayland's selections for X11 only
+    /// while one has it.
+    fn focus(&mut self, window: Option<Window>) -> Result<(), Failure> {
+        self.bridge.focus_moved(window);
         let connection = self.connection;
         let atoms = &self.atoms;
         match window {

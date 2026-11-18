@@ -270,7 +270,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `activation.rs`: `xdg-activation-v1`: tokens, activation through the layout, urgent windows.
 - `dialog.rs`: `xdg-dialog-v1`: offered; the modal hint is read, and nothing uses it yet.
 - `selection.rs`: the clipboard (`wl_data_device`), the primary selection and
-  `ext-data-control-v1`, on Smithay's handlers.
+  `ext-data-control-v1`, on Smithay's handlers; the selection Yuna holds for an X11 owner, and
+  the record of what Wayland clients set, for X11 ([below](#selections)).
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, the motion each frame
   samples, what is drawn, called back and reported presented, what clients are told, and the
   hidden windows.
@@ -299,7 +300,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   reads, decoded and bounded; `shell.rs`, `xwayland-shell-v1`; `windows.rs`, X11 windows on
   Yuna's side ([An X11 window's life](#an-x11-windows-life)); `menus.rs`, override-redirect
   windows, menus and tooltips; `answers.rs`, the sync requests and pings Yuna waits on;
-  `mod.rs`, each display's phases on Yuna's loop.
+  `bridge.rs`, the selections on X11's side, on the manager's thread, and `selections.rs`,
+  on Yuna's side ([Selections](#selections)); `mod.rs`, each display's phases on Yuna's loop.
 - `process.rs`: what every program Yuna starts shares, MCP's and Xwayland: the descriptors it
   does not inherit.
 - `mcp/`: the MCP server, [below](#the-mcp-server).
@@ -414,7 +416,8 @@ window lies among the others. Each property read is bounded, 64 KiB of text, 64 
 list; a malformed value is taken as unset, whatever the property held before, logged once per
 window. Titles are read in UTF-8, in Latin-1 for `STRING`, and `COMPOUND_TEXT` as Latin-1. Any
 X11 client may send any event to the root (`SendEvent`), which the server marks as sent: the
-manager takes no sent event but a client message, so that a made-up `DestroyNotify` or
+manager takes no sent event but a client message or a selection owner's answer
+([Selections](#between-x11-and-wayland)), so that a made-up `DestroyNotify` or
 `MapRequest` of another program's window changes nothing, and among client messages no
 `WL_SURFACE_SERIAL` sent so: only Xwayland's own pairs a window with a surface. An event x11rb
 cannot read is logged and left. The manager never reparents: Yuna draws no frames
@@ -783,8 +786,9 @@ file shrunk in between would kill Yuna with SIGBUS, which Smithay catches only f
 ### Selections
 
 Each seat has its own clipboard and primary selection, which follow its keyboard focus: a seat's
-focus is only ever on its own clients, so a selection never crosses seats. Yuna holds no
-selection of its own.
+focus is only ever on its own clients, so a selection never crosses seats. Between Wayland
+clients Yuna passes pipes and never touches the data. It holds a selection itself for one kind of
+owner alone, an X11 program of the seat ([below](#between-x11-and-wayland)).
 
 1. When the keyboard focus moves to another client's window, that client gets the selections
    just before its keyboard `enter`, as `wl_data_device` asks: each device it has is told what
@@ -803,6 +807,69 @@ selection of its own.
    source gone, Yuna closes the pipe at once: the reader sees it end, empty.
 5. A selection lasts as long as its source. When the source is destroyed, or its client leaves,
    the selection empties, and the client with the focus and the data-control clients are told.
+
+#### Between X11 and Wayland
+
+Each seat's X11 window manager carries the clipboard (`CLIPBOARD`) and the primary selection
+(`PRIMARY`) between the seat's X11 and Wayland programs, both ways, on its own thread
+(`xwayland/bridge.rs`); Yuna's loop decides what the seat's Wayland selections are
+(`xwayland/selections.rs`, `selection.rs`), and never reads, writes or waits on the data.
+
+1. **X11 to Wayland.** XFixes tells the manager when an X11 client takes a selection. The manager
+   converts the owner's `TARGETS` and maps them to MIME types: a target named as a MIME type is
+   offered as it is; `UTF8_STRING` is `text/plain;charset=utf-8`, and `STRING`, else `TEXT`,
+   `text/plain`; the others are left. Yuna makes them the seat's selection, held by itself: a
+   Smithay compositor selection whose data names the Xwayland and the owner (`X11Offer`). It
+   replaces a Wayland client's, which is cancelled; the client with the focus and the data-control
+   clients are offered it as any selection. An owner whose targets give no MIME type, or that does
+   not answer within 5 s, empties the selection.
+2. A Wayland client that reads it sends its pipe, which Yuna passes to the manager with the type.
+   The manager converts the selection to that type's target onto a window of its own, reads the
+   answer in pieces of 256 KiB, or INCR's chunks as the owner appends them, writes them into the
+   pipe as its reader drains it, then closes it. A refusal closes it at once: the reader sees it
+   end, empty.
+3. The owner gone empties the seat's selection: its selection set to none, its window destroyed,
+   its client gone, or its Xwayland ended. A client gone also ends the transfers it was serving.
+4. **Wayland to X11.** When a Wayland client of the seat sets a selection, Yuna records its MIME
+   types, 64 at most of 255 bytes at most, and tells the seat's manager at the round's end, once
+   however often it changed. The manager takes the X11 selection on its own window and answers
+   each `SelectionRequest`: `TARGETS`, each MIME type under its own name, and `UTF8_STRING`,
+   `STRING` and `TEXT` from the text types; `TIMESTAMP`; and each data target by asking Yuna's
+   loop, which makes a pipe, gives its write end to the source
+   (`request_data_device_client_selection`, `request_primary_client_selection`) and sends its
+   read end back. The manager sets what comes on the requestor's property whole, or, above the
+   core protocol's maximum request (256 KiB), in INCR's chunks, each once the requestor deleted
+   the last. The bytes go as the source wrote them: text is never encoded again. An unknown
+   target, or a failure before the answer, is refused: the property none. So is a request named
+   with a time before the manager took the selection, as ICCCM asks (`CurrentTime` is
+   answered), and a request for the manager's other selections, `WM_S0` and `_XSETTINGS_S0`,
+   which serve no data. An answer to one of the manager's own conversions that names another
+   selection or target than it asked, which any X11 client can make up, is left.
+5. When the Wayland selection ends, cleared, replaced or its source gone, the manager releases the
+   X11 selection, naming the time it took it, so that an X11 client that took it since keeps it.
+   A source destroyed, by its client or with it, reaches Yuna as a cleared selection: Yuna's fork
+   of Smithay calls `new_selection` with none then ([patch 6](smithay-patches.md)). An Xwayland
+   started after a client set a selection is told it once its manager owns `WM_S0`.
+6. **Who reads.** The seat's Wayland selections are read from X11 only while one of the seat's
+   X11 windows has its keyboard, as a Wayland client reads them only with the focus: every other
+   request is refused, `TARGETS` included. The manager knows it from the focus commands Yuna
+   sends it, and carries out those already sent before it answers a request, so that a paste
+   right after a click finds the focus moved. An X11 client's selection always becomes the seat's
+   Wayland selection, which Wayland's rule then gives to the client with the focus.
+7. **Bounds.** A transfer that makes no progress for 5 s (`X11_TRANSFER_TIMEOUT`) ends: its
+   Wayland reader sees its pipe end, its X11 requestor is refused, or, mid-INCR, gets no next
+   chunk. One past 256 MiB (`MAX_X11_TRANSFER_BYTES`) ends too. Eight run at once each way on a
+   seat (`MAX_X11_TRANSFERS`): Yuna refuses a ninth Wayland read before it reaches the manager,
+   closing its pipe, and the manager a ninth X11 request. A transfer holds one piece or one chunk
+   at a time: its reader sets the pace. A reader or a source that closes its pipe, a requestor or
+   an owner gone, a reply missing or short, ends that transfer alone.
+
+A Wayland copy and an X11 copy made at once end as one selection on both sides: Yuna numbers the
+Wayland selections clients set, and an X11 owner the manager saw before it learnt of a newer one
+is left, since the manager then takes X11's selection for the newer. Drag and drop between X11 and
+Wayland does not exist yet ([debt](debt.md#xwayland)).
+
+#### Drag and drop
 
 A drag starts from a button an agent's pointer holds: Smithay accepts `start_drag` only with the
 serial of the pointer's grab, which a press starts, and Yuna then gives the pointer Smithay's
@@ -980,18 +1047,23 @@ waits:
 2. **Serving.** Once Xwayland writes its number on `-displayfd`, the manager's thread connects
    through `-wm` and takes charge, in this order (`xwayland/manager.rs`): XFixes'
    disconnection mode, without which `-terminate` never fires while the manager is connected;
-   `RESOURCE_MANAGER`, `Xft.dpi` at 96 × S; XSETTINGS, `Xft/DPI` with it; Composite's manual
-   redirection and SubstructureRedirect on the root; `_NET_SUPPORTED`,
+   `RESOURCE_MANAGER`, `Xft.dpi` at 96 × S; XSETTINGS, `Xft/DPI` with it; XFixes' selection
+   events for `CLIPBOARD` and `PRIMARY` on its own window, so that no X11 client's selection goes
+   unseen ([Selections](#between-x11-and-wayland)); Composite's manual redirection and
+   SubstructureRedirect on the root; `_NET_SUPPORTED`,
    `_NET_SUPPORTING_WM_CHECK` and the root's empty lists of windows; `WM_S0` last. Xwayland accepts
    its clients only once a client owns `WM_S0`, so the first one finds every setting in place. The
    thread then reads X11's events; what Yuna decides on comes to its loop through a calloop channel
    of 256 events, and Yuna's commands go back, at the end of the round that made them, through a
-   channel the thread reads when its wake-up socket says so. Yuna handles the managers' events in a
-   slice of each round, one at least: until 1 ms before the earliest deadline armed when the round
-   began, a frame most often, and 8 ms at most (`MANAGER_SLICE`). Those past it wait, in order, for
-   the next rounds, which come at once, the deadlines due between them run first; meanwhile the
-   channels are not read, so that once one is full its manager waits, and X11's own buffers hold
-   what comes. A burst of thousands of windows so never holds another window's frames long
+   channel the thread reads when its wake-up socket says so. Between them it sleeps in `poll` on
+   its connection, its wake-up socket and the pipes its selections' transfers wait on, until the
+   first transfer's time limit; with no transfer, with no time limit. Yuna handles the managers'
+   events in a slice of each round, one at least: until 1 ms before the earliest deadline armed
+   when the round began, a frame most often, and 8 ms at most (`MANAGER_SLICE`). Those past it
+   wait, in order, for the next rounds, which come at once, the deadlines due between them run
+   first; meanwhile the channels are not read, so that once one is full its manager waits, and
+   X11's own buffers hold what comes. A burst of thousands of windows so never holds another
+   window's frames long
    ([measured](measurements.md#m18--a-flood-of-x11-windows-and-menus-2026-11-15)). A start
    that has not reached `WM_S0` within 30 s (`START_TIMEOUT`) is ended.
 3. **Paused.** Only after starts that fail in a row: below.
@@ -1295,11 +1367,21 @@ own thread, both `took_us`.
   `x11_menus.rs` in it shows menus: at their place over their window, pixel for pixel at 1.5 and
   area-filtered at 1; at a constant offset from their window's drawn corner in each frame of a
   slide; clicked on the X11 pixel drawn; a tooltip alone at its position; a menu whose window goes
-  drawn alone. `x11_misbehaving.rs` in it runs hostile X11 clients on one seat beside a Wayland
-  sentinel on another: a title of 16 MiB, invalid UTF-8 and COMPOUND_TEXT, messages and states
-  naming atoms never interned, nonsense size hints, cycles of `WM_TRANSIENT_FOR`, 5,000 windows then
-  5,000 override-redirect windows mapped at once, the cap of menus, windows destroyed before
-  they pair, a client dying mid-request, menus far off every output, and 24 random sequences of
+  drawn alone. `x11_selections.rs` in it carries selections between X11 and Wayland, with
+  `selection_client.rs`'s client on the X11 client's seat: an X11 copy pasted in Wayland as
+  UTF-8 text and a Wayland copy pasted in X11 as `UTF8_STRING`, exact bytes; a mebibyte each
+  way through INCR; the primary selection; an X11 owner that exits mid-transfer, the paste ended
+  at once and the next copy whole; a Wayland source that never writes, refused at the time limit;
+  a Wayland copy older than the seat's Xwayland; a Wayland source destroyed, then its client
+  gone, each releasing the X11 selection; malformed and made-up answers of an X11 owner; a
+  request older than Yuna's taking refused; nine reads at once, the ninth refused; and nothing
+  read from Wayland while a Wayland window has the keyboard, the keyboard back on Wayland after a
+  paste, or the X11 window that had it unmapped or destroyed. `x11_misbehaving.rs` in it runs
+  hostile X11 clients on one seat beside a Wayland sentinel on another: a title of 16 MiB,
+  invalid UTF-8 and COMPOUND_TEXT, messages and states naming atoms never interned, nonsense size
+  hints, cycles of `WM_TRANSIENT_FOR`, 5,000 windows then 5,000 override-redirect windows mapped
+  at once, the cap of menus, windows destroyed before they pair, a client dying mid-request,
+  menus far off every output, and 24 random sequences of
   up to 32 X11 requests, checked after each; each ends with Yuna sound, the sentinel untouched
   and called back, and Yuna at rest once the hostile clients have gone. The flood checks that
   the sentinel is never starved, and in a release build that no round of Yuna's loop works a

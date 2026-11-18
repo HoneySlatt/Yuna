@@ -329,9 +329,33 @@ with games' VRR:
   small the same way unless their prefix's DPI is 96 × S: Wine reads its registry's `LogPixels`,
   not `Xft.dpi` (`wine reg add "HKCU\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 144`
   at 1.5). Paid at Stage 2, with the configuration's rules per application.
-- No clipboard or drag and drop between X11 and Wayland programs until M1.11; between X11
-  programs of one seat they work inside Xwayland
-  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- No drag and drop between X11 and Wayland programs yet: a later task of M1.11; between X11
+  programs of one seat it works inside Xwayland
+  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). The clipboard and the primary
+  selection pass both ways ([ARCHITECTURE](ARCHITECTURE.md#between-x11-and-wayland)).
+- An `ext-data-control-v1` source destroyed while it is the owner's seat's selection still
+  clears it silently: Yuna's patch of Smithay (patch 6) tells of `wl_data_source`s and primary
+  sources alone. The X11 selection Yuna holds for it stays until an X11 program asks for it, which
+  finds it gone, is refused, and releases it.
+- The transfers between X11 and Wayland are bounded per seat, not per program: a Wayland client
+  that starts 8 reads of an X11 selection and never drains them holds every other program's
+  paste of X11 data up to the time limit, 5 s, at a time; an X11 program that starts 8 requests,
+  the same for X11. It is one seat and one user's programs.
+- Between X11 and Wayland, the targets `MULTIPLE`, `SAVE_TARGETS` and `DELETE` are refused: an
+  X11 clipboard manager cannot keep a Wayland selection after its source goes, and nothing asks
+  several targets at once of Yuna yet.
+- Text crosses as its bytes, never encoded again: `STRING`, Latin-1 by ICCCM, is served from
+  UTF-8 text as it is, and an X11 reply is passed in whatever type and format its owner gave.
+- An X11 owner that lost its selection, then exits mid-transfer, ends its transfers only at the
+  time limit, 5 s: XFixes tells of a client gone only while it owns the selection.
+- The MIME types of Wayland selections are interned as atoms in Xwayland, which never frees one:
+  a client of the seat setting selections of ever new types grows Xwayland's table of atoms, 64 a
+  selection, until Xwayland ends.
+- An X11 requestor window the manager does not follow, given a Wayland selection through INCR,
+  keeps the manager's `PropertyChange` mask for its life: its property changes wake the manager,
+  which leaves them.
+- The transfers' time limit runs on the manager's thread, on real time, not on Yuna's clock: a
+  test on the manual clock cannot step it.
 - No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
   key, until Stage 2.
 - A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
@@ -433,7 +457,9 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   change any state. Smithay's shape; Stage 2's core gives each protocol module its own objects.
 - The X11 manager's commands go through an unbounded channel
   (`crates/yuna/src/xwayland/manager.rs`, `mpsc::channel()`); its events are bounded. Bounded at
-  Stage 2, or earlier if a client can fill it.
+  Stage 2, or earlier if a client can fill it. The selections' commands are bounded before it:
+  a Wayland client's reads of an X11 selection at 8 running (`MAX_X11_TRANSFERS`), each with its
+  pipe, and the seat's Wayland selections once a round each.
 - A global, `OPENED_DISPLAYS` (`crates/yuna/src/render.rs`), keeps EGL displays alive because
   tests run several compositors in one process; Yuna's Vulkan core needs none.
 - wayland-rs bounds each client's outgoing buffer at 4,096 bytes and ends a client whose buffer

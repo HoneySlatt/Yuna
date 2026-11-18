@@ -552,3 +552,32 @@ sources of wlroots 0.20.2, sway 1.12, Hyprland 0.57.1, aquamarine 0.16.0, niri 2
 - **Tests.** KWin mocks libdrm (`autotests/drm/mock_drm.cpp`, about 1,400 lines).
 - **Commands.** sway runs bindings, IPC and configuration through one `execute_command`; niri
   keeps two action types with a conversion; niri's IPC is not API-stable by its own note.
+
+## The agents' toolbox
+
+Read on 2026-11-17 for M1.11, in KWin master (`src/xwayland/`), Mutter main, xwayland-satellite
+main, wayland-backend 0.3.17, libwayland main, at-spi2-core 2.62, GTK 4.24, Qt 6 and the agent
+servers named below.
+
+- **X11 selections.** KWin, Mutter and xwayland-satellite own a hidden X11 window per selection,
+  read an X11 owner's `TARGETS` into a Wayland selection and fetch the data only on a paste,
+  INCR above the request size. KWin gives X11 the Wayland selection only while an X11 window is
+  active, and ends a transfer idle for 5 to 10 s; Mutter and satellite have no time limit.
+  Satellite has no drag and drop; KWin's and Mutter's speak XDND 5 through a proxy window.
+- **Protocol traces.** wayland-backend's Rust server reads `WAYLAND_DEBUG` once, for every client
+  together, and has no hook per client; libwayland's server has `wl_display_add_protocol_logger`,
+  which Weston uses for its `proto` log scope. A protocol error reaches `ClientData::disconnected`
+  with its code, object, interface and message. libwayland and wayland-rs clients print their
+  own trace with `WAYLAND_DEBUG=client`, and libwayland prints the error text on its client's
+  standard error.
+- **Accessibility.** Every toolkit read finds the AT-SPI bus through `AT_SPI_BUS_ADDRESS` first.
+  GTK 4 and AccessKit export nothing until a registry answers their `Embed`; Qt exports first.
+  Chromium needs `ACCESSIBILITY_ENABLED`, and `--force-renderer-accessibility` for web content;
+  Firefox `GNOME_ACCESSIBILITY`; AccessKit a session bus. `at-spi2-registryd` pings every
+  application every 30 s; Qt holds each key until the registry answers, 100 ms at most. On
+  Wayland, extents are read in window coordinates; an application maps to its window by its bus
+  peer's pid, then its title. kwin-mcp, swampcy, KDE's selenium-webdriver-at-spi and Dogtail each
+  run a private bus and force accessibility on.
+- **D-Bus in Rust.** RustSec marked `zvariant` unmaintained on 2026-10-16
+  (RUSTSEC-2026-0370), its code moved into zbus 6 as `zbus::wire`; zbus 6.3 without default
+  features adds six crates and no runtime.

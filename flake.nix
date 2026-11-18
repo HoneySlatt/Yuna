@@ -151,7 +151,7 @@
           # Yuna's fork of Smithay, a git dependency: its hash changes with the revision
           # Cargo.toml pins (docs/smithay-patches.md).
           outputHashes = {
-            "smithay-0.7.0" = "sha256-eGaRSNtFHytTJP1q3XTtiMZJUA5Cy11khHBg1p01h/s=";
+            "smithay-0.7.0" = "sha256-JMrgq6EbiCJwiktBCqn1hEoUw6UxzbvD2+3uD8mMfIQ=";
           };
         };
         cargoBuildFlags = [

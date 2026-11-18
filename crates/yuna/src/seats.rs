@@ -372,6 +372,7 @@ impl State {
         }
         removed.seat.remove_keyboard();
         removed.seat.remove_pointer();
+        self.selections.forget_seat(id);
         // A seat removed takes its outputs away at once, as an output removed does; the other
         // seats' motions go on (ADR-0015).
         self.mark_layout_changed(Change::InstantFor(BTreeSet::from([id])));

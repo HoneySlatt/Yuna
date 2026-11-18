@@ -30,7 +30,8 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
     zwp_primary_selection_offer_v1, zwp_primary_selection_source_v1,
 };
-use yuna::Compositor;
+use yuna::yuna_layout::SeatId;
+use yuna::{Compositor, OWNER_SEAT};
 
 use crate::client::Client;
 
@@ -106,6 +107,21 @@ impl Pipe {
             Err(error) => panic!("the pipe cannot be read: {error}"),
         }
     }
+
+    /// Adds to `data` what the pipe holds now, without waiting; true once every writer has
+    /// closed it.
+    pub fn read_available(&mut self, data: &mut Vec<u8>) -> bool {
+        let mut bytes = [0; 64 * 1024];
+        loop {
+            match self.0.read(&mut bytes) {
+                Ok(0) => return true,
+                Ok(read) => data.extend_from_slice(&bytes[..read]),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return false,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => panic!("the pipe cannot be read: {error}"),
+            }
+        }
+    }
 }
 
 /// A test client with the selection protocols.
@@ -142,7 +158,12 @@ impl SelectionClient {
     /// A client with a keyboard, a data device and a primary selection device, as an
     /// application has; its windows open through [`SelectionClient::client`].
     pub fn connect(compositor: &mut Compositor) -> SelectionClient {
-        let mut selection_client = SelectionClient::bind(compositor);
+        SelectionClient::connect_to(compositor, OWNER_SEAT)
+    }
+
+    /// [`SelectionClient::connect`], as a client of `seat`.
+    pub fn connect_to(compositor: &mut Compositor, seat: SeatId) -> SelectionClient {
+        let mut selection_client = SelectionClient::bind(compositor, seat);
         let qh = selection_client.queue.handle();
         let state = &mut selection_client.state;
         let seat = state.seat.clone().expect("wl_seat");
@@ -167,7 +188,7 @@ impl SelectionClient {
 
     /// A client with an `ext_data_control_device_v1` alone, as a clipboard manager has.
     pub fn connect_data_control(compositor: &mut Compositor) -> SelectionClient {
-        let mut selection_client = SelectionClient::bind(compositor);
+        let mut selection_client = SelectionClient::bind(compositor, OWNER_SEAT);
         let qh = selection_client.queue.handle();
         let state = &mut selection_client.state;
         let seat = state.seat.clone().expect("wl_seat");
@@ -182,9 +203,9 @@ impl SelectionClient {
         selection_client
     }
 
-    /// Connects a client and binds the seat and the selections' managers on its queue.
-    fn bind(compositor: &mut Compositor) -> SelectionClient {
-        let client = Client::connect(compositor);
+    /// Connects a client of `seat` and binds the seat and the selections' managers on its queue.
+    fn bind(compositor: &mut Compositor, seat: SeatId) -> SelectionClient {
+        let client = Client::connect_to(compositor, seat);
         let queue = client.connection().new_event_queue();
         client
             .connection()
@@ -213,6 +234,15 @@ impl SelectionClient {
         self.client.try_roundtrip(compositor)?;
         self.queue.dispatch_pending(&mut self.state)?;
         Ok(())
+    }
+
+    /// Reads and handles the events the compositor sent, without sending anything or waiting:
+    /// for a story whose compositor runs elsewhere, between its rounds.
+    pub fn read_events(&mut self) {
+        self.client.read_events();
+        if let Err(error) = self.queue.dispatch_pending(&mut self.state) {
+            panic!("the client's connection failed: {error}");
+        }
     }
 
     /// The serial of the last `wl_keyboard.enter`.
@@ -349,6 +379,12 @@ impl SelectionClient {
                 .write_all(data)
                 .expect("the pipe takes the data");
         }
+    }
+
+    /// The pipes source `source` was sent and not answered yet, taken from it: a story writes
+    /// them as it wills, on a thread of its own or never.
+    pub fn take_sent(&mut self, source: usize) -> Vec<OwnedFd> {
+        std::mem::take(&mut self.state.sources[source].waiting)
     }
 
     pub fn destroy_source(&mut self, source: usize) {

@@ -14,7 +14,7 @@ publish = false
 # Yuna's fork of Smithay, pinned to one commit: upstream's revision and Yuna's patches
 # (docs/smithay-patches.md, ADR-0042, ADR-0045). Raised at each stage's end (ADR-0017). Each
 # crate turns on the features it uses.
-smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "f819b3f093e0cfaddb59886510b4a09fe542f138", default-features = false }
+smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "67ec6ed0291b567c152fe5a079465145bfeda20d", default-features = false }
 # Property tests of the layout model (M1.2), in tests only. Without its default features: no
 # forking, no timeouts, no temporary files.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }

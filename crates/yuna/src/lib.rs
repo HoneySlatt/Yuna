@@ -83,8 +83,9 @@ pub use text_input::MAX_TEXT_BYTES;
 pub use virtual_input::MAX_VIRTUAL_DEVICES_PER_CLIENT;
 pub use xwayland::{
     DrawnX11Menu, FAILURE_MEMORY, FIRST_PAUSE, IDLE_SECONDS, LONGEST_PAUSE, MANAGER_GRACE,
-    MANAGER_SLICE, MAX_DISPLAYS, MAX_MENUS_PER_CLIENT, START_TIMEOUT, X11_PING_TIMEOUT,
-    X11_SYNC_TIMEOUT, X11Display, XwaylandConfig, remove_displays_after_panic,
+    MANAGER_SLICE, MAX_DISPLAYS, MAX_MENUS_PER_CLIENT, MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS,
+    START_TIMEOUT, X11_PING_TIMEOUT, X11_SYNC_TIMEOUT, X11_TRANSFER_TIMEOUT, X11Display,
+    XwaylandConfig, remove_displays_after_panic,
 };
 pub use yuna_layout;
 pub use yuna_motion;

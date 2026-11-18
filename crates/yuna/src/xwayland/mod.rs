@@ -27,17 +27,21 @@
 //! menus of its override-redirect windows (`menus.rs`), each paired with its Wayland surface
 //! through xwayland-shell-v1 (`shell.rs`), and waits on their sync requests and pings
 //! (`answers.rs`); what the state decides goes back to the manager as commands, at the round's
-//! end ([`Xwayland::send_commands`]).
+//! end ([`Xwayland::send_commands`]). The manager also carries the seat's clipboard and primary
+//! selection between X11 and Wayland, both ways: on its thread (`bridge.rs`), Yuna's state
+//! deciding what the seat's Wayland selections are (`selections.rs`).
 //!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
 //! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
 //! after Xwayland exits, Yuna holds two sockets per seat and nothing else: no process, no timer.
 
 mod answers;
+mod bridge;
 mod display;
 mod manager;
 mod menus;
 mod properties;
+mod selections;
 mod server;
 mod shell;
 mod windows;
@@ -63,6 +67,8 @@ use yuna_layout::SeatId;
 use crate::render::Device;
 use crate::state::State;
 pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
+pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
+pub use bridge::{MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
 use display::Display;
 pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
 use manager::{Commands, ManagerEvent, Stop};
@@ -631,6 +637,7 @@ impl Xwayland {
                     took_ms = xserver.started.elapsed().as_millis(),
                     "Xwayland ready"
                 );
+                state.x11_selections_ready(id);
             }
             ManagerEvent::Stopped(stop) => {
                 xserver.manager_stopped = true;
@@ -655,6 +662,7 @@ impl Xwayland {
     /// end, so that the state never holds a manager, whose life is its Xwayland's. A command for
     /// an Xwayland whose manager is gone is dropped.
     pub(crate) fn send_commands(&mut self, state: &mut State) {
+        state.x11_selection_commands();
         for (id, command) in state.x11.take_outbox() {
             if let Some(manager) = self
                 .servers

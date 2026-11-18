@@ -25,6 +25,7 @@ use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, SeatId, WindowId};
 use yuna_motion::Change;
 
 use super::answers::Waits;
+use super::bridge::Selection;
 use super::manager::{Command, ManagerEvent, NetState, StateAction, StateChange};
 use super::menus::MenuPlace;
 use super::properties::{FrameExtents, Properties, SizeHints, Wishes, X11Rect};
@@ -71,6 +72,9 @@ pub(crate) struct X11Windows {
     pub(super) servers: HashMap<u64, X11Server>,
     /// Commands for the managers, passed on at the round's end.
     outbox: Vec<(u64, Command)>,
+    /// The seats' Wayland selections that Wayland clients changed this round, for the managers
+    /// (`selections.rs`).
+    pub(super) wayland_changed: Vec<(SeatId, Selection)>,
 }
 
 /// One Xwayland's windows.
@@ -103,6 +107,8 @@ pub(super) struct X11Server {
     refusals_said: HashSet<u32>,
     /// The X11 clients whose override-redirect window past their cap was said: once each.
     pub(super) menu_refusals_said: HashSet<u32>,
+    /// The transfers of its selections to Wayland clients passed to its manager and not ended.
+    pub(super) transfers_to_wayland: usize,
 }
 
 /// One X11 window, as its manager described it.
@@ -368,12 +374,15 @@ impl State {
                 menus_with: HashMap::new(),
                 refusals_said: HashSet::new(),
                 menu_refusals_said: HashSet::new(),
+                transfers_to_wayland: 0,
             },
         );
     }
 
-    /// Xwayland `server` has ended: its windows close, and its commands go.
+    /// Xwayland `server` has ended: its windows close, its commands go, and the selections Yuna
+    /// held for its X11 clients empty.
     pub(crate) fn x11_server_gone(&mut self, server: u64) {
+        self.x11_selections_gone(server);
         // Its menus drawn alone leave the screen now: when Xwayland died in a busy round, its
         // surfaces are destroyed later in the round, once its record, which would redraw them,
         // is gone.
@@ -486,6 +495,10 @@ impl State {
                 self.x11_sync_counter(server, window, value);
             }
             ManagerEvent::PingAnswered(window) => self.x11_ping_answered(server, window),
+            ManagerEvent::SelectionTaken { .. }
+            | ManagerEvent::SelectionDropped(_)
+            | ManagerEvent::ReadWayland { .. }
+            | ManagerEvent::TransferToWaylandEnded => self.x11_selection_event(server, event),
             // The phases of Xwayland's start and end, `mod.rs`'s.
             ManagerEvent::Ready | ManagerEvent::Stopped(_) => {}
         }

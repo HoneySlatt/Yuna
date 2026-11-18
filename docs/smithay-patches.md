@@ -7,8 +7,8 @@ never rewritten ([ADR-0021](adr/0021-smithays-fork.md),
 upstream ([ADR-0011](adr/0011-built-on-smithay.md)).
 
 Base: upstream `8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55` ([ADR-0017](adr/0017-smithays-revision.md)),
-branch `yuna`; main pins its head, `f819b3f0`, since M1.10; it pinned `e229954a` from M1.6
-([ADR-0042](adr/0042-main-on-smithays-fork.md)).
+branch `yuna`; main pins its head, `67ec6ed0`, since M1.11; it pinned `f819b3f0` from M1.10 and
+`e229954a` from M1.6 ([ADR-0042](adr/0042-main-on-smithays-fork.md)).
 
 | # | Commit | What | Why | Used by |
 |---|---|---|---|---|
@@ -17,6 +17,7 @@ branch `yuna`; main pins its head, `f819b3f0`, since M1.10; it pinned `e229954a`
 | 3 | `e229954a` | Saturating sums in `PositionerState`: `get_anchor_point`, `get_geometry`, `get_unconstrained_geometry` and `compute_offsets`. | A client's positioner values near `i32::MAX` overflowed there: a panic in a debug build, a wrap in release. It replaces [ADR-0027](adr/0027-smithay-without-overflow-checks.md)'s build setting. | Every popup; tested by Yuna's `a_positioner_past_i32_max_is_dismissed_not_a_panic`. |
 | 4 | `57d42361` | `VirtualPointerDevice::client()`, as `VirtualKeyboardDevice` has. | A `zwlr_virtual_pointer_v1` created without a seat is for its client's seat, which Yuna knows by its client alone; without it, Yuna could not tell which seat's pointer a request moves. | `virtual_input.rs`; tested by Yuna's stories of virtual input (M1.10). |
 | 5 | `f819b3f0` | A virtual keyboard's keymap read with `pread`, its size checked against the file and refused past 1 MiB, never mapped; its `unsafe` block gone. | Smithay mapped the size the client told: a size larger than the file made libxkbcommon read past its end, and the kernel ended the compositor with SIGBUS, every seat with it. | `virtual_input.rs`; tested by Yuna's `a_keymap_told_larger_than_its_file_is_refused`. |
+| 6 | `67ec6ed0` | When a `wl_data_source` or a primary selection's source that is its seat's selection is destroyed, by its client or with it, Smithay clears the selection, then calls `SelectionHandler::new_selection` with none, as when a client clears it. A data-control source destroyed still clears it silently. | Smithay told no handler: to release the X11 selection of a Wayland copy whose program had quit, Yuna would have to ask Smithay after every dispatch whether the selection was still there. | `selection.rs`, `xwayland/selections.rs`; tested by Yuna's `a_wayland_source_destroyed_or_its_client_gone_releases_the_x11_selection`. |
 
 Patch 1 gives the private `build_request` an eighth parameter and allows clippy's
 `too_many_arguments` there, as Smithay does on `AtomicDrmSurface::new`; the owner accepted it on
