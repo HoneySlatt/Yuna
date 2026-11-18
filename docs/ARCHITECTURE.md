@@ -303,7 +303,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   `bridge.rs`, the selections on X11's side, on the manager's thread, and `selections.rs`,
   on Yuna's side ([Selections](#selections)); `mod.rs`, each display's phases on Yuna's loop.
 - `process.rs`: what every program Yuna starts shares, MCP's and Xwayland: the descriptors it
-  does not inherit.
+  does not inherit; and what Yuna reads of a process in `/proc`, its parent and its group, which
+  a client's connection and a seat's closing follow.
 - `mcp/`: the MCP server, [below](#the-mcp-server).
 - `main.rs`, `stop_signal.rs` and `fatal.rs`: the program alone: its command line, its logs,
   SIGTERM, SIGCHLD for `yuna mcp`, and its stop after a panic of its state
@@ -889,8 +890,16 @@ same Yuna. Nothing new depends on several seats in one Yuna until Stage 2's core
 The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` global, no output
 and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
 and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat
-whose socket it came through, recorded in its `ClientState`: its windows open on that seat's
-workspaces, and each seat's focus goes only to its own clients' surfaces. A client is shown its
+whose socket it came through, recorded in its `ClientState` with who it is, read once as Yuna
+accepts it (`ClientProcess`): its process id, from the socket's credentials, Yuna's own for a
+socket pair a test made, Xwayland's own for its socket pair; and, for a client of an agent's seat
+but its Xwayland, the processes above it up to Yuna, from `/proc`. A client may have exited
+between its `connect` and the accept: its lineage is then empty, or, its pid taken meanwhile,
+another process's. Its windows open on that seat's workspaces, and each seat's focus goes only to
+its own clients' surfaces. When the display ends a client, its `ClientState` records why, a
+protocol error or its connection closed, under the display's lock, and the round frees it; for
+the MCP server, which watches them, the compositor keeps each departure until it is taken
+(`Compositor::take_client_departures`). A client is shown its
 own seat's `wl_seat` and its seat's outputs' `wl_output`s alone, through the filter per client of
 Yuna's fork of Smithay ([ADR-0042](adr/0042-main-on-smithays-fork.md)); a client that held
 another seat's would still get no input, since that seat's focus is never on its surfaces.
@@ -1180,7 +1189,10 @@ standard input, one per line, and writes the replies to its standard output, not
 - `stdio.rs`: the lines, at most 1 MiB, and the queue of replies.
 - `tools.rs`: the tools' schemas, their arguments, read with serde, and their results, given
   both as `structuredContent` and as text. A tool that does several things takes an `action`.
-- `programs.rs`: the programs `spawn` starts, and which processes belong to a seat.
+- `programs.rs`: the programs `spawn` starts, their logs and their pace, and which processes and
+  clients belong to a seat's program.
+- `events.rs`: each agent seat's log of events, and how window and output events are told from
+  what the compositor describes.
 - `image.rs`: a capture's PNG and its base64, made on a thread of its own.
 - `mod.rs`: `Server`, which holds the compositor and runs the tools.
 
@@ -1189,9 +1201,12 @@ of SIGCHLD, of the waiting calls' timers and of the encoders' channel only note 
 `Server::dispatch` reaps the children that ended, handing the compositor the status of each that
 is not a program ([XWayland](#xwayland)), reads one chunk of input, answers each whole
 line, answers the calls whose window came or whose time is up, starts encoding the captures copied
-and answers those encoded whose frame's boundary came, sends the compositor's events and
-writes the replies. While 16 MiB of replies wait, no further line is answered and the client's
-input is not read. A line over 1 MiB, or an input or output that fails, ends the connection.
+and answers those encoded whose frame's boundary came, sends the compositor's events, records
+the round's events in the seats' logs and answers the `events` calls waiting for them, and
+writes the replies. SIGCHLD comes when a child ends, never when it is stopped or continued
+(`SA_NOCLDSTOP`), so that a program frozen or slowed wakes nothing. While 16 MiB of replies
+wait, no further line is answered and the client's input is not read. A line over 1 MiB, or an input
+or output that fails, ends the connection.
 
 `yuna mcp` starts with no output and no socket of the owner's seat, which announces no
 `wl_seat`: everything is on agents' seats ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
@@ -1216,7 +1231,13 @@ window or program unknown there:
   must then be at least twice the range's least; `vrr_min: 0` runs it at a fixed rate, a
   value `create` refuses. An output is told with its VRR range in Hz and its monitor's name,
   each null when it has none; `create` and `configure` answer with it so.
-- `spawn` starts, lists and stops a seat's programs.
+- `spawn` starts, lists and stops a seat's programs, reads their logs, and freezes, thaws and
+  slows them. `list` gives, for each program, the last protocol error Yuna closed one of its
+  connections for, and how much of the time it may run (`run_percent`). Its description names
+  `env: {"WAYLAND_DEBUG": "client"}`, which has a program write its own Wayland trace to its
+  log: Yuna keeps no trace of a client.
+- `events` reads a seat's events after a cursor the agent keeps, or waits for the first that
+  matches, as `windows` waits ([below](#events)).
 - `windows` lists a seat's windows, as `Compositor::windows` describes them, each with its
   `shell`, `xdg` or `x11`: its `rect`, where
   it is drawn at the call's time, read as hit tests read it ([A frame](#a-frame)); its `place`,
@@ -1227,7 +1248,7 @@ window or program unknown there:
   so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
   real time whatever the clock's, for one that matches. A waiting call is answered once the
   layout has placed the window, which on the manual clock takes a `clock` advance;
-  `notifications/cancelled` drops it unanswered; 64 wait at most.
+  `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`' with them.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -1238,12 +1259,14 @@ window or program unknown there:
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
-fails the `windows` calls waiting on it, then ends its processes: every process under Yuna that
+fails the `windows` and `events` calls waiting on it, drops its events and ends its programs'
+pace, then ends its processes: every process under Yuna that
 is, or descends from, one of the seat's programs still running, is in a process group one of
 them led, is one of its clients, or has `YUNA_SEAT=<id>` in `/proc/<pid>/environ`; unless
 another seat's `YUNA_SEAT`, or another seat's running program or its group, says it is that
-seat's, as a reused pid would be. Each gets SIGTERM; 2 s later, SIGKILL goes to those still under
-Yuna and to any found again; the call is answered once all are gone, or 1 s after SIGKILL, with
+seat's, as a reused pid would be. Each gets SIGTERM, then SIGCONT, so that a stopped one acts on
+it at once; 2 s later, SIGKILL goes to those still under Yuna and to any found again; the call
+is answered once all are gone, or 1 s after SIGKILL, with
 what was ended and what is left, or when Yuna stops. The seat's programs are then forgotten, their logs deleted. A
 process that empties its environment and leaves its group and its parents is not found
 ([debt](debt.md)).
@@ -1257,25 +1280,83 @@ empty `XDG_RUNTIME_DIR` of its own, where neither the user's session bus nor the
 is found; then the agent's variables; then `YUNA_SEAT`, its
 seat's id, which the agent's cannot replace. It inherits no descriptor of
 Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
-log file. A log keeps 1 MiB; past it, the pipe is read 64 KiB every 100 ms and counted, so that a
+log file. A log keeps the first 256 KiB of the program's output, where a failure to start
+shows, and its newest 1 MiB: one file, the newest in a ring after the first (`LOG_HEAD`,
+`LOG_TAIL`). `spawn log` reads it by byte offsets since the program started, from an offset or
+its newest bytes, 64 KiB by default and 1 MiB at most, never across the bytes dropped, as lossy
+UTF-8; it tells every byte written, those dropped, and whether the output has ended. Once a
+program has written more than its log keeps, the pipe is read 64 KiB every 100 ms, so that a
 program writing without end waits on its pipe and Yuna does not spin. 64 programs run at most,
-128 are remembered. Each leads its own process group, which `stop` signals, its first process
-gone or not. Yuna is its children's subreaper: a process whose parent ends becomes Yuna's, so
-that the whole tree is reaped and ended by Yuna. When Yuna stops, every process under it, found
-through `/proc`, gets SIGTERM, then SIGKILL 2 s later, while the compositor still serves its
-clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` in
-`XDG_RUNTIME_DIR`, is removed.
+128 are remembered, so 128 logs, 160 MiB at worst, in `XDG_RUNTIME_DIR`. Each leads its own
+process group, which `stop` signals, SIGTERM then SIGCONT, its first process gone or not.
+`freeze` stops the group (SIGSTOP) and `thaw` continues it (SIGCONT); `slow` runs it a share of
+each 100 ms, a timer on real time continuing then stopping it, until it is thawed, frozen,
+stopped, or its group has ended: a manual clock does not pace it. A frozen program reads
+nothing: once the 4 KiB wayland-rs buffers for its connection and its socket are full, the
+display closes it, and `events` tells `client_left`, reason `closed`. Yuna is its children's
+subreaper: a process whose parent ends becomes Yuna's, so that the whole tree is reaped and
+ended by Yuna. When Yuna stops, no program is paced any more, and every process under it, found
+through `/proc`, gets SIGTERM and SIGCONT, then SIGKILL 2 s later, while the compositor still
+serves its clients; then the folder of sockets, logs and runtime folders, `yuna-mcp-<pid>` in
+`XDG_RUNTIME_DIR`, is removed. While it lives, Yuna holds the lock of the folder's `lock` file
+(`flock`, which the kernel releases at any end, SIGKILL included, in any pid namespace); it makes
+the folder under a name of its own, `.yuna-mcp-<pid>-starting`, locks it, then gives it its name,
+so that no other Yuna ever finds it unlocked. A `yuna mcp` that starts removes each `yuna-mcp-*`
+folder whose lock it can take, holding it meanwhile: the folder a Yuna killed by SIGKILL leaves.
+It never follows a link, never decides by a pid, and keeps a folder with no lock file, an older
+Yuna's ([debt](debt.md#the-mcp-server)).
 
 A panic of the server's thread, Yuna's state thread, is fatal
 ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). The program's panic hook
 writes the panic's message, then ends what Yuna started, as when it stops, without the event
-loop: every process under Yuna gets SIGTERM, those left SIGKILL 2 s later, each reaped as it
-ends, 3 s at most, their clients unanswered meanwhile; at once when none runs
+loop: every process under Yuna gets SIGTERM and SIGCONT, those left SIGKILL 2 s later, each
+reaped as it ends, 3 s at most, their clients unanswered meanwhile; at once when none runs
 (`mcp::end_after_panic`, which reads `/proc` every 10 ms while it waits). The folder is removed,
 and Yuna exits with status 101 ([The program](#the-program)). The replies not yet written are
 lost. In a debug build, `YUNA_PANIC_ON_TOOL=<tool>`, read when the server starts, makes each call
 of that tool panic, for the tests of this path (`mcp::PANIC_ON_TOOL`); a release build has
 neither the variable nor the panic.
+
+#### Events
+
+Each agent seat has a log of its last 1,024 events (`MAX_EVENTS`), from the first look after it
+is created to its closing. An event has a `seq`, which grows across the whole Yuna and is never
+reused, its time on the clock's scale, its kind and its fields; a title, an application id or a
+workspace's name is cut to 512 bytes (`MAX_EVENT_TEXT`). At the end of each round, and before it
+answers an `events` call, so that a call without `after` waits only for what comes after it, the
+server records:
+
+- what the compositor describes of its windows and outputs, compared with its last look
+  (`events::Observer`): windows opened, closed, changed in title or application id, placed
+  (output, workspace or place in the layout changed, told only when no arrangement is pending),
+  unresponsive; the seat's focus; outputs added, removed and changed. The server looks only when
+  the compositor's description generation has moved since its last look
+  (`Compositor::description_generation`): it grows when a window opens or closes, a title or an
+  application id changes, the layout changes or is arranged, a window moves to another output,
+  an X11 window's answers change, or an output is added or removed; a round in which clients only
+  drew describes nothing. A look costs in proportion to the windows, and describing them grows
+  with their square ([measurements](measurements.md)). Each window is told at most once a look:
+  a title changed a thousand times between two looks is one `window_changed`; a window that opens
+  and closes between two looks is not seen;
+- the clients the display ended (`client_left`), each with its pid, the program it belongs to,
+  and the protocol error it was ended for, which that program then keeps for `spawn list`. A
+  client's program is the one whose process the client's was, or was under, when it connected,
+  as its lineage read then says, or else the one whose process group it was in
+  (`Programs::program_of`), so that a client that exited and was reaped is still named. It is
+  null for a client of no program, and for one whose process had exited before Yuna accepted
+  it, its lineage then unread;
+- the programs reaped, with their exit code or signal (`program_exited`).
+
+An `events` call with `after` gives the seat's events numbered above it, only the kinds it names,
+256 at most (`MAX_EVENTS_PER_REPLY`), with `next`, the cursor to give next, and `missed`, how
+many of the seat's events above the cursor the log dropped; a cursor past the newest event is
+refused. Without `after` it gives no past event, so that its `next` reads what comes. With
+`wait_ms`, 50 s at most on real time, it waits for a first event that matches and is answered
+once the round that recorded it ends, or at once when the log has dropped events after its
+cursor, which may hold the one it waits for; it counts among the 64 calls that may wait, fails
+when its seat closes, and `notifications/cancelled` drops it. The server keeps no state of a call:
+the
+cursor is the agent's ([ADR-0033](adr/0033-the-mcp-server.md)).
 
 ### The program
 
@@ -1388,8 +1469,13 @@ own thread, both `took_us`.
   period. `mcp.rs` in it drives the MCP
   server through two socket pairs, its input and its output: both revisions, every tool but
   `spawn`, two seats that keep to their own, waits, cancellation and timeouts, a client that does
-  not read, a line too long, an input that closes. `motion.rs` in it turns animations on: each
-  boundary of two retargeted scrolls checked against a `Motion` of the test's own, fed the same
+  not read, a line too long, an input that closes; and `events`: a window opened then closed in
+  order, a wait from now and its kinds, 1,500 titles told once, a cursor older than the log, a
+  wait failed by its seat's closing or cancelled, an output removed with its windows, a client's
+  protocol error, a client that reads nothing closed, a client that only draws making no look, a
+  wait whose cursor missed events answered at once, and one bound for `windows`' and `events`'
+  waits. `motion.rs` in it turns animations on: each boundary of two retargeted scrolls checked
+  against a `Motion` of the test's own, fed the same
   layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
   drawn at once sampled and shown at the next boundary, or, its drawing across that one, at the
   one after, and no boundary showing one frame twice; half a second or 100 ms after a drawing
@@ -1466,6 +1552,9 @@ own thread, both `took_us`.
 - `crates/yuna/tests/mcp.rs`: `yuna mcp` as an MCP client runs it: its programs' environment and
   logs, an orphan adopted, `stop`, the whole tree ended when its input closes, a seat's closing
   that ends its processes and no other seat's, a seat whose programs exhaust Yuna's descriptors,
+  a program's protocol error told through `events` and kept for `spawn list`, `spawn log` by
+  offsets over 3 MiB of output, a program frozen and thawed, one slowed to half its CPU time
+  without SIGCHLD waking Yuna, frozen programs ended at SIGTERM, an old Yuna's folder removed,
   a panic of its state, in a debug build, that ends a tree ignoring SIGTERM within 3 s, at once
   with no program, removes its folder and exits with 101,
   and Alacritty started through `spawn`, found through `windows`, clicked and typed into: its

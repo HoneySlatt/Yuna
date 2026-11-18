@@ -25,6 +25,7 @@ use std::sync::Arc;
 use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig, xkb};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
+use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -33,9 +34,9 @@ use smithay::utils::{Logical, Point, Serial};
 use yuna_layout::SeatId;
 use yuna_motion::Change;
 
-use crate::Error;
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
+use crate::{ClientProcess, Error};
 
 /// The layout of every agent's keyboard: the same on every machine and in CI, whatever the
 /// `XKB_DEFAULT_*` variables say (ADR-0037).
@@ -238,31 +239,45 @@ impl State {
         Ok(id)
     }
 
-    /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal.
-    /// Refused for a seat that does not exist.
-    /// With `sees_every_seat`, it is shown every seat's globals, for tests alone.
+    /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal, with
+    /// who it is: its peer's process, from the socket's credentials, and, for an agent's seat,
+    /// the processes above it, read in `/proc` now. The peer may have exited since it connected
+    /// ([`ClientProcess`]). Refused for a seat that does not exist. With `sees_every_seat`, it
+    /// is shown every seat's globals, for tests alone.
     pub(crate) fn insert_client(
         &mut self,
         seat: SeatId,
         stream: UnixStream,
         sees_every_seat: bool,
     ) -> Result<(), Error> {
-        let data = ClientState::new(seat, sees_every_seat, self.departed_clients.clone());
+        let pid = rustix::net::sockopt::socket_peercred(&stream)
+            .ok()
+            .map(|credentials| credentials.pid.as_raw_nonzero().get());
+        let process = ClientProcess::connecting(pid, seat != OWNER_SEAT);
+        let data = ClientState::new(
+            seat,
+            sees_every_seat,
+            process,
+            self.departed_clients.clone(),
+        );
         self.insert_client_state(stream, data)
     }
 
-    /// Serves `seat`'s Xwayland `server` on `stream`, marked as such, with the client scale
-    /// `scale`: it is told outputs and pointer in X11 pixels, `scale` per logical unit
-    /// ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
-    /// Refused for a seat that does not exist.
+    /// Serves `seat`'s Xwayland `server`, process `pid`, on `stream`, marked as such, with the
+    /// client scale `scale`: it is told outputs and pointer in X11 pixels, `scale` per logical
+    /// unit ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+    /// Its socket pair's credentials are Yuna's own, so its pid is given; its lineage, Yuna's
+    /// child, names no program, and is not read. Refused for a seat that does not exist.
     pub(crate) fn insert_xwayland_client(
         &mut self,
         seat: SeatId,
         stream: UnixStream,
         scale: f64,
         server: u64,
+        pid: i32,
     ) -> Result<(), Error> {
-        let mut data = ClientState::new(seat, false, self.departed_clients.clone());
+        let process = ClientProcess::connecting(Some(pid), false);
+        let mut data = ClientState::new(seat, false, process, self.departed_clients.clone());
         data.xwayland = Some(server);
         // Before it can bind a global, so that it never sees an output unscaled.
         data.compositor.set_client_scale(scale);

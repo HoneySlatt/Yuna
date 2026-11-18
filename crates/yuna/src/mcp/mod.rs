@@ -4,8 +4,9 @@
 //! Everything runs in the compositor's event loop, on its thread: the client's input and output,
 //! the programs' output and exits, the calls that wait. Their sources only note what came; after
 //! each round, [`Server::dispatch`] reads the requests, answers them, and writes the replies. A
-//! call that waits, for a window, is answered from a later round, once the layout has placed the
-//! window, or when its time is up, on the real clock whatever the compositor's:
+//! call that waits, for a window or an event, is answered from a later round, once the layout
+//! has placed the window or the round that recorded the event has ended, or when its time is
+//! up, on the real clock whatever the compositor's:
 //! [`tools::MAX_WAIT`] at most, under the time a client gives a call. On a manual clock, the
 //! window is placed only once the clock moves to its output's refresh.
 //! `notifications/cancelled` drops a waiting call unanswered.
@@ -15,20 +16,29 @@
 //! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): every tool but
 //! `clock` names it, and an id of another seat's output, window or program is unknown there.
 //! `seat close` releases what the seat holds, removes its socket, ends its clients, its outputs
-//! and its place in the layout at once, then ends its processes: SIGTERM, then SIGKILL
-//! [`END_GRACE`] later; it is answered once they are gone, [`KILL_WAIT`] after SIGKILL at most.
+//! and its place in the layout at once, then ends its processes: SIGTERM and SIGCONT, then
+//! SIGKILL [`END_GRACE`] later; it is answered once they are gone, [`KILL_WAIT`] after SIGKILL at
+//! most.
 //!
 //! Bounds: a line over [`stdio::MAX_LINE`] ends the connection; while more than
 //! [`MAX_QUEUED_OUTPUT`] of replies wait, because the client does not read them, no further
 //! request is answered and its input is not read; at most [`tools::MAX_WAITING_CALLS`] calls wait
 //! at once; at most [`MAX_ENCODERS`] captures are encoded at once. The protocol is in
 //! `protocol.rs`, the framing in `stdio.rs`, the tools' schemas and results in `tools.rs`, the
-//! programs in `programs.rs`.
+//! programs in `programs.rs`, the seats' events in `events.rs`.
+//!
+//! What happens on agents' seats is recorded once a round in each seat's log, `events.rs`: the
+//! windows and outputs as the compositor describes them, compared with the last look; the
+//! clients the display ended, with the program each belongs to and the protocol error it was
+//! ended for, which the program keeps for `spawn list`; the programs reaped. An `events` call
+//! reads it from the agent's cursor, or waits, as `windows` does, for a first event that
+//! matches, answered at the end of the round that recorded it.
 //!
 //! A panic of the server's thread is fatal: the program's panic hook ends the programs and
 //! removes their folder ([`Server::programs_folder`], [`end_after_panic`]), then stops Yuna. In a
 //! debug build, `PANIC_ON_TOOL` makes a tool's call panic, for the tests of that path.
 
+mod events;
 mod image;
 mod programs;
 mod protocol;
@@ -57,23 +67,25 @@ use crate::compositor::{Compositor, WindowDescription};
 use crate::output::{InvalidOutput, OutputMode};
 use crate::state::OWNER_SEAT;
 use crate::{CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error};
+use events::{EventData, EventLog, Kind, Observer};
 use image::Encoded;
-use programs::{Programs, Start, THROTTLE};
+use programs::{End, Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
 use tools::{
-    ButtonCall, CaptureCall, ClockCall, CopiedCapture, KeyboardCall, OutputsCall, PointerCall,
-    SeatCall, SpawnCall, ToolResult, WindowsCall, WorkspacesCall,
+    ButtonCall, CaptureCall, ClockCall, CopiedCapture, EventsCall, KeyboardCall, OutputsCall,
+    PointerCall, SeatCall, SpawnCall, ToolResult, WindowsCall, WorkspacesCall,
 };
 
+pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use programs::{
-    END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOG_LIMIT, MAX_KEPT, MAX_RUNNING,
-    SEAT_VARIABLE, end_after_panic,
+    END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT,
+    MAX_RUNNING, PACE_PERIOD, SEAT_VARIABLE, end_after_panic,
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
-pub use tools::{MAX_WAIT, MAX_WAITING_CALLS};
+pub use tools::{DEFAULT_LOG_READ, MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS};
 
 /// How many bytes of replies may wait for the client before its input stops being read: 16 MiB,
 /// room for a few captures (M1.5's C4) beside the replies to a burst of calls.
@@ -124,6 +136,18 @@ struct WindowWait {
     id: Value,
     revision: Revision,
     call: WindowsCall,
+    timer: RegistrationToken,
+}
+
+/// An `events` call waiting for a first event of `seat` after `after` that `kinds` take.
+#[derive(Debug)]
+struct EventWait {
+    key: u64,
+    id: Value,
+    revision: Revision,
+    seat: SeatId,
+    after: u64,
+    kinds: Option<Vec<Kind>>,
     timer: RegistrationToken,
 }
 
@@ -191,6 +215,16 @@ pub struct Server {
     queue: OutputQueue,
     events: Rc<RefCell<Events>>,
     waits: Vec<WindowWait>,
+    event_waits: Vec<EventWait>,
+    /// The agents' seats' events, and what the compositor described at the last look.
+    event_log: EventLog,
+    observer: Observer,
+    /// The compositor's description generation at the last look; none before the first.
+    looked_at: Option<u64>,
+    /// How many looks described the windows and outputs.
+    looks: u64,
+    /// The programs reaped since the events were last recorded.
+    program_exits: Vec<(SeatId, u64, End)>,
     /// The keys of waiting calls and of closings, never reused.
     next_wait: u64,
     closings: Vec<SeatClosing>,
@@ -246,11 +280,12 @@ impl Server {
     /// `XDG_RUNTIME_DIR`. Without, a seat's clients connect only through
     /// [`Compositor::connect_client_to`], and `spawn` is refused.
     pub fn new(
-        compositor: Compositor,
+        mut compositor: Compositor,
         input: OwnedFd,
         output: OwnedFd,
         children: Option<OwnedFd>,
     ) -> Result<Server, Error> {
+        compositor.watch_client_departures();
         let failed = |what: &str, error: &dyn std::fmt::Display| {
             Error::EventLoop(format!("the MCP server's {what}: {error}"))
         };
@@ -343,6 +378,12 @@ impl Server {
             queue: OutputQueue::default(),
             events,
             waits: Vec::new(),
+            event_waits: Vec::new(),
+            event_log: EventLog::default(),
+            observer: Observer::default(),
+            looked_at: None,
+            looks: 0,
+            program_exits: Vec::new(),
             next_wait: 1,
             closings: Vec::new(),
             captures: Vec::new(),
@@ -388,6 +429,19 @@ impl Server {
         self.encoders_running
     }
 
+    /// How many times the server described the compositor's windows and outputs to tell their
+    /// events: once for each look after something they show may have changed. For tests.
+    #[doc(hidden)]
+    pub fn event_looks(&self) -> u64 {
+        self.looks
+    }
+
+    /// Records the seats' events now, as the end of each round does. For measures.
+    #[doc(hidden)]
+    pub fn record_events_now(&mut self) {
+        self.record_events();
+    }
+
     /// The folder of its seats' sockets and its programs' logs, `yuna-mcp-<pid>` in
     /// `XDG_RUNTIME_DIR`, when it may start programs: what the fatal path removes.
     pub fn programs_folder(&self) -> Option<&Path> {
@@ -403,7 +457,8 @@ impl Server {
 
     /// Runs one round of the compositor's loop, waiting up to `timeout` (`None`: as long as it
     /// takes), then answers what came: requests, cancellations, ended programs, calls whose time
-    /// is up or whose window opened; then writes the replies.
+    /// is up or whose window opened; records the round's events and answers the calls waiting
+    /// for them; then writes the replies.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         let wakeups = self.compositor.counters().wakeups;
         self.compositor.dispatch(timeout)?;
@@ -416,7 +471,8 @@ impl Server {
         {
             programs::drain(children.as_fd());
             let compositor = &mut self.compositor;
-            programs.reap(|pid, status| compositor.child_reaped(pid, status));
+            let ended = programs.reap(|pid, status| compositor.child_reaped(pid, status));
+            self.program_exits.extend(ended);
         }
         for key in events.closings_due {
             self.closing_stage_up(key);
@@ -440,6 +496,9 @@ impl Server {
         }
         // What the calls changed reaches the compositor's clients now.
         self.compositor.flush();
+        // Once the round has ended, the clients it freed included.
+        self.record_events();
+        self.answer_event_waits();
         self.write_output();
         self.compositor.log_counters_after(wakeups);
         Ok(())
@@ -551,10 +610,13 @@ impl Server {
         stop
     }
 
-    /// Ends every process under Yuna: SIGTERM, then SIGKILL to those left after [`END_GRACE`],
-    /// each wait cut short once none is left. Meanwhile the compositor still serves its clients,
-    /// so that a program answering SIGTERM with a last roundtrip gets its answer.
+    /// Ends every process under Yuna: SIGTERM and SIGCONT, then SIGKILL to those left after
+    /// [`END_GRACE`], each wait cut short once none is left. No program is paced any more, so
+    /// that none is stopped again before it acts on SIGTERM. Meanwhile the compositor still
+    /// serves its clients, so that a program answering SIGTERM with a last roundtrip gets its
+    /// answer.
     fn end_programs(&mut self, programs: &mut Programs, children: &OwnedFd) {
+        programs.unpace_all(&self.compositor.loop_handle());
         for (signal, wait) in [(Signal::TERM, END_GRACE), (Signal::KILL, KILL_WAIT)] {
             if programs::signal_all(signal) == 0 {
                 return;
@@ -666,6 +728,11 @@ impl Server {
                     "keyboard" => self.keyboard(arguments),
                     "spawn" => self.spawn(arguments),
                     "windows" => match self.windows(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It waits, and is answered later.
+                        None => return,
+                    },
+                    "events" => match self.events(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits, and is answered later.
                         None => return,
@@ -914,15 +981,19 @@ impl Server {
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
         self.fail_waits_of(seat);
-        let processes = match &self.programs {
-            Some((programs, _)) => programs.seat_processes(seat, &client_pids),
+        let handle = self.compositor.loop_handle();
+        let processes = match &mut self.programs {
+            Some((programs, _)) => {
+                programs.unpace_seat(&handle, seat);
+                programs.seat_processes(seat, &client_pids)
+            }
             None => Vec::new(),
         };
         if processes.is_empty() {
             return Some(self.seat_closed(seat, &[], &[]));
         }
         for &pid in &processes {
-            let _ = rustix::process::kill_process(pid, Signal::TERM);
+            programs::send_ending_signal(pid, Signal::TERM);
         }
         tracing::info!(
             seat = seat.0,
@@ -954,11 +1025,26 @@ impl Server {
         None
     }
 
-    /// Answers the `windows` and `capture` calls that wait on `seat`, which closed, and forgets
-    /// its captures: a stale handle fails plainly
+    /// Answers the `windows`, `events` and `capture` calls that wait on `seat`, which closed,
+    /// and forgets its captures and its events: a stale handle fails plainly
     /// ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
         self.recent_captures.remove(&seat);
+        self.event_log.remove_seat(seat);
+        let handle = self.compositor.loop_handle();
+        let (closed, waiting): (Vec<EventWait>, Vec<EventWait>) =
+            std::mem::take(&mut self.event_waits)
+                .into_iter()
+                .partition(|wait| wait.seat == seat);
+        self.event_waits = waiting;
+        for wait in closed {
+            handle.remove(wait.timer);
+            let result = ToolResult::failed(format!("seat {} was closed", seat.0));
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+        }
         while let Some(index) = self
             .captures
             .iter()
@@ -971,7 +1057,6 @@ impl Server {
                 result.into_result(capture.revision),
             ));
         }
-        let handle = self.compositor.loop_handle();
         let mut index = 0;
         while index < self.waits.len() {
             if self.waits[index].call.seat != seat.0 {
@@ -1454,7 +1539,11 @@ impl Server {
         let seat = match &call {
             SpawnCall::Start { seat, .. }
             | SpawnCall::List { seat }
-            | SpawnCall::Stop { seat, .. } => *seat,
+            | SpawnCall::Stop { seat, .. }
+            | SpawnCall::Log { seat, .. }
+            | SpawnCall::Freeze { seat, .. }
+            | SpawnCall::Thaw { seat, .. }
+            | SpawnCall::Slow { seat, .. } => *seat,
         };
         let seat = SeatId(seat);
         if seat == OWNER_SEAT || !self.compositor.seats().contains(&seat) {
@@ -1463,11 +1552,16 @@ impl Server {
                 seat.0
             ));
         }
+        let handle = self.compositor.loop_handle();
+        // A paced program, as its result tells it.
+        let paced = |programs: &Programs, program: u64| {
+            let listed = programs.program(seat, program).map(tools::program_json);
+            ToolResult::done(json!({ "program": listed }))
+        };
         match call {
             SpawnCall::Start {
                 command, env, cwd, ..
             } => {
-                let handle = self.compositor.loop_handle();
                 let start = Start {
                     command,
                     env,
@@ -1490,13 +1584,216 @@ impl Server {
                     .collect();
                 ToolResult::done(json!({ "programs": list }))
             }
-            SpawnCall::Stop { program, force, .. } => match programs.stop(seat, program, force) {
-                Ok(()) => ToolResult::done(json!({
-                    "stopped": program,
-                    "signal": if force { "SIGKILL" } else { "SIGTERM" },
-                })),
+            SpawnCall::Stop { program, force, .. } => {
+                match programs.stop(&handle, seat, program, force) {
+                    Ok(()) => ToolResult::done(json!({
+                        "stopped": program,
+                        "signal": if force { "SIGKILL" } else { "SIGTERM" },
+                    })),
+                    Err(reason) => ToolResult::failed(reason),
+                }
+            }
+            SpawnCall::Log {
+                program,
+                from,
+                max_bytes,
+                ..
+            } => {
+                let max_bytes = max_bytes.unwrap_or(tools::DEFAULT_LOG_READ);
+                if !(1..=tools::MAX_LOG_READ).contains(&max_bytes) {
+                    return ToolResult::failed(format!(
+                        "max_bytes is from 1 to {}",
+                        tools::MAX_LOG_READ
+                    ));
+                }
+                let read = programs
+                    .program(seat, program)
+                    .ok_or_else(|| format!("no program {program} on seat {}", seat.0))
+                    .and_then(|found| found.read_log(from, max_bytes));
+                match read {
+                    Ok(read) => ToolResult::done(tools::log_json(&read)),
+                    Err(reason) => ToolResult::failed(reason),
+                }
+            }
+            SpawnCall::Freeze { program, .. } => match programs.freeze(&handle, seat, program) {
+                Ok(()) => paced(programs, program),
                 Err(reason) => ToolResult::failed(reason),
             },
+            SpawnCall::Thaw { program, .. } => match programs.thaw(&handle, seat, program) {
+                Ok(()) => paced(programs, program),
+                Err(reason) => ToolResult::failed(reason),
+            },
+            SpawnCall::Slow {
+                program,
+                run_percent,
+                ..
+            } => match programs.slow(&handle, seat, program, run_percent) {
+                Ok(()) => paced(programs, program),
+                Err(reason) => ToolResult::failed(reason),
+            },
+        }
+    }
+
+    /// `events`: the result now, or none when the call waits. What happened before it is
+    /// recorded first, so that a call without `after` waits only for what comes after it.
+    fn events(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call: EventsCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        let seat = match self.agent_seat(call.seat) {
+            Ok(seat) => seat,
+            Err(failed) => return Some(failed),
+        };
+        let wait = Duration::from_millis(call.wait_ms);
+        if wait > MAX_WAIT {
+            return Some(ToolResult::failed(format!(
+                "wait_ms is at most {}",
+                MAX_WAIT.as_millis()
+            )));
+        }
+        if call.kinds.as_ref().is_some_and(Vec::is_empty) {
+            return Some(ToolResult::failed(
+                "kinds names one kind at least: leave it out for every kind",
+            ));
+        }
+        self.record_events();
+        let newest = self.event_log.last_seq();
+        let after = match call.after {
+            Some(after) if after > newest => {
+                return Some(ToolResult::failed(format!(
+                    "after {after} is past the newest event, {newest}: give a reply's next"
+                )));
+            }
+            Some(after) => after,
+            None => newest,
+        };
+        let reading = self.event_log.read(seat, after, call.kinds.as_deref());
+        // A cursor whose events the log dropped is told at once: what it waits for may be
+        // among them.
+        if wait.is_zero() || !reading.events.is_empty() || reading.missed > 0 {
+            return Some(ToolResult::done(tools::events_json(&reading, false)));
+        }
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_WAITING_CALLS} calls wait already"
+            )));
+        }
+        let key = self.next_wait;
+        let timer = match self.arm_wait_timer(key, wait) {
+            Ok(timer) => timer,
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
+        };
+        self.next_wait += 1;
+        self.event_waits.push(EventWait {
+            key,
+            id: id.clone(),
+            revision,
+            seat,
+            after,
+            kinds: call.kinds,
+            timer,
+        });
+        None
+    }
+
+    /// The calls waiting, `windows`' and `events`' together, which [`MAX_WAITING_CALLS`]
+    /// bounds.
+    fn waiting_calls(&self) -> usize {
+        self.waits.len() + self.event_waits.len()
+    }
+
+    /// Arms the timer that ends waiting call `key`'s time `after` from now, on real time.
+    fn arm_wait_timer(
+        &self,
+        key: u64,
+        after: Duration,
+    ) -> Result<RegistrationToken, smithay::reexports::calloop::Error> {
+        let events = self.events.clone();
+        self.compositor
+            .loop_handle()
+            .insert_source(Timer::from_duration(after), move |_, _, state| {
+                state.woke = true;
+                events.borrow_mut().timed_out.push(key);
+                TimeoutAction::Drop
+            })
+            .map_err(|e| e.error)
+    }
+
+    /// Records in the seats' logs what happened since the last time: outputs and windows as the
+    /// compositor describes them now, the clients the display ended, with the program each
+    /// belonged to, which keeps the protocol error it was ended for, and the programs reaped.
+    /// The windows and outputs are described only when the compositor's description generation
+    /// moved since the last look: a round in which only buffers changed, a game drawing,
+    /// describes nothing. Each agent seat has a log from its first look; a closed seat's went
+    /// with it.
+    fn record_events(&mut self) {
+        for seat in self.compositor.seats() {
+            if seat != OWNER_SEAT {
+                self.event_log.add_seat(seat);
+            }
+        }
+        let time_ns = self.compositor.now().as_nanos() as u64;
+        let generation = self.compositor.description_generation();
+        if self.looked_at != Some(generation) {
+            self.looked_at = Some(generation);
+            self.looks += 1;
+            let windows = self.compositor.windows();
+            let outputs = self.compositor.output_descriptions();
+            let arranged = !self.compositor.arrangement_pending();
+            for (seat, data) in self.observer.look(&windows, &outputs, arranged) {
+                self.event_log.record(seat, time_ns, data);
+            }
+        }
+        for departure in self.compositor.take_client_departures() {
+            if !self.event_log.has_seat(departure.seat) {
+                continue;
+            }
+            let program = self.programs.as_mut().and_then(|(programs, _)| {
+                let program = programs.program_of(departure.seat, &departure.process)?;
+                if let Some(error) = &departure.error {
+                    programs.note_protocol_error(program, error.clone());
+                }
+                Some(program)
+            });
+            let left = EventData::ClientLeft {
+                pid: departure.process.pid,
+                program,
+                error: departure.error,
+            };
+            self.event_log.record(departure.seat, time_ns, left);
+        }
+        for (seat, program, end) in std::mem::take(&mut self.program_exits) {
+            self.event_log
+                .record(seat, time_ns, EventData::ProgramExited { program, end });
+        }
+    }
+
+    /// Answers each `events` call waiting whose seat now has an event it takes, or whose
+    /// cursor's events the log has begun to drop.
+    fn answer_event_waits(&mut self) {
+        let mut index = 0;
+        while index < self.event_waits.len() {
+            let wait = &self.event_waits[index];
+            let reading = self
+                .event_log
+                .read(wait.seat, wait.after, wait.kinds.as_deref());
+            if reading.events.is_empty() && reading.missed == 0 {
+                index += 1;
+                continue;
+            }
+            let result = ToolResult::done(tools::events_json(&reading, false));
+            let wait = self.event_waits.remove(index);
+            self.compositor.loop_handle().remove(wait.timer);
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
         }
     }
 
@@ -1528,24 +1825,15 @@ impl Server {
         if wait.is_zero() || (!matching.is_empty() && placed) {
             return Some(ToolResult::done(json!({ "windows": matching })));
         }
-        if self.waits.len() >= MAX_WAITING_CALLS {
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
             return Some(ToolResult::failed(format!(
                 "{MAX_WAITING_CALLS} calls wait already"
             )));
         }
         let key = self.next_wait;
-        let events = self.events.clone();
-        let timer = self.compositor.loop_handle().insert_source(
-            Timer::from_duration(wait),
-            move |_, _, state| {
-                state.woke = true;
-                events.borrow_mut().timed_out.push(key);
-                TimeoutAction::Drop
-            },
-        );
-        let timer = match timer {
+        let timer = match self.arm_wait_timer(key, wait) {
             Ok(timer) => timer,
-            Err(error) => return Some(ToolResult::failed(error.error.to_string())),
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
         self.next_wait += 1;
         self.waits.push(WindowWait {
@@ -1595,20 +1883,11 @@ impl Server {
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
         let key = self.next_wait;
-        let events = self.events.clone();
-        let timer = self.compositor.loop_handle().insert_source(
-            Timer::from_duration(MAX_WAIT),
-            move |_, _, state| {
-                state.woke = true;
-                events.borrow_mut().timed_out.push(key);
-                TimeoutAction::Drop
-            },
-        );
-        let timer = match timer {
+        let timer = match self.arm_wait_timer(key, MAX_WAIT) {
             Ok(timer) => timer,
             Err(error) => {
                 self.compositor.cancel_capture(ticket);
-                return Some(ToolResult::failed(error.error.to_string()));
+                return Some(ToolResult::failed(error.to_string()));
             }
         };
         self.next_wait += 1;
@@ -1843,9 +2122,24 @@ impl Server {
         }
     }
 
-    /// Answers the call `key` whose time is up, if it still waits: no window matched, or no
-    /// frame came for a capture.
+    /// Answers the call `key` whose time is up, if it still waits: no window matched, no event
+    /// came, or no frame came for a capture.
     fn answer_timed_out(&mut self, key: u64) {
+        if let Some(index) = self.event_waits.iter().position(|wait| wait.key == key) {
+            // Its timer removed itself.
+            let wait = self.event_waits.remove(index);
+            let reading = self
+                .event_log
+                .read(wait.seat, wait.after, wait.kinds.as_deref());
+            // An event recorded in this round, not yet told, comes with it.
+            let timed_out = reading.events.is_empty();
+            let result = ToolResult::done(tools::events_json(&reading, timed_out));
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+            return;
+        }
         if let Some(index) = self.captures.iter().position(|capture| {
             capture.key == key && matches!(capture.stage, CaptureStage::Copying(_))
         }) {
@@ -1897,6 +2191,14 @@ impl Server {
             if cancelled {
                 handle.remove(wait.timer);
                 tracing::debug!(request = %id, "a waiting call is cancelled");
+            }
+            !cancelled
+        });
+        self.event_waits.retain(|wait| {
+            let cancelled = &wait.id == id;
+            if cancelled {
+                handle.remove(wait.timer);
+                tracing::debug!(request = %id, "a waiting `events` call is cancelled");
             }
             !cancelled
         });

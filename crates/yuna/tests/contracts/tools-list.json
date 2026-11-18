@@ -1,6 +1,6 @@
 [
   {
-    "description": "Create a seat of your own, list the seats, or close one. A seat has its own pointer, keyboard, focus and clipboard, its own outputs and workspaces, and its own Wayland socket, which the programs it starts use; no input, focus or clipboard of one seat reaches another. Create one first: every other tool but clock takes its handle. Closing it releases what it holds, disconnects its windows, ends its programs (SIGTERM, then SIGKILL 2 s later) and removes its outputs; it answers once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",
+    "description": "Create a seat of your own, list the seats, or close one. A seat has its own pointer, keyboard, focus and clipboard, its own outputs and workspaces, and its own Wayland socket, which the programs it starts use; no input, focus or clipboard of one seat reaches another. Create one first: every other tool but clock takes its handle. Closing it releases what it holds, disconnects its windows, ends its programs (SIGTERM and SIGCONT, then SIGKILL 2 s later) and removes its outputs; it answers once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -172,7 +172,7 @@
     "title": "Workspaces"
   },
   {
-    "description": "Start a program on a seat, list a seat's programs, or stop one. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log file of its output and errors, whose path the result gives; its windows open on its seat. Logs go when the seat closes.",
+    "description": "Start a program on a seat, list a seat's programs, stop one, read its log, or make it stuck or slow. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log of its output and errors; its windows open on its seat. env {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives each program's state, its log's size, its run_percent (100 free, 0 frozen) and protocol_error: the last Wayland protocol error one of its connections was ended for (interface, object, code, message), null for none. stop sends its process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of them, 64 KiB by default, 1 MiB at most, from the byte offset from since it started, or its newest without from; size is every byte it wrote, dropped those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; ended is true once its output has closed. freeze stops its process group (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of each 100 ms and stops it the rest, on real time whatever the clock, until thaw, freeze, stop or the end of its group. A frozen program reads no event: once its Wayland socket's buffer fills, Yuna closes its connection, and events tells client_left with reason closed. Logs go when the seat closes.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -180,7 +180,11 @@
           "enum": [
             "start",
             "list",
-            "stop"
+            "stop",
+            "log",
+            "freeze",
+            "thaw",
+            "slow"
           ],
           "type": "string"
         },
@@ -207,8 +211,25 @@
           "description": "stop: SIGKILL rather than SIGTERM",
           "type": "boolean"
         },
+        "from": {
+          "description": "log: the first byte, an offset since it started; its newest bytes by default",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "description": "log: how many bytes at most; 65536 by default",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
         "program": {
-          "description": "stop: the program's id",
+          "description": "stop, log, freeze, thaw, slow: the program's id",
+          "type": "integer"
+        },
+        "run_percent": {
+          "description": "slow: the share of each 100 ms it runs",
+          "maximum": 99,
+          "minimum": 1,
           "type": "integer"
         },
         "seat": {
@@ -262,6 +283,57 @@
     },
     "name": "windows",
     "title": "Windows"
+  },
+  {
+    "description": "Wait for what happens on a seat, or read what happened since a cursor, rather than asking in a loop. Each event gives seq, a number that grows across the whole Yuna and is never reused, time_ns on the clock's scale, kind, and its fields; a title, an app_id or a workspace is cut to 512 bytes. Yuna looks for events at the end of each round, and at each events call, so that one without after waits only for what comes after it; a window is told at most once a look. Kinds: window_opened (window, app_id, title, pid, shell); window_closed (window); window_changed (window, title, app_id: either changed, however often since the last look); window_placed (window, output, workspace, place: where it rests in the layout changed, told once the layout is arranged); window_unresponsive (window: it left a ping unanswered, as windows' unresponsive tells); focus (window: the seat's focus moved, null for none); program_exited (program, exit_code or signal, the other null); client_left (pid, program, reason, error: a Wayland connection of the seat ended; reason protocol_error, with error's interface, object, code and message, or closed, error null: it left, sent what is not Wayland, or could not take its events; pid as windows gives it; program null for a client of no program, or one whose process had exited before Yuna accepted it); output_added, output_removed, output_changed (output). With after, a seq or a reply's next, gives the events after it, only kinds when given, at most 256 a reply; next is the cursor to give next, and missed how many events of the seat after the cursor its log, which keeps its last 1024, dropped. Without after, no past event: the reply's next reads what comes. With wait_ms, waits up to that long, on real time whatever the clock, for a first event that matches, and answers once the round that recorded it ends, or at once when the log dropped events after the cursor; timed_out is true when none came. A window that opens and closes between two looks is not seen. Yuna keeps nothing between calls: the cursor is yours.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "description": "the cursor: an event's seq or a reply's next; none for what comes from now",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kinds": {
+          "description": "only these kinds; every kind by default",
+          "items": {
+            "enum": [
+              "window_opened",
+              "window_closed",
+              "window_changed",
+              "window_placed",
+              "window_unresponsive",
+              "focus",
+              "program_exited",
+              "client_left",
+              "output_added",
+              "output_removed",
+              "output_changed"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "wait_ms": {
+          "description": "how long to wait for a first event; 0 by default",
+          "maximum": 50000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "events",
+    "title": "Events"
   },
   {
     "description": "Capture what one of a seat's outputs shows, as a PNG image of its newest frame: the one being drawn when a change is on its way, else the last one drawn. All of the output, its first by default, a region of it, or a window: what the output shows where the window is, what covers it included; a hidden window is refused. By default at the logical size, where a pixel is a logical unit, the units pointer takes; size physical gives every physical pixel. The result tells how the image maps to its output, logical = x + pixel × units_per_pixel, and gives a capture id: pointer takes it, with x and y in that image's pixels. One capture of a seat at a time. It comes once the clock reaches the boundary its frame is presented at: on a manual clock, advance it.",

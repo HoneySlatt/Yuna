@@ -65,7 +65,8 @@ pub use capture::{
 };
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
-    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
+    ClientDeparture, ClientProcess, ClientProtocolError, Compositor, Config, Counters,
+    OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
 };
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{

@@ -12,10 +12,16 @@
 //! their sound server there; with a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that
 //! D-Bus's library does not launch a bus of its own through X11, which would hold the seat's
 //! Xwayland. Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own
-//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Its standard input is `/dev/null`; its output and errors go,
-//! through a pipe Yuna reads, to a log file the agent reads, bounded to [`LOG_LIMIT`].
+//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Its
+//! standard input is `/dev/null`; its output and errors go, through a pipe Yuna reads, to a log
+//! file the agent reads through `spawn log`, which keeps its first [`LOG_HEAD`] bytes and its
+//! newest [`LOG_TAIL`] ([`LogRead`]).
 //!
-//! Each program leads a process group of its own, which `stop` signals. Yuna is its programs'
+//! Each program leads a process group of its own, which `stop` signals, and which `freeze`,
+//! `thaw` and `slow` stop and continue ([`Pace`]). Every path that ends processes with SIGTERM
+//! sends SIGCONT right after it, as systemd does, so that a stopped process ends at once rather
+//! than at SIGKILL. A client's program is the one its process was, or was under, when it
+//! connected ([`Programs::program_of`]). Yuna is its programs'
 //! subreaper (the program sets it, `main.rs`): a process whose parent dies becomes Yuna's
 //! child, so that the whole tree stays Yuna's to reap and to end. When Yuna stops, every process
 //! under it gets SIGTERM, then SIGKILL [`END_GRACE`] later if it is still there, while Yuna still
@@ -24,7 +30,8 @@
 //! never polled: every child is reaped there, and the status of one that is not a program, an
 //! Xwayland's, goes back to the compositor, whose own wait on it then finds it reaped. The folder
 //! that holds the seats' sockets, the logs and the programs' runtime folders is removed when Yuna
-//! stops.
+//! stops; one that a Yuna killed by SIGKILL left is removed when the next `yuna mcp` starts, its
+//! lock free: Yuna holds its folder's [`LOCK_FILE`] locked while it lives ([`Programs::new`]).
 //!
 //! A panic of Yuna's state stops it at once
 //! ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): its
@@ -35,9 +42,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -45,6 +52,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::rustix;
 use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
@@ -52,7 +60,8 @@ use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions, WaitStatus};
 
 use yuna_layout::SeatId;
 
-use crate::process::keep_descriptors_from_the_program;
+use crate::compositor::{ClientProcess, ClientProtocolError};
+use crate::process::{ProcessStat, keep_descriptors_from_the_program, read_stat};
 use crate::state::State;
 use crate::xwayland::X11Display;
 
@@ -104,10 +113,18 @@ pub const MAX_RUNNING: usize = 64;
 /// is forgotten, and its log deleted.
 pub const MAX_KEPT: usize = 128;
 
-/// How much of a program's output its log keeps: 1 MiB. What comes after is counted and
-/// dropped, so that a program that never stops writing fills neither the disk nor memory: the
-/// logs are in `XDG_RUNTIME_DIR`, most often in memory, [`MAX_KEPT`] of them at most.
-pub const LOG_LIMIT: u64 = 1 << 20;
+/// How much of the start of a program's output its log keeps: 256 KiB, where a failure to start
+/// shows.
+pub const LOG_HEAD: u64 = 256 << 10;
+
+/// How much of the newest of a program's output its log keeps, after its first [`LOG_HEAD`]:
+/// 1 MiB. What comes between is counted and dropped, so that a program that never stops writing
+/// fills neither the disk nor memory: the logs are in `XDG_RUNTIME_DIR`, most often in memory,
+/// [`MAX_KEPT`] of them at most, 160 MiB together at worst.
+pub const LOG_TAIL: u64 = 1 << 20;
+
+/// How long a slowed program's period is: it runs its share of each, and is stopped the rest.
+pub const PACE_PERIOD: Duration = Duration::from_millis(100);
 
 /// How long the programs have, once Yuna stops, between SIGTERM and SIGKILL.
 pub const END_GRACE: Duration = Duration::from_secs(2);
@@ -122,7 +139,7 @@ const ENDING_POLL: Duration = Duration::from_millis(10);
 /// How much of a program's output is read at a time.
 const READ_SIZE: usize = 64 * 1024;
 
-/// How often a program's output is read once its log is full.
+/// How often a program's output is read once it has written more than its log keeps.
 pub const THROTTLE: Duration = Duration::from_millis(100);
 
 /// A program started by `spawn`.
@@ -136,15 +153,25 @@ pub struct Program {
     pub command: Vec<String>,
     /// How it ended; none while it runs.
     pub end: Option<End>,
-    /// Its log file: its standard output and errors, in the order they came.
+    /// Its log file: its standard output and errors, in the order they came, its first
+    /// [`LOG_HEAD`] bytes, then a ring of its newest [`LOG_TAIL`] once it wrote more.
     pub log: PathBuf,
-    log_count: Rc<Cell<LogCount>>,
+    /// The last protocol error one of its Wayland clients was ended for.
+    pub protocol_error: Option<ClientProtocolError>,
+    /// When it started, and when it was reaped: a client connected between was its, when its
+    /// process was the program's or under it ([`Programs::program_of`]).
+    started: Instant,
+    reaped: Option<Instant>,
+    log_state: Rc<RefCell<ProgramLog>>,
+    pace: Rc<Cell<Pace>>,
+    /// The timer that stops and continues it while it is slowed.
+    pace_timer: Option<RegistrationToken>,
 }
 
 impl Program {
     /// Bytes of output its log holds.
-    pub fn log_written(&self) -> u64 {
-        self.log_count.get().written
+    pub fn log_kept(&self) -> u64 {
+        self.log_state.borrow().kept()
     }
 
     /// Whether a process of its group still runs: the program, or one it started and did not
@@ -153,9 +180,46 @@ impl Program {
         rustix::process::test_kill_process_group(self.pid).is_ok()
     }
 
-    /// Bytes of output dropped past [`LOG_LIMIT`].
+    /// Bytes of output its log dropped: past its first [`LOG_HEAD`] and before its newest
+    /// [`LOG_TAIL`].
     pub fn log_dropped(&self) -> u64 {
-        self.log_count.get().dropped
+        self.log_state.borrow().dropped()
+    }
+
+    /// How it is paced now: free once its whole group has ended, whatever it was asked.
+    pub fn pace(&self) -> Pace {
+        match self.pace.get() {
+            Pace::Free => Pace::Free,
+            paced if self.group_runs() => paced,
+            _ => Pace::Free,
+        }
+    }
+
+    /// Up to `max_bytes` of its log from byte `from` of its output, or its newest without.
+    pub fn read_log(&self, from: Option<u64>, max_bytes: u64) -> Result<LogRead, String> {
+        self.log_state.borrow().read(from, max_bytes)
+    }
+}
+
+/// How much of the time a program's process group may run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pace {
+    /// As it likes.
+    Free,
+    /// Stopped (SIGSTOP), until thawed.
+    Frozen,
+    /// Running this many hundredths of each [`PACE_PERIOD`], from 1 to 99, stopped the rest.
+    Slow(u8),
+}
+
+impl Pace {
+    /// The share of the time it may run, in hundredths: 100 free, 0 frozen.
+    pub fn run_percent(self) -> u8 {
+        match self {
+            Pace::Free => 100,
+            Pace::Frozen => 0,
+            Pace::Slow(percent) => percent,
+        }
     }
 }
 
@@ -168,10 +232,143 @@ pub enum End {
     Killed(i32),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct LogCount {
+/// A read of a program's log, as `spawn log` gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogRead {
+    /// Bytes `from` to `to` of its output, as UTF-8, any invalid sequence replaced.
+    pub text: String,
+    /// Where the bytes start and end, in bytes since the program started.
+    pub from: u64,
+    pub to: u64,
+    /// Every byte it wrote.
+    pub size: u64,
+    /// The bytes its log did not keep.
+    pub dropped: u64,
+    /// Whether its output has ended: every process that held its pipe has closed it.
+    pub ended: bool,
+}
+
+/// A program's log: its file, which holds its first [`LOG_HEAD`] bytes, then its newest
+/// [`LOG_TAIL`] in a ring, byte `n` past the head at `LOG_HEAD + (n - LOG_HEAD) % LOG_TAIL`.
+#[derive(Debug)]
+struct ProgramLog {
+    file: File,
+    /// Every byte the program wrote.
+    size: u64,
+    /// The bytes put in the file: `size`, unless a write failed, after which none is.
     written: u64,
-    dropped: u64,
+    failed: bool,
+    ended: bool,
+}
+
+impl ProgramLog {
+    fn new(file: File) -> ProgramLog {
+        ProgramLog {
+            file,
+            size: 0,
+            written: 0,
+            failed: false,
+            ended: false,
+        }
+    }
+
+    /// Where byte `offset` of the output is in the file.
+    fn position(offset: u64) -> u64 {
+        if offset < LOG_HEAD {
+            offset
+        } else {
+            LOG_HEAD + (offset - LOG_HEAD) % LOG_TAIL
+        }
+    }
+
+    /// How many bytes from byte `offset` lie in the file before its head's end or the ring's
+    /// end, whichever comes first.
+    fn contiguous_from(offset: u64) -> u64 {
+        if offset < LOG_HEAD {
+            LOG_HEAD - offset
+        } else {
+            LOG_HEAD + LOG_TAIL - Self::position(offset)
+        }
+    }
+
+    /// The end of the head kept, and the start of the tail kept: equal when nothing was
+    /// dropped between.
+    fn kept_bounds(&self) -> (u64, u64) {
+        let head_end = self.written.min(LOG_HEAD);
+        let tail_start = head_end.max(self.written.saturating_sub(LOG_TAIL));
+        (head_end, tail_start)
+    }
+
+    fn kept(&self) -> u64 {
+        let (head_end, tail_start) = self.kept_bounds();
+        head_end + (self.written - tail_start)
+    }
+
+    fn dropped(&self) -> u64 {
+        self.size - self.kept()
+    }
+
+    /// Adds `bytes` the program wrote. A write that fails, the disk full most often, is said
+    /// once, and nothing more goes into the file: what came after is dropped.
+    fn append(&mut self, bytes: &[u8]) {
+        self.size += bytes.len() as u64;
+        let mut rest = bytes;
+        while !rest.is_empty() && !self.failed {
+            let room = usize::try_from(Self::contiguous_from(self.written)).unwrap_or(usize::MAX);
+            let length = room.min(rest.len());
+            match self
+                .file
+                .write_all_at(&rest[..length], Self::position(self.written))
+            {
+                Ok(()) => {
+                    self.written += length as u64;
+                    rest = &rest[length..];
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "a program's log cannot be written: the rest is dropped");
+                    self.failed = true;
+                }
+            }
+        }
+    }
+
+    /// Up to `max_bytes` of the bytes kept from byte `from`, or the newest without. A start in
+    /// the bytes dropped moves to the first kept after; the bytes given never cross what was
+    /// dropped, so that they are whole: the next read starts at their end.
+    fn read(&self, from: Option<u64>, max_bytes: u64) -> Result<LogRead, String> {
+        let (head_end, tail_start) = self.kept_bounds();
+        let mut start = from
+            .unwrap_or_else(|| self.written.saturating_sub(max_bytes))
+            .min(self.written);
+        if (head_end..tail_start).contains(&start) {
+            start = tail_start;
+        }
+        let limit = if start < head_end && head_end < tail_start {
+            head_end
+        } else {
+            self.written
+        };
+        let end = start.saturating_add(max_bytes).min(limit);
+        let mut bytes = vec![0; usize::try_from(end - start).unwrap_or(0)];
+        let mut offset = start;
+        let mut filled = 0;
+        while offset < end {
+            let length = Self::contiguous_from(offset).min(end - offset) as usize;
+            self.file
+                .read_exact_at(&mut bytes[filled..filled + length], Self::position(offset))
+                .map_err(|error| format!("its log cannot be read: {error}"))?;
+            filled += length;
+            offset += length as u64;
+        }
+        Ok(LogRead {
+            text: String::from_utf8_lossy(&bytes).into_owned(),
+            from: start,
+            to: end,
+            size: self.size,
+            dropped: self.dropped(),
+            ended: self.ended,
+        })
+    }
 }
 
 /// What `spawn` asks to start.
@@ -190,10 +387,12 @@ pub struct Start {
 #[derive(Debug)]
 pub struct Programs {
     folder: PathBuf,
+    /// The folder's lock file, locked while this Yuna lives ([`LOCK_FILE`]).
+    _lock: File,
     list: Vec<Program>,
     next_id: u64,
-    /// The output sources that stopped reading past [`LOG_LIMIT`], until the next
-    /// [`THROTTLE`] ends.
+    /// The output sources that stopped reading once their program wrote more than its log
+    /// keeps, until the next [`THROTTLE`] ends.
     throttled: Throttled,
 }
 
@@ -204,38 +403,33 @@ type Throttled = Rc<RefCell<Vec<Rc<Cell<Option<RegistrationToken>>>>>>;
 
 impl Programs {
     /// Creates the folder of the seats' sockets, the programs' logs and their runtime folders,
-    /// `yuna-mcp-<pid>` in `runtime_dir`, readable by its user alone.
+    /// `yuna-mcp-<pid>` in `runtime_dir`, readable by its user alone, and locks its
+    /// [`LOCK_FILE`] for as long as this Yuna lives. First removes the folders of Yunas that are
+    /// gone ([`remove_stale_folders`]). The folder is made and locked under a name of its own,
+    /// which no sweep takes, then given its name: another Yuna's sweep never finds it unlocked.
     pub fn new(runtime_dir: &Path) -> io::Result<Programs> {
+        remove_stale_folders(runtime_dir);
         let pid = std::process::id();
-        let mut attempt = 0_u32;
-        let folder = loop {
-            // A folder of the same name is a stopped Yuna's, with this pid then: kept, and
-            // another name taken.
-            let name = match attempt {
-                0 => format!("yuna-mcp-{pid}"),
-                n => format!("yuna-mcp-{pid}-{n}"),
-            };
-            let folder = runtime_dir.join(name);
-            match fs::DirBuilder::new().mode(0o700).create(&folder) {
-                Ok(()) => break folder,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists && attempt < 100 => {
-                    attempt += 1;
+        let staging = runtime_dir.join(format!(".{FOLDER_PREFIX}{pid}-starting"));
+        match prepare_folder(&staging) {
+            Ok(lock) => match name_folder(runtime_dir, pid, &staging) {
+                Ok(folder) => Ok(Programs {
+                    folder,
+                    _lock: lock,
+                    list: Vec::new(),
+                    next_id: 1,
+                    throttled: Throttled::default(),
+                }),
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&staging);
+                    Err(error)
                 }
-                Err(error) => return Err(error),
+            },
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                Err(error)
             }
-        };
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(folder.join("logs"))?;
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(folder.join("runtime"))?;
-        Ok(Programs {
-            folder,
-            list: Vec::new(),
-            next_id: 1,
-            throttled: Throttled::default(),
-        })
+        }
     }
 
     /// Where seat `seat`'s Wayland socket goes, in the folder.
@@ -251,6 +445,13 @@ impl Programs {
     /// The programs of `seat` remembered, in the order they started.
     pub fn list(&self, seat: SeatId) -> Vec<&Program> {
         self.list.iter().filter(|p| p.seat == seat).collect()
+    }
+
+    /// Program `id` of `seat`, while it is remembered; none for another seat's.
+    pub fn program(&self, seat: SeatId, id: u64) -> Option<&Program> {
+        self.list
+            .iter()
+            .find(|program| program.id == id && program.seat == seat)
     }
 
     /// Starts a program on `seat`, whose clients connect through `socket`, and its X11 clients
@@ -300,7 +501,7 @@ impl Programs {
         let log = self.folder.join("logs").join(format!("{id}.log"));
         let environment =
             program_environment(std::env::vars_os(), &runtime, socket, x11, seat, &start.env);
-        let (pid, log_count) = match self.launch(handle, environment, &start, &runtime, &log) {
+        let (pid, log_state) = match self.launch(handle, environment, &start, &runtime, &log) {
             Ok(launched) => launched,
             Err(reason) => {
                 let _ = fs::remove_file(&log);
@@ -316,9 +517,14 @@ impl Programs {
             command: start.command,
             end: None,
             log,
-            log_count,
+            protocol_error: None,
+            started: Instant::now(),
+            reaped: None,
+            log_state,
+            pace: Rc::new(Cell::new(Pace::Free)),
+            pace_timer: None,
         });
-        self.forget_oldest_ended();
+        self.forget_oldest_ended(handle);
         // Only programs that ended are forgotten: this one is still last.
         self.list
             .last()
@@ -334,12 +540,13 @@ impl Programs {
         start: &Start,
         runtime: &Path,
         log_path: &Path,
-    ) -> Result<(Pid, Rc<Cell<LogCount>>), String> {
+    ) -> Result<(Pid, Rc<RefCell<ProgramLog>>), String> {
         fs::DirBuilder::new()
             .mode(0o700)
             .create(runtime)
             .map_err(|e| format!("its runtime folder cannot be created: {e}"))?;
         let log = OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .mode(0o600)
@@ -373,43 +580,175 @@ impl Programs {
         let pid = Pid::from_child(&child);
         // The child is reaped through SIGCHLD (`reap`), not through `Child::wait`.
         drop(child);
-        let log_count = Rc::new(Cell::new(LogCount::default()));
+        let log_state = Rc::new(RefCell::new(ProgramLog::new(log)));
         if let Err(error) = watch_output(
             handle,
             output_read,
-            log,
-            log_count.clone(),
+            log_state.clone(),
             self.throttled.clone(),
         ) {
             tracing::warn!(%error, %program, "a program's output cannot be read");
+            log_state.borrow_mut().ended = true;
         }
-        Ok((pid, log_count))
+        Ok((pid, log_state))
     }
 
-    /// Sends program `id` of `seat` its process group SIGTERM, or SIGKILL when `force`: the
-    /// processes it started go too, even once it has ended itself. Refused for an unknown
-    /// program, another seat's, and one whose whole group has ended.
-    pub fn stop(&mut self, seat: SeatId, id: u64, force: bool) -> Result<(), String> {
-        let program = self
-            .list
-            .iter()
-            .find(|program| program.id == id && program.seat == seat)
-            .ok_or_else(|| format!("no program {id} on seat {}", seat.0))?;
+    /// Sends program `id` of `seat` its process group SIGTERM, then SIGCONT, or SIGKILL when
+    /// `force`: the processes it started go too, even once it has ended itself, stopped ones
+    /// included. Its pace ends first. Refused for an unknown program, another seat's, and one
+    /// whose whole group has ended.
+    pub fn stop(
+        &mut self,
+        handle: &LoopHandle<'static, State>,
+        seat: SeatId,
+        id: u64,
+        force: bool,
+    ) -> Result<(), String> {
+        let program = self.program_mut(seat, id)?;
+        unpace(handle, program);
         let signal = if force { Signal::KILL } else { Signal::TERM };
-        match rustix::process::kill_process_group(program.pid, signal) {
-            Ok(()) => Ok(()),
-            Err(rustix::io::Errno::SRCH) => Err(format!(
-                "program {id} has ended, and every process of its group with it"
-            )),
-            Err(error) => Err(format!("program {id} cannot be signalled: {error}")),
+        signal_group(program, signal)?;
+        if signal == Signal::TERM {
+            let _ = signal_group(program, Signal::CONT);
+        }
+        Ok(())
+    }
+
+    /// Stops program `id` of `seat`, its whole process group, until it is thawed: SIGSTOP.
+    /// Refused as [`Programs::stop`] is.
+    pub fn freeze(
+        &mut self,
+        handle: &LoopHandle<'static, State>,
+        seat: SeatId,
+        id: u64,
+    ) -> Result<(), String> {
+        let program = self.program_mut(seat, id)?;
+        unpace(handle, program);
+        signal_group(program, Signal::STOP)?;
+        program.pace.set(Pace::Frozen);
+        Ok(())
+    }
+
+    /// Lets program `id` of `seat` run as it likes again: its pace ends, and its whole group
+    /// gets SIGCONT. Refused as [`Programs::stop`] is.
+    pub fn thaw(
+        &mut self,
+        handle: &LoopHandle<'static, State>,
+        seat: SeatId,
+        id: u64,
+    ) -> Result<(), String> {
+        let program = self.program_mut(seat, id)?;
+        unpace(handle, program);
+        signal_group(program, Signal::CONT)
+    }
+
+    /// Slows program `id` of `seat`: its whole group runs `run_percent` hundredths of each
+    /// [`PACE_PERIOD`], continued then stopped by a timer on real time, whatever the
+    /// compositor's clock, until it is thawed, frozen, stopped, or its group has ended. Refused
+    /// for a share outside 1 to 99, and as [`Programs::stop`] is.
+    pub fn slow(
+        &mut self,
+        handle: &LoopHandle<'static, State>,
+        seat: SeatId,
+        id: u64,
+        run_percent: u8,
+    ) -> Result<(), String> {
+        if !(1..=99).contains(&run_percent) {
+            return Err("run_percent is from 1 to 99: freeze or thaw for 0 or 100".to_owned());
+        }
+        let program = self.program_mut(seat, id)?;
+        unpace(handle, program);
+        signal_group(program, Signal::CONT)?;
+        let running_for = PACE_PERIOD * u32::from(run_percent) / 100;
+        let stopped_for = PACE_PERIOD - running_for;
+        let group = program.pid;
+        let pace = program.pace.clone();
+        let mut running = true;
+        let timer = handle
+            .insert_source(Timer::from_duration(running_for), move |_, _, state| {
+                state.woke = true;
+                running = !running;
+                let signal = if running { Signal::CONT } else { Signal::STOP };
+                match rustix::process::kill_process_group(group, signal) {
+                    // Its whole group has ended: nothing is left to pace.
+                    Err(rustix::io::Errno::SRCH) => {
+                        pace.set(Pace::Free);
+                        TimeoutAction::Drop
+                    }
+                    _ if running => TimeoutAction::ToDuration(running_for),
+                    _ => TimeoutAction::ToDuration(stopped_for),
+                }
+            })
+            .map_err(|error| format!("program {id} cannot be paced: {}", error.error))?;
+        program.pace_timer = Some(timer);
+        program.pace.set(Pace::Slow(run_percent));
+        Ok(())
+    }
+
+    /// Ends the pace of every program, without signalling them: Yuna is about to end them all,
+    /// and no timer must stop one again between its SIGTERM and its SIGCONT.
+    pub fn unpace_all(&mut self, handle: &LoopHandle<'static, State>) {
+        for program in &mut self.list {
+            unpace(handle, program);
+        }
+    }
+
+    /// Ends the pace of `seat`'s programs, without signalling them, as [`Programs::unpace_all`].
+    pub fn unpace_seat(&mut self, handle: &LoopHandle<'static, State>, seat: SeatId) {
+        for program in self.list.iter_mut().filter(|program| program.seat == seat) {
+            unpace(handle, program);
+        }
+    }
+
+    /// Program `id` of `seat`; refused for an unknown program and for another seat's.
+    fn program_mut(&mut self, seat: SeatId, id: u64) -> Result<&mut Program, String> {
+        self.list
+            .iter_mut()
+            .find(|program| program.id == id && program.seat == seat)
+            .ok_or_else(|| format!("no program {id} on seat {}", seat.0))
+    }
+
+    /// The program of `seat` a client belongs to, `process` as it connected: the one that was
+    /// its process, or above it, when it connected, alive then, so that its pid was its own;
+    /// else the latest one started before that whose process group it was in, as a process of
+    /// a launcher that exited is. None for a client of no program's, or of a program
+    /// forgotten.
+    pub fn program_of(&self, seat: SeatId, process: &ClientProcess) -> Option<u64> {
+        let at = process.connected_at;
+        let before = |program: &&Program| program.seat == seat && program.started <= at;
+        let pid = |program: &Program| program.pid.as_raw_nonzero().get();
+        self.list
+            .iter()
+            .filter(before)
+            .filter(|program| program.reaped.is_none_or(|reaped| reaped > at))
+            .find(|program| process.lineage.contains(&pid(program)))
+            .or_else(|| {
+                self.list
+                    .iter()
+                    .filter(before)
+                    .rfind(|program| process.group == Some(pid(program)))
+            })
+            .map(|program| program.id)
+    }
+
+    /// Records `error` as the last protocol error of program `id`, a client of its was ended
+    /// for.
+    pub fn note_protocol_error(&mut self, id: u64, error: ClientProtocolError) {
+        if let Some(program) = self.list.iter_mut().find(|program| program.id == id) {
+            program.protocol_error = Some(error);
         }
     }
 
     /// Reaps every child that ended, programs, orphans Yuna adopted and Xwaylands alike, and
-    /// records how each program ended. Gives `not_a_program` the pid and status of every other
-    /// child, so that the compositor learns how an Xwayland ended, which this reaping took
-    /// before its own wait on it could. Run when SIGCHLD has come.
-    pub fn reap(&mut self, mut not_a_program: impl FnMut(Pid, WaitStatus)) {
+    /// records how each program ended; returns those programs, with their seats. Gives
+    /// `not_a_program` the pid and status of every other child, so that the compositor learns
+    /// how an Xwayland ended, which this reaping took before its own wait on it could. Run when
+    /// SIGCHLD has come.
+    pub fn reap(
+        &mut self,
+        mut not_a_program: impl FnMut(Pid, WaitStatus),
+    ) -> Vec<(SeatId, u64, End)> {
+        let mut ended = Vec::new();
         reap_children(|pid, status| {
             let end = match (status.exit_status(), status.terminating_signal()) {
                 (Some(code), _) => End::Exited(code),
@@ -425,10 +764,13 @@ impl Programs {
                 Some(program) => {
                     tracing::info!(program = program.id, ?end, "program ended");
                     program.end = Some(end);
+                    program.reaped = Some(Instant::now());
+                    ended.push((program.seat, program.id, end));
                 }
                 None => not_a_program(pid, status),
             }
         });
+        ended
     }
 
     /// Whether an output source waits for the end of a [`THROTTLE`].
@@ -521,7 +863,7 @@ impl Programs {
     }
 
     /// Forgets the programs of `seat`, which closed, and deletes their logs and runtime
-    /// folders.
+    /// folders. Their pace has ended already ([`Programs::unpace_seat`]).
     pub fn forget_seat(&mut self, seat: SeatId) {
         let folder = self.folder.clone();
         self.list.retain(|program| {
@@ -540,32 +882,179 @@ impl Programs {
     }
 
     /// Forgets the oldest programs that ended while more than [`MAX_KEPT`] are remembered, and
-    /// deletes their logs and runtime folders.
-    fn forget_oldest_ended(&mut self) {
+    /// deletes their logs and runtime folders. The group of one still paced, which no call can
+    /// name any more, is left to run as it likes.
+    fn forget_oldest_ended(&mut self, handle: &LoopHandle<'static, State>) {
         while self.list.len() > MAX_KEPT {
             let Some(index) = self.list.iter().position(|p| p.end.is_some()) else {
                 return;
             };
-            let program = self.list.remove(index);
+            let mut program = self.list.remove(index);
+            if program.pace() != Pace::Free {
+                unpace(handle, &mut program);
+                let _ = signal_group(&program, Signal::CONT);
+            }
             let _ = fs::remove_file(&program.log);
             let _ = fs::remove_dir_all(self.folder.join("runtime").join(program.id.to_string()));
         }
     }
 }
 
-/// Sends `signal` to every living process under Yuna, found through `/proc`, and returns how
-/// many there were. A child of Yuna's that ended since it was read is not reaped yet, so its pid
-/// is not reused; a deeper process may be reaped by its own parent in between, its pid then
-/// free for another ([debt](../../../../docs/debt.md#the-mcp-server)).
+/// Sends `signal` to every living process under Yuna, found through `/proc`, as
+/// [`send_ending_signal`] does, and returns how many there were. A child of Yuna's that ended
+/// since it was read is not reaped yet, so its pid is not reused; a deeper process may be reaped
+/// by its own parent in between, its pid then free for another
+/// ([debt](../../../../docs/debt.md#the-mcp-server)).
 pub fn signal_all(signal: Signal) -> usize {
     let living = living();
     if !living.is_empty() {
         tracing::info!(processes = living.len(), ?signal, "ending the programs");
     }
     for &pid in &living {
-        let _ = rustix::process::kill_process(pid, signal);
+        send_ending_signal(pid, signal);
     }
     living.len()
+}
+
+/// Sends `signal` to process `pid`; after SIGTERM, SIGCONT too, as systemd does: a stopped
+/// process, a program frozen or slowed, acts on SIGTERM only once continued, and would otherwise
+/// wait for SIGKILL.
+pub fn send_ending_signal(pid: Pid, signal: Signal) {
+    let _ = rustix::process::kill_process(pid, signal);
+    if signal == Signal::TERM {
+        let _ = rustix::process::kill_process(pid, Signal::CONT);
+    }
+}
+
+/// Sends `signal` to `program`'s process group; refused, with why, when its whole group has
+/// ended.
+fn signal_group(program: &Program, signal: Signal) -> Result<(), String> {
+    match rustix::process::kill_process_group(program.pid, signal) {
+        Ok(()) => Ok(()),
+        Err(rustix::io::Errno::SRCH) => Err(format!(
+            "program {} has ended, and every process of its group with it",
+            program.id
+        )),
+        Err(error) => Err(format!(
+            "program {} cannot be signalled: {error}",
+            program.id
+        )),
+    }
+}
+
+/// Ends `program`'s pace, without signalling it: its timer goes while it runs.
+fn unpace(handle: &LoopHandle<'static, State>, program: &mut Program) {
+    // A timer that found the group ended has removed itself, and set the pace free: its token
+    // is not removed again.
+    if let (Some(timer), Pace::Slow(_)) = (program.pace_timer.take(), program.pace.get()) {
+        handle.remove(timer);
+    }
+    program.pace.set(Pace::Free);
+}
+
+/// The prefix of the folders `yuna mcp` makes in `XDG_RUNTIME_DIR`, before its pid.
+const FOLDER_PREFIX: &str = "yuna-mcp-";
+
+/// The file in a `yuna mcp`'s folder whose lock it holds while it lives (`flock`, through
+/// [`File::try_lock`]): the kernel releases it at any end, SIGKILL included, and in any pid
+/// namespace, so that a lock another Yuna can take tells a folder whose Yuna is gone.
+pub const LOCK_FILE: &str = "lock";
+
+/// Makes the folder `staging`, its lock file locked, and its `logs` and `runtime` folders;
+/// returns the lock. A folder of that name is a gone Yuna's that had this pid, and goes first.
+fn prepare_folder(staging: &Path) -> io::Result<File> {
+    match fs::DirBuilder::new().mode(0o700).create(staging) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            fs::remove_dir_all(staging)?;
+            fs::DirBuilder::new().mode(0o700).create(staging)?;
+        }
+        made => made?,
+    }
+    let lock = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(staging.join(LOCK_FILE))?;
+    lock.try_lock().map_err(io::Error::from)?;
+    for inner in ["logs", "runtime"] {
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(staging.join(inner))?;
+    }
+    Ok(lock)
+}
+
+/// Gives `staging` its name in `runtime_dir`, `yuna-mcp-<pid>`, or `yuna-mcp-<pid>-<n>` when
+/// a folder of that name is there, a gone Yuna's whose lock is not free yet; never in place of
+/// another.
+fn name_folder(runtime_dir: &Path, pid: u32, staging: &Path) -> io::Result<PathBuf> {
+    for attempt in 0..100 {
+        let folder = runtime_dir.join(match attempt {
+            0 => format!("{FOLDER_PREFIX}{pid}"),
+            n => format!("{FOLDER_PREFIX}{pid}-{n}"),
+        });
+        let renamed = rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            staging,
+            rustix::fs::CWD,
+            &folder,
+            rustix::fs::RenameFlags::NOREPLACE,
+        );
+        match renamed {
+            Ok(()) => return Ok(folder),
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(io::Error::other(format!(
+        "every name of {FOLDER_PREFIX}{pid}'s is taken"
+    )))
+}
+
+/// Whether `name` is a `yuna mcp`'s folder's: `yuna-mcp-<pid>` or `yuna-mcp-<pid>-<n>`. A
+/// folder still being made, `.yuna-mcp-<pid>-starting`, is not.
+fn is_folder_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(FOLDER_PREFIX) else {
+        return false;
+    };
+    let (pid, attempt) = rest.split_once('-').unwrap_or((rest, "0"));
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    digits(pid) && digits(attempt)
+}
+
+/// Removes each `yuna mcp`'s folder in `runtime_dir` whose [`LOCK_FILE`]'s lock can be taken:
+/// the folder of sockets, logs and runtime folders a Yuna killed by SIGKILL left, which nothing
+/// else removes. It is removed with its lock held, so that no other sweep takes it meanwhile;
+/// never by its pid alone. A link is not followed, and a folder with no lock file, a Yuna's
+/// older than this one, is kept: nothing tells whether it lives.
+fn remove_stale_folders(runtime_dir: &Path) {
+    let Ok(entries) = fs::read_dir(runtime_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // The entry's own type: a link to a folder is not followed.
+        let is_folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if !is_folder || !entry.file_name().to_str().is_some_and(is_folder_name) {
+            continue;
+        }
+        let folder = entry.path();
+        let Ok(lock) = File::open(folder.join(LOCK_FILE)) else {
+            continue;
+        };
+        match lock.try_lock() {
+            Ok(()) => match fs::remove_dir_all(&folder) {
+                Ok(()) => tracing::info!(?folder, "a gone Yuna's folder is removed"),
+                Err(error) => {
+                    tracing::warn!(%error, ?folder, "a gone Yuna's folder cannot be removed");
+                }
+            },
+            // Its Yuna lives.
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(error)) => {
+                tracing::warn!(%error, ?folder, "a Yuna's folder's lock cannot be read");
+            }
+        }
+    }
 }
 
 /// The processes living under Yuna now.
@@ -707,16 +1196,15 @@ fn seat_in_environment(pid: i32) -> Option<SeatId> {
         .map(SeatId)
 }
 
-/// Reads a program's output as it comes, into `log`, up to [`LOG_LIMIT`]; the source goes when
-/// the output ends. Past the limit, what comes is counted and dropped, read at most
-/// [`READ_SIZE`] every [`THROTTLE`]: the source stops reading and joins `throttled`, which the
-/// server lets read again at the end of the throttle. A program that writes faster waits on its
-/// pipe, rather than keep Yuna reading for nothing.
+/// Reads a program's output as it comes, into `log`; the source goes when the output ends.
+/// Once the program has written more than its log keeps, [`LOG_HEAD`] and [`LOG_TAIL`], it is
+/// read at most [`READ_SIZE`] every [`THROTTLE`]: the source stops reading and joins
+/// `throttled`, which the server lets read again at the end of the throttle. A program that
+/// writes faster waits on its pipe, rather than keep Yuna reading for what it drops.
 fn watch_output(
     handle: &LoopHandle<'static, State>,
     output: OwnedFd,
-    mut log: File,
-    count: Rc<Cell<LogCount>>,
+    log: Rc<RefCell<ProgramLog>>,
     throttled: Throttled,
 ) -> io::Result<()> {
     rustix::io::ioctl_fionbio(&output, true)?;
@@ -729,20 +1217,14 @@ fn watch_output(
             move |_, output, state| {
                 state.woke = true;
                 match rustix::io::read(output.as_fd(), &mut buffer) {
-                    Ok(0) => Ok(PostAction::Remove),
+                    Ok(0) => {
+                        log.borrow_mut().ended = true;
+                        Ok(PostAction::Remove)
+                    }
                     Ok(read) => {
-                        let mut now = count.get();
-                        let room = usize::try_from(LOG_LIMIT.saturating_sub(now.written))
-                            .unwrap_or(usize::MAX)
-                            .min(read);
-                        if room > 0 && log.write_all(&buffer[..room]).is_ok() {
-                            now.written += room as u64;
-                        } else {
-                            now.dropped += room as u64;
-                        }
-                        now.dropped += (read - room) as u64;
-                        count.set(now);
-                        if now.written < LOG_LIMIT {
+                        let mut log = log.borrow_mut();
+                        log.append(&buffer[..read]);
+                        if log.size < LOG_HEAD + LOG_TAIL {
                             return Ok(PostAction::Continue);
                         }
                         throttled.borrow_mut().push(own_source.clone());
@@ -753,6 +1235,7 @@ fn watch_output(
                     }
                     Err(error) => {
                         tracing::warn!(%error, "a program's output cannot be read");
+                        log.borrow_mut().ended = true;
                         Ok(PostAction::Remove)
                     }
                 }
@@ -771,14 +1254,6 @@ pub fn drain(pipe: BorrowedFd<'_>) {
             return;
         }
     }
-}
-
-/// A process as `/proc/<pid>/stat` gives it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProcessStat {
-    parent: i32,
-    group: i32,
-    zombie: bool,
 }
 
 /// Every process under `root`, its parents followed through `/proc`, by pid.
@@ -825,21 +1300,6 @@ fn living_descendants(root: Pid) -> Vec<Pid> {
         .filter(|(_, process)| !process.zombie)
         .filter_map(|(pid, _)| Pid::from_raw(pid))
         .collect()
-}
-
-/// A `/proc/<pid>/stat` line: `pid (name) state ppid pgrp …`, the name possibly holding spaces
-/// and parentheses, so read from its last `)`.
-fn read_stat(stat: &str) -> Option<ProcessStat> {
-    let after_name = &stat[stat.rfind(')')? + 1..];
-    let mut fields = after_name.split_whitespace();
-    let state = fields.next()?;
-    let parent = fields.next()?.parse().ok()?;
-    let group = fields.next()?.parse().ok()?;
-    Some(ProcessStat {
-        parent,
-        group,
-        zombie: state == "Z",
-    })
 }
 
 #[cfg(test)]
@@ -1019,6 +1479,91 @@ mod tests {
         assert_eq!(read_stat("43 (z) Z 1 43"), stat(1, 43, true));
         assert_eq!(read_stat("44 no parenthesis"), None);
         assert_eq!(read_stat("45 (x) S 1"), None);
+    }
+
+    /// A log in a file of its own, in the test's temporary folder.
+    fn log_in(name: &str) -> (ProgramLog, PathBuf) {
+        let path =
+            std::env::temp_dir().join(format!("yuna-program-log-{name}-{}", std::process::id()));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .expect("a log file");
+        (ProgramLog::new(file), path)
+    }
+
+    /// The bytes `start..end` of an output where byte `n` is `n % 251`: a prime, so that bytes
+    /// read at a wrong place in the ring differ.
+    fn output(start: u64, end: u64) -> Vec<u8> {
+        (start..end).map(|n| (n % 251) as u8).collect()
+    }
+
+    #[test]
+    fn a_log_keeps_its_head_and_its_newest_bytes_by_offset() {
+        let (mut log, path) = log_in("ring");
+        let size = LOG_HEAD + 3 * LOG_TAIL + 12_345;
+        // Written in uneven pieces, so that pieces cross the head's end and the ring's.
+        let mut written = 0;
+        for piece in [100, LOG_HEAD - 50, 70_001, LOG_TAIL, 2 * LOG_TAIL] {
+            let end = (written + piece).min(size);
+            log.append(&output(written, end));
+            written = end;
+        }
+        log.append(&output(written, size));
+        let _ = fs::remove_file(&path);
+        assert_eq!(log.size, size);
+        assert_eq!(log.kept(), LOG_HEAD + LOG_TAIL);
+        assert_eq!(log.dropped(), size - LOG_HEAD - LOG_TAIL);
+        // The text is the bytes as UTF-8, the invalid ones replaced.
+        let text = |start, end| String::from_utf8_lossy(&output(start, end)).into_owned();
+        let head = log.read(Some(0), 1_000).expect("a read");
+        assert_eq!((head.from, head.to), (0, 1_000));
+        assert_eq!(head.text, text(0, 1_000));
+        let edge = log.read(Some(LOG_HEAD - 10), 1_000).expect("a read");
+        assert_eq!((edge.from, edge.to), (LOG_HEAD - 10, LOG_HEAD));
+        let tail_start = size - LOG_TAIL;
+        let gap = log.read(Some(LOG_HEAD + 5), 4_000).expect("a read");
+        assert_eq!((gap.from, gap.to), (tail_start, tail_start + 4_000));
+        assert_eq!(gap.text, text(tail_start, tail_start + 4_000));
+        let newest = log.read(None, LOG_TAIL).expect("a read");
+        assert_eq!((newest.from, newest.to), (tail_start, size));
+        assert_eq!(newest.text, text(tail_start, size));
+        let past = log.read(Some(size * 2), 10).expect("a read");
+        assert_eq!((past.from, past.to, past.text.as_str()), (size, size, ""));
+    }
+
+    #[test]
+    fn a_short_log_keeps_everything_and_reads_across_head_and_tail() {
+        let (mut log, path) = log_in("short");
+        let size = LOG_HEAD + 1_000;
+        log.append(&vec![b'a'; size as usize]);
+        let whole = log.read(Some(0), LOG_HEAD + LOG_TAIL).expect("a read");
+        let _ = fs::remove_file(&path);
+        assert_eq!((whole.from, whole.to, whole.dropped), (0, size, 0));
+        assert_eq!(whole.text.len(), size as usize);
+        assert!(!whole.ended);
+        let newest = log.read(None, 2_000).expect("a read");
+        assert_eq!((newest.from, newest.to), (size - 2_000, size));
+    }
+
+    #[test]
+    fn only_yuna_mcps_folders_are_swept() {
+        assert!(is_folder_name("yuna-mcp-123"));
+        assert!(is_folder_name("yuna-mcp-123-4"));
+        for other in [
+            "yuna-mcp-",
+            "yuna-mcp-12-",
+            "yuna-mcp-+12",
+            "yuna-mcp-test-tree-12",
+            "yuna-mcp-12-a",
+            ".yuna-mcp-12-starting",
+            "wayland-1",
+        ] {
+            assert!(!is_folder_name(other), "{other}");
+        }
     }
 
     #[test]

@@ -38,6 +38,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Cost window** (bench): a measured window whose costs the bench reads; for a compositor whose
   frames are counted by capture, the **frames window** after it runs the same scenario again with
   the frame counter, whose copies would weigh on the costs.
+- **Cursor** (MCP): the number an agent gives `events` as `after`, an event's `seq` or a reply's
+  `next`: the agent keeps it, Yuna keeps nothing between calls.
 - **Data control**: `ext-data-control-v1`, which lets a client, such as a clipboard manager, read
   and set the selections without the keyboard focus.
 - **Development shell**: the environment `nix develop` opens from `flake.nix`, with the pinned
@@ -107,6 +109,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
+- **Look** (MCP): the MCP server's comparison of what the compositor describes of windows and
+  outputs with what it described last, from which it tells their events; run once a round and
+  at each `events` call, only when the compositor's description generation has moved.
 - **Managed window**: an X11 window its manager places, as Yuna's layout does an `xdg_toplevel`:
   one that asks to be mapped, neither override-redirect nor a dock or a desktop
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
@@ -138,6 +143,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Pace** (bench): how a backend times the frames of a compositor whose client draws as fast as
   it can, as each recipe records it: wlroots' headless timer, a frame 4 ms after each commit, or
   the mode's rate. In `game` and `pacing`, costs a second rank only within one pace.
+- **Pace** (MCP): how much of the time a program's process group may run: free, frozen until
+  thawed, or slowed to a share of each 100 ms (`spawn freeze`, `thaw`, `slow`).
 - **Pairing**: matching an X11 window with the Wayland surface Xwayland draws it into, through
   the serial `xwayland-shell-v1` gives both, in either order.
 - **Peers** (bench): the rivals with Yuna's features, niri, Hyprland, Umbriel and KWin: Yuna's

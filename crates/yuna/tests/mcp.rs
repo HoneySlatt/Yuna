@@ -429,8 +429,8 @@ fn program(yuna: &mut Yuna, index: usize) -> Value {
 }
 
 /// A program inherits no descriptor of Yuna's beyond its standard input, output and errors; its
-/// log keeps 1 MiB of its output and counts the rest; a program whose first process left while
-/// one it started runs is still stopped, its whole group with it.
+/// log keeps its first `LOG_HEAD` and newest `LOG_TAIL` bytes and counts the rest; a program
+/// whose first process left while one it started runs is still stopped, its whole group with it.
 #[test]
 fn a_program_gets_no_descriptor_of_yunas_a_bounded_log_and_a_group_that_stops() {
     let mut yuna = Yuna::start("bounds");
@@ -451,7 +451,8 @@ fn a_program_gets_no_descriptor_of_yunas_a_bounded_log_and_a_group_that_stops() 
     assert_eq!(descriptors, "0\n1\n2\n");
 
     let over = 1 << 17;
-    let flood = format!("head -c {} /dev/zero", (1 << 20) + over);
+    let kept = yuna::mcp::LOG_HEAD + yuna::mcp::LOG_TAIL;
+    let flood = format!("head -c {} /dev/zero", kept + over);
     yuna.call(
         "spawn",
         json!({"action": "start", "seat": SEAT, "command": ["sh", "-c", flood]}),
@@ -461,7 +462,7 @@ fn a_program_gets_no_descriptor_of_yunas_a_bounded_log_and_a_group_that_stops() 
         (flooded["state"] == json!("exited") && flooded["log_dropped"] == json!(over))
             .then_some(flooded)
     });
-    assert_eq!(flooded["log_bytes"], json!(1 << 20));
+    assert_eq!(flooded["log_bytes"], json!(kept));
 
     yuna.call(
         "spawn",
@@ -861,4 +862,509 @@ fn a_panic_with_no_program_stops_yuna_at_once() {
     assert!(took < END_GRACE / 2, "{took:?}");
     assert!(!folder.exists(), "{} is left", folder.display());
     assert!(holds_the_panic(&yuna.log()), "{}", yuna.log());
+}
+
+/// `events`' answer to `arguments`, which must not fail.
+fn events(yuna: &mut Yuna, arguments: Value) -> Value {
+    let result = yuna.call("events", arguments);
+    assert_eq!(result["isError"], json!(false), "{result}");
+    result["structuredContent"].clone()
+}
+
+/// The id of the program a `spawn start` started.
+fn program_id(started: &Value) -> u64 {
+    started["structuredContent"]["program"]["id"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{started}"))
+}
+
+/// A Wayland client written by hand, in Python's standard library alone: it binds
+/// `wl_compositor` and `wl_subcompositor`, makes two surfaces, and makes the first a subsurface
+/// of the second twice, a role it already has, then reads until the connection closes.
+const ROLE_TWICE: &str = r#"
+import os, socket, struct, sys
+
+def message(target, opcode, payload=b""):
+    return struct.pack("=II", target, (8 + len(payload)) << 16 | opcode) + payload
+
+def string(text):
+    data = text.encode() + b"\0"
+    return struct.pack("=I", len(data)) + data + b"\0" * (-len(data) % 4)
+
+wayland = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+wayland.connect(os.environ["WAYLAND_DISPLAY"])
+# wl_display.get_registry, object 2, then wl_display.sync, object 3.
+wayland.sendall(message(1, 1, struct.pack("=I", 2)) + message(1, 0, struct.pack("=I", 3)))
+names, data, synced = {}, b"", False
+while not synced:
+    chunk = wayland.recv(65536)
+    if not chunk:
+        sys.exit("the connection closed before the globals came")
+    data += chunk
+    while len(data) >= 8:
+        target, word = struct.unpack("=II", data[:8])
+        size = word >> 16
+        if len(data) < size:
+            break
+        body, data = data[8:size], data[size:]
+        if target == 2 and word & 0xFFFF == 0:
+            name, length = struct.unpack("=II", body[:8])
+            names[body[8:8 + length - 1].decode()] = name
+        synced = synced or target == 3
+
+def bind(interface, version, new_id):
+    return message(2, 0, struct.pack("=I", names[interface]) + string(interface)
+                   + struct.pack("=II", version, new_id))
+
+requests = bind("wl_compositor", 4, 4) + bind("wl_subcompositor", 1, 5)
+requests += message(4, 0, struct.pack("=I", 6)) + message(4, 0, struct.pack("=I", 7))
+requests += message(5, 1, struct.pack("=III", 8, 6, 7)) + message(5, 1, struct.pack("=III", 9, 6, 7))
+wayland.sendall(requests)
+while wayland.recv(65536):
+    pass
+print("closed", flush=True)
+"#;
+
+/// A program whose Wayland client breaks the protocol is told, through `events`, as
+/// `client_left` with the error Yuna sent, its pid and its program's id, waited for; `spawn list`
+/// then gives the program that error, and `events` its exit.
+#[test]
+fn a_programs_protocol_error_is_told_and_kept_on_the_program() {
+    let mut yuna = Yuna::start("protocol-error");
+    let script = yuna.folder.join("role_twice.py");
+    fs::write(&script, ROLE_TWICE).expect("the client's script");
+    let start = events(&mut yuna, json!({"seat": SEAT}))["next"].clone();
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["python3", "-I", script]}),
+    );
+    let id = program_id(&started);
+    let pid = started["structuredContent"]["program"]["pid"].clone();
+    let told = events(
+        &mut yuna,
+        json!({"seat": SEAT, "after": start, "kinds": ["client_left"], "wait_ms": 20_000}),
+    );
+    let left = &told["events"][0];
+    assert_eq!(left["reason"], json!("protocol_error"), "{told}");
+    assert_eq!(left["program"], json!(id), "{told}");
+    assert_eq!(left["pid"], pid, "{told}");
+    let error = left["error"].clone();
+    assert_eq!(error["interface"], json!("wl_subcompositor"), "{told}");
+    assert_eq!(error["object"], json!(5));
+    // `wl_subcompositor.error.bad_surface`.
+    assert_eq!(error["code"], json!(0));
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
+        "{told}"
+    );
+    let exited = events(
+        &mut yuna,
+        json!({"seat": SEAT, "after": start, "kinds": ["program_exited"], "wait_ms": 20_000}),
+    );
+    assert_eq!(
+        exited["events"][0],
+        json!({"seq": exited["events"][0]["seq"], "time_ns": exited["events"][0]["time_ns"],
+               "kind": "program_exited", "program": id, "exit_code": 0, "signal": null}),
+        "{exited}\n{}",
+        yuna.log()
+    );
+    assert_eq!(program(&mut yuna, 0)["protocol_error"], error);
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// `spawn log` reads a program's output by offsets, and its newest bytes by default; after
+/// 3 MiB of output it keeps the first 256 KiB and the last 1 MiB, counts the rest as dropped,
+/// and never gives bytes across what it dropped.
+#[test]
+fn a_programs_log_is_read_by_offsets_and_keeps_its_head_and_tail() {
+    use yuna::mcp::{DEFAULT_LOG_READ, LOG_HEAD, LOG_TAIL, MAX_LOG_READ};
+    let mut yuna = Yuna::start("log");
+    let flood = 3 << 20;
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["sh", "-c", format!(
+            "printf 'first line\\n'; head -c {flood} /dev/zero | tr '\\000' x; printf '\\nlast line\\n'"
+        )]}),
+    );
+    let id = program_id(&started);
+    let read = |yuna: &mut Yuna, extra: Value| {
+        let mut arguments = json!({"action": "log", "seat": SEAT, "program": id});
+        for (name, value) in extra.as_object().cloned().unwrap_or_default() {
+            arguments[name] = value;
+        }
+        let result = yuna.call("spawn", arguments);
+        assert_eq!(result["isError"], json!(false), "{result}");
+        result["structuredContent"].clone()
+    };
+    let size = 11 + flood + 11;
+    let tail = wait_for("the end of the program's output", || {
+        let tail = read(&mut yuna, json!({}));
+        (tail["ended"] == json!(true)).then_some(tail)
+    });
+    assert_eq!(tail["size"], json!(size));
+    assert_eq!(tail["dropped"], json!(size - LOG_HEAD - LOG_TAIL));
+    assert_eq!(tail["to"], json!(size));
+    assert_eq!(tail["from"], json!(size - DEFAULT_LOG_READ));
+    let text = tail["text"].as_str().expect("a text");
+    assert!(
+        text.ends_with("xxx\nlast line\n"),
+        "{}",
+        &text[text.len() - 40..]
+    );
+
+    let head = read(&mut yuna, json!({"from": 0, "max_bytes": 11}));
+    assert_eq!(head["text"], json!("first line\n"));
+    assert_eq!(
+        (head["from"].clone(), head["to"].clone()),
+        (json!(0), json!(11))
+    );
+    // The head's last bytes, never those after it, which were dropped.
+    let edge = read(&mut yuna, json!({"from": LOG_HEAD - 5, "max_bytes": 100}));
+    assert_eq!(edge["text"], json!("xxxxx"));
+    assert_eq!(edge["to"], json!(LOG_HEAD));
+    // A start in what was dropped moves to the first byte kept after it.
+    let gap = read(&mut yuna, json!({"from": LOG_HEAD}));
+    assert_eq!(gap["from"], json!(size - LOG_TAIL));
+    assert_eq!(gap["to"], json!(size - LOG_TAIL + DEFAULT_LOG_READ));
+    let whole_tail = read(&mut yuna, json!({"max_bytes": MAX_LOG_READ}));
+    assert_eq!(whole_tail["from"], json!(size - LOG_TAIL));
+    assert_eq!(
+        whole_tail["text"].as_str().map(str::len),
+        Some(LOG_TAIL as usize)
+    );
+    let past = read(&mut yuna, json!({"from": size + 10}));
+    assert_eq!(
+        (past["from"].clone(), past["text"].clone()),
+        (json!(size), json!(""))
+    );
+    for refused in [json!(0), json!(MAX_LOG_READ + 1)] {
+        let call = json!({"action": "log", "seat": SEAT, "program": id, "max_bytes": refused});
+        assert_eq!(yuna.call("spawn", call)["isError"], json!(true));
+    }
+    let unknown = json!({"action": "log", "seat": SEAT, "program": 99});
+    assert_eq!(yuna.call("spawn", unknown)["isError"], json!(true));
+    let listed = program(&mut yuna, 0);
+    assert_eq!(listed["log_bytes"], json!(LOG_HEAD + LOG_TAIL));
+    assert_eq!(listed["log_dropped"], tail["dropped"]);
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The state letter `/proc/<pid>/stat` gives a process: `T` while it is stopped.
+fn state_of(pid: i32) -> Option<char> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(')')? + 1..].trim_start().chars().next()
+}
+
+/// The CPU time process `pid` has used, in clock ticks: its user and system times.
+fn cpu_ticks(pid: i32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("the process");
+    let after_name = &stat[stat.rfind(')').expect("a name") + 1..];
+    let fields: Vec<&str> = after_name.split_whitespace().collect();
+    fields[11].parse::<u64>().expect("utime") + fields[12].parse::<u64>().expect("stime")
+}
+
+/// A frozen program stops: its process is stopped and its output stops growing, `spawn list`
+/// gives it a run_percent of 0; thawed, it runs and writes again.
+#[test]
+fn a_frozen_program_stops_and_thaws() {
+    let mut yuna = Yuna::start("freeze");
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c", "while :; do echo tick; sleep 0.02; done"
+        ]}),
+    );
+    let id = program_id(&started);
+    let pid = started["structuredContent"]["program"]["pid"]
+        .as_i64()
+        .expect("a pid") as i32;
+    let written = |yuna: &mut Yuna| program(yuna, 0)["log_bytes"].as_u64().unwrap_or(0);
+    wait_for("its first ticks", || (written(&mut yuna) > 0).then_some(()));
+    let frozen = yuna.call(
+        "spawn",
+        json!({"action": "freeze", "seat": SEAT, "program": id}),
+    );
+    assert_eq!(
+        frozen["structuredContent"]["program"]["run_percent"],
+        json!(0),
+        "{frozen}"
+    );
+    wait_for("its stop", || (state_of(pid) == Some('T')).then_some(()));
+    std::thread::sleep(Duration::from_millis(100));
+    let before = written(&mut yuna);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(written(&mut yuna), before, "a frozen program wrote");
+    assert_eq!(state_of(pid), Some('T'));
+    let thawed = yuna.call(
+        "spawn",
+        json!({"action": "thaw", "seat": SEAT, "program": id}),
+    );
+    assert_eq!(
+        thawed["structuredContent"]["program"]["run_percent"],
+        json!(100)
+    );
+    wait_for("its ticks again", || {
+        (written(&mut yuna) > before).then_some(())
+    });
+    let unknown = yuna.call(
+        "spawn",
+        json!({"action": "freeze", "seat": SEAT, "program": 9}),
+    );
+    assert_eq!(unknown["isError"], json!(true));
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The wake-ups Yuna counted in its last `counters` line, at the `debug` level.
+fn wakeups(log: &str) -> u64 {
+    log.lines()
+        .rev()
+        .filter(|line| line.contains(" counters "))
+        .find_map(|line| {
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix("wakeups="))
+                .and_then(|count| count.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+/// The clock ticks a second of `/proc/<pid>/stat`'s CPU times: Linux's `USER_HZ`, 100 on every
+/// architecture Yuna builds for.
+const TICKS_A_SECOND: f64 = 100.0;
+
+/// A busy program slowed to 50 % runs half of the time: sampled every 3 ms over 2 s, it is
+/// stopped in 0.4 to 0.6 of the samples, and its CPU time is at most 0.6 of the time elapsed,
+/// the tenth above a half for the timer's lag and the ticks' grain, never measured against a
+/// free run, which another test's load would move. It is stopped and continued by Yuna's timer,
+/// 20 times a second, and Yuna wakes for those alone: SIGCHLD does not wake it when its child
+/// stops or continues (`SA_NOCLDSTOP`), which would double the wake-ups.
+#[test]
+fn a_slowed_program_runs_half_the_time_and_its_stops_wake_nothing() {
+    let mut yuna = Yuna::launch("slow", None, &[("YUNA_LOG", "debug")]);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(created["structuredContent"]["seat"], json!(SEAT));
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["sh", "-c", "while :; do :; done"]}),
+    );
+    let id = program_id(&started);
+    let pid = started["structuredContent"]["program"]["pid"]
+        .as_i64()
+        .expect("a pid") as i32;
+    let slowed = yuna.call(
+        "spawn",
+        json!({"action": "slow", "seat": SEAT, "program": id, "run_percent": 50}),
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    let woke_before = wakeups(&yuna.log());
+    let ticks_before = cpu_ticks(pid);
+    let began = Instant::now();
+    let mut stopped_samples = 0;
+    let mut samples = 0;
+    while began.elapsed() < Duration::from_secs(2) {
+        samples += 1;
+        stopped_samples += u32::from(state_of(pid) == Some('T'));
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    let ticks = cpu_ticks(pid) - ticks_before;
+    let woke = wakeups(&yuna.log()) - woke_before;
+    let seconds = began.elapsed().as_secs_f64();
+    let stopped = f64::from(stopped_samples) / f64::from(samples);
+    let cpu = ticks as f64 / TICKS_A_SECOND / seconds;
+    let per_second = woke as f64 / seconds;
+    eprintln!(
+        "slowed: stopped in {stopped:.2} of {samples} samples; CPU {cpu:.2} of the time \
+         elapsed, {ticks} ticks in {seconds:.2} s; {per_second:.1} wake-ups a second"
+    );
+    let thawed = yuna.call(
+        "spawn",
+        json!({"action": "thaw", "seat": SEAT, "program": id}),
+    );
+    let refused: Vec<Value> = [0, 100]
+        .into_iter()
+        .map(|wrong| {
+            let call = json!({"action": "slow", "seat": SEAT, "program": id, "run_percent": wrong});
+            yuna.call("spawn", call)["isError"].clone()
+        })
+        .collect();
+    // The busy program ends before any assertion: a failed one drops `Yuna`, which kills it with
+    // SIGKILL, and a Yuna killed so leaves its programs running.
+    yuna.call(
+        "spawn",
+        json!({"action": "stop", "seat": SEAT, "program": id, "force": true}),
+    );
+    wait_for("the busy program's end", || (!alive(pid)).then_some(()));
+    assert_eq!(
+        slowed["structuredContent"]["program"]["run_percent"],
+        json!(50),
+        "{slowed}"
+    );
+    assert!((0.4..=0.6).contains(&stopped), "{stopped}");
+    assert!(ticks > 0, "the slowed program never ran");
+    assert!(cpu <= 0.6, "{cpu}");
+    // 20 a second from the timer; as many again if SIGCHLD woke Yuna at each stop and continue.
+    assert!(
+        (5.0..=28.0).contains(&per_second),
+        "{per_second} wake-ups a second"
+    );
+    assert_eq!(
+        thawed["structuredContent"]["program"]["run_percent"],
+        json!(100)
+    );
+    assert_eq!(refused, [json!(true), json!(true)]);
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A frozen program ends at SIGTERM's time, not SIGKILL's, 2 s later: every path that sends
+/// SIGTERM sends SIGCONT after it. `spawn stop`, which sends no SIGKILL, ends it at once; so do
+/// a seat's closing and Yuna's stopping.
+#[test]
+fn a_frozen_program_ends_at_sigterm() {
+    use yuna::mcp::END_GRACE;
+    let mut yuna = Yuna::start("frozen-end");
+    let other = yuna.call("seat", json!({"action": "create"}));
+    let other = other["structuredContent"]["seat"].clone();
+    let mut frozen = Vec::new();
+    for seat in [json!(SEAT), json!(SEAT), other.clone()] {
+        let started = yuna.call(
+            "spawn",
+            json!({"action": "start", "seat": seat, "command": ["sleep", "600"]}),
+        );
+        let id = program_id(&started);
+        let pid = started["structuredContent"]["program"]["pid"]
+            .as_i64()
+            .expect("a pid") as i32;
+        let call = json!({"action": "freeze", "seat": seat, "program": id});
+        assert_eq!(yuna.call("spawn", call)["isError"], json!(false));
+        wait_for("its stop", || (state_of(pid) == Some('T')).then_some(()));
+        frozen.push((id, pid));
+    }
+    // One frozen whose group is killed outright, not through Yuna, is no longer told frozen.
+    let outright = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["sleep", "600"]}),
+    );
+    let outright_id = program_id(&outright);
+    let outright_pid = outright["structuredContent"]["program"]["pid"]
+        .as_i64()
+        .expect("a pid") as i32;
+    let call = json!({"action": "freeze", "seat": SEAT, "program": outright_id});
+    assert_eq!(yuna.call("spawn", call)["isError"], json!(false));
+    wait_for("its stop", || {
+        (state_of(outright_pid) == Some('T')).then_some(())
+    });
+    kill_process(Pid::from_raw(outright_pid).expect("a pid"), Signal::KILL).expect("SIGKILL");
+    let killed = wait_for("the killed program's end", || {
+        let killed = program(&mut yuna, 2);
+        (killed["state"] == json!("killed")).then_some(killed)
+    });
+    assert_eq!(killed["run_percent"], json!(100), "{killed}");
+
+    let began = Instant::now();
+    let stop = json!({"action": "stop", "seat": SEAT, "program": frozen[0].0});
+    assert_eq!(yuna.call("spawn", stop)["isError"], json!(false));
+    let ended = wait_for("the stopped program's end", || {
+        let ended = program(&mut yuna, 0);
+        (ended["state"] != json!("running")).then_some(ended)
+    });
+    assert_eq!(ended["signal"], json!(15), "{ended}");
+    assert!(began.elapsed() < END_GRACE / 2, "{:?}", began.elapsed());
+
+    let began = Instant::now();
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    let took = began.elapsed();
+    assert!(
+        closed["structuredContent"]["ended"]
+            .as_array()
+            .is_some_and(|ended| ended.contains(&json!(frozen[1].1))),
+        "{closed}"
+    );
+    assert!(took < END_GRACE / 2, "{took:?}");
+
+    let began = Instant::now();
+    let status = yuna.close_and_wait();
+    let took = began.elapsed();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    assert!(!alive(frozen[2].1));
+    // Its second for the last replies is not waited for: the output is read.
+    assert!(took < END_GRACE, "{took:?}");
+}
+
+/// A `yuna mcp` killed by SIGKILL leaves its folder in `XDG_RUNTIME_DIR`: the next one removes
+/// it when it starts, when its lock file's lock is free, whatever pid its name holds, a retry's
+/// `yuna-mcp-<pid>-<n>` too. It keeps a folder whose lock is held, though its pid is gone; one
+/// with no lock file, an older Yuna's; a link to a folder, which it does not follow; and any
+/// other name. A live Yuna holds its own folder's lock.
+#[test]
+fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
+    use yuna::mcp::LOCK_FILE;
+    let top = std::env::temp_dir().join(format!("yuna-mcp-test-stale-{}", std::process::id()));
+    let runtime = top.join("runtime");
+    // Above any pid Linux gives (`pid_max` is 2²² at most), and the test's own, which lives:
+    // neither decides.
+    let gone = runtime.join("yuna-mcp-999999999");
+    let gone_retry = runtime.join("yuna-mcp-999999998-1");
+    let gone_living_pid = runtime.join(format!("yuna-mcp-{}", std::process::id()));
+    let locked = runtime.join("yuna-mcp-999999997");
+    let older = runtime.join("yuna-mcp-999999996");
+    let elsewhere = top.join("elsewhere");
+    let link = runtime.join("yuna-mcp-999999995");
+    let unrelated = runtime.join("yuna-mcp-notes");
+    for folder in [
+        &gone,
+        &gone_retry,
+        &gone_living_pid,
+        &locked,
+        &older,
+        &elsewhere,
+        &unrelated,
+    ] {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder.join("logs"))
+            .expect("a folder");
+        fs::write(folder.join("logs/1.log"), "a log\n").expect("a log");
+        if folder != &older {
+            fs::write(folder.join(LOCK_FILE), "").expect("a lock file");
+        }
+    }
+    std::os::unix::fs::symlink(&elsewhere, &link).expect("a link");
+    let held = fs::File::open(locked.join(LOCK_FILE)).expect("the lock file");
+    held.try_lock().expect("the lock, as a live Yuna holds it");
+
+    let mut yuna = Yuna::start("stale");
+    assert_eq!(yuna.runtime_dir(), runtime);
+    for removed in [&gone, &gone_retry, &gone_living_pid] {
+        assert!(
+            !removed.exists(),
+            "{} is left\n{}",
+            removed.display(),
+            yuna.log()
+        );
+    }
+    for kept in [&locked, &older, &unrelated] {
+        assert!(kept.join("logs").exists(), "{} is gone", kept.display());
+    }
+    assert!(fs::symlink_metadata(&link).is_ok_and(|link| link.file_type().is_symlink()));
+    assert!(elsewhere.join("logs/1.log").exists());
+    let own = runtime.join(format!("yuna-mcp-{}", yuna.child.id()));
+    let own_lock = fs::File::open(own.join(LOCK_FILE)).expect("its lock file");
+    assert!(
+        matches!(own_lock.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "a live Yuna's lock is free"
+    );
+    assert!(
+        !runtime
+            .join(format!(".yuna-mcp-{}-starting", yuna.child.id()))
+            .exists()
+    );
+    drop(held);
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
 }

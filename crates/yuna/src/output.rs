@@ -311,6 +311,7 @@ impl State {
         self.layout.add_output(seat, id, config).map_err(|e| {
             Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
         })?;
+        self.note_description_changed();
         let rect = self
             .layout
             .output_rect(id)
@@ -600,6 +601,7 @@ impl State {
         if let Err(error) = self.layout.remove_output(id) {
             tracing::error!(%error, output = id.0, "the layout has no such output");
         }
+        self.note_description_changed();
         let leaving: Vec<WlSurface> = self
             .toplevels
             .values()

@@ -1,10 +1,13 @@
 //! Stopping cleanly on SIGTERM and SIGINT: the signal handler writes a byte to a pipe whose read
 //! end the compositor's event loop watches, so that the loop wakes and returns, and the Wayland
 //! socket and its lock file are removed. SIGCHLD, for `yuna mcp`, writes to a pipe of its own, so
-//! that the loop reaps the programs that ended.
+//! that the loop reaps the programs that ended; only when a child ends, never when one is stopped
+//! or continued (`SA_NOCLDSTOP`), so that a program frozen or slowed through MCP wakes nothing.
 //!
-//! The handler is set with the C library's `signal`, which the standard library links already:
-//! calloop's own signal source needs the `nix` crate, a dependency the owner has not accepted.
+//! The handlers are set with the C library's `sigaction`, which the standard library links
+//! already: calloop's own signal source needs the `nix` crate, a dependency the owner has not
+//! accepted. Its structure is declared here as glibc and musl lay it out on x86-64 and AArch64,
+//! the targets Yuna builds for; another target refuses to build rather than pass a wrong layout.
 
 use std::ffi::c_int;
 use std::io;
@@ -20,16 +23,39 @@ use smithay::reexports::rustix;
 static STOP_PIPE: AtomicI32 = AtomicI32::new(-1);
 static CHILDREN_PIPE: AtomicI32 = AtomicI32::new(-1);
 
-/// `SIG_ERR`, `(void (*)(int)) -1`, as `signal` returns it.
-const SIG_ERR: usize = usize::MAX;
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+compile_error!(
+    "stop_signal.rs declares `struct sigaction` as Linux's C libraries lay it out on x86-64 and \
+     AArch64: check its layout on this target before adding it"
+);
+
+/// Restarts a system call the handler interrupted, as `signal` does on Linux.
+const SA_RESTART: c_int = 0x1000_0000;
+
+/// No SIGCHLD when a child stops or continues: only when it ends.
+const SA_NOCLDSTOP: c_int = 1;
+
+/// POSIX's `struct sigaction`, as glibc and musl lay it out on x86-64 and AArch64: the handler,
+/// a union whose other member Yuna does not use, as a pointer-sized integer; the signals blocked
+/// while it runs, a set of 1,024 bits; the flags; and the restorer, which the C library sets
+/// itself.
+#[repr(C)]
+struct SigAction {
+    handler: usize,
+    mask: [u64; 16],
+    flags: c_int,
+    restorer: usize,
+}
 
 // SAFETY: this declaration matches the C library's own, which the standard library links on
-// Linux; calls to it are `unsafe`, each with its reason.
+// Linux, with `SigAction` laid out as its `struct sigaction` on the targets allowed above;
+// calls to it are `unsafe`, each with its reason.
 unsafe extern "C" {
-    /// POSIX `signal`: `void (*signal(int, void (*)(int)))(int)`. The handler and the value
-    /// returned are pointer-sized, passed as integers so that `SIG_ERR` is not taken for a
-    /// function.
-    fn signal(signum: c_int, handler: usize) -> usize;
+    /// POSIX `sigaction`: `int sigaction(int, const struct sigaction *, struct sigaction *)`.
+    fn sigaction(signum: c_int, action: *const SigAction, previous: *mut SigAction) -> c_int;
 }
 
 /// Writes one byte to the stop pipe.
@@ -60,30 +86,47 @@ fn write_byte(pipe: &AtomicI32) {
 /// Installs the handler for SIGTERM and SIGINT, and returns the pipe's read end, which becomes
 /// readable when either arrives.
 pub fn install() -> io::Result<OwnedFd> {
-    install_on(&STOP_PIPE, on_stop_signal, &[Signal::TERM, Signal::INT])
+    install_on(&STOP_PIPE, on_stop_signal, &[Signal::TERM, Signal::INT], 0)
 }
 
 /// Installs the handler for SIGCHLD, and returns the pipe's read end, which becomes readable
-/// when a child ends.
+/// when a child ends; a child stopped or continued sends nothing.
 pub fn install_children() -> io::Result<OwnedFd> {
-    install_on(&CHILDREN_PIPE, on_child_signal, &[Signal::CHILD])
+    install_on(
+        &CHILDREN_PIPE,
+        on_child_signal,
+        &[Signal::CHILD],
+        SA_NOCLDSTOP,
+    )
 }
 
-/// Makes a pipe whose write end `pipe` keeps, and installs `handler` for `signals`.
+/// Makes a pipe whose write end `pipe` keeps, and installs `handler` for `signals`, with
+/// `SA_RESTART` and `flags`.
 fn install_on(
     pipe: &AtomicI32,
     handler: extern "C" fn(c_int),
     signals: &[Signal],
+    flags: c_int,
 ) -> io::Result<OwnedFd> {
     let (read, write) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)?;
     // Kept open for the life of the process: the handler may run at any time.
     pipe.store(write.into_raw_fd(), Ordering::Relaxed);
+    let action = SigAction {
+        handler: handler as usize,
+        // No other signal is blocked while the handler runs.
+        mask: [0; 16],
+        flags: SA_RESTART | flags,
+        restorer: 0,
+    };
     for &signal_number in signals {
-        // SAFETY: `signal` is declared with its C signature, pointer-sized values passed as
-        // `usize`; the handler is an `extern "C" fn(c_int)` that does only async-signal-safe
-        // work, and the pipe it writes to is open before it is installed.
-        let previous = unsafe { signal(signal_number.as_raw(), handler as usize) };
-        if previous == SIG_ERR {
+        // SAFETY: `sigaction` is declared with its C signature, and `action` is a valid
+        // `struct sigaction` for the whole call, laid out as the C library's: its handler is an
+        // `extern "C" fn(c_int)` that does only async-signal-safe work, its mask empty, its flags
+        // the C library's own values, no `SA_SIGINFO` among them, so that the handler is read as
+        // a one-argument function. The previous action is not asked for: a null pointer, which
+        // POSIX allows. The pipe the handler writes to is open before it is installed.
+        let failed = unsafe { sigaction(signal_number.as_raw(), &action, std::ptr::null_mut()) };
+        if failed != 0 {
             return Err(io::Error::last_os_error());
         }
     }

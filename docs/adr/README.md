@@ -111,3 +111,5 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0089](0089-yuna-for-the-owners-other-projects.md) | Yuna for the owner's other projects: an agent's seat, wlr-screencopy, its own Mesa | Accepted |
 | [0090](0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md) | An output's mode and scale changed whole, through MCP | Accepted |
 | [0091](0091-the-clipboard-between-x11-and-wayland-who-reads-and-its-bounds.md) | The clipboard between X11 and Wayland: who reads it, and its bounds | Accepted |
+| [0092](0092-a-programs-protocol-trace-its-errors-and-its-log-through-mcp.md) | A program's protocol trace, its errors and its log through MCP | Accepted |
+| [0093](0093-a-call-that-waits-for-the-seats-events.md) | A call that waits for the seat's events, and programs made stuck or slow | Accepted |

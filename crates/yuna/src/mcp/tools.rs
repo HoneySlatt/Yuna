@@ -13,11 +13,12 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use super::programs::{End, Program};
+use super::events::{Event, EventData, Kind, Reading};
+use super::programs::{End, LogRead, Program};
 use super::protocol::{self, Revision};
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
-use crate::compositor::{OutputDescription, WindowDescription};
+use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
 use crate::{CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion};
 use yuna_layout::geometry::Rect;
@@ -27,8 +28,15 @@ use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
 /// ([survey](../../../../docs/survey.md#agents-and-mcp)).
 pub const MAX_WAIT: Duration = Duration::from_secs(50);
 
-/// How many calls may wait at once; past it, a call that would wait is refused.
+/// How many calls may wait at once, `windows`' and `events`' together; past it, a call that
+/// would wait is refused.
 pub const MAX_WAITING_CALLS: usize = 64;
+
+/// How many bytes of a log `spawn log` gives by default.
+pub const DEFAULT_LOG_READ: u64 = 64 << 10;
+
+/// How many bytes of a log `spawn log` gives at most.
+pub const MAX_LOG_READ: u64 = 1 << 20;
 
 /// What a seat's id means in a schema: every tool but `clock` acts on one seat.
 const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
@@ -36,6 +44,7 @@ const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
 /// Every tool's definition, for `tools/list`, always in this order.
 pub fn definitions() -> Value {
     let seat = json!({ "type": "integer", "minimum": 2, "description": SEAT_PROPERTY });
+    let kind_names: Vec<&str> = Kind::ALL.iter().map(|kind| kind.name()).collect();
     // `seat create`'s output and `outputs create`'s take the same two (ADR-0049); `outputs
     // configure` takes them too, the output's own by default, and 0 for no VRR range.
     let vrr_min_create = "create: run under VRR, from this many refreshes a second up to rate, \
@@ -59,7 +68,7 @@ pub fn definitions() -> Value {
                 and its own Wayland socket, which the programs it starts use; no input, focus \
                 or clipboard of one seat reaches another. Create one first: every other tool but clock takes its \
                 handle. Closing it releases what it holds, disconnects its windows, ends its \
-                programs (SIGTERM, then SIGKILL 2 s later) and removes its outputs; it answers \
+                programs (SIGTERM and SIGCONT, then SIGKILL 2 s later) and removes its outputs; it answers \
                 once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",
             "inputSchema": {
                 "type": "object",
@@ -148,23 +157,47 @@ pub fn definitions() -> Value {
         {
             "name": "spawn",
             "title": "Programs",
-            "description": "Start a program on a seat, list a seat's programs, or stop one. A \
-                program gets its seat's Wayland socket and X display, an environment without \
-                Yuna's own DISPLAY or the user's D-Bus, and a log file of its output and errors, \
-                whose path the result gives; its windows open on its seat. Logs go when the seat closes.",
+            "description": "Start a program on a seat, list a seat's programs, stop one, read \
+                its log, or make it stuck or slow. A program gets its seat's Wayland socket and \
+                X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a \
+                log of its output and errors; its windows open on its seat. env \
+                {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives \
+                each program's state, its log's size, its run_percent (100 free, 0 frozen) and \
+                protocol_error: the last Wayland protocol error one of its connections was \
+                ended for (interface, object, code, message), null for none. stop sends its \
+                process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the \
+                bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of \
+                them, 64 KiB by default, 1 MiB at most, from the byte offset from since it \
+                started, or its newest without from; size is every byte it wrote, dropped \
+                those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; \
+                ended is true once its output has closed. freeze stops its process group \
+                (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of \
+                each 100 ms and stops it the rest, on real time whatever the clock, until thaw, \
+                freeze, stop or the end of its group. A frozen program reads no event: once its \
+                Wayland socket's buffer fills, Yuna closes its connection, and events tells \
+                client_left with reason closed. Logs go when the seat closes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["start", "list", "stop"] },
+                    "action": { "type": "string",
+                        "enum": ["start", "list", "stop", "log", "freeze", "thaw", "slow"] },
                     "seat": seat,
                     "command": { "type": "array", "items": { "type": "string" }, "minItems": 1,
                         "description": "start: the program, found in PATH, and its arguments" },
                     "env": { "type": "object", "additionalProperties": { "type": "string" },
                         "description": "start: variables added to its environment" },
                     "cwd": { "type": "string", "description": "start: its working folder" },
-                    "program": { "type": "integer", "description": "stop: the program's id" },
+                    "program": { "type": "integer",
+                        "description": "stop, log, freeze, thaw, slow: the program's id" },
                     "force": { "type": "boolean",
-                        "description": "stop: SIGKILL rather than SIGTERM" }
+                        "description": "stop: SIGKILL rather than SIGTERM" },
+                    "from": { "type": "integer", "minimum": 0,
+                        "description": "log: the first byte, an offset since it started; its \
+                            newest bytes by default" },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_LOG_READ,
+                        "description": "log: how many bytes at most; 65536 by default" },
+                    "run_percent": { "type": "integer", "minimum": 1, "maximum": 99,
+                        "description": "slow: the share of each 100 ms it runs" }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false
@@ -202,6 +235,55 @@ pub fn definitions() -> Value {
                             false by default" },
                     "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
                         "description": "how long to wait for a match; 0 by default" }
+                },
+                "required": ["seat"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "events",
+            "title": "Events",
+            "description": "Wait for what happens on a seat, or read what happened since a \
+                cursor, rather than asking in a loop. Each event gives seq, a number that grows \
+                across the whole Yuna and is never reused, time_ns on the clock's scale, kind, \
+                and its fields; a title, an app_id or a workspace is cut to 512 bytes. Yuna \
+                looks for events at the end of each round, and at each events call, so that \
+                one without after waits only for what comes after it; a window is told at most \
+                once a look. Kinds: window_opened (window, app_id, title, pid, shell); \
+                window_closed (window); window_changed (window, title, app_id: either changed, \
+                however often since the last look); window_placed (window, output, \
+                workspace, place: where it rests in the layout changed, told once the layout \
+                is arranged); window_unresponsive (window: it left a ping \
+                unanswered, as windows' unresponsive tells); focus (window: the seat's focus \
+                moved, null for none); program_exited (program, exit_code or signal, the other \
+                null); client_left (pid, program, reason, error: a Wayland connection of the \
+                seat ended; reason protocol_error, with error's interface, object, code and \
+                message, or closed, error null: it left, sent what is not Wayland, or could not \
+                take its events; pid as windows gives it; program null for a client of no \
+                program, or one whose process had exited before Yuna accepted it); \
+                output_added, \
+                output_removed, output_changed (output). With after, a seq or a reply's next, \
+                gives the events after it, only kinds when given, at most 256 a reply; next is \
+                the cursor to give next, and missed how many events of the seat after the \
+                cursor its log, which keeps its last 1024, dropped. Without after, no past \
+                event: the reply's next reads what comes. With wait_ms, waits up to that long, \
+                on real time whatever the clock, for a first event that matches, and answers \
+                once the round that recorded it ends, or at once when the log dropped events \
+                after the cursor; timed_out is true when none came. A window that opens and \
+                closes between two looks is not seen. Yuna keeps nothing \
+                between calls: the cursor is yours.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seat": seat,
+                    "after": { "type": "integer", "minimum": 0,
+                        "description": "the cursor: an event's seq or a reply's next; none \
+                            for what comes from now" },
+                    "kinds": { "type": "array", "minItems": 1,
+                        "items": { "type": "string", "enum": kind_names },
+                        "description": "only these kinds; every kind by default" },
+                    "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
+                        "description": "how long to wait for a first event; 0 by default" }
                 },
                 "required": ["seat"],
                 "additionalProperties": false
@@ -535,6 +617,36 @@ pub enum SpawnCall {
         #[serde(default)]
         force: bool,
     },
+    Log {
+        seat: u64,
+        program: u64,
+        from: Option<u64>,
+        max_bytes: Option<u64>,
+    },
+    Freeze {
+        seat: u64,
+        program: u64,
+    },
+    Thaw {
+        seat: u64,
+        program: u64,
+    },
+    Slow {
+        seat: u64,
+        program: u64,
+        run_percent: u8,
+    },
+}
+
+/// `events`' arguments.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsCall {
+    pub seat: u64,
+    pub after: Option<u64>,
+    pub kinds: Option<Vec<Kind>>,
+    #[serde(default)]
+    pub wait_ms: u64,
 }
 
 /// `windows`' arguments.
@@ -855,13 +967,22 @@ pub fn workspace_json(workspace: &WorkspaceInfo) -> Value {
     })
 }
 
+/// How a program ended, as `exit_code` and `signal`, one of them null.
+fn end_json(end: End) -> (Option<i32>, Option<i32>) {
+    match end {
+        End::Exited(code) => (Some(code), None),
+        End::Killed(signal) => (None, Some(signal)),
+    }
+}
+
 /// A program, as the tools give it.
 pub fn program_json(program: &Program) -> Value {
-    let (state, exit_code, signal) = match program.end {
-        None => ("running", None, None),
-        Some(End::Exited(code)) => ("exited", Some(code), None),
-        Some(End::Killed(signal)) => ("killed", None, Some(signal)),
+    let state = match program.end {
+        None => "running",
+        Some(End::Exited(_)) => "exited",
+        Some(End::Killed(_)) => "killed",
     };
+    let (exit_code, signal) = program.end.map_or((None, None), end_json);
     json!({
         "id": program.id,
         "seat": program.seat.0,
@@ -871,10 +992,105 @@ pub fn program_json(program: &Program) -> Value {
         "group_running": program.group_runs(),
         "exit_code": exit_code,
         "signal": signal,
+        "run_percent": program.pace().run_percent(),
+        "protocol_error": program.protocol_error.as_ref().map(protocol_error_json),
         "log": program.log,
-        "log_bytes": program.log_written(),
+        "log_bytes": program.log_kept(),
         "log_dropped": program.log_dropped(),
     })
+}
+
+/// A protocol error a client was ended for.
+fn protocol_error_json(error: &ClientProtocolError) -> Value {
+    json!({
+        "interface": error.interface,
+        "object": error.object,
+        "code": error.code,
+        "message": error.message,
+    })
+}
+
+/// A read of a program's log, as `spawn log` gives it.
+pub fn log_json(read: &LogRead) -> Value {
+    json!({
+        "text": read.text,
+        "from": read.from,
+        "to": read.to,
+        "size": read.size,
+        "dropped": read.dropped,
+        "ended": read.ended,
+    })
+}
+
+/// An event, as `events` gives it: its number, time and kind, and its fields.
+pub fn event_json(event: &Event) -> Value {
+    let mut described = match &event.data {
+        EventData::WindowOpened {
+            window,
+            app_id,
+            title,
+            pid,
+            shell,
+        } => json!({
+            "window": window.0, "app_id": app_id, "title": title, "pid": pid,
+            "shell": shell.name(),
+        }),
+        EventData::WindowClosed { window } | EventData::WindowUnresponsive { window } => {
+            json!({ "window": window.0 })
+        }
+        EventData::WindowChanged {
+            window,
+            title,
+            app_id,
+        } => json!({ "window": window.0, "title": title, "app_id": app_id }),
+        EventData::WindowPlaced {
+            window,
+            output,
+            workspace,
+            place,
+        } => json!({
+            "window": window.0,
+            "output": output.map(|output| output.0),
+            "workspace": workspace,
+            "place": place.map(rect_json),
+        }),
+        EventData::Focus { window } => json!({ "window": window.map(|window| window.0) }),
+        EventData::ProgramExited { program, end } => {
+            let (exit_code, signal) = end_json(*end);
+            json!({ "program": program, "exit_code": exit_code, "signal": signal })
+        }
+        EventData::ClientLeft {
+            pid,
+            program,
+            error,
+        } => json!({
+            "pid": pid,
+            "program": program,
+            "reason": if error.is_some() { "protocol_error" } else { "closed" },
+            "error": error.as_ref().map(protocol_error_json),
+        }),
+        EventData::OutputAdded { output }
+        | EventData::OutputRemoved { output }
+        | EventData::OutputChanged { output } => json!({ "output": output.0 }),
+    };
+    described["seq"] = json!(event.seq);
+    described["time_ns"] = json!(event.time_ns);
+    described["kind"] = json!(event.data.kind().name());
+    described
+}
+
+/// What `events` answers: the events read, the cursor to give next, the events the log dropped
+/// after the cursor, and, when its wait ran out, `timed_out`.
+pub fn events_json(reading: &Reading<'_>, timed_out: bool) -> Value {
+    let mut answer = json!({
+        "events": reading.events.iter().map(|event| event_json(event)).collect::<Vec<Value>>(),
+        "next": reading.next,
+        "missed": reading.missed,
+    });
+    if timed_out {
+        answer["timed_out"] = json!(true);
+    }
+    answer
 }
 
 /// An advance's length from its arguments: exactly one of nanoseconds or milliseconds, more
@@ -921,6 +1137,7 @@ mod tests {
                 "workspaces",
                 "spawn",
                 "windows",
+                "events",
                 "capture",
                 "pointer",
                 "keyboard",
@@ -1304,6 +1521,130 @@ mod tests {
                 "max_fall": null,
                 "intent": "perceptual",
             }])
+        );
+    }
+
+    #[test]
+    fn events_and_spawns_new_actions_read_their_arguments() {
+        let call: EventsCall = arguments(args(json!({
+            "seat": 2, "after": 7, "kinds": ["window_opened", "client_left"], "wait_ms": 10
+        })))
+        .expect("events' arguments");
+        assert_eq!(call.after, Some(7));
+        assert_eq!(call.kinds, Some(vec![Kind::WindowOpened, Kind::ClientLeft]));
+        let call: EventsCall = arguments(args(json!({"seat": 2}))).expect("events' arguments");
+        assert_eq!((call.after, call.kinds, call.wait_ms), (None, None, 0));
+        assert!(arguments::<EventsCall>(args(json!({"seat": 2, "kinds": ["nope"]}))).is_err());
+        assert!(arguments::<EventsCall>(args(json!({"seat": 2, "from": 1}))).is_err());
+        // The schema names every kind serde reads, and nothing else.
+        let tools = definitions();
+        let events = tools
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|tool| tool["name"] == json!("events"))
+            .expect("the events tool");
+        let names = &events["inputSchema"]["properties"]["kinds"]["items"]["enum"];
+        for name in names.as_array().expect("the kinds") {
+            let call = json!({"seat": 2, "kinds": [name]});
+            assert!(arguments::<EventsCall>(args(call)).is_ok(), "{name}");
+        }
+        assert_eq!(names.as_array().map(Vec::len), Some(Kind::ALL.len()));
+
+        assert!(matches!(
+            arguments(args(
+                json!({"action": "log", "seat": 2, "program": 1, "from": 5,
+                                  "max_bytes": 9})
+            )),
+            Ok(SpawnCall::Log {
+                from: Some(5),
+                max_bytes: Some(9),
+                ..
+            })
+        ));
+        assert!(matches!(
+            arguments(args(json!({"action": "slow", "seat": 2, "program": 1,
+                                  "run_percent": 50}))),
+            Ok(SpawnCall::Slow {
+                run_percent: 50,
+                ..
+            })
+        ));
+        assert!(matches!(
+            arguments(args(json!({"action": "freeze", "seat": 2, "program": 1}))),
+            Ok(SpawnCall::Freeze { program: 1, .. })
+        ));
+        assert!(matches!(
+            arguments(args(json!({"action": "thaw", "seat": 2, "program": 1}))),
+            Ok(SpawnCall::Thaw { program: 1, .. })
+        ));
+        assert!(
+            arguments::<SpawnCall>(args(json!({"action": "slow", "seat": 2, "program": 1})))
+                .is_err()
+        );
+        assert!(
+            arguments::<SpawnCall>(args(
+                json!({"action": "slow", "seat": 2, "program": 1, "run_percent": 300})
+            ))
+            .is_err()
+        );
+        assert!(
+            arguments::<SpawnCall>(args(
+                json!({"action": "freeze", "seat": 2, "program": 1, "force": true})
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_event_gives_its_number_time_kind_and_fields() {
+        let event = |data| Event {
+            seq: 3,
+            time_ns: 40,
+            data,
+        };
+        let left = event(EventData::ClientLeft {
+            pid: Some(77),
+            program: Some(2),
+            error: Some(ClientProtocolError {
+                interface: "wl_subcompositor".to_owned(),
+                object: 5,
+                code: 0,
+                message: "role".to_owned(),
+            }),
+        });
+        assert_eq!(
+            event_json(&left),
+            json!({"seq": 3, "time_ns": 40, "kind": "client_left", "pid": 77, "program": 2,
+                   "reason": "protocol_error", "error": {"interface": "wl_subcompositor",
+                   "object": 5, "code": 0, "message": "role"}})
+        );
+        let closed = event(EventData::ClientLeft {
+            pid: None,
+            program: None,
+            error: None,
+        });
+        assert_eq!(event_json(&closed)["reason"], json!("closed"));
+        assert_eq!(event_json(&closed)["error"], Value::Null);
+        let exited = event(EventData::ProgramExited {
+            program: 4,
+            end: End::Killed(9),
+        });
+        assert_eq!(
+            event_json(&exited),
+            json!({"seq": 3, "time_ns": 40, "kind": "program_exited", "program": 4,
+                   "exit_code": null, "signal": 9})
+        );
+        let placed = event(EventData::WindowPlaced {
+            window: WindowId(1),
+            output: None,
+            workspace: Some("web".to_owned()),
+            place: None,
+        });
+        assert_eq!(
+            event_json(&placed),
+            json!({"seq": 3, "time_ns": 40, "kind": "window_placed", "window": 1,
+                   "output": null, "workspace": "web", "place": null})
         );
     }
 

@@ -45,7 +45,6 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Motion, Settings};
 
-use crate::Error;
 use crate::capture::{CaptureTicket, CapturedFrame, PendingCapture};
 use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
@@ -55,6 +54,7 @@ use crate::screencopy::ScreencopyState;
 use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
+use crate::{ClientProcess, Error};
 
 /// The owner's seat, which always exists; agents' seats come after it, from 2
 /// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
@@ -65,7 +65,17 @@ pub(crate) type DrawHook = Box<dyn FnMut(&mut Clock)>;
 
 /// The clients the display ended since the end of the last round, which Yuna frees then
 /// (`Compositor::flush`). Each client's [`ClientState`] holds it and records its own end there.
-pub(crate) type DepartedClients = Arc<Mutex<Vec<ClientId>>>;
+pub(crate) type DepartedClients = Arc<Mutex<Vec<Departed>>>;
+
+/// A client the display ended, as its [`ClientState`] recorded it then: what Yuna frees, and
+/// tells the MCP server ([`ClientDeparture`](crate::ClientDeparture)).
+#[derive(Debug)]
+pub(crate) struct Departed {
+    pub client: ClientId,
+    pub seat: SeatId,
+    pub process: ClientProcess,
+    pub reason: DisconnectReason,
+}
 
 /// Everything the compositor holds, beside its event loop and display.
 pub(crate) struct State {
@@ -90,6 +100,13 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
+    /// Grows each time something [`State::describe_windows`] or [`State::describe_outputs`]
+    /// gives may have changed, but for windows' drawn rectangles and motion, which move with
+    /// every frame: a window opened or closed, a title or an application id, the layout changed
+    /// or arranged, an X11 window's answers, an output added or removed. What the MCP server reads
+    /// before it describes anything for its events (`Compositor::description_generation`), so
+    /// that a round in which only buffers changed describes nothing.
+    pub description_generation: u64,
     /// How the layout changed since it was last arranged: the changes made since, combined
     /// ([`Change::and`]), instant on the outputs where one of them must show at once
     /// (`frames.rs`).
@@ -192,6 +209,7 @@ impl State {
             window_counts: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
+            description_generation: 0,
             layout_change: Change::Animated,
             motion: Motion::new(animations),
             surfaces_gone: false,
@@ -253,6 +271,11 @@ impl State {
         id
     }
 
+    /// Notes that something [`State::description_generation`] follows may have changed.
+    pub(crate) fn note_description_changed(&mut self) {
+        self.description_generation += 1;
+    }
+
     pub(crate) fn output_index(&self, id: OutputId) -> Option<usize> {
         self.outputs.iter().position(|o| o.id == id)
     }
@@ -285,6 +308,8 @@ pub(crate) struct ClientState {
     pub xwayland: Option<u64>,
     /// Whether a window of this client was refused for passing a cap on windows: said once.
     pub window_cap_logged: AtomicBool,
+    /// Who it is, read when it connected: what its departure tells.
+    pub process: ClientProcess,
     /// Where the client records that the display ended it: the compositor's list.
     departed: DepartedClients,
 }
@@ -293,6 +318,7 @@ impl ClientState {
     pub(crate) fn new(
         seat: SeatId,
         sees_every_seat: bool,
+        process: ClientProcess,
         departed: DepartedClients,
     ) -> ClientState {
         ClientState {
@@ -301,6 +327,7 @@ impl ClientState {
             sees_every_seat,
             xwayland: None,
             window_cap_logged: AtomicBool::new(false),
+            process,
             departed,
         }
     }
@@ -311,14 +338,20 @@ impl ClientData for ClientState {
 
     /// The display ended the client: it left, broke the protocol, or could not take its events.
     /// Its objects are freed later, by a dispatch that reads a client or at the round's end. The
-    /// display calls this under its own lock, so it only records the client: a call back into
-    /// the display would wait for ever.
+    /// display calls this under its own lock, so it only records the client, who it was and why,
+    /// in the compositor's list: a call back into the display would wait for ever.
     fn disconnected(&self, client: ClientId, reason: DisconnectReason) {
         tracing::debug!(?reason, xwayland = self.xwayland.is_some(), "a client left");
+        let departed = Departed {
+            client,
+            seat: self.seat,
+            process: self.process.clone(),
+            reason,
+        };
         self.departed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(client);
+            .push(departed);
     }
 }
 

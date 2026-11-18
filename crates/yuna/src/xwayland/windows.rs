@@ -823,6 +823,8 @@ impl State {
         let parent_changed = record.properties.transient_for != properties.transient_for;
         let counter_changed = record.properties.sync_counter != properties.sync_counter;
         record.properties = properties;
+        // Its title and class among them.
+        self.note_description_changed();
         if parent_changed {
             self.x11_place_menu_again(server, window);
         }

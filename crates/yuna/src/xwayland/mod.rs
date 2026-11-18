@@ -562,7 +562,13 @@ impl Xwayland {
         xserver.arm_overdue(id, START_TIMEOUT, handle);
         state.x11_server_started(id, seat, scale);
         let connected = state
-            .insert_xwayland_client(seat, spawned.wayland, scale, id)
+            .insert_xwayland_client(
+                seat,
+                spawned.wayland,
+                scale,
+                id,
+                spawned.pid.as_raw_nonzero().get(),
+            )
             .map_err(|error| error.to_string())
             .and_then(|()| watch_displayfd(spawned.displayfd, id, handle));
         if let Err(reason) = connected {

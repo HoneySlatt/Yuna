@@ -225,13 +225,19 @@ with games' VRR:
 - Claude Code 2.1.318 ran the done-when's story through `yuna mcp` alone
   ([measurements](measurements.md)); Codex and OpenCode are untested, and which revision of MCP
   each client speaks, Claude Code's included, is not recorded.
-- A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed,
-  and its folder of logs, up to 128 MiB, in `XDG_RUNTIME_DIR`: nothing ends or removes them. So
-  does one that aborts, overflows its stack or panics inside its panic hook: no hook runs then,
-  or it cannot finish. A panic of its state ends them
+- A `yuna mcp` killed by SIGKILL leaves its programs running, their Wayland connection closed:
+  nothing ends them. Its folder of sockets and logs, up to 160 MiB, stays in `XDG_RUNTIME_DIR`
+  until the next `yuna mcp` starts there and removes it, its lock free. So does one that aborts,
+  overflows its stack or panics inside its panic hook: no hook runs then, or it cannot finish. A
+  panic of its state ends them
   ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). Stopping can take 4 s,
   a second for the last replies and three for the programs, and an MCP client may kill Yuna
   sooner.
+- A test of `tests/mcp.rs` that fails drops its `yuna mcp` with SIGKILL, so its programs run
+  on: the tests that start a busy program end it before they assert.
+- A folder with no lock file, a `yuna mcp`'s older than its lock, is never swept: nothing tells
+  whether its Yuna lives. It is removed by hand. A folder whose making a crash interrupted,
+  `.yuna-mcp-<pid>-starting`, is removed only by the next Yuna that has that pid.
 - An agent reads presentation times only through a capture: its frame's `boundary` and
   `presented_ns`. No tool gives a program's presentation feedback, which the program reads
   itself through `wp_presentation`.
@@ -242,8 +248,45 @@ with games' VRR:
   ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)); Yuna's stopping ends it. A test pins
   the gap. A cgroup per seat would close it, where systemd delegates one.
 - A seat whose agent forgets it keeps its programs until Yuna stops: there is no lease.
-- A closed seat's programs are forgotten with their logs: an agent reads a log before it
-  closes the seat.
+- A closed seat's programs are forgotten with their logs: an agent reads a log, through
+  `spawn log`, before it closes the seat.
+- Once its program has written more than 1.25 MiB, a log's file holds its newest bytes in a
+  ring: `spawn log` reads them in order, the file's path does not. `spawn log`'s text is lossy
+  UTF-8 cut at byte offsets: a character split at a read's edge shows as replacement
+  characters.
+- `events` tells windows by comparing what the compositor describes with its last look: a window
+  that opens and closes between two looks is not seen, and what changed several times shows its
+  last state. A look runs only once the compositor's description generation has moved, so a
+  round in which clients only drew costs 0.2 µs; but a look after a change describes every
+  window, and `Layout::window` walks the windows of its workspace, so a look costs 0.13 ms at
+  100 windows, 4.4 ms at 1,000 and 11 ms at 2,000 in a release build
+  ([measurements](measurements.md)): a title changed each round, among 1,000 windows, takes a
+  frame's time of 240 Hz. `windows` pays the same. An index of each window's place in the layout
+  model would make it linear. Stage 2's one event stream
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md),
+  item 14) replaces the comparison.
+- An event's title, application id or workspace's name is cut to 512 bytes, at a character's
+  boundary: a change past the cut is not told.
+- `missed` is exact while a seat's dropped events form at most 1,024 runs of consecutive
+  numbers; past that, other seats' events interleaving, the oldest runs merge, and a cursor
+  inside a merged run is told at most that run's count.
+- A client's program is found from the processes above it when Yuna accepted it, or its process
+  group: one that left both, a double fork with `setsid`, is told with no program, its protocol
+  error kept on none. A client whose process exited before the accept has no lineage, and no
+  program; were its pid taken meanwhile, the lineage read would be the other process's. A pidfd
+  of the peer (`SO_PEERPIDFD`) would make it exact.
+- Yuna keeps no protocol trace of a client: wayland-rs has none, and a fork for it was not
+  taken. `WAYLAND_DEBUG=client` is the client's own, in its log, for clients on libwayland or
+  wayland-rs, set before the program starts.
+- `slow` paces a program on real time: a manual clock does not, so a slowed program makes a
+  manual-clock run depend on the machine's timing. `freeze`, `thaw` and `slow` act on the
+  program's process group: a process it moved to a group of its own runs on.
+- A frozen program that is sent events is cut off once wayland-rs's 4 KiB buffer for its
+  connection and its socket's buffer are full: within one keyboard `type` of 4,096 characters,
+  8,192 key events of 24 bytes, in the test that types to such a client on the development
+  machine, whose socket buffers set the figure. Its windows close. Stage 2 measures how long a
+  client that stops reading should be kept
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 - 64 programs run at most, counted by their first process: one that exits leaving its children
   frees its place.
 - When Yuna stops or a seat closes, the processes are found through `/proc`, then signalled by

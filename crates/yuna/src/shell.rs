@@ -410,6 +410,7 @@ impl State {
         }
         self.next_window_id += 1;
         self.windows.insert(window, root.id());
+        self.note_description_changed();
         if let Some(owner) = &owner {
             *self.window_counts.entry(owner.clone()).or_default() += 1;
         }
@@ -568,6 +569,7 @@ impl State {
         toplevel.urgent = false;
         toplevel.size_asked = None;
         self.windows.remove(&window);
+        self.note_description_changed();
         if let Some(output) = shown_on {
             self.leave_output(root, output);
         }
@@ -951,6 +953,16 @@ impl State {
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
+    }
+
+    /// Its title is read where windows are described; this tells that it may have changed.
+    fn title_changed(&mut self, _surface: ToplevelSurface) {
+        self.note_description_changed();
+    }
+
+    /// As [`XdgShellHandler::title_changed`], for its application id.
+    fn app_id_changed(&mut self, _surface: ToplevelSurface) {
+        self.note_description_changed();
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {

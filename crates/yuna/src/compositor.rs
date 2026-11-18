@@ -15,6 +15,7 @@ use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
 };
 use smithay::reexports::rustix::process::{Pid, WaitStatus};
+use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{BindError, Display, ListeningSocket};
 use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::socket::ListeningSocketSource;
@@ -28,6 +29,7 @@ use crate::clock::{Clock, ClockMode};
 use crate::colour::SurfaceColourDescription;
 use crate::input::PointerDescription;
 use crate::output::OutputMode;
+use crate::process::lineage_under_yuna;
 use crate::render::Device;
 use crate::state::{OWNER_SEAT, State};
 use crate::xwayland::{DrawnX11Menu, X11Display, Xwayland, XwaylandConfig};
@@ -166,6 +168,71 @@ pub struct WindowDescription {
     pub unresponsive: bool,
 }
 
+/// Who a client is, read once, when Yuna accepts its connection: its process, and, for a client
+/// of an agent's seat, the processes above it up to Yuna, which name the program it belongs to
+/// (`mcp/programs.rs`) even once it has exited and been reaped.
+///
+/// The peer may have exited between its `connect` and Yuna's accept: its lineage is then empty,
+/// or, if it has been reaped and its pid taken by another process meanwhile, that other
+/// process's. A pidfd of the peer (`SO_PEERPIDFD`) would make it exact
+/// ([debt](../../../docs/debt.md#the-mcp-server)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientProcess {
+    /// Its process id, as the kernel gave it for its socket, as [`Compositor::windows`] gives
+    /// its windows': Yuna's own for a socket pair made in Yuna's process, a test's client;
+    /// Xwayland's own for its socket pair.
+    pub pid: Option<i32>,
+    /// Its process and those above it up to Yuna, Yuna left out, nearest first, as `/proc` gave
+    /// them then; empty when it was not under Yuna, and for a client not of an agent's seat, or
+    /// an Xwayland, whose lineage is not read.
+    pub lineage: Vec<i32>,
+    /// Its process group then; none when its lineage is empty.
+    pub group: Option<i32>,
+    /// When it connected, on real time.
+    pub connected_at: Instant,
+}
+
+impl ClientProcess {
+    /// The client whose process is `pid`, connecting now: its lineage read in `/proc` when
+    /// `read_lineage`.
+    pub(crate) fn connecting(pid: Option<i32>, read_lineage: bool) -> ClientProcess {
+        let (lineage, group) = pid
+            .filter(|_| read_lineage)
+            .map_or_else(Default::default, lineage_under_yuna);
+        ClientProcess {
+            pid,
+            lineage,
+            group,
+            connected_at: Instant::now(),
+        }
+    }
+}
+
+/// A client the display ended, as [`Compositor::take_client_departures`] tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientDeparture {
+    /// The seat it belonged to.
+    pub seat: SeatId,
+    /// Who it was.
+    pub process: ClientProcess,
+    /// The protocol error it was ended for, as Yuna sent it; none when its connection closed:
+    /// it left, sent what is not Wayland, or could not take the events written to it.
+    pub error: Option<ClientProtocolError>,
+}
+
+/// A protocol error a client was ended for: `wl_display.error`'s arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientProtocolError {
+    /// The interface of the object it named.
+    pub interface: String,
+    /// That object's id.
+    pub object: u32,
+    /// The error's code, in that interface's `error` enum.
+    pub code: u32,
+    /// What Yuna, or Smithay, wrote of it.
+    pub message: String,
+}
+
 /// An output, as [`Compositor::output_descriptions`] describes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputDescription {
@@ -198,6 +265,10 @@ pub struct Compositor {
     timer: Option<(RegistrationToken, Duration)>,
     /// The source of each agent seat's socket.
     seat_sockets: HashMap<SeatId, RegistrationToken>,
+    /// The clients the display ended since they were last taken, once someone watches them
+    /// ([`Compositor::watch_client_departures`]): none is kept otherwise. Each client leaves
+    /// once, so it holds at most the clients that left between two takes.
+    departures: Option<Vec<ClientDeparture>>,
 }
 
 impl Compositor {
@@ -285,6 +356,7 @@ impl Compositor {
             socket_name,
             timer: None,
             seat_sockets: HashMap::new(),
+            departures: None,
         })
     }
 
@@ -457,6 +529,21 @@ impl Compositor {
     /// The process ids of `seat`'s clients, as the kernel gave them for their sockets.
     pub fn client_pids(&self, seat: SeatId) -> Vec<i32> {
         self.state.client_pids(seat)
+    }
+
+    /// From now on, keeps each client the display ends, with who it was and why, until
+    /// [`Compositor::take_client_departures`] takes them: what the MCP server tells agents.
+    pub fn watch_client_departures(&mut self) {
+        self.departures.get_or_insert_with(Vec::new);
+    }
+
+    /// The clients the display ended since the last call, in the order they were freed; none
+    /// unless [`Compositor::watch_client_departures`] was called.
+    pub fn take_client_departures(&mut self) -> Vec<ClientDeparture> {
+        self.departures
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Moves agent seat `seat`'s pointer to (`x`, `y`), logical units from the top-left corner
@@ -687,6 +774,13 @@ impl Compositor {
     /// clock that an agent steps ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
     pub fn real_now(&self) -> Duration {
         self.state.clock.real_now()
+    }
+
+    /// A number that grows each time what [`Compositor::windows`] and
+    /// [`Compositor::output_descriptions`] give may have changed, but for windows' drawn
+    /// rectangles and motion: equal twice, they give the same. Reading it costs nothing.
+    pub fn description_generation(&self) -> u64 {
+        self.state.description_generation
     }
 
     /// Whether the layout changed since it was last arranged: the windows' places are those of
@@ -973,14 +1067,30 @@ impl Compositor {
             if departed.is_empty() {
                 return;
             }
-            for client in departed {
-                self.state.forget_client(&client);
+            for departed in departed {
+                self.state.forget_client(&departed.client);
                 // An ended client is not read: the call fails, and frees it on its way out. A
                 // client a dispatch freed already is not found, and nothing happens.
                 let _ = self
                     .display
                     .backend()
-                    .dispatch_single_client(&mut self.state, client);
+                    .dispatch_single_client(&mut self.state, departed.client);
+                if let Some(departures) = &mut self.departures {
+                    let error = match departed.reason {
+                        DisconnectReason::ProtocolError(error) => Some(ClientProtocolError {
+                            interface: error.object_interface,
+                            object: error.object_id,
+                            code: error.code,
+                            message: error.message,
+                        }),
+                        DisconnectReason::ConnectionClosed => None,
+                    };
+                    departures.push(ClientDeparture {
+                        seat: departed.seat,
+                        process: departed.process,
+                        error,
+                    });
+                }
             }
         }
     }

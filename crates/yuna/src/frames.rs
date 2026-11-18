@@ -121,6 +121,7 @@ impl State {
     /// their motions at that arrangement, however many animated changes come with it.
     pub(crate) fn mark_layout_changed(&mut self, change: Change) {
         self.layout_dirty = true;
+        self.note_description_changed();
         self.layout_change = std::mem::take(&mut self.layout_change).and(change);
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
@@ -575,6 +576,8 @@ impl State {
     /// states, and moves each between shown and hidden.
     pub(crate) fn arrange(&mut self) {
         self.layout_dirty = false;
+        // Places and outputs shown on change here, at once or at the next refresh.
+        self.note_description_changed();
         let change = std::mem::take(&mut self.layout_change);
         let now = self.clock.now();
         self.motion.update(&self.layout, now, change);
@@ -709,6 +712,8 @@ impl State {
         if before == output {
             return;
         }
+        // At an arrangement, or where a motion ends.
+        self.note_description_changed();
         if let Some(before) = before {
             self.leave_output(root, before);
         }

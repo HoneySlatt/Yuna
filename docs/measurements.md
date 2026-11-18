@@ -4,6 +4,39 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.11 — The events' look (2026-11-18)
+
+What `yuna mcp`'s look for events costs a round (`mcp/events.rs`), measured by
+`crates/yuna/examples/events_look.rs` in a release build of branch `m1.11-events` after
+`6e271a3`, its correction round uncommitted. One agent seat, one output of 1920 × 1080 at 60 Hz
+and scale 1, on a manual clock; the windows from clients of the example's own, 1,000 a client at
+most, each 64 × 64 pixels. Each case timed 1,000 times, the look alone. Machine: Ryzen 7 5800X
+(16 threads), Linux 7.3.1. **Disturbed**: the one-minute load average read 15.8 before and 16.5
+after; other sessions' tests ran meanwhile, one of SlimeEngine at 730 % of a core and another
+worktree's Yuna tests (`.delegation/m1.11-events-2/13`, local).
+
+| Windows | Case | Median | p99 | Longest |
+|---|---|---|---|---|
+| 100 | no change | 0.1 µs | 0.1 µs | 0.5 µs |
+| 100 | a frame | 0.2 µs | 0.4 µs | 1.7 µs |
+| 100 | a title | 130 µs | 209 µs | 2.5 ms |
+| 1,000 | no change | 0.1 µs | 0.1 µs | 0.5 µs |
+| 1,000 | a frame | 0.2 µs | 0.4 µs | 0.8 µs |
+| 1,000 | a title | 4.4 ms | 8.4 ms | 28 ms |
+| 2,000 | no change | 0.1 µs | 0.1 µs | 0.7 µs |
+| 2,000 | a frame | 0.2 µs | 0.3 µs | 0.6 µs |
+| 2,000 | a title | 11 ms | 29 ms | 38 ms |
+
+- **No change** and **a frame**, one window's buffer committed and its output refreshed, as a game
+  draws: the look reads the compositor's description generation and stops, at any count.
+- **A title**: every window and output described and compared, one event recorded. The comparison
+  is linear; describing the windows is not: `Layout::window` walks the windows of its workspace
+  for each window, so the cost grows with their square. At 1,000 windows a look after a change
+  takes a 240 Hz frame's time ([debt](debt.md#the-mcp-server)).
+- The checker's measure of the first comparison alone, which searched every window's list for
+  each window seen before, gave 2.41 ms at 2,000 windows, disturbed too
+  (`.delegation/m1.11-events-check/01`, local).
+
 ## M1.10 — A program's presentation in Yuna against a headless sway (2026-11-17)
 
 uwui's own `scripts/measure.py`, at the revision `flake.nix` pins (`fb77f0d`), measures `vkcube`

@@ -1047,3 +1047,538 @@ fn a_waiting_windows_call_on_a_mapped_window_gets_its_place_in_the_new_mode() {
         json!({"x": 16.0, "y": 16.0, "width": 936.0, "height": 1048.0})
     );
 }
+
+
+/// Maps a window of `client`, `app_id` and `title`, on its seat's focused output, and runs the
+/// frames armed, so that the layout has placed it; returns its index in `client`.
+fn open_placed_window(mcp: &mut Mcp, client: &mut Client, app_id: &str, title: &str) -> usize {
+    let window = client.create_window();
+    client.set_app_id_and_title(window, app_id, title);
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    client.ack(window);
+    client.attach(window, crate::TILE.0, crate::TILE.1, RED);
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    crate::run_armed_deadlines(mcp.server.compositor());
+    window
+}
+
+/// `events`' answer to `arguments`, which must not fail.
+fn events(mcp: &mut Mcp, arguments: Value) -> Value {
+    let result = mcp.call("events", arguments);
+    assert_eq!(result["isError"], json!(false), "{result}");
+    result["structuredContent"].clone()
+}
+
+/// The kinds of an answer's events, in order.
+fn kinds(answer: &Value) -> Vec<&str> {
+    answer["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event["kind"].as_str())
+        .collect()
+}
+
+/// The seqs of an answer's events, in order.
+fn seqs(answer: &Value) -> Vec<u64> {
+    answer["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event["seq"].as_u64())
+        .collect()
+}
+
+/// Every reply that comes until the one to request `id`, that one included, within 5 s of real
+/// time.
+fn replies_until(mcp: &mut Mcp, id: u64) -> Vec<Value> {
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut replies = Vec::new();
+    while !replies.iter().any(|reply: &Value| reply["id"] == json!(id)) {
+        assert!(
+            Instant::now() < until,
+            "no reply to request {id}: {replies:?}"
+        );
+        replies.extend(mcp.replies());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    replies
+}
+
+/// The newest event's number, as an `events` call without `after` gives it.
+fn cursor(mcp: &mut Mcp, seat: u64) -> u64 {
+    events(mcp, json!({"seat": seat}))["next"]
+        .as_u64()
+        .expect("a cursor")
+}
+
+/// A window that opens, then closes, is told `window_opened`, placed and focused, then
+/// `window_closed` and the focus gone, in order, each event's seq above the last.
+#[test]
+fn events_tell_a_window_opened_then_closed_in_order() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let start = cursor(&mut mcp, seat);
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = open_placed_window(&mut mcp, &mut client, "org.example.Events", "One");
+    let opened = events(&mut mcp, json!({"seat": seat, "after": start}));
+    assert_eq!(
+        kinds(&opened),
+        ["window_opened", "window_placed", "focus"],
+        "{opened}"
+    );
+    let told = &opened["events"][0];
+    assert_eq!(told["window"], json!(1));
+    assert_eq!(told["app_id"], json!("org.example.Events"));
+    assert_eq!(told["title"], json!("One"));
+    assert_eq!(told["shell"], json!("xdg"));
+    assert_eq!(told["pid"], json!(std::process::id()));
+    assert!(told["time_ns"].is_u64());
+    let placed = &opened["events"][1];
+    assert_eq!(placed["output"], json!(1));
+    assert_eq!(
+        placed["place"],
+        json!({"x": 16.0, "y": 16.0, "width": 1256.0, "height": 1408.0})
+    );
+    assert_eq!(opened["events"][2]["window"], json!(1));
+    assert_eq!(opened["missed"], json!(0));
+
+    client.close(window);
+    client.roundtrip(mcp.server.compositor());
+    let closed = events(
+        &mut mcp,
+        json!({"seat": seat, "after": opened["next"].clone()}),
+    );
+    assert_eq!(kinds(&closed), ["window_closed", "focus"], "{closed}");
+    assert_eq!(closed["events"][0]["window"], json!(1));
+    assert_eq!(closed["events"][1]["window"], Value::Null);
+    let all = events(&mut mcp, json!({"seat": seat, "after": start}));
+    let numbers = seqs(&all);
+    assert_eq!(numbers.len(), 5, "{all}");
+    assert!(numbers.windows(2).all(|pair| pair[0] < pair[1]), "{all}");
+    assert_eq!(all["next"], json!(numbers[4]));
+}
+
+/// Without `after`, `events` gives no past event: it waits from now, and is answered once a
+/// window opens, with that window's events alone. `kinds` keeps only the kinds it names; a kind
+/// it does not know is refused.
+#[test]
+fn events_wait_from_now_and_kinds_filter_them() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut first = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut first, "org.example.First", "First");
+    // An event of the past, which no call without `after` gives.
+    let now = events(&mut mcp, json!({"seat": seat}));
+    assert_eq!(now["events"], json!([]));
+    assert!(now["next"].as_u64() > Some(0), "{now}");
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 700, "method": "tools/call",
+                      "params": modern(json!({"name": "events", "arguments":
+                          {"seat": seat, "wait_ms": 10_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+
+    let mut second = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut second, "org.example.Second", "Second");
+    let waited = mcp.reply_to(700)["result"]["structuredContent"].clone();
+    assert_eq!(kinds(&waited)[0], "window_opened", "{waited}");
+    assert_eq!(waited["events"][0]["app_id"], json!("org.example.Second"));
+    assert!(
+        waited["events"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .all(|event| event["app_id"] != json!("org.example.First")),
+        "{waited}"
+    );
+    assert_eq!(waited.get("timed_out"), None);
+
+    let opened = events(
+        &mut mcp,
+        json!({"seat": seat, "after": 0, "kinds": ["window_opened"]}),
+    );
+    assert_eq!(
+        kinds(&opened),
+        ["window_opened", "window_opened"],
+        "{opened}"
+    );
+    let focus = events(
+        &mut mcp,
+        json!({"seat": seat, "after": 0, "kinds": ["focus", "window_closed"]}),
+    );
+    assert_eq!(kinds(&focus), ["focus", "focus"], "{focus}");
+    for wrong in [json!(["teleported"]), json!([]), json!("focus")] {
+        let refused = mcp.call("events", json!({"seat": seat, "kinds": wrong}));
+        assert_eq!(refused["isError"], json!(true), "{wrong}");
+    }
+    let ahead = mcp.call("events", json!({"seat": seat, "after": 1_000_000}));
+    assert_eq!(ahead["isError"], json!(true));
+    let too_long = mcp.call("events", json!({"seat": seat, "wait_ms": 60_000}));
+    assert_eq!(too_long["isError"], json!(true));
+
+    // A wait whose time is up says so.
+    let quiet = events(
+        &mut mcp,
+        json!({"seat": seat, "kinds": ["client_left"], "wait_ms": 30}),
+    );
+    assert_eq!(quiet["events"], json!([]));
+    assert_eq!(quiet["timed_out"], json!(true));
+}
+
+/// A title changed 1,500 times between two looks is one `window_changed`, with the last title.
+#[test]
+fn a_title_changed_1500_times_in_a_round_is_one_event() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = open_placed_window(&mut mcp, &mut client, "org.example.Titles", "title");
+    let start = cursor(&mut mcp, seat);
+    for n in 0..1_500 {
+        client.set_app_id_and_title(window, "org.example.Titles", &format!("title {n}"));
+    }
+    client.roundtrip(mcp.server.compositor());
+    let changed = events(
+        &mut mcp,
+        json!({"seat": seat, "after": start, "kinds": ["window_changed"]}),
+    );
+    assert_eq!(
+        changed["events"].as_array().map(|events| events.len()),
+        Some(1),
+        "{changed}"
+    );
+    assert_eq!(changed["events"][0]["title"], json!("title 1499"));
+    assert_eq!(changed["events"][0]["app_id"], json!("org.example.Titles"));
+}
+
+/// A seat's log keeps its last 1,024 events: a cursor older than them learns how many it
+/// missed, and reads on, 256 a reply, from the oldest kept; a newer cursor missed none.
+#[test]
+fn a_cursor_older_than_the_log_is_told_what_it_missed() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    // Each output added, then removed: 2,000 events, besides the seat's first output.
+    for _ in 0..1_000 {
+        let created = mcp.call(
+            "outputs",
+            json!({"action": "create", "seat": seat, "width": 64, "height": 64, "rate": 60,
+                   "scale": 1}),
+        );
+        let output = created["structuredContent"]["output"]["id"].clone();
+        let removed = mcp.call(
+            "outputs",
+            json!({"action": "remove", "seat": seat, "output": output}),
+        );
+        assert_eq!(removed["isError"], json!(false), "{removed}");
+    }
+    let newest = cursor(&mut mcp, seat);
+    assert!(newest >= 2_001, "{newest}");
+    let old = events(&mut mcp, json!({"seat": seat, "after": 0}));
+    let kept = yuna::mcp::MAX_EVENTS as u64;
+    assert_eq!(old["missed"], json!(newest - kept), "{}", old["missed"]);
+    let numbers = seqs(&old);
+    assert_eq!(numbers.len(), yuna::mcp::MAX_EVENTS_PER_REPLY);
+    assert_eq!(numbers[0], newest - kept + 1);
+    assert_eq!(old["next"], json!(numbers[numbers.len() - 1]));
+    let on = events(
+        &mut mcp,
+        json!({"seat": seat, "after": old["next"].clone()}),
+    );
+    assert_eq!(on["missed"], json!(0));
+    assert_eq!(seqs(&on)[0], numbers[numbers.len() - 1] + 1);
+    assert_eq!(kinds(&on)[0..2], ["output_added", "output_removed"]);
+}
+
+/// A waiting `events` call fails when its seat closes, rather than wait out its time; one that
+/// `notifications/cancelled` names is dropped unanswered, even once an event comes.
+#[test]
+fn a_waiting_events_call_fails_with_its_seat_and_is_dropped_when_cancelled() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    for id in [800, 801] {
+        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                          "params": modern(json!({"name": "events", "arguments":
+                              {"seat": seat, "wait_ms": 10_000}}))}));
+    }
+    mcp.send(
+        &json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                      "params": {"requestId": 801, "reason": "the test"}}),
+    );
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut client, "org.example.Waited", "Waited");
+    // Every reply up to 800's, and those after: a 801 answered with it would be among them.
+    let mut replies = replies_until(&mut mcp, 800);
+    std::thread::sleep(Duration::from_millis(20));
+    replies.extend(mcp.replies());
+    let answered = replies
+        .iter()
+        .find(|reply| reply["id"] == json!(800))
+        .expect("800's reply");
+    assert_eq!(
+        kinds(&answered["result"]["structuredContent"])[0],
+        "window_opened"
+    );
+    assert!(
+        replies.iter().all(|reply| reply["id"] != json!(801)),
+        "{replies:?}"
+    );
+
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 802, "method": "tools/call",
+                      "params": modern(json!({"name": "events", "arguments":
+                          {"seat": seat, "kinds": ["output_added"], "wait_ms": 40_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 803, "method": "tools/call",
+                      "params": modern(json!({"name": "seat", "arguments":
+                          {"action": "close", "seat": seat}}))}));
+    let mut replies = Vec::new();
+    let until = Instant::now() + Duration::from_secs(5);
+    while replies.len() < 2 && Instant::now() < until {
+        replies.extend(mcp.replies());
+    }
+    let failed = replies
+        .iter()
+        .find(|reply| reply["id"] == json!(802))
+        .unwrap_or_else(|| panic!("{replies:?}"));
+    assert_eq!(failed["result"]["isError"], json!(true));
+    let text = failed["result"]["content"][0]["text"]
+        .as_str()
+        .expect("a reason");
+    assert!(text.contains("was closed"), "{text}");
+    let stale = mcp.call("events", json!({"seat": seat}));
+    assert_eq!(stale["isError"], json!(true));
+}
+
+/// An output removed is told `output_removed`, and each window it held `window_placed`: moved
+/// to the seat's other output, on a workspace that output does not show (ADR-0018), so hidden,
+/// with no output and no place.
+#[test]
+fn an_output_removed_is_told_with_each_window_it_moved() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let created = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 1280, "height": 720, "rate": 60,
+               "scale": 1}),
+    );
+    let other = created["structuredContent"]["output"]["id"].clone();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut client, "org.example.A", "A");
+    open_placed_window(&mut mcp, &mut client, "org.example.B", "B");
+    let listed = mcp.call("windows", json!({"seat": seat}));
+    for window in listed["structuredContent"]["windows"]
+        .as_array()
+        .expect("a list")
+    {
+        assert_eq!(window["output"], json!(1), "{listed}");
+    }
+    let start = cursor(&mut mcp, seat);
+    let removed = mcp.call(
+        "outputs",
+        json!({"action": "remove", "seat": seat, "output": 1}),
+    );
+    assert_eq!(removed["isError"], json!(false), "{removed}");
+    crate::run_armed_deadlines(mcp.server.compositor());
+    let told = events(&mut mcp, json!({"seat": seat, "after": start}));
+    let list = told["events"].as_array().expect("a list");
+    assert_eq!(list[0]["kind"], json!("output_removed"), "{told}");
+    assert_eq!(list[0]["output"], json!(1));
+    let mut moved: Vec<&Value> = list
+        .iter()
+        .filter(|event| event["kind"] == json!("window_placed"))
+        .map(|event| &event["window"])
+        .collect();
+    moved.sort_by_key(|window| window.as_u64());
+    assert_eq!(moved, [&json!(1), &json!(2)], "{told}");
+    assert!(
+        list.iter()
+            .filter(|event| event["kind"] == json!("window_placed"))
+            .all(|event| event["output"] == Value::Null && event["place"] == Value::Null),
+        "{told}"
+    );
+    let workspaces = mcp.call("workspaces", json!({"action": "list", "seat": seat}));
+    let outputs = &workspaces["structuredContent"]["outputs"];
+    assert_eq!(outputs[0]["output"], other, "{workspaces}");
+    let held: Vec<u64> = outputs[0]["workspaces"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .flat_map(|workspace| workspace["windows"].as_array().cloned().unwrap_or_default())
+        .filter_map(|window| window.as_u64())
+        .collect();
+    assert!(held.contains(&1) && held.contains(&2), "{workspaces}");
+}
+
+/// A client ended for a protocol error, a window's surface given a popup's role besides its
+/// toplevel's, is told `client_left` with the error Yuna sent it: its interface, object, code
+/// and message. A client of the test's own process has the test's pid, as its window had, and
+/// belongs to no program.
+#[test]
+fn a_protocol_error_is_told_with_its_interface_code_and_message() {
+    use crate::client::Parent;
+    use wayland_protocols::xdg::shell::client::xdg_wm_base;
+
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = open_placed_window(&mut mcp, &mut client, "org.example.Broken", "Broken");
+    let start = cursor(&mut mcp, seat);
+    client.create_popup_on_window_surface(window, Parent::Window(window));
+    let error = client.protocol_error(mcp.server.compositor());
+    assert_eq!(error.interface, "xdg_wm_base");
+    drop(client);
+    let told = events(
+        &mut mcp,
+        json!({"seat": seat, "after": start, "kinds": ["client_left", "window_closed"]}),
+    );
+    assert_eq!(kinds(&told), ["window_closed", "client_left"], "{told}");
+    let left = &told["events"][1];
+    assert_eq!(left["reason"], json!("protocol_error"));
+    assert_eq!(left["pid"], json!(std::process::id()));
+    assert_eq!(left["program"], Value::Null);
+    let sent = &left["error"];
+    assert_eq!(sent["interface"], json!("xdg_wm_base"), "{left}");
+    assert_eq!(sent["code"], json!(xdg_wm_base::Error::Role as u32));
+    assert!(sent["object"].as_u64() > Some(1), "{left}");
+    assert!(
+        sent["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "{left}"
+    );
+}
+
+/// A client that stops reading, as a frozen program does, while its seat types to it, fills its
+/// connection's buffers: the display closes it, and `events` tells `client_left` with reason
+/// `closed` and no error.
+#[test]
+fn a_client_that_reads_nothing_while_it_is_typed_to_is_told_closed() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let name = format!("agent-{seat}");
+    let mut client =
+        crate::input_client::InputClient::connect(mcp.server.compositor(), SeatId(seat), &name);
+    let window = client.client.create_window();
+    client.client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    client.client.ack(window);
+    client.client.attach(window, 400, 300, RED);
+    client.client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    crate::run_armed_deadlines(mcp.server.compositor());
+    mcp.call(
+        "pointer",
+        json!({"action": "click", "seat": seat, "x": 26, "y": 26}),
+    );
+    crate::run_armed_deadlines(mcp.server.compositor());
+    client.roundtrip(mcp.server.compositor());
+    let start = cursor(&mut mcp, seat);
+    // From now on the client reads nothing: each key typed waits in its socket.
+    let text = "a".repeat(yuna::MAX_TYPED);
+    let mut calls = 0;
+    let left = loop {
+        assert!(calls < 50, "the client was never closed");
+        let typed = mcp.call(
+            "keyboard",
+            json!({"action": "type", "seat": seat, "text": text}),
+        );
+        assert_eq!(typed["isError"], json!(false), "{typed}");
+        calls += 1;
+        let told = events(
+            &mut mcp,
+            json!({"seat": seat, "after": start, "kinds": ["client_left"]}),
+        );
+        if let Some(left) = told["events"].as_array().and_then(|events| events.first()) {
+            break left.clone();
+        }
+    };
+    eprintln!(
+        "the client was closed after {calls} calls of {} keys",
+        yuna::MAX_TYPED
+    );
+    assert_eq!(left["reason"], json!("closed"), "{left}");
+    assert_eq!(left["error"], Value::Null);
+}
+
+/// The windows and outputs are described for events only when something events tell may have
+/// changed: a client drawing frame after frame, as a game does, while its title, place and focus
+/// stay, makes no look; a title it changes makes one.
+#[test]
+fn a_client_that_only_draws_makes_no_look() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = open_placed_window(&mut mcp, &mut client, "org.example.Game", "Game");
+    cursor(&mut mcp, seat);
+    let looks = mcp.server.event_looks();
+    for colour in [RED, crate::BLUE, RED, crate::BLUE] {
+        client.attach(window, crate::TILE.0, crate::TILE.1, colour);
+        client.damage(window, crate::TILE.0, crate::TILE.1);
+        client.commit(window);
+        client.roundtrip(mcp.server.compositor());
+        crate::run_armed_deadlines(mcp.server.compositor());
+        assert_eq!(mcp.replies(), Vec::<Value>::new());
+    }
+    assert_eq!(mcp.server.event_looks(), looks, "a frame made a look");
+    client.set_app_id_and_title(window, "org.example.Game", "Game, paused");
+    client.roundtrip(mcp.server.compositor());
+    mcp.replies();
+    assert_eq!(mcp.server.event_looks(), looks + 1);
+}
+
+/// A waiting call whose cursor is older than its seat's log is answered at once, with what it
+/// missed, rather than wait for an event that may have been dropped.
+#[test]
+fn a_wait_whose_cursor_missed_events_is_answered_at_once() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let old = cursor(&mut mcp, seat);
+    for _ in 0..(yuna::mcp::MAX_EVENTS / 2 + 1) {
+        let created = mcp.call(
+            "outputs",
+            json!({"action": "create", "seat": seat, "width": 64, "height": 64, "rate": 60,
+                   "scale": 1}),
+        );
+        let output = created["structuredContent"]["output"]["id"].clone();
+        mcp.call(
+            "outputs",
+            json!({"action": "remove", "seat": seat, "output": output}),
+        );
+    }
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 900, "method": "tools/call",
+                      "params": modern(json!({"name": "events", "arguments":
+                          {"seat": seat, "after": old, "kinds": ["client_left"],
+                           "wait_ms": 40_000}}))}));
+    let answered = mcp.replies();
+    assert_eq!(answered.len(), 1, "it waits");
+    let answer = &answered[0]["result"]["structuredContent"];
+    assert_eq!(answer["events"], json!([]), "{answer}");
+    assert!(answer["missed"].as_u64() > Some(0), "{answer}");
+    assert_eq!(answer.get("timed_out"), None);
+}
+
+/// `windows`' and `events`' waiting calls count together against `MAX_WAITING_CALLS`: once
+/// that many wait, of either, the next of either is refused.
+#[test]
+fn windows_and_events_waits_share_one_bound() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    for id in 0..MAX_WAITING_CALLS {
+        let (name, arguments) = if id % 2 == 0 {
+            ("windows", json!({"seat": seat, "wait_ms": 10_000}))
+        } else {
+            ("events", json!({"seat": seat, "wait_ms": 10_000}))
+        };
+        mcp.send(
+            &json!({"jsonrpc": "2.0", "id": id + 1_000, "method": "tools/call",
+                          "params": modern(json!({"name": name, "arguments": arguments}))}),
+        );
+    }
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    let windows = mcp.call("windows", json!({"seat": seat, "wait_ms": 10_000}));
+    assert_eq!(windows["isError"], json!(true), "{windows}");
+    let events = mcp.call("events", json!({"seat": seat, "wait_ms": 10_000}));
+    assert_eq!(events["isError"], json!(true), "{events}");
+}
