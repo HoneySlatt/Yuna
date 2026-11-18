@@ -186,6 +186,12 @@ impl Hostile {
             },
         );
         self.others_untouched();
+        // Xwayland ends itself once its clients are gone; its end wakes Yuna, rightly, and must
+        // come before the rest is judged, or it may land inside the half second judged.
+        wait(&mut self.compositor, "Xwayland ends", |compositor| {
+            let display = compositor.x11_display(seat).expect("the seat's display");
+            display.server.is_none().then_some(())
+        });
         assert_rests_real(&mut self.compositor);
     }
 }
