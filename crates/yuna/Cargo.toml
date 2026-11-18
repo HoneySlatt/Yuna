@@ -28,7 +28,6 @@ wayland-protocols.workspace = true
 # The test drivers' virtual keyboard and pointer (ADR-0089).
 wayland-protocols-misc.workspace = true
 wayland-protocols-wlr.workspace = true
-x11rb.workspace = true
 # The readers of `/proc`, the DRM statistics and the machine's load that the measuring examples
 # use: the repository reads them one way.
 yuna-bench = { path = "../yuna-bench" }
