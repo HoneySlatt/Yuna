@@ -97,7 +97,7 @@ until it is met.
 | A capture | no frame of a game lost and its direct scanout kept while captured, the capture lowering its own rate rather than cost one; the capture's GPU time | presentation feedback with and without a capture running |
 | Colour accuracy | set from KWin's at Stage 5 | captures of the output buffer against the colours asked; the owner's monitor by probe |
 | A tablet | set from KWin's, once a tablet is at hand | input to present of the pen; pressure and tilt passed on |
-| `yuna mcp` | start, memory per instance and instances together, set at the agents' toolbox | the log's times; resident memory |
+| `yuna mcp` | its seat's first frame within 100 ms of its start on the GPU, 150 ms on llvmpipe, its `seat create` answered within 100 ms; at rest with one seat, its own memory at most 102.5 MiB on the GPU and 125 MiB on llvmpipe, of which anonymous at most 25 and 45 MiB, its GPU's 30 MiB at 1080p and 55 MiB at 4K; ten together grow nothing in 5 minutes ([ADR-0097](adr/0097-the-budgets-of-yuna-mcp.md)) | `examples/instances.rs`: the log's times; `Pss_Anon` + `Pss_File` with no other process on its Mesa, `Pss_Anon`; the kernel's DRM resident memory |
 | An agent's output | full rate while its programs draw, nothing at rest; no input of an agent reaching the owner's seat | presentation feedback; a test that tries |
 
 ### Architecture and stability scenarios
@@ -127,7 +127,7 @@ audit.
 | A sandboxed client is connected when Yuna crashes | it reconnects through its security context | a test |
 | Ten times the windows, the outputs or the rate | queues and caches stay within their bounds; nothing grows without end | a soak test |
 | Ten agents' Yunas started together | each meets its budgets per instance; none grows without end | a soak test, headless |
-| One agent's Yuna started | its first frame comes within its budget, set at M1.11 | the log's times |
+| One agent's Yuna started | its first frame within `yuna mcp`'s budget above | the log's times |
 
 ### Without a figure
 
