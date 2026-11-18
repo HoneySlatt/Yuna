@@ -12,6 +12,13 @@
 //! kind without the fields it must have, a signature that does not parse, and file descriptors,
 //! which Yuna never negotiates. Its body is decoded only when asked, for the signature the caller
 //! expects ([`Message::body`]).
+//!
+//! Encoding refuses, with a [`MessageError`] and never a panic, what a bus disconnects its sender
+//! for, so that Yuna never sends it: a kind without the fields it must have, a reply serial of 0,
+//! a destination or a sender that is no bus name, an interface, a member or an error name that
+//! breaks its rules (`names.rs`), a path that is no object path, and the path and the interface
+//! the bus reserves. Names and paths come from programs too: a toolkit's bus name and its nodes'
+//! paths are what Yuna's walks call.
 
 use std::fmt;
 
@@ -20,6 +27,8 @@ use serde::de::DeserializeOwned;
 use serde::ser::{SerializeStruct, Serializer};
 use zbus::wire::serialized::{Context, Data};
 use zbus::wire::{Endian, ObjectPath, OwnedVariant, Signature, Str, Variant};
+
+use super::names::{self, LOCAL_INTERFACE, LOCAL_PATH, MAX_NAME};
 
 /// The largest message Yuna sends or reads, header and body: 4 MiB. The accessibility bus refuses
 /// larger ones too (its `max_message_size`), far under the 128 MiB the specification allows, so
@@ -92,6 +101,16 @@ impl fmt::Display for MessageError {
 
 fn malformed(why: impl fmt::Display) -> MessageError {
     MessageError::Malformed(why.to_string())
+}
+
+/// A name or a path as an error shows it: quoted, or only its length past [`MAX_NAME`], since a
+/// program may give one of megabytes.
+fn shown(value: &str) -> String {
+    if value.len() <= MAX_NAME {
+        format!("{value:?}")
+    } else {
+        format!("of {} bytes", value.len())
+    }
 }
 
 /// A message's body, encoded, with its signature: the types of its arguments.
@@ -289,7 +308,8 @@ impl Message {
         Ok(value)
     }
 
-    /// The message's bytes, little-endian, with `serial`.
+    /// The message's bytes, little-endian, with `serial`. Refused when a bus would disconnect
+    /// Yuna for it ([`Message::check_header`]).
     pub(crate) fn encode(&self, serial: u32) -> Result<Vec<u8>, MessageError> {
         if serial == 0 {
             return Err(malformed("a serial of 0"));
@@ -297,9 +317,15 @@ impl Message {
         if self.body.endian != Endian::Little {
             return Err(malformed("a big-endian body is never sent"));
         }
+        self.check_header()?;
         let mut fields: Vec<(u8, Field<'_>)> = Vec::new();
         if let Some(path) = &self.path {
-            let path = ObjectPath::try_from(path.as_str()).map_err(malformed)?;
+            let path = ObjectPath::try_from(path.as_str()).map_err(|error| {
+                malformed(format!(
+                    "path {} is not a valid object path: {error}",
+                    shown(path)
+                ))
+            })?;
             fields.push((PATH, Field::Value(Variant::ObjectPath(path))));
         }
         let strings = [
@@ -344,6 +370,85 @@ impl Message {
             return Err(MessageError::TooLong(bytes.len()));
         }
         Ok(bytes)
+    }
+
+    /// Refuses a header a bus would disconnect Yuna for (the specification's *Header Fields*
+    /// and *Valid Names*): a kind without the fields it must have, a reply serial of 0, a name
+    /// that breaks its rules, the path or the interface the bus reserves. Its path's own rules
+    /// are checked as it is encoded.
+    fn check_header(&self) -> Result<(), MessageError> {
+        if !self.has_required_fields() {
+            return Err(malformed(format!(
+                "a {:?} without the fields it must have",
+                self.kind
+            )));
+        }
+        if self.reply_serial == Some(0) {
+            return Err(malformed("a reply serial of 0"));
+        }
+        if self.path.as_deref() == Some(LOCAL_PATH) {
+            return Err(malformed(format!(
+                "path {LOCAL_PATH} is reserved: a bus disconnects whoever sends it"
+            )));
+        }
+        if self.interface.as_deref() == Some(LOCAL_INTERFACE) {
+            return Err(malformed(format!(
+                "interface {LOCAL_INTERFACE} is reserved: a bus disconnects whoever sends it"
+            )));
+        }
+        type Check = fn(&str) -> Result<(), &'static str>;
+        let named: [(&str, &Option<String>, &str, Check); 5] = [
+            (
+                "destination",
+                &self.destination,
+                "bus name",
+                names::check_bus_name,
+            ),
+            ("sender", &self.sender, "bus name", names::check_bus_name),
+            (
+                "interface",
+                &self.interface,
+                "interface name",
+                names::check_interface_name,
+            ),
+            (
+                "member",
+                &self.member,
+                "member name",
+                names::check_member_name,
+            ),
+            // An error's name has an interface's rules.
+            (
+                "error name",
+                &self.error_name,
+                "error name",
+                names::check_interface_name,
+            ),
+        ];
+        for (field, value, kind, check) in named {
+            if let Some(value) = value
+                && let Err(why) = check(value)
+            {
+                return Err(malformed(format!(
+                    "{field} {} is not a valid {kind}: {why}",
+                    shown(value)
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether it has the fields its kind must have: a call its path and member, a signal its
+    /// path, interface and member, an error its name and reply serial, a reply its reply serial.
+    fn has_required_fields(&self) -> bool {
+        match self.kind {
+            Kind::MethodCall => self.path.is_some() && self.member.is_some(),
+            Kind::Signal => {
+                self.path.is_some() && self.interface.is_some() && self.member.is_some()
+            }
+            Kind::Error => self.error_name.is_some() && self.reply_serial.is_some(),
+            Kind::MethodReturn => self.reply_serial.is_some(),
+        }
     }
 
     /// The length of the whole message that `prefix`, its first [`FRAME_PREFIX`] bytes or more,
@@ -451,15 +556,7 @@ impl Message {
                 _ => {}
             }
         }
-        let required = match kind {
-            Kind::MethodCall => message.path.is_some() && message.member.is_some(),
-            Kind::Signal => {
-                message.path.is_some() && message.interface.is_some() && message.member.is_some()
-            }
-            Kind::Error => message.error_name.is_some() && message.reply_serial.is_some(),
-            Kind::MethodReturn => message.reply_serial.is_some(),
-        };
-        if !required {
+        if !message.has_required_fields() {
             return Err(malformed(format!(
                 "a {kind:?} without the fields it must have"
             )));

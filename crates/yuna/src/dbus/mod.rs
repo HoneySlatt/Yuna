@@ -3,6 +3,8 @@
 //!
 //! - `message.rs`: a message, its header Yuna's own, its header and body encoded through zbus's
 //!   `wire` module, the D-Bus wire format alone: no connection, runtime or executor of zbus's.
+//! - `names.rs`: the specification's rules for bus names, interfaces, members and error names,
+//!   which the encoder checks.
 //! - `connection.rs`: a connection on a non-blocking Unix socket, SASL's EXTERNAL authentication,
 //!   `Hello`, then calls, replies, errors and signals both ways. Its owner watches its socket on
 //!   its event loop: nothing here waits or runs a thread.
@@ -11,12 +13,15 @@
 //!
 //! Promises: bad input from the bus, truncated, misaligned, too long or of a wrong signature, is
 //! refused with an error, never a panic, and leaves the connection following its stream when the
-//! frame was whole. Bounds: a message is 4 MiB at most ([`MAX_MESSAGE`]), 8 MiB wait to be
-//! written at most ([`connection::MAX_UNSENT`]), 1 MiB is read at a time
-//! ([`connection::READ_BUDGET`]). Yuna never sends or takes file descriptors.
+//! frame was whole. Yuna never sends what a bus disconnects it for: a message whose header
+//! breaks the specification's rules, a name or a path a program gave included, is refused by
+//! [`Message::encode`] with an error, and the connection goes on. Bounds: a message is 4 MiB at
+//! most ([`MAX_MESSAGE`]), 8 MiB wait to be written at most ([`connection::MAX_UNSENT`]), 1 MiB
+//! is read at a time ([`connection::READ_BUDGET`]). Yuna never sends or takes file descriptors.
 
 mod connection;
 mod message;
+mod names;
 
 #[cfg(test)]
 mod tests;

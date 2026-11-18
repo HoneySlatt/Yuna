@@ -263,6 +263,189 @@ fn a_call_without_its_fields_or_with_file_descriptors_is_refused() {
     assert!(Message::decode(&build(vec![path(), member(), (200, Variant::U32(1))])).is_ok());
 }
 
+/// `prefix` filled with `filler` to `length` bytes.
+fn name_of_length(prefix: &str, filler: char, length: usize) -> String {
+    let mut name = prefix.to_owned();
+    while name.len() < length {
+        name.push(filler);
+    }
+    name
+}
+
+/// Bus names at the edges of the specification's rules, each valid: a unique name's elements
+/// may begin with a digit, a well-known name's may not; `-` and `_` anywhere; 255 bytes.
+fn valid_bus_names() -> Vec<String> {
+    let mut names: Vec<String> = [
+        ":1.4",
+        ":1.999",
+        ":a-b.c_d",
+        ":1.2.3",
+        "a.b",
+        "_a.-b",
+        "A-1.B_2",
+        "org.freedesktop.DBus",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    names.push(name_of_length(":1.", '1', 255));
+    names.push(name_of_length("a.", 'b', 255));
+    names
+}
+
+/// Interface names at the edges of the rules, each valid; error names follow the same.
+fn valid_interfaces() -> Vec<String> {
+    let mut names: Vec<String> = ["a.b", "_a._1", "A9.Z", "org.a11y.atspi.Accessible"]
+        .map(str::to_owned)
+        .to_vec();
+    names.push(name_of_length("a.", 'b', 255));
+    names
+}
+
+/// Member names at the edges of the rules, each valid.
+fn valid_members() -> Vec<String> {
+    let mut names: Vec<String> = ["c", "_", "A9_z"].map(str::to_owned).to_vec();
+    names.push(name_of_length("m", 'm', 255));
+    names
+}
+
+/// Asserts that `message` is refused, its error naming `field`.
+fn assert_refused(message: Message, field: &str) {
+    match message.encode(1) {
+        Err(MessageError::Malformed(why)) => assert!(why.contains(field), "{field}: {why}"),
+        other => panic!("{field}: {other:?}"),
+    }
+}
+
+/// What a bus disconnects its sender for is never encoded: it is refused, with an error and never
+/// a panic, so that Yuna never sends it. A destination or a sender that is no bus name; an
+/// interface, a member or an error name that breaks its rules; a path that is no object path; the
+/// path and the interface the bus reserves; a field a kind must have, missing; a reply serial of 0
+/// (the specification's *Valid Names*, *Valid Object Paths* and *Header Fields*). Each name at
+/// the edge of its rules is encoded.
+#[test]
+fn a_header_a_bus_would_disconnect_yuna_for_is_never_encoded() {
+    let call = |destination: &str, path: &str, interface: &str, member: &str| {
+        Message::method_call(destination, path, interface, member, Body::empty())
+    };
+    let with_sender = |sender: &str| {
+        let mut message = call(BUS_NAME, "/a", "a.b", "c");
+        message.sender = Some(sender.to_owned());
+        message
+    };
+
+    for name in valid_bus_names() {
+        assert!(call(&name, "/a", "a.b", "c").encode(1).is_ok(), "{name}");
+        assert!(with_sender(&name).encode(1).is_ok(), "{name}");
+    }
+    let mut invalid_bus_names: Vec<String> = [
+        "",
+        "x",
+        "not a bus name",
+        ":",
+        ":1",
+        ":.1",
+        ":1.",
+        ":1..2",
+        ".a.b",
+        "a.b.",
+        "a..b",
+        "1a.b",
+        "a.1b",
+        "a.b c",
+        "a.é",
+        "a/b.c",
+        "a.b\0",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    invalid_bus_names.push(name_of_length(":1.", '1', 256));
+    invalid_bus_names.push(name_of_length("a.", 'b', 256));
+    for name in &invalid_bus_names {
+        assert_refused(call(name, "/a", "a.b", "c"), "destination");
+        assert_refused(with_sender(name), "sender");
+    }
+
+    let mut invalid_interfaces: Vec<String> = [
+        "", "a", "a.", ".a", "a..b", "1a.b", "a.1b", "a-b.c", "a b.c", "a.é", ":1.4",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    invalid_interfaces.push(name_of_length("a.", 'b', 256));
+    let mut received = call(BUS_NAME, "/a", "a.b", "c");
+    received.serial = 7;
+    received.sender = Some(":1.9".to_owned());
+    for name in valid_interfaces() {
+        assert!(call(BUS_NAME, "/a", &name, "c").encode(1).is_ok(), "{name}");
+        let error = Message::error(&received, &name, "text");
+        assert!(error.encode(1).is_ok(), "{name}");
+    }
+    for name in &invalid_interfaces {
+        assert_refused(call(BUS_NAME, "/a", name, "c"), "interface");
+        assert_refused(Message::error(&received, name, "text"), "error name");
+    }
+    // The bus disconnects whoever sends a message on the interface it reserves.
+    assert_refused(
+        call(BUS_NAME, "/a", "org.freedesktop.DBus.Local", "c"),
+        "interface",
+    );
+
+    for name in valid_members() {
+        assert!(
+            call(BUS_NAME, "/a", "a.b", &name).encode(1).is_ok(),
+            "{name}"
+        );
+    }
+    let mut invalid_members: Vec<String> = ["", "1a", "a.b", "a-b", "a b", "é"]
+        .map(str::to_owned)
+        .to_vec();
+    invalid_members.push(name_of_length("m", 'm', 256));
+    for name in &invalid_members {
+        assert_refused(call(BUS_NAME, "/a", "a.b", name), "member");
+    }
+
+    for path in ["/", "/a", "/a_9/B", &"/ab".repeat(400)] {
+        assert!(call(BUS_NAME, path, "a.b", "c").encode(1).is_ok(), "{path}");
+    }
+    // The path the bus reserves, with the rest: a toolkit gives the paths Yuna's walks call.
+    for path in [
+        "",
+        "a",
+        "/a/",
+        "//",
+        "/a//b",
+        "/a-b",
+        "/a.b",
+        "/é",
+        "/a b",
+        "/org/freedesktop/DBus/Local",
+    ] {
+        assert_refused(call(BUS_NAME, path, "a.b", "c"), "path");
+    }
+
+    // A field each kind must have.
+    let mut no_path = call(BUS_NAME, "/a", "a.b", "c");
+    no_path.path = None;
+    assert_refused(no_path, "fields");
+    let mut no_member = call(BUS_NAME, "/a", "a.b", "c");
+    no_member.member = None;
+    assert_refused(no_member, "fields");
+    let mut no_interface = Message::signal("/a", "a.b", "c", Body::empty());
+    no_interface.interface = None;
+    assert_refused(no_interface, "fields");
+    let mut no_error_name = Message::error(&received, UNKNOWN_METHOD, "text");
+    no_error_name.error_name = None;
+    assert_refused(no_error_name, "fields");
+    let mut no_reply_serial = Message::method_return(&received, Body::empty());
+    no_reply_serial.reply_serial = None;
+    assert_refused(no_reply_serial, "fields");
+    // The reply to a message never sent, whose serial is still 0.
+    let unsent = call(BUS_NAME, "/a", "a.b", "c");
+    assert_refused(
+        Message::method_return(&unsent, Body::empty()),
+        "reply serial",
+    );
+}
+
 #[test]
 fn an_address_escapes_what_its_path_must() {
     assert_eq!(
@@ -352,22 +535,58 @@ proptest! {
         }
     }
 
+    /// Any bus name the specification's rules make, as a destination, and any string in a body,
+    /// come back whole.
     #[test]
     fn any_names_and_paths_come_back_whole(
+        destination in "(:[A-Za-z0-9_-]{1,8}(\\.[A-Za-z0-9_-]{1,8}){1,4}|[A-Za-z_-][A-Za-z0-9_-]{0,7}(\\.[A-Za-z_-][A-Za-z0-9_-]{0,7}){1,4})",
         name in "[A-Za-z0-9_.:-]{1,64}",
         segments in proptest::collection::vec("[A-Za-z0-9_]{1,16}", 0..8),
         text in "\\PC{0,200}",
     ) {
         let path = format!("/{}", segments.join("/"));
         let body = Body::new("(so)s", &((name.as_str(), OwnedObjectPath::try_from(path.as_str()).unwrap()), text.as_str())).unwrap();
-        let call = Message::method_call(&name, &path, "a.b", "c", body);
+        let call = Message::method_call(&destination, &path, "a.b", "c", body);
         let decoded = Message::decode(&call.encode(1).unwrap()).unwrap();
+        prop_assert_eq!(decoded.destination.as_deref(), Some(destination.as_str()));
         prop_assert_eq!(decoded.path.as_deref(), Some(path.as_str()));
         let ((got_name, got_path), got_text): ((String, OwnedObjectPath), String) =
             decoded.body("(so)s").unwrap();
         prop_assert_eq!(got_name, name);
         prop_assert_eq!(got_path.as_str(), path.as_str());
         prop_assert_eq!(got_text, text);
+    }
+
+    /// A valid name with a character no name may hold put anywhere in it is refused, as each
+    /// header field that carries a name, and never makes the encoder panic.
+    #[test]
+    fn a_name_holding_a_character_no_name_may_hold_is_never_encoded(
+        at in any::<usize>(),
+        forbidden in "[^A-Za-z0-9_.:-]",
+    ) {
+        let spoiled = |name: &str| {
+            let mut name = name.to_owned();
+            name.insert_str(at % (name.len() + 1), &forbidden);
+            name
+        };
+        let mut received = Message::method_call(BUS_NAME, "/a", "a.b", "c", Body::empty());
+        received.serial = 7;
+        received.sender = Some(":1.9".to_owned());
+        let mut with_sender = received.clone();
+        with_sender.sender = Some(spoiled(":1.42"));
+        let messages = [
+            ("destination", Message::method_call(&spoiled("org.a11y.atspi.Registry"), "/a", "a.b", "c", Body::empty())),
+            ("sender", with_sender),
+            ("interface", Message::method_call(BUS_NAME, "/a", &spoiled("org.a11y.atspi.Accessible"), "c", Body::empty())),
+            ("member", Message::method_call(BUS_NAME, "/a", "a.b", &spoiled("GetChildren"), Body::empty())),
+            ("error name", Message::error(&received, &spoiled("org.freedesktop.DBus.Error.Failed"), "text")),
+        ];
+        for (field, message) in messages {
+            match message.encode(1) {
+                Err(MessageError::Malformed(why)) => prop_assert!(why.contains(field), "{}: {}", field, why),
+                other => prop_assert!(false, "{}: {:?}", field, other),
+            }
+        }
     }
 }
 
@@ -642,6 +861,85 @@ fn a_bus_that_ends_fails_the_connection_for_good() {
     );
     // A socket where no bus listens is refused at once.
     assert!(Connection::connect(&daemon.folder.join("nowhere")).is_err());
+}
+
+/// Every name at the edge of the specification's rules, which Yuna encodes, a real bus takes:
+/// sent in each header field that carries one, it leaves the sender connected. A bus disconnects
+/// whoever sends a name it refuses, so that the calls sent after them, answered with each error
+/// name at its edge, would never come back.
+#[test]
+fn a_real_bus_takes_every_name_at_the_edge_of_the_rules() {
+    let daemon = Daemon::start("edges");
+    let mut server = Connection::connect(&daemon.socket).expect("a connection");
+    let mut client = Connection::connect(&daemon.socket).expect("a connection");
+    let until = Instant::now() + Duration::from_secs(10);
+    while server.unique_name().is_none() || client.unique_name().is_none() {
+        for connection in [&mut server, &mut client] {
+            connection.flush().unwrap();
+            let _ = connection.read().unwrap();
+        }
+        assert!(Instant::now() < until, "no Hello reply");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let server_name = server.unique_name().expect("a name").to_owned();
+    let quiet = |destination: &str, path: &str, interface: &str, member: &str| {
+        let mut call = Message::method_call(destination, path, interface, member, Body::empty());
+        call.flags |= NO_REPLY_EXPECTED;
+        call
+    };
+    let mut sent = Vec::new();
+    for name in valid_bus_names() {
+        sent.push(quiet(&name, "/a", "a.b", "c"));
+        let mut with_sender = quiet(&server_name, "/a", "a.b", "c");
+        with_sender.sender = Some(name);
+        sent.push(with_sender);
+    }
+    for name in valid_interfaces() {
+        sent.push(quiet(&server_name, "/a", &name, "c"));
+    }
+    for name in valid_members() {
+        sent.push(quiet(&server_name, "/a", "a.b", &name));
+    }
+    for path in ["/", "/a_9/B", &"/ab".repeat(400)] {
+        sent.push(quiet(&server_name, path, "a.b", "c"));
+    }
+    for message in sent {
+        client.send(message).expect("encoded");
+    }
+    let errors: Vec<u32> = valid_interfaces()
+        .into_iter()
+        .map(|name| {
+            let ask = Message::method_call(
+                &server_name,
+                "/a",
+                "a.b",
+                "Fail",
+                Body::new("s", &name).unwrap(),
+            );
+            client.send(ask).expect("encoded")
+        })
+        .collect();
+    let mut connections = [&mut server, &mut client];
+    let mut answered: HashMap<u32, Message> = HashMap::new();
+    exchange(&mut connections, |index, message, connection| {
+        if index == 0 && message.member.as_deref() == Some("Fail") {
+            let name: String = message.body("s").unwrap();
+            connection
+                .send(Message::error(&message, &name, "as asked"))
+                .expect("encoded");
+        }
+        if index == 1
+            && let Some(serial) = message.reply_serial
+        {
+            answered.insert(serial, message);
+        }
+        (errors.iter().all(|serial| answered.contains_key(serial))).then_some(())
+    });
+    for (serial, name) in errors.iter().zip(valid_interfaces()) {
+        assert_eq!(answered[serial].kind, Kind::Error, "{name}");
+        assert_eq!(answered[serial].error_name.as_deref(), Some(name.as_str()));
+    }
+    assert!(server.failure().is_none() && client.failure().is_none());
 }
 
 /// The test's end of a socket pair, which plays the bus.

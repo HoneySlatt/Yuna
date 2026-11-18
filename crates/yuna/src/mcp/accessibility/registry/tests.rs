@@ -339,3 +339,79 @@ fn embedding_is_bounded_and_checked() {
     assert!(answer.embedded.is_none());
     assert_eq!(read(answer.reply).kind, Kind::Error);
 }
+
+/// `Socket.<member>((so))` from `sender`, naming `named`'s application at `root`.
+fn socket_call(sender: &str, member: &str, named: &str, root: &str) -> Message {
+    let body = Body::new("(so)", &reference(named, root)).unwrap();
+    call(sender, ROOT_PATH, "org.a11y.atspi.Socket", member, body)
+}
+
+/// The bus names of the applications embedded.
+fn embedded_names(registry: &Registry) -> Vec<&str> {
+    registry
+        .apps()
+        .iter()
+        .map(|app| app.bus_name.as_str())
+        .collect()
+}
+
+/// An application is the connection that embeds it: `Embed` takes its sender's name, which the
+/// bus sets, whether the call names it or leaves the name empty. A name of another connection,
+/// or one that is no bus name, is refused with `InvalidArgs`: Yuna's walks call the name
+/// recorded, and a bus disconnects whoever sends to a name that is no bus name, which would end
+/// the seat's bus. Another connection neither unembeds nor deregisters it.
+#[test]
+fn an_application_is_the_connection_that_embeds_it() {
+    let mut registry = Registry::default();
+    let answer = registry.answer(&socket_call(":1.4", "Embed", ":1.4", ROOT_PATH), OWN);
+    assert_eq!(answer.embedded.as_deref(), Some(":1.4"));
+    assert_eq!(read(answer.reply).kind, Kind::MethodReturn);
+
+    for named in [
+        ":1.5",
+        "x",
+        "not a bus name",
+        "org.a11y.atspi.Registry",
+        ":1..2",
+    ] {
+        let answer = registry.answer(&socket_call(":1.6", "Embed", named, "/r"), OWN);
+        assert!(answer.embedded.is_none(), "{named:?}");
+        let reply = read(answer.reply);
+        assert_eq!(reply.kind, Kind::Error, "{named:?}");
+        assert_eq!(
+            reply.error_name.as_deref(),
+            Some(crate::dbus::INVALID_ARGS),
+            "{named:?}"
+        );
+    }
+    assert_eq!(embedded_names(&registry), [":1.4"]);
+
+    // A call without a sender, which no bus delivers, embeds nothing.
+    let mut anonymous = socket_call(":1.6", "Embed", "", "/r");
+    anonymous.sender = None;
+    let answer = registry.answer(&anonymous, OWN);
+    assert!(answer.embedded.is_none());
+    assert_eq!(read(answer.reply).kind, Kind::Error);
+    assert_eq!(embedded_names(&registry), [":1.4"]);
+
+    // Another connection's `Unembed` and `DeregisterApplication` forget nothing.
+    let unembed = registry.answer(&socket_call(":1.6", "Unembed", ":1.4", ROOT_PATH), OWN);
+    assert_eq!(
+        read(unembed.reply).error_name.as_deref(),
+        Some(crate::dbus::INVALID_ARGS)
+    );
+    let mut deregister = call(
+        ":1.6",
+        "/org/a11y/atspi/registry",
+        "org.a11y.atspi.Registry",
+        "DeregisterApplication",
+        Body::new("s", ":1.4").unwrap(),
+    );
+    deregister.flags |= NO_REPLY_EXPECTED;
+    assert!(registry.answer(&deregister, OWN).reply.is_none());
+    assert_eq!(embedded_names(&registry), [":1.4"]);
+
+    // Its own connection's `Unembed`, its name left empty, forgets it.
+    registry.answer(&socket_call(":1.4", "Unembed", "", ROOT_PATH), OWN);
+    assert!(registry.apps().is_empty());
+}

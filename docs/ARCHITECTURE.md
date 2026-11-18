@@ -1609,7 +1609,10 @@ The bus:
    listener, so that no toolkit sends events and Qt holds no key, the key notifications, and the
    root's `Accessible` (the table is in `registry.rs`). For each application embedded the first
    time, Yuna asks the bus for its connection's process; an application embedding again is
-   answered and not counted again.
+   answered and not counted again. An application is the connection that embeds it, as the bus
+   names its sender: an `Embed`, `Unembed` or `DeregisterApplication` names its sender or leaves
+   the name empty, any other name is refused, and only the bus's own `NameOwnerChanged` says a
+   connection left.
 4. Its daemon's exit is watched through its pidfd. A bus that ends is forgotten and its socket
    removed, so that a GTK 4 program, which connects without a time limit, never finds a socket
    with no daemon; the next `accessibility: true` starts another. The daemon is one of the seat's
@@ -1627,7 +1630,10 @@ corner, plus its extents less its window node's: GTK 4 counts from its window wi
 Qt from its window's corner, Qt on X11 in its own logical pixels, which at Xwayland's scale are
 Yuna's logical units ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). A walk visits 10,000 nodes at most, 64 levels deep, and gives
 256; each application has 3 s, and one that does not answer by then is told so, the others'
-trees given whole. Each walk has a serial its calls carry, so that a late reply of a walk cut at
+trees given whole. A bus disconnects whoever sends a name or a path that breaks the
+specification's rules, or the path it reserves, which would end the seat's bus for every
+program: Yuna's encoder refuses such a message (`dbus/names.rs`), so that a node at such a path
+costs its own calls alone. Each walk has a serial its calls carry, so that a late reply of a walk cut at
 its deadline never reaches the next walk of the same call. With `wait_ms`, a call walks again while nothing matches, once an application
 embeds, a client of its seat commits or a process is known, no sooner than 100 ms after its last
 walk, and at

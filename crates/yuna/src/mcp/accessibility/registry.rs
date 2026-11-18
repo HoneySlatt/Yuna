@@ -6,11 +6,11 @@
 //!
 //! | Call | Who asks | Yuna's answer |
 //! |---|---|---|
-//! | `Socket.Embed((so))` on the root | GTK 4 (`gtkatspiroot.c`, `root_register`, which exports nothing before the reply), Qt (`atspiadaptor.cpp`, `registerApplication`, waiting for the reply), the ATK bridge (`bridge.c`, `register_application`) | the application is recorded; the reply is the registry's root, `(so)`, Yuna's unique name and `/org/a11y/atspi/accessible/root` |
-//! | `Socket.Unembed((so))` | toolkits leaving | the application is forgotten |
+//! | `Socket.Embed((so))` on the root | GTK 4 (`gtkatspiroot.c`, `root_register`, which exports nothing before the reply), Qt (`atspiadaptor.cpp`, `registerApplication`, waiting for the reply), the ATK bridge (`bridge.c`, `register_application`) | the application is recorded as its sender's connection, the name given empty or the sender's, another refused with `InvalidArgs` ([`caller_name`]); the reply is the registry's root, `(so)`, Yuna's unique name and `/org/a11y/atspi/accessible/root` |
+//! | `Socket.Unembed((so))` | toolkits leaving | the sender's application is forgotten |
 //! | `Registry.GetRegisteredEvents()` | GTK 4 after `Embed` (a critical error without it), Qt at start and on each listener's change, the ATK bridge after `Embed` | an empty `a(ss)`: no listener, so that no toolkit sends events, and Qt installs no key filter |
 //! | `Registry.RegisterEvent`, `DeregisterEvent` | assistive programs | an empty reply; Yuna records no listener, being the only reader |
-//! | `Registry.DeregisterApplication(s)` | the ATK bridge leaving, no reply asked | the application is forgotten |
+//! | `Registry.DeregisterApplication(s)` | the ATK bridge leaving, no reply asked | the sender's applications are forgotten |
 //! | `DeviceEventController.GetKeystrokeListeners()`, `GetDeviceEventListeners()` | the ATK bridge after `Embed` | empty lists |
 //! | `DeviceEventController.NotifyListenersSync(…)` | the ATK bridge for each key, Qt for each key while a listener is registered (never, here) | `false` at once: no listener consumed it |
 //! | `DeviceEventController.NotifyListenersAsync(…)` | toolkits | an empty reply |
@@ -94,6 +94,28 @@ fn null_reference(name: &str) -> (String, OwnedObjectPath) {
     )
 }
 
+/// The bus name of the application `call` speaks for, which it names `named`: its sender's, which
+/// the bus sets and guarantees. An empty name is the sender's too, as registryd takes it; GTK 4
+/// and Qt name their own (`tests/mcp.rs`). Another name is refused, so that no program has Yuna
+/// call, or forget, another connection, nor a name that is no bus name, for which the bus would
+/// disconnect Yuna and end the seat's bus.
+fn caller_name(call: &Message, named: &str) -> Result<String, (&'static str, String)> {
+    let Some(sender) = call.sender.as_deref() else {
+        return Err((
+            FAILED,
+            "a call without a sender, which a bus always sets".to_owned(),
+        ));
+    };
+    if named.is_empty() || named == sender {
+        Ok(sender.to_owned())
+    } else {
+        Err((
+            crate::dbus::INVALID_ARGS,
+            format!("an application is its own connection's, {sender}, never another name"),
+        ))
+    }
+}
+
 impl Registry {
     /// The applications embedded, in the order they came.
     pub(super) fn apps(&self) -> &[App] {
@@ -139,13 +161,7 @@ impl Registry {
                 }
                 Err(failure) => Err(failure),
             },
-            (ROOT_PATH, SOCKET, "Unembed") => {
-                if let Ok((name, root)) = call.body::<(String, OwnedObjectPath)>("(so)") {
-                    self.apps
-                        .retain(|app| !(app.bus_name == name && app.root == root.as_str()));
-                }
-                Ok(Body::empty())
-            }
+            (ROOT_PATH, SOCKET, "Unembed") => self.unembed(call),
             (ROOT_PATH, ACCESSIBLE, member) => self.root_accessible(call, member, own_name),
             (ROOT_PATH, PROPERTIES, "Get") => self.root_property(call),
             (ROOT_PATH, PROPERTIES, "GetAll") => self.root_properties(call),
@@ -153,12 +169,7 @@ impl Registry {
                 encoded("a(ss)", &Vec::<(String, String)>::new())
             }
             (REGISTRY_PATH, REGISTRY, "RegisterEvent" | "DeregisterEvent") => Ok(Body::empty()),
-            (REGISTRY_PATH, REGISTRY, "DeregisterApplication") => {
-                if let Ok(name) = call.body::<String>("s") {
-                    self.name_lost(&name);
-                }
-                Ok(Body::empty())
-            }
+            (REGISTRY_PATH, REGISTRY, "DeregisterApplication") => self.deregister(call),
             (CONTROLLER_PATH, CONTROLLER, "NotifyListenersSync") => encoded("b", &false),
             (
                 CONTROLLER_PATH,
@@ -213,18 +224,14 @@ impl Registry {
         Answer { reply, embedded }
     }
 
-    /// Records the application `call` embeds, its bus name given or, empty, its sender's: its
-    /// name when it is new, none when it was embedded already, which is answered the same and
-    /// neither counted again nor asked its process again.
+    /// Records the application `call` embeds, its sender's ([`caller_name`]): its name when it is
+    /// new, none when it was embedded already, which is answered the same and neither counted
+    /// again nor asked its process again.
     fn embed(&mut self, call: &Message) -> Result<Option<String>, (&'static str, String)> {
-        let (name, root) = call
+        let (named, root) = call
             .body::<(String, OwnedObjectPath)>("(so)")
             .map_err(|e| (crate::dbus::INVALID_ARGS, e.to_string()))?;
-        let name = if name.is_empty() {
-            call.sender.clone().unwrap_or_default()
-        } else {
-            name
-        };
+        let name = caller_name(call, &named)?;
         let app = App {
             bus_name: name.clone(),
             root: root.as_str().to_owned(),
@@ -247,6 +254,29 @@ impl Registry {
         self.apps.push(app);
         self.generation += 1;
         Ok(Some(name))
+    }
+
+    /// Forgets the application `call` unembeds, its sender's ([`caller_name`]) at the root it
+    /// names. A malformed body forgets nothing and is answered all the same.
+    fn unembed(&mut self, call: &Message) -> Result<Body, (&'static str, String)> {
+        let Ok((named, root)) = call.body::<(String, OwnedObjectPath)>("(so)") else {
+            return Ok(Body::empty());
+        };
+        let name = caller_name(call, &named)?;
+        self.apps
+            .retain(|app| !(app.bus_name == name && app.root == root.as_str()));
+        Ok(Body::empty())
+    }
+
+    /// Forgets the applications of the connection `call` deregisters, its sender's
+    /// ([`caller_name`]), as the ATK bridge leaves. A malformed body forgets nothing.
+    fn deregister(&mut self, call: &Message) -> Result<Body, (&'static str, String)> {
+        let Ok(named) = call.body::<String>("s") else {
+            return Ok(Body::empty());
+        };
+        let name = caller_name(call, &named)?;
+        self.name_lost(&name);
+        Ok(Body::empty())
     }
 
     /// The references of the applications embedded, as the root's children.

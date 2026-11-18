@@ -241,6 +241,10 @@ pub(super) struct Accessibility {
     next_call: u64,
     /// The serial of the next walk, never reused.
     next_walk: u64,
+    /// In tests, how many more sources [`Accessibility::watch`] makes before one fails, as one
+    /// fails when its descriptor cannot be copied past the process's limit: at 0, the next.
+    #[cfg(test)]
+    watches_before_failure: std::cell::Cell<Option<usize>>,
 }
 
 impl Accessibility {
@@ -253,6 +257,8 @@ impl Accessibility {
             calls: Vec::new(),
             next_call: 1,
             next_walk: 1,
+            #[cfg(test)]
+            watches_before_failure: std::cell::Cell::new(None),
         }
     }
 
@@ -374,6 +380,13 @@ impl Accessibility {
         number: u64,
         wake: Wake,
     ) -> Result<RegistrationToken, String> {
+        #[cfg(test)]
+        if let Some(left) = self.watches_before_failure.get() {
+            self.watches_before_failure.set(left.checked_sub(1));
+            if left == 0 {
+                return Err("a source the test refused".to_owned());
+            }
+        }
         let fd = fd
             .as_fd()
             .try_clone_to_owned()
@@ -708,7 +721,15 @@ impl Accessibility {
         let number = bus.number;
         let wake = Wake::of_seat(Source::AccessibilityBus, seat);
         let readable = self.watch(&connection.fd(), Interest::READ, number, wake)?;
-        let writable = self.watch(&connection.fd(), Interest::WRITE, number, wake)?;
+        // Left alone, the first source would watch its copy of the socket after the daemon is
+        // ended: readable for ever, level-triggered, a loop that never rests.
+        let writable = match self.watch(&connection.fd(), Interest::WRITE, number, wake) {
+            Ok(source) => source,
+            Err(error) => {
+                self.handle.remove(readable);
+                return Err(error);
+            }
+        };
         let _ = self.handle.disable(&writable);
         let Some(bus) = self.buses.get_mut(&seat) else {
             self.handle.remove(readable);
@@ -791,12 +812,7 @@ impl Accessibility {
                 }
             }
             Kind::Signal => {
-                let lost = message.interface.as_deref() == Some(BUS_INTERFACE)
-                    && message.member.as_deref() == Some("NameOwnerChanged");
-                if lost
-                    && let Ok((name, _old, new)) = message.body::<(String, String, String)>("sss")
-                    && new.is_empty()
-                {
+                if let Some(name) = name_left(&message) {
                     bus.registry.name_lost(&name);
                 }
             }
@@ -1139,6 +1155,20 @@ impl Accessibility {
             }
         }
     }
+}
+
+/// The connection that `signal` says left the bus: `NameOwnerChanged` with no new owner, from the
+/// bus itself alone, whose name the bus sets as its sender. Any program may send Yuna a signal of
+/// that name; one from a program would make Yuna forget another program's application.
+fn name_left(signal: &Message) -> Option<String> {
+    let from_bus = signal.sender.as_deref() == Some(BUS_NAME)
+        && signal.interface.as_deref() == Some(BUS_INTERFACE)
+        && signal.member.as_deref() == Some("NameOwnerChanged");
+    if !from_bus {
+        return None;
+    }
+    let (name, _old, new) = signal.body::<(String, String, String)>("sss").ok()?;
+    new.is_empty().then_some(name)
 }
 
 /// Sends `message` on `bus`'s connection; none when it cannot be, which the caller treats as
