@@ -336,7 +336,8 @@ pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
 [ADR-0045](docs/adr/0045-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
 [`docs/smithay-patches.md`](docs/smithay-patches.md).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
-commit of its own.
+commit of its own. `cargo update` takes a crate's new version only once it has been published for
+three days, as `.cargo/config.toml` says ([ADR-0103](docs/adr/0103-crates-updates-wait-three-days.md)).
 
 ## Contracts
 

@@ -1,0 +1,10 @@
+# A crate's new version is taken by `cargo update` only once it has been published for three days,
+# so that a broken or malicious release, usually yanked within days, never enters Cargo.lock
+# (ADR-0103). A fix for an advisory is taken at once, the delay lifted for that one update:
+#
+#   CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate>
+[registry]
+global-min-publish-age = "3 days"
+
+[resolver]
+incompatible-publish-age = "deny"
