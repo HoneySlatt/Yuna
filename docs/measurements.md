@@ -88,6 +88,12 @@ nix develop -c env TMPDIR=<folder> target/release/examples/instances --phase tog
 nix develop -c env TMPDIR=<folder> target/release/examples/instances --phase soak
 ```
 
+Judged against [ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)'s budgets, at
+their conditions, one seat and no program: every quiet start and every instance at rest meets
+them, at 1080p and at 4K, but the start at 4K on the GPU, measured only disturbed (126 ms at the
+longest, [debt](debt.md)). With a program open, as the seats together run, no budget applies: the
+program's buffers are its own. Ten instances together grow nothing in five minutes.
+
 **Disturbed.** Other sessions' test suites ran through most of the runs, from 04:28 to 05:59 UTC,
 at times on all 16 threads. A window is disturbed when the other programs used more than 2 cores
 or 10 % of the GPU on average (`yuna_bench::machine`); each table says which. A disturbed window's

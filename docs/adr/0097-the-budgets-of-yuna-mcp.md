@@ -1,6 +1,6 @@
 # 0097. The budgets of `yuna mcp`
 
-- Status: Accepted
+- Status: Superseded by [0100](0100-the-budgets-of-yuna-mcp-at-their-conditions.md)
 - Date: 2026-11-18
 
 ## Context
