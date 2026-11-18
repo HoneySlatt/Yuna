@@ -20,8 +20,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.8](#m18--xwayland) is done (2026-11-15), with ADR-0066 to ADR-0070.
 - [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077.
 - [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089.
-- [M1.11](#m111--the-agents-toolbox) is in progress since 2026-11-17; the owner split X11's drag
-  and drop off into [M1.12](#m112--drag-and-drop-between-x11-and-wayland) on 2026-11-18.
+- [M1.11](#m111--the-agents-toolbox) is done (2026-11-18), with ADR-0090 to ADR-0101; the owner
+  split X11's drag and drop off into [M1.12](#m112--drag-and-drop-between-x11-and-wayland). Next:
+  M1.12.
 - From M1.11, the owner chose on 2026-11-17 to work on `main` directly, without a milestone's
   branch: push only a state where `scripts/check.sh` passes, and follow CI to green after each
   push; the closing review reads the milestone's commits on `main`, and its fixes follow there.
@@ -43,7 +44,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.8](#m18--xwayland) | X11 applications run, crisp at scale 1.5 and the right size on every output | Done |
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Done |
-| [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | In progress |
+| [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Done |
 | [M1.12](#m112--drag-and-drop-between-x11-and-wayland) | Drag and drop between X11 and Wayland programs | Planned |
 | [M1.13](#m113--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
@@ -166,10 +167,10 @@ milestone first needs it.
 - **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N
   `yuna mcp` against one with N seats, up to 10, for Stage 2's choice of
   [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md).
-- **Status.** Built on `main`, ADR-0090 to ADR-0101, its budgets set by the owner
-  ([ROADMAP](ROADMAP.md)); Claude Code ran its done-when through MCP alone and found a crash on
-  llvmpipe, fixed ([measurements](measurements.md)); the motion's property test found a jump that
-  M1.7 left, fixed. The closing review's findings are being fixed.
+- **Result.** Done on 2026-11-18 (ADR-0090 to ADR-0101), its closing review's findings fixed:
+  every item above through MCP, its budgets set by the owner ([ROADMAP](ROADMAP.md)); Claude Code
+  ran its done-when through MCP alone, and found a crash on llvmpipe, fixed
+  ([measurements](measurements.md)); a jump M1.7 left, fixed. What is left is [debt](debt.md).
 
 ### M1.12 — Drag and drop between X11 and Wayland
 
