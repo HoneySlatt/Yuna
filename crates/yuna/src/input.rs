@@ -10,9 +10,11 @@
 //! scroll first puts it on what is drawn under it then, and the refresh where the motion ends
 //! puts it there once ([ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
 //! A button press focuses the window under it, which takes the seat's keyboard at the next
-//! refresh (`frames.rs`), and its serial may start a popup grab or a drag on that window. Every
-//! focus of a seat is on its own clients' surfaces: no event of one seat reaches another's
-//! client.
+//! refresh (`frames.rs`), and its serial may start a popup grab or a drag on that window. During a
+//! drag, each motion and the release also go to the seat's drags between X11 and Wayland
+//! (`xwayland/drags.rs`), which pick the drag's target among the layout's windows alone, never
+//! an X11 menu. Every focus of a seat is on its own clients' surfaces: no event of one seat
+//! reaches another's client.
 //!
 //! Keys are pressed by their XKB keycode, a key named by a keysym it types. Text is typed through
 //! the seat's keymap, `us` unless its agent changed it (`keymap.rs`): each character by its key,
@@ -31,7 +33,7 @@ use smithay::desktop::PopupManager;
 use smithay::desktop::WindowSurfaceType;
 use smithay::desktop::utils::under_from_surface_tree;
 use smithay::input::Seat;
-use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
+use smithay::input::dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source};
 use smithay::input::keyboard::{
     FilterResult, KeyboardHandle, KeyboardSource, Keycode, KeymapFile, Keysym, xkb,
 };
@@ -55,6 +57,7 @@ use crate::popups::popup_toplevel;
 use crate::render;
 use crate::seats::{seat_id, seat_of_surface};
 use crate::state::{OWNER_SEAT, State, tree_root};
+use crate::xwayland::X11Toplevel;
 
 /// The most characters one `type_text` types: a paragraph, so that one call cannot keep Yuna
 /// busy for long.
@@ -96,6 +99,15 @@ pub struct PointerDescription {
     pub cursor: String,
     /// The buttons held.
     pub buttons: Vec<u32>,
+}
+
+/// What a hit test found under a point: the surface whose input region holds it, that surface's
+/// origin in logical coordinates, and the X11 window, when the surface is an X11 window's own.
+#[derive(Debug)]
+pub(crate) struct Hit {
+    pub surface: WlSurface,
+    pub origin: Point<f64, Logical>,
+    pub x11: Option<X11Toplevel>,
 }
 
 /// The toplevel surface of the window `surface` belongs to: through its subsurfaces' parents,
@@ -197,26 +209,43 @@ impl State {
     /// The surface under `location`, in logical coordinates, among the windows that the output of
     /// `seat` holding it draws now, read at [`VirtualOutput::motion_read_at`], with that surface's
     /// origin in the same coordinates.
-    fn surface_under(
+    pub(crate) fn surface_under(
         &self,
         seat: SeatId,
         location: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.hit_test(seat, location, true)
+            .map(|hit| (hit.surface, hit.origin))
+    }
+
+    /// What is under `location`, as [`State::surface_under`] finds it; X11 menus left out unless
+    /// `with_menus`, as a drag's target is picked among the layout's windows alone.
+    pub(crate) fn hit_test(
+        &self,
+        seat: SeatId,
+        location: Point<f64, Logical>,
+        with_menus: bool,
+    ) -> Option<Hit> {
         let output = self.output_at(seat, location)?;
         let at = output.motion_read_at(self.clock.now());
         let hit = |surface: &WlSurface, origin: Point<f64, Logical>| {
             under_from_surface_tree(surface, location - origin, (0, 0), WindowSurfaceType::ALL)
                 .map(|(found, at)| (found, origin + at.to_f64()))
         };
+        let found = |(surface, origin): (WlSurface, Point<f64, Logical>)| Hit {
+            surface,
+            origin,
+            x11: None,
+        };
         // What the output draws then, as its frames do (`frames.rs`): a window moving is where
         // it is drawn, not at its place; a window scrolled out is not, nor its popups. X11 menus
         // over no window are over every window.
-        let menus = self.x11_shown_menus(output);
-        for lone in &menus.lone {
+        let menus = with_menus.then(|| self.x11_shown_menus(output));
+        for lone in menus.iter().flat_map(|menus| &menus.lone) {
             let origin =
                 render::x11_menu_origin(&lone.surface, lone.corner, lone.x11_scale, output);
-            if let Some(found) = origin.and_then(|origin| hit(&lone.surface, origin)) {
-                return Some(found);
+            if let Some(under) = origin.and_then(|origin| hit(&lone.surface, origin)) {
+                return Some(found(under));
             }
         }
         let frame = self.motion.frame(output.id, at);
@@ -237,7 +266,7 @@ impl State {
             let corner = Point::<f64, Logical>::from((rect.x, rect.y));
             // An X11 window's menus, topmost first, where the frame draws them, so that the
             // pointer lands on the X11 pixel drawn under it, as on the window.
-            if let Some(x11) = toplevel.x11() {
+            if let (Some(x11), Some(menus)) = (toplevel.x11(), &menus) {
                 let window_corner = render::x11_surface_corner(
                     self.x11.geometry_offset(x11),
                     rect,
@@ -247,16 +276,16 @@ impl State {
                 for menu in menus.with(drawn.window) {
                     let at = render::x11_offset_on(window_corner, menu.offset, x11.scale, output);
                     let origin = render::x11_menu_origin(&menu.surface, at, x11.scale, output);
-                    if let Some(found) = origin.and_then(|origin| hit(&menu.surface, origin)) {
-                        return Some(found);
+                    if let Some(under) = origin.and_then(|origin| hit(&menu.surface, origin)) {
+                        return Some(found(under));
                     }
                 }
             }
             // Topmost first; a menu may overflow its window.
             for (popup, at) in PopupManager::popups_for_surface(toplevel.wl_surface()) {
                 let origin = corner + at.to_f64() - popup.geometry().loc.to_f64();
-                if let Some(found) = hit(popup.wl_surface(), origin) {
-                    return Some(found);
+                if let Some(under) = hit(popup.wl_surface(), origin) {
+                    return Some(found(under));
                 }
             }
             let inside = location.x >= rect.x
@@ -279,8 +308,14 @@ impl State {
                 ),
                 None => Some(corner - toplevel.geometry.loc.to_f64()),
             };
-            if let Some(found) = origin.and_then(|origin| hit(toplevel.wl_surface(), origin)) {
-                return Some(found);
+            if let Some((surface, origin)) =
+                origin.and_then(|origin| hit(toplevel.wl_surface(), origin))
+            {
+                return Some(Hit {
+                    surface,
+                    origin,
+                    x11: toplevel.x11().cloned(),
+                });
             }
         }
         None
@@ -329,7 +364,9 @@ impl State {
         }
     }
 
-    fn move_pointer(
+    /// Moves `seat`'s pointer to `location`, over `under`: during a drag, what the drag is over
+    /// decides where the motion goes (`xwayland/drags.rs`).
+    pub(crate) fn move_pointer(
         &mut self,
         seat: SeatId,
         pointer: &PointerHandle<State>,
@@ -340,7 +377,8 @@ impl State {
             data.pointer_moved = true;
             data.pointer_origin = under.as_ref().map(|(_, origin)| *origin);
         }
-        self.send_pointer_motion(pointer, under, location);
+        let focus = self.drag_moved(seat, location, under);
+        self.send_pointer_motion(pointer, focus, location);
     }
 
     /// Moves `seat`'s pointer to (`x`, `y`), logical units from the top-left corner of `output`,
@@ -486,6 +524,13 @@ impl State {
         }
         self.send_button(&pointer, button, pressed, serial);
         self.after_popup_grab_input(seat);
+        if !pressed
+            && self
+                .seat(seat)
+                .is_some_and(|data| data.pressed_buttons.is_empty())
+        {
+            self.drag_released(seat);
+        }
         Ok(self.describe_pointer(seat))
     }
 
@@ -989,10 +1034,12 @@ fn source_seat<S: Source>(source: &S) -> Option<SeatId> {
 
 /// A drag a client starts from a button it holds: Smithay checks that the request carries the
 /// serial of the pointer's grab, which a press starts. The drag takes the pointer until the
-/// button is released, and offers its source to the surfaces it crosses, all of its seat's.
-/// Refused, its source cancelled, from a client of another seat than the pointer's: one that
-/// bound another agent's `wl_seat` and guessed its serial. Touch has no drag: Yuna has no touch.
-/// The drag's icon is not drawn: Yuna draws no cursor yet.
+/// button is released, and offers its source to the surfaces it crosses, all of its seat's; over
+/// an X11 window it speaks XDND instead, its source wrapped so that Smithay's cancel at a release
+/// there waits for X11's answer (`xwayland/drags.rs`). Refused, its source cancelled, from a
+/// client of another seat than the pointer's: one that bound another agent's `wl_seat` and
+/// guessed its serial. Touch has no drag: Yuna has no touch. The drag's icon is not drawn: Yuna
+/// draws no cursor yet.
 impl WaylandDndGrabHandler for State {
     fn dnd_requested<S: Source>(
         &mut self,
@@ -1004,9 +1051,10 @@ impl WaylandDndGrabHandler for State {
     ) {
         let pointer = seat.get_pointer();
         let start = pointer.as_ref().and_then(PointerHandle::grab_start_data);
-        let same_seat = seat_id(&seat).is_some_and(|id| source_seat(&source) == Some(id));
-        match (type_, pointer, start) {
-            (GrabType::Pointer, Some(pointer), Some(start)) if same_seat => {
+        let id = seat_id(&seat).filter(|&id| source_seat(&source) == Some(id));
+        match (type_, pointer, start, id) {
+            (GrabType::Pointer, Some(pointer), Some(start), Some(id)) => {
+                let source = self.wayland_drag_started(id, source);
                 let grab = DnDGrab::new_pointer(&self.display_handle, start, source, seat);
                 pointer.set_grab(self, grab, serial, Focus::Keep);
             }
@@ -1018,8 +1066,28 @@ impl WaylandDndGrabHandler for State {
     }
 }
 
-/// A drag's end: Smithay tells the source and the target themselves.
-impl DndGrabHandler for State {}
+/// A drag's end: Smithay tells a Wayland target and the source itself; over an X11 window, or with
+/// none, the seat's drags decide (`xwayland/drags.rs`). Both are called from within Smithay's
+/// pointer grab: neither calls the pointer.
+impl DndGrabHandler for State {
+    fn dropped(
+        &mut self,
+        _target: Option<DndTarget<'_, Self>>,
+        _validated: bool,
+        seat: Seat<Self>,
+        _location: Point<f64, Logical>,
+    ) {
+        if let Some(seat) = seat_id(&seat) {
+            self.wayland_drag_ended(seat, true);
+        }
+    }
+
+    fn cancelled(&mut self, seat: Seat<Self>, _location: Point<f64, Logical>) {
+        if let Some(seat) = seat_id(&seat) {
+            self.wayland_drag_ended(seat, false);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

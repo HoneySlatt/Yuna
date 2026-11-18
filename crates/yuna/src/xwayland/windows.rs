@@ -26,6 +26,7 @@ use yuna_motion::Change;
 
 use super::answers::Waits;
 use super::bridge::Selection;
+use super::drags::Drags;
 use super::manager::{Command, ManagerEvent, NetState, StateAction, StateChange};
 use super::menus::MenuPlace;
 use super::properties::{FrameExtents, Properties, SizeHints, Wishes, X11Rect};
@@ -75,6 +76,8 @@ pub(crate) struct X11Windows {
     /// The seats' Wayland selections that Wayland clients changed this round, for the managers
     /// (`selections.rs`).
     pub(super) wayland_changed: Vec<(SeatId, Selection)>,
+    /// The seats' drags between X11 and Wayland (`drags.rs`).
+    pub(super) drags: Drags,
 }
 
 /// One Xwayland's windows.
@@ -244,6 +247,45 @@ impl X11Windows {
     pub(crate) fn has_server(&self, server: u64) -> bool {
         self.servers.contains_key(&server)
     }
+
+    /// The point in X11's root pixels of `x11`'s window under the pointer at `pointer`, its
+    /// surface drawn with its top-left corner at `origin`, both logical: none beyond X11's
+    /// coordinates, or for a window gone.
+    pub(crate) fn root_point_in(
+        &self,
+        x11: &X11Toplevel,
+        pointer: (f64, f64),
+        origin: (f64, f64),
+    ) -> Option<(i16, i16)> {
+        let window = self.window(x11)?;
+        let told = window.told.unwrap_or(window.geometry);
+        root_point((told.x, told.y), pointer, origin, x11.scale)
+    }
+}
+
+/// The point in X11's root pixels a pointer at `pointer` is at, over an X11 window whose surface
+/// is drawn with its top-left corner at `origin`, both logical, and whose X11 corner Yuna told it
+/// is `corner`: that corner plus the pointer's place in the surface times XWayland's scale,
+/// rounded. Measured from what is drawn, so that a window that moves, a fullscreen window centred
+/// at a smaller size, or one shown in an emulated mode is read where it shows; as Xwayland itself
+/// reads the pointer in its window. None beyond X11's 16-bit coordinates.
+fn root_point(
+    corner: (i32, i32),
+    pointer: (f64, f64),
+    origin: (f64, f64),
+    scale: f64,
+) -> Option<(i16, i16)> {
+    let axis = |corner: i32, pointer: f64, origin: f64| {
+        let point = f64::from(corner) + ((pointer - origin) * scale).round();
+        let in_range =
+            point.is_finite() && point >= f64::from(i16::MIN) && point <= f64::from(i16::MAX);
+        // In range and whole: the cast is exact.
+        in_range.then_some(point as i16)
+    };
+    Some((
+        axis(corner.0, pointer.0, origin.0)?,
+        axis(corner.1, pointer.1, origin.1)?,
+    ))
 }
 
 /// An X11 rectangle: a corner in X11 pixels and a logical size times XWayland's scale, the size
@@ -379,10 +421,11 @@ impl State {
         );
     }
 
-    /// Xwayland `server` has ended: its windows close, its commands go, and the selections Yuna
-    /// held for its X11 clients empty.
+    /// Xwayland `server` has ended: its windows close, its commands go, the selections Yuna
+    /// held for its X11 clients empty, and its drags end.
     pub(crate) fn x11_server_gone(&mut self, server: u64) {
         self.x11_selections_gone(server);
+        self.x11_drags_gone(server);
         // Its menus drawn alone leave the screen now: when Xwayland died in a busy round, its
         // surfaces are destroyed later in the round, once its record, which would redraw them,
         // is gone.
@@ -499,6 +542,16 @@ impl State {
             | ManagerEvent::SelectionDropped(_)
             | ManagerEvent::ReadWayland { .. }
             | ManagerEvent::TransferToWaylandEnded => self.x11_selection_event(server, event),
+            ManagerEvent::X11DragOffered { .. }
+            | ManagerEvent::X11DragEntered { .. }
+            | ManagerEvent::X11DragLeft(_)
+            | ManagerEvent::X11DragDropped(_)
+            | ManagerEvent::X11DragAction { .. }
+            | ManagerEvent::X11DragEnded(_)
+            | ManagerEvent::DragProxyMapped(_)
+            | ManagerEvent::WaylandDragStatus { .. }
+            | ManagerEvent::ReadWaylandDrag { .. }
+            | ManagerEvent::WaylandDragEnded { .. } => self.x11_drag_event(server, event),
             // The phases of Xwayland's start and end, `mod.rs`'s.
             ManagerEvent::Ready | ManagerEvent::Stopped(_) => {}
         }
@@ -1477,6 +1530,46 @@ mod tests {
             logical_limits(SizeHints::default(), NO_EXTENTS, 1.5),
             (Size::default(), Size::default())
         );
+    }
+
+    /// R10: a drag's point is the corner Yuna told the window plus the pointer's place in its
+    /// drawn surface times S, rounded; none beyond X11's coordinates.
+    #[test]
+    fn a_drags_root_point_is_the_told_corner_plus_the_drawn_offset_times_s() {
+        // S = 1: the window told (100, 50), drawn there; 10.5 rounds half away from zero.
+        assert_eq!(
+            root_point((100, 50), (110.5, 60.25), (100.0, 50.0), 1.0),
+            Some((111, 60))
+        );
+        // S = 1.5: told (150, 75), its surface drawn at (100, 50) logical.
+        assert_eq!(
+            root_point((150, 75), (110.0, 60.0), (100.0, 50.0), 1.5),
+            Some((165, 90))
+        );
+        // A window drawn away from its told place, moving: read where it is drawn.
+        assert_eq!(
+            root_point((150, 75), (310.0, 60.0), (300.0, 50.0), 1.5),
+            Some((165, 90))
+        );
+        // Fullscreen at S = 1.5 on a 1920 × 1080 output at (0, 0), told the output's corner,
+        // centred at 1280 × 720 X11 pixels, 853.33 × 480 logical: the output's centre is the
+        // window's.
+        let width = 1280.0 / 1.5;
+        let origin = ((1920.0 - width) / 2.0, (1080.0 - 480.0) / 2.0);
+        assert_eq!(
+            root_point((0, 0), (960.0, 540.0), origin, 1.5),
+            Some((640, 360))
+        );
+        // Beyond 16 bits, on either axis.
+        assert_eq!(
+            root_point((32_000, 0), (1000.0, 0.0), (0.0, 0.0), 1.0),
+            None
+        );
+        assert_eq!(
+            root_point((0, -32_000), (0.0, -1000.0), (0.0, 0.0), 1.0),
+            None
+        );
+        assert_eq!(root_point((0, 0), (f64::NAN, 0.0), (0.0, 0.0), 1.0), None);
     }
 
     #[test]

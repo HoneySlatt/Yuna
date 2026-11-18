@@ -336,7 +336,7 @@ fn selection_of(target: SelectionTarget) -> Selection {
 
 /// The MIME types of a source X11 is offered: the first [`MAX_MIME_TYPES`], those no longer than
 /// [`MAX_MIME_TYPE_BYTES`].
-fn for_x11(mime_types: Vec<String>) -> Vec<String> {
+pub(crate) fn for_x11(mime_types: Vec<String>) -> Vec<String> {
     mime_types
         .into_iter()
         .filter(|mime_type| mime_type.len() <= MAX_MIME_TYPE_BYTES)
@@ -346,7 +346,7 @@ fn for_x11(mime_types: Vec<String>) -> Vec<String> {
 
 /// A new pipe for a read of a selection: its read end, non-blocking, and its write end, for the
 /// source, blocking, as a client writes it. None when no pipe can be made.
-fn reader_pipe() -> Option<(OwnedFd, OwnedFd)> {
+pub(crate) fn reader_pipe() -> Option<(OwnedFd, OwnedFd)> {
     let made = pipe_with(PipeFlags::CLOEXEC)
         .and_then(|(read, write)| fcntl_setfl(&read, OFlags::NONBLOCK).map(|()| (read, write)));
     match made {

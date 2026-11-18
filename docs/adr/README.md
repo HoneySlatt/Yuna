@@ -121,3 +121,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0099](0099-a-workspace-switch-keeps-each-workspace-on-its-row.md) | A workspace switch keeps each workspace on its row | Accepted |
 | [0100](0100-the-budgets-of-yuna-mcp-at-their-conditions.md) | The budgets of `yuna mcp`, at their conditions | Accepted; supersedes 0097 |
 | [0101](0101-an-agents-clipboard-through-mcp.md) | An agent's clipboard through MCP | Accepted |
+| [0102](0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md) | Drag and drop between X11 and Wayland: a drag session beside Smithay's grabs | Accepted |

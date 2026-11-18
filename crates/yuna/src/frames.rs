@@ -273,6 +273,7 @@ impl State {
             Deadline::Presentation(output) => of_output(Source::ClockPresentation, output),
             Deadline::HiddenFrames => Wake::of(Source::ClockHiddenFrames),
             Deadline::X11Answers => Wake::of(Source::ClockX11Answers),
+            Deadline::Drags => Wake::of(Source::ClockDrags),
         }
     }
 
@@ -283,6 +284,7 @@ impl State {
             Deadline::Presentation(output) => self.send_presentations(output),
             Deadline::HiddenFrames => self.send_hidden_frames(),
             Deadline::X11Answers => self.x11_answers_due(),
+            Deadline::Drags => self.drags_due(),
         }
     }
 

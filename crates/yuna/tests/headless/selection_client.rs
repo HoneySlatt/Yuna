@@ -6,6 +6,10 @@
 //! own, over the same connection, so that `client.rs` stays about windows: the windows and the
 //! selections are one Wayland client, which is what the keyboard focus looks at. It records
 //! every offer and every selection event in order, and what each of its sources is asked.
+//!
+//! For drags, it takes the seat's pointer on demand ([`SelectionClient::take_pointer`]), whose
+//! presses' serials start a drag, and records the device's drag events ([`DragEvent`]), each
+//! offer's actions, and each source's drag events in order ([`SourceDragEvent`]).
 
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
@@ -17,11 +21,11 @@ use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
 use smithay::reexports::rustix::time::Timespec;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{
-    wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_keyboard,
+    wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_keyboard, wl_pointer,
     wl_registry, wl_seat, wl_surface,
 };
 use wayland_client::{
-    Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, delegate_noop,
+    Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
     event_created_child,
 };
 use wayland_protocols::ext::data_control::v1::client::{
@@ -52,10 +56,39 @@ pub enum SelectionEvent {
     Drag,
 }
 
+/// A drag-and-drop event of `wl_data_device`, as the client got it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragEvent {
+    /// `enter`: its serial, and the offer of this index, or none for a drag within one client.
+    Enter {
+        serial: u32,
+        offer: Option<usize>,
+    },
+    Motion,
+    Leave,
+    Drop,
+}
+
+/// A drag-and-drop event of a `wl_data_source`, as its client got it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceDragEvent {
+    /// `target`: the MIME type the target accepts, or none.
+    Target(Option<String>),
+    /// `action`: the action chosen, `wl_data_device_manager.dnd_action`'s bits.
+    Action(u32),
+    DropPerformed,
+    Finished,
+    Cancelled,
+}
+
 /// An offer the client was given, and the MIME types it offers.
 pub struct Offer {
     proxy: OfferProxy,
     pub mime_types: Vec<String>,
+    /// A drag's offer: the actions its source offers (`source_actions`), the last told.
+    pub source_actions: Option<u32>,
+    /// A drag's offer: the action chosen (`action`), the last told.
+    pub action: Option<u32>,
 }
 
 enum OfferProxy {
@@ -85,6 +118,8 @@ pub struct Source {
     pub cancelled: bool,
     /// Drag-and-drop events: `target`, `action`, `dnd_drop_performed`, `dnd_finished`.
     pub drag_events: u32,
+    /// The drag-and-drop events, `cancelled` included, in order.
+    pub drag: Vec<SourceDragEvent>,
 }
 
 enum SourceProxy {
@@ -182,6 +217,12 @@ pub struct SelectionState {
     pub enters: Vec<u32>,
     /// The surface the keyboard last entered and has not left.
     pub keyboard_on: Option<wl_surface::WlSurface>,
+    /// The seat's pointer, once taken ([`SelectionClient::take_pointer`]).
+    pointer: Option<wl_pointer::WlPointer>,
+    /// The serial of each press of a pointer button, in order.
+    pub presses: Vec<u32>,
+    /// Every drag-and-drop event of the data device, in order.
+    pub drags: Vec<DragEvent>,
     /// Every offer the client was given, in order; events name them by index.
     pub offers: Vec<Offer>,
     pub events: Vec<SelectionEvent>,
@@ -279,6 +320,18 @@ impl SelectionClient {
         }
     }
 
+    /// Takes the seat's pointer, so that the client gets the presses that start its drags.
+    pub fn take_pointer(&mut self, compositor: &mut Compositor) {
+        let seat = self.state.seat.clone().expect("wl_seat");
+        self.state.pointer = Some(seat.get_pointer(&self.queue.handle(), ()));
+        self.roundtrip(compositor);
+    }
+
+    /// The serial of the last press of a pointer button.
+    pub fn press_serial(&self) -> u32 {
+        *self.state.presses.last().expect("a press")
+    }
+
     /// The serial of the last `wl_keyboard.enter`.
     pub fn enter_serial(&self) -> u32 {
         *self.state.enters.last().expect("a keyboard enter")
@@ -349,20 +402,76 @@ impl SelectionClient {
             .set_selection(Some(source));
     }
 
-    /// Starts a drag of a new source offering `mime_types` from `origin`, naming `serial`.
+    /// Starts a drag of a new source offering `mime_types` from `origin`, naming `serial`, its
+    /// actions never set.
     pub fn start_drag(
         &mut self,
         mime_types: &[&str],
         origin: &wl_surface::WlSurface,
         serial: u32,
     ) -> usize {
+        self.start_drag_for(mime_types, None, origin, serial)
+    }
+
+    /// Starts a drag from `origin` of a new source offering `mime_types`, for `actions` when
+    /// given (`wl_data_source.set_actions`), naming `serial`; returns the source's index.
+    pub fn start_drag_for(
+        &mut self,
+        mime_types: &[&str],
+        actions: Option<wl_data_device_manager::DndAction>,
+        origin: &wl_surface::WlSurface,
+        serial: u32,
+    ) -> usize {
         let source = self.clipboard_source(mime_types);
+        if let Some(actions) = actions {
+            source.set_actions(actions);
+        }
         self.state
             .data_device
             .as_ref()
             .expect("wl_data_device")
             .start_drag(Some(&source), origin, None, serial);
         self.add_source(SourceProxy::Clipboard(source))
+    }
+
+    /// Starts a drag with no source from `origin`, naming `serial`: a drag within the client,
+    /// which no other client is offered.
+    pub fn start_local_drag(&mut self, origin: &wl_surface::WlSurface, serial: u32) {
+        self.state
+            .data_device
+            .as_ref()
+            .expect("wl_data_device")
+            .start_drag(None, origin, None, serial);
+    }
+
+    /// Tells drag offer `offer` the client accepts `mime_type`, or nothing, naming the `enter`'s
+    /// `serial`.
+    pub fn accept(&mut self, offer: usize, serial: u32, mime_type: Option<&str>) {
+        let OfferProxy::Clipboard(proxy) = &self.state.offers[offer].proxy else {
+            panic!("not a drag's offer");
+        };
+        proxy.accept(serial, mime_type.map(str::to_owned));
+    }
+
+    /// Tells drag offer `offer` the actions the client takes, and the one it prefers.
+    pub fn set_actions(
+        &mut self,
+        offer: usize,
+        actions: wl_data_device_manager::DndAction,
+        preferred: wl_data_device_manager::DndAction,
+    ) {
+        let OfferProxy::Clipboard(proxy) = &self.state.offers[offer].proxy else {
+            panic!("not a drag's offer");
+        };
+        proxy.set_actions(actions, preferred);
+    }
+
+    /// Tells drag offer `offer` the client is done with it: the drop is complete.
+    pub fn finish(&mut self, offer: usize) {
+        let OfferProxy::Clipboard(proxy) = &self.state.offers[offer].proxy else {
+            panic!("not a drag's offer");
+        };
+        proxy.finish();
     }
 
     /// A new `wl_data_source` offering `mime_types`, for the next index of the sources.
@@ -387,6 +496,7 @@ impl SelectionClient {
             waiting: Vec::new(),
             cancelled: false,
             drag_events: 0,
+            drag: Vec::new(),
         });
         self.state.sources.len() - 1
     }
@@ -443,6 +553,8 @@ impl SelectionState {
         self.offers.push(Offer {
             proxy,
             mime_types: Vec::new(),
+            source_actions: None,
+            action: None,
         });
     }
 
@@ -541,10 +653,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for SelectionState {
                 let offer = id.map(|offer| state.offer_index(&offer.id()));
                 state.events.push(SelectionEvent::Clipboard(offer));
             }
-            wl_data_device::Event::Enter { .. }
-            | wl_data_device::Event::Leave
-            | wl_data_device::Event::Motion { .. }
-            | wl_data_device::Event::Drop => state.events.push(SelectionEvent::Drag),
+            wl_data_device::Event::Enter { serial, id, .. } => {
+                let offer = id.map(|offer| state.offer_index(&offer.id()));
+                state.drags.push(DragEvent::Enter { serial, offer });
+                state.events.push(SelectionEvent::Drag);
+            }
+            wl_data_device::Event::Motion { .. } => {
+                state.drags.push(DragEvent::Motion);
+                state.events.push(SelectionEvent::Drag);
+            }
+            wl_data_device::Event::Leave => {
+                state.drags.push(DragEvent::Leave);
+                state.events.push(SelectionEvent::Drag);
+            }
+            wl_data_device::Event::Drop => {
+                state.drags.push(DragEvent::Drop);
+                state.events.push(SelectionEvent::Drag);
+            }
             _ => {}
         }
     }
@@ -563,8 +688,23 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for SelectionState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            state.add_mime_type(&offer.id(), mime_type);
+        let actions = |actions: WEnum<wl_data_device_manager::DndAction>| match actions {
+            WEnum::Value(actions) => actions.bits(),
+            WEnum::Unknown(bits) => bits,
+        };
+        match event {
+            wl_data_offer::Event::Offer { mime_type } => {
+                state.add_mime_type(&offer.id(), mime_type)
+            }
+            wl_data_offer::Event::SourceActions { source_actions } => {
+                let index = state.offer_index(&offer.id());
+                state.offers[index].source_actions = Some(actions(source_actions));
+            }
+            wl_data_offer::Event::Action { dnd_action } => {
+                let index = state.offer_index(&offer.id());
+                state.offers[index].action = Some(actions(dnd_action));
+            }
+            _ => {}
         }
     }
 }
@@ -578,10 +718,54 @@ impl Dispatch<wl_data_source::WlDataSource, usize> for SelectionState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let source = &mut state.sources[*index];
         match event {
             wl_data_source::Event::Send { mime_type, fd } => state.sent(*index, mime_type, fd),
-            wl_data_source::Event::Cancelled => state.sources[*index].cancelled = true,
-            _ => state.sources[*index].drag_events += 1,
+            wl_data_source::Event::Cancelled => {
+                source.cancelled = true;
+                source.drag.push(SourceDragEvent::Cancelled);
+            }
+            wl_data_source::Event::Target { mime_type } => {
+                source.drag_events += 1;
+                source.drag.push(SourceDragEvent::Target(mime_type));
+            }
+            wl_data_source::Event::Action { dnd_action } => {
+                source.drag_events += 1;
+                let bits = match dnd_action {
+                    WEnum::Value(action) => action.bits(),
+                    WEnum::Unknown(bits) => bits,
+                };
+                source.drag.push(SourceDragEvent::Action(bits));
+            }
+            wl_data_source::Event::DndDropPerformed => {
+                source.drag_events += 1;
+                source.drag.push(SourceDragEvent::DropPerformed);
+            }
+            wl_data_source::Event::DndFinished => {
+                source.drag_events += 1;
+                source.drag.push(SourceDragEvent::Finished);
+            }
+            _ => source.drag_events += 1,
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for SelectionState {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_pointer::Event::Button {
+            serial,
+            state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+            ..
+        } = event
+        {
+            state.presses.push(serial);
         }
     }
 }

@@ -580,7 +580,8 @@ pub fn definitions() -> Value {
                 programs, sockets, outputs' refreshes, Xwayland, accessibility bus and \
                 clipboard reads and writes, beside Yuna's own parts: \
                 signals, MCP's input and output, encoders, waiting calls, captures' timers, \
-                the programs' throttle, the hidden windows' frames and X11 answers; wakes and \
+                the programs' throttle, the hidden windows' frames, X11 answers and drags' \
+                time limits; wakes and \
                 unnamed_client_wakes stay every seat's, an unnamed wake's client, and so its \
                 seat, being unknown.",
                 source_names.join(", "), cause_names.join(", ")),

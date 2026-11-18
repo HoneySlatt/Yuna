@@ -43,6 +43,13 @@
 //! reader's pace sets the next. A reader or a pipe that closes, a requestor or an owner gone, a
 //! reply of the wrong type or too short, each ends its transfer alone: the Wayland reader sees
 //! its pipe end, the X11 requestor a refusal, or, mid-INCR, no next chunk.
+//!
+//! **Drags.** A drag's data between X11 and Wayland moves through the same transfers, within the
+//! same bounds and count (`xdnd.rs`): an X11 program's `XdndSelection` read for a Wayland target,
+//! named with the time of the drag's latest position, and asked again, [`MAX_DRAG_ASKS`] times at
+//! most, when the source refused it for a newer position; and a Wayland client's drag served to
+//! the X11 target's requests, which `xdnd.rs` checks first. A drag's transfers that ended keep
+//! when they last moved, from which its time limits run.
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -91,6 +98,11 @@ const MAX_TARGETS: u32 = 256;
 
 /// How much of a property a transfer to Wayland reads at once, in bytes: its memory.
 const PIECE_BYTES: u32 = 256 * 1024;
+
+/// How many times a read of an X11 drag is asked, at most: once, then again each time its source
+/// refused it for a newer position that came meanwhile, as Qt refuses every time but its last
+/// position's.
+const MAX_DRAG_ASKS: u8 = 4;
 
 /// The bytes of a `ChangeProperty` request before its data.
 const CHANGE_PROPERTY_HEADER: usize = 24;
@@ -218,14 +230,26 @@ struct X11Owner {
     asking: Option<(Window, Instant)>,
 }
 
+/// What a transfer to Wayland reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadFrom {
+    /// One of the seat's selections, from the X11 owner of this number.
+    Selection { selection: Selection, owner: u64 },
+    /// An X11 program's drag, the manager's `drag`-th (`xdnd.rs`).
+    Drag(u64),
+}
+
 /// A transfer from an X11 owner into a Wayland reader's pipe, on a window of the manager's own.
 #[derive(Debug)]
 struct ToWayland {
-    selection: Selection,
+    from: ReadFrom,
+    /// The X11 selection converted: `CLIPBOARD`, `PRIMARY` or `XdndSelection`.
+    selection: Atom,
     /// The target it is converted to.
     target: Atom,
-    /// The owner it reads, by its number.
-    owner: u64,
+    /// The time its conversion named, and how many times it was asked.
+    time: Timestamp,
+    asks: u8,
     /// The reader's pipe, non-blocking.
     pipe: OwnedFd,
     stage: Fetch,
@@ -263,10 +287,38 @@ struct Request {
     time: Timestamp,
 }
 
+impl Request {
+    fn of(asked: &SelectionRequestEvent) -> Request {
+        Request {
+            requestor: asked.requestor,
+            selection: asked.selection,
+            target: asked.target,
+            // ICCCM 2.2: a requestor that names no property is an old one, and the target
+            // names it.
+            property: if asked.property == x11rb::NONE {
+                asked.target
+            } else {
+                asked.property
+            },
+            time: asked.time,
+        }
+    }
+}
+
+/// What an X11 request for Wayland's data is served from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Served {
+    /// One of the seat's Wayland selections.
+    Selection(Selection),
+    /// A Wayland client's drag, Yuna's `drag`-th (`xdnd.rs`).
+    Drag(u64),
+}
+
 /// A transfer from a Wayland source's pipe into an X11 requestor's property.
 #[derive(Debug)]
 struct ToX11 {
     request: Request,
+    served: Served,
     /// The type of the property set: the target, `UTF8_STRING` for `TEXT`.
     type_: Atom,
     /// The read end of the source's pipe, non-blocking, once Yuna's loop gives it.
@@ -327,6 +379,19 @@ pub(super) struct Bridge<'a> {
     next_owner: u64,
     /// The names of the atoms met in owners' targets; none for an atom X11 does not know.
     names: HashMap<Atom, Option<String>>,
+    /// When the transfers of the latest drags last moved, once they ended, each way, by drag:
+    /// a drag's time limit runs from its last move, ended transfers included.
+    drags_to_wayland_moved: Vec<(u64, Instant)>,
+    drags_to_x11_moved: Vec<(u64, Instant)>,
+}
+
+/// Records that drag `drag`'s transfers last moved `at`, in `moves`, one entry a drag: the
+/// manager forgets the drags it no longer follows at each turn ([`Bridge::keep_drag_moves`]).
+fn note_move(moves: &mut Vec<(u64, Instant)>, drag: u64, at: Instant) {
+    match moves.iter_mut().find(|(of, _)| *of == drag) {
+        Some((_, last)) => *last = (*last).max(at),
+        None => moves.push((drag, at)),
+    }
 }
 
 impl<'a> Bridge<'a> {
@@ -355,6 +420,8 @@ impl<'a> Bridge<'a> {
             next_transfer: 1,
             next_owner: 1,
             names: HashMap::new(),
+            drags_to_wayland_moved: Vec::new(),
+            drags_to_x11_moved: Vec::new(),
         }
     }
 
@@ -494,7 +561,11 @@ impl<'a> Bridge<'a> {
                     .to_wayland
                     .iter()
                     .filter(|(_, transfer)| {
-                        transfer.selection == selection && transfer.owner == previous.number
+                        transfer.from
+                            == ReadFrom::Selection {
+                                selection,
+                                owner: previous.number,
+                            }
                     })
                     .map(|(&window, _)| window)
                     .collect();
@@ -537,7 +608,7 @@ impl<'a> Bridge<'a> {
 
     /// A window for one conversion: a child of the manager's own, so that the root's
     /// notifications never name it, listening to its properties' changes.
-    fn transfer_window(&self) -> Result<Window, Failure> {
+    pub(super) fn transfer_window(&self) -> Result<Window, Failure> {
         let window = self.connection.generate_id()?;
         self.connection.create_window(
             0,
@@ -559,8 +630,13 @@ impl<'a> Bridge<'a> {
     /// X11 client can send any window such an answer (`SendEvent`), the owner's own as well: one
     /// that names another window, selection or target than a conversion waiting, or comes after
     /// the first, is left. One that names them all cannot be told from the owner's, and ends that
-    /// conversion alone.
-    pub(super) fn converted(&mut self, answer: &SelectionNotifyEvent) -> Result<GoOn, Failure> {
+    /// conversion alone. A drag's read refused is asked again when its source moved on since, a
+    /// newer time in `drag_time`, the drag's ([`ask_again`]).
+    pub(super) fn converted(
+        &mut self,
+        answer: &SelectionNotifyEvent,
+        drag_time: impl Fn(u64) -> Option<Timestamp>,
+    ) -> Result<GoOn, Failure> {
         let window = answer.requestor;
         let targets = self.atoms.TARGETS;
         let asking = Selection::BOTH.into_iter().find(|&selection| {
@@ -577,14 +653,32 @@ impl<'a> Bridge<'a> {
             return Ok(true);
         };
         let asked = transfer.stage == Fetch::Converting
-            && answer.selection == transfer.selection.atom(&atoms)
+            && answer.selection == transfer.selection
             && answer.target == transfer.target;
         if !asked {
             return Ok(true);
         }
         // Refused, or answered in a property the manager did not name.
         if answer.property != atoms._YUNA_SELECTION {
-            return self.end_to_wayland(window, "its owner refused it");
+            let newest = match transfer.from {
+                ReadFrom::Drag(drag) => drag_time(drag),
+                ReadFrom::Selection { .. } => None,
+            };
+            let Some(time) = ask_again(transfer.time, newest, transfer.asks) else {
+                return self.end_to_wayland(window, "its owner refused it");
+            };
+            transfer.time = time;
+            transfer.asks += 1;
+            transfer.progress = Instant::now();
+            let (selection, target) = (transfer.selection, transfer.target);
+            self.connection.convert_selection(
+                window,
+                selection,
+                target,
+                atoms._YUNA_SELECTION,
+                time,
+            )?;
+            return Ok(true);
         }
         transfer.stage = Fetch::Reading {
             offset: 0,
@@ -653,7 +747,7 @@ impl<'a> Bridge<'a> {
     }
 
     /// The names of `atoms`, those X11 knows, asked at once for those not known yet.
-    fn names_of(&mut self, atoms: &[Atom]) -> Result<Vec<(Atom, String)>, Failure> {
+    pub(super) fn names_of(&mut self, atoms: &[Atom]) -> Result<Vec<(Atom, String)>, Failure> {
         if self.names.len() > MAX_NAMES {
             self.names.clear();
         }
@@ -683,7 +777,10 @@ impl<'a> Bridge<'a> {
     }
 
     /// The atoms of `targets`' names, asked at once, each with its MIME type.
-    fn intern(&mut self, targets: &[(String, String)]) -> Result<Vec<(Atom, String)>, Failure> {
+    pub(super) fn intern(
+        &mut self,
+        targets: &[(String, String)],
+    ) -> Result<Vec<(Atom, String)>, Failure> {
         let cookies = targets
             .iter()
             .map(|(name, mime_type)| {
@@ -727,6 +824,37 @@ impl<'a> Bridge<'a> {
             .and_then(|x11| x11.offer.as_ref())
             .and_then(|offer| offer.iter().find(|(offered, _)| offered == mime_type))
             .map(|&(_, target)| target);
+        let from = ReadFrom::Selection { selection, owner };
+        let atom = self.atom_of(selection);
+        self.start_to_wayland(from, atom, target, x11rb::CURRENT_TIME, pipe)
+    }
+
+    /// A Wayland target reads X11 drag `drag`, its `XdndSelection`, as `target`, the target of
+    /// one of its MIME types, none when it offers no such type, into `pipe`: converted with the
+    /// drag's `time`, as XDND asks, or refused as [`Bridge::send_to_wayland`] refuses.
+    pub(super) fn send_drag_to_wayland(
+        &mut self,
+        drag: u64,
+        target: Option<Atom>,
+        time: Timestamp,
+        pipe: OwnedFd,
+    ) -> Result<GoOn, Failure> {
+        let atom = self.atoms.XdndSelection;
+        self.start_to_wayland(ReadFrom::Drag(drag), atom, target, time, pipe)
+    }
+
+    /// Starts a transfer to Wayland: `selection` converted to `target` at `time` onto a new
+    /// window, its answer written into `pipe`. Refused, the pipe closed, without a target, with
+    /// a pipe that cannot be made non-blocking, or when [`MAX_X11_TRANSFERS`] run. Its end, a
+    /// refusal included, is posted.
+    fn start_to_wayland(
+        &mut self,
+        from: ReadFrom,
+        selection: Atom,
+        target: Option<Atom>,
+        time: Timestamp,
+        pipe: OwnedFd,
+    ) -> Result<GoOn, Failure> {
         let non_blocking =
             fcntl_getfl(&pipe).and_then(|flags| fcntl_setfl(&pipe, flags | OFlags::NONBLOCK));
         let refusal = match (target, non_blocking) {
@@ -736,24 +864,26 @@ impl<'a> Bridge<'a> {
             _ => None,
         };
         let Some(target) = target.filter(|_| refusal.is_none()) else {
-            tracing::debug!(reason = refusal, "an X11 selection is not sent to Wayland");
+            tracing::debug!(reason = refusal, "X11's data is not sent to Wayland");
             drop(pipe);
             return Ok(self.post(ManagerEvent::TransferToWaylandEnded));
         };
         let window = self.transfer_window()?;
         self.connection.convert_selection(
             window,
-            self.atom_of(selection),
+            selection,
             target,
             self.atoms._YUNA_SELECTION,
-            x11rb::CURRENT_TIME,
+            time,
         )?;
         self.to_wayland.insert(
             window,
             ToWayland {
+                from,
                 selection,
                 target,
-                owner,
+                time,
+                asks: 1,
                 pipe,
                 stage: Fetch::Converting,
                 pending: Vec::new(),
@@ -771,14 +901,29 @@ impl<'a> Bridge<'a> {
         let Some(transfer) = self.to_wayland.remove(&window) else {
             return Ok(true);
         };
+        let from = transfer.from;
         match self.fetch_and_write(window, transfer)? {
             Step::Going(transfer) => {
                 self.to_wayland.insert(window, transfer);
                 Ok(true)
             }
-            Step::Ended => self.closed_to_wayland(window, None),
+            Step::Ended => {
+                self.ended_to_wayland(from, Instant::now());
+                self.closed_to_wayland(window, None)
+            }
             // Dropped, the transfer closes its pipe.
-            Step::Failed(_, reason) => self.closed_to_wayland(window, Some(reason)),
+            Step::Failed(transfer, reason) => {
+                self.ended_to_wayland(from, transfer.progress);
+                self.closed_to_wayland(window, Some(reason))
+            }
+        }
+    }
+
+    /// A transfer to Wayland that last moved `at` ended: for a drag's, its time limit runs from
+    /// then.
+    fn ended_to_wayland(&mut self, from: ReadFrom, at: Instant) {
+        if let ReadFrom::Drag(drag) = from {
+            note_move(&mut self.drags_to_wayland_moved, drag, at);
         }
     }
 
@@ -883,39 +1028,47 @@ impl<'a> Bridge<'a> {
 
     /// Ends transfer `window` to Wayland short, for `reason`.
     fn end_to_wayland(&mut self, window: Window, reason: &str) -> Result<GoOn, Failure> {
-        if self.to_wayland.remove(&window).is_none() {
+        let Some(transfer) = self.to_wayland.remove(&window) else {
             return Ok(true);
-        }
+        };
+        self.ended_to_wayland(transfer.from, transfer.progress);
         self.closed_to_wayland(window, Some(reason))
     }
 
-    /// An X11 client asks for one of the seat's selections that Yuna holds: answered at once for
-    /// `TARGETS` and `TIMESTAMP`, through a transfer for a data target, refused otherwise, and
-    /// whenever none of the seat's X11 windows has the keyboard.
+    /// An X11 client asks for one of the seat's selections that Yuna holds: served
+    /// ([`Bridge::serve`]) while one of the seat's X11 windows has the keyboard, refused
+    /// otherwise.
     pub(super) fn requested(&mut self, asked: &SelectionRequestEvent) -> Result<GoOn, Failure> {
-        // ICCCM 2.2: a requestor that names no property is an old one, and the target names it.
-        let property = if asked.property == x11rb::NONE {
-            asked.target
-        } else {
-            asked.property
-        };
-        let request = Request {
-            requestor: asked.requestor,
-            selection: asked.selection,
-            target: asked.target,
-            property,
-            time: asked.time,
-        };
         let Some(selection) = self.selection_of(asked.selection) else {
-            return self.refuse(&request);
+            return self.refuse(&Request::of(asked));
         };
         if self.focused.is_none() {
             tracing::debug!(
                 ?selection,
                 "an X11 client asks for a Wayland selection without the keyboard: refused"
             );
-            return self.refuse(&request);
+            return self.refuse(&Request::of(asked));
         }
+        let held = self.held(selection);
+        let (offered, owned_at) = (held.wayland.clone(), held.owned_at);
+        self.serve(asked, offered, owned_at, Served::Selection(selection))
+    }
+
+    /// Answers an X11 client's request for Wayland's data, which Yuna took at `owned_at` and
+    /// offers as `offered`, each target with its MIME type, none when it offers nothing: at once
+    /// for `TARGETS` and `TIMESTAMP`, and for a drag's `DELETE`, which a target asks after a move
+    /// and Wayland's source carries out itself; through a transfer for a data target. Refused
+    /// otherwise: an unknown target, a request named with a time before Yuna took the selection,
+    /// one of the manager's own windows as the requestor, or past [`MAX_X11_TRANSFERS`].
+    pub(super) fn serve(
+        &mut self,
+        asked: &SelectionRequestEvent,
+        offered: Option<Vec<(Atom, String)>>,
+        owned_at: Option<Timestamp>,
+        served: Served,
+    ) -> Result<GoOn, Failure> {
+        let request = Request::of(asked);
+        let property = request.property;
         // The manager's own windows keep their events; INCR would change their mask.
         let own_window = request.requestor == self.root
             || request.requestor == self.own
@@ -924,11 +1077,9 @@ impl<'a> Bridge<'a> {
                 .into_iter()
                 .any(|selection| self.asks_on(selection) == Some(request.requestor));
         let atoms = self.atoms;
-        let held = self.held(selection);
-        let owned_at = held.owned_at;
         // ICCCM 2.2: a request made before Yuna took the selection asks for an older one.
         let stale = owned_at.is_some_and(|taken| earlier(request.time, taken));
-        let offered = match &held.wayland {
+        let offered = match offered {
             Some(targets) if !own_window && !stale => targets,
             _ => return self.refuse(&request),
         };
@@ -954,6 +1105,17 @@ impl<'a> Bridge<'a> {
             )?;
             return self.notify(&request, property);
         }
+        if request.target == atoms.DELETE && matches!(served, Served::Drag(_)) {
+            // ICCCM 2.6.3.1: done, with an empty property of type NULL.
+            self.connection.change_property8(
+                PropMode::REPLACE,
+                request.requestor,
+                property,
+                atoms.NULL,
+                &[],
+            )?;
+            return self.notify(&request, property);
+        }
         let mime_type = offered
             .iter()
             .find(|&&(target, _)| target == request.target)
@@ -976,6 +1138,7 @@ impl<'a> Bridge<'a> {
             transfer,
             ToX11 {
                 request,
+                served,
                 type_,
                 source: None,
                 ended: false,
@@ -985,11 +1148,23 @@ impl<'a> Bridge<'a> {
                 progress: Instant::now(),
             },
         );
-        Ok(self.post(ManagerEvent::ReadWayland {
-            selection,
-            mime_type,
-            transfer,
+        Ok(self.post(match served {
+            Served::Selection(selection) => ManagerEvent::ReadWayland {
+                selection,
+                mime_type,
+                transfer,
+            },
+            Served::Drag(drag) => ManagerEvent::ReadWaylandDrag {
+                drag,
+                mime_type,
+                transfer,
+            },
         }))
+    }
+
+    /// Refuses `asked`, a request none may be served for.
+    pub(super) fn refuse_request(&self, asked: &SelectionRequestEvent) -> Result<GoOn, Failure> {
+        self.refuse(&Request::of(asked))
     }
 
     /// Tells `request`'s requestor its answer is in `property`; none is a refusal.
@@ -1039,13 +1214,25 @@ impl<'a> Bridge<'a> {
         let Some(sending) = self.to_x11.remove(&transfer) else {
             return Ok(true);
         };
+        let served = sending.served;
         match self.read_and_answer(sending)? {
             Step::Going(sending) => {
                 self.to_x11.insert(transfer, sending);
                 Ok(true)
             }
-            Step::Ended => Ok(true),
+            Step::Ended => {
+                self.moved_to_x11(served, Instant::now());
+                Ok(true)
+            }
             Step::Failed(sending, reason) => self.ended_to_x11(&sending, reason),
+        }
+    }
+
+    /// A transfer to X11 that last moved `at` ended: for a drag's, its time limit runs from
+    /// then.
+    fn moved_to_x11(&mut self, served: Served, at: Instant) {
+        if let Served::Drag(drag) = served {
+            note_move(&mut self.drags_to_x11_moved, drag, at);
         }
     }
 
@@ -1160,7 +1347,8 @@ impl<'a> Bridge<'a> {
     }
 
     /// [`Bridge::end_to_x11`] for `sending`, taken from the transfers already.
-    fn ended_to_x11(&self, sending: &ToX11, reason: &str) -> Result<GoOn, Failure> {
+    fn ended_to_x11(&mut self, sending: &ToX11, reason: &str) -> Result<GoOn, Failure> {
+        self.moved_to_x11(sending.served, sending.progress);
         tracing::debug!(
             reason,
             "a transfer of a Wayland selection to X11 ends short"
@@ -1267,6 +1455,68 @@ impl<'a> Bridge<'a> {
         writes.chain(reads).collect()
     }
 
+    /// When a transfer of X11 drag `drag` to Wayland last moved, running or ended; none if none
+    /// ran.
+    pub(super) fn drag_to_wayland_progress(&self, drag: u64) -> Option<Instant> {
+        let running = self
+            .to_wayland
+            .values()
+            .filter(|transfer| transfer.from == ReadFrom::Drag(drag))
+            .map(|transfer| transfer.progress);
+        let ended = self
+            .drags_to_wayland_moved
+            .iter()
+            .filter(|(of, _)| *of == drag)
+            .map(|&(_, at)| at);
+        running.chain(ended).max()
+    }
+
+    /// When a transfer of Wayland drag `drag` to X11 last moved, running or ended; none if none
+    /// ran.
+    pub(super) fn drag_to_x11_progress(&self, drag: u64) -> Option<Instant> {
+        let running = self
+            .to_x11
+            .values()
+            .filter(|sending| sending.served == Served::Drag(drag))
+            .map(|sending| sending.progress);
+        let ended = self
+            .drags_to_x11_moved
+            .iter()
+            .filter(|(of, _)| *of == drag)
+            .map(|&(_, at)| at);
+        running.chain(ended).max()
+    }
+
+    /// Keeps the last moves of the drags the manager still follows, X11 programs' to Wayland and
+    /// Wayland clients' to X11, and forgets the others': at most the drags it follows, and those
+    /// whose transfers ended in one turn.
+    pub(super) fn keep_drag_moves(
+        &mut self,
+        follows_x11: impl Fn(u64) -> bool,
+        follows_wayland: impl Fn(u64) -> bool,
+    ) {
+        self.drags_to_wayland_moved
+            .retain(|&(drag, _)| follows_x11(drag));
+        self.drags_to_x11_moved
+            .retain(|&(drag, _)| follows_wayland(drag));
+    }
+
+    /// X11 drag `drag`'s source left: the transfers reading it end.
+    pub(super) fn end_drag_to_wayland(&mut self, drag: u64) -> Result<GoOn, Failure> {
+        let reading: Vec<Window> = self
+            .to_wayland
+            .iter()
+            .filter(|(_, transfer)| transfer.from == ReadFrom::Drag(drag))
+            .map(|(&window, _)| window)
+            .collect();
+        for window in reading {
+            if !self.end_to_wayland(window, "its drag's source left")? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// When the first transfer, or the first owner's `TARGETS`, runs out of time, if one runs.
     pub(super) fn next_deadline(&self) -> Option<Instant> {
         let asked = [&self.clipboard, &self.primary]
@@ -1284,6 +1534,13 @@ impl<'a> Bridge<'a> {
     }
 }
 
+/// The time a refused read of a drag is asked again with: the drag's `newest`, once its source
+/// moved on since the read named `asked_with`, while it was asked fewer than [`MAX_DRAG_ASKS`]
+/// times; none otherwise, and the read ends.
+fn ask_again(asked_with: Timestamp, newest: Option<Timestamp>, asks: u8) -> Option<Timestamp> {
+    newest.filter(|&newest| newest != asked_with && asks < MAX_DRAG_ASKS)
+}
+
 /// Whether X11 time `time` is before `than`: `CurrentTime` never is. X11's times are
 /// milliseconds that wrap around in 49.7 days, compared as X11's server compares them: `time`
 /// is earlier when `than` lies less than half the range after it.
@@ -1293,7 +1550,7 @@ fn earlier(time: Timestamp, than: Timestamp) -> bool {
 
 /// A reply, or none when X11 refused the request, for a window or an atom that does not exist; a
 /// lost connection fails.
-fn refused_is_none<R>(reply: Result<R, ReplyError>) -> Result<Option<R>, Failure> {
+pub(super) fn refused_is_none<R>(reply: Result<R, ReplyError>) -> Result<Option<R>, Failure> {
     match reply {
         Ok(reply) => Ok(Some(reply)),
         Err(ReplyError::X11Error(_)) => Ok(None),
@@ -1314,6 +1571,32 @@ mod tests {
 
     fn strings(names: &[&str]) -> Vec<String> {
         names.iter().map(|&name| name.to_owned()).collect()
+    }
+
+    /// A drag's read refused for an older position is asked again with the newest, a bounded
+    /// number of times; a read refused at the newest, or a selection's, ends.
+    #[test]
+    fn a_drags_read_refused_for_an_older_position_is_asked_again() {
+        assert_eq!(ask_again(10, Some(12), 1), Some(12));
+        assert_eq!(ask_again(12, Some(12), 1), None, "refused at the newest");
+        assert_eq!(ask_again(10, None, 1), None, "no drag");
+        assert_eq!(ask_again(10, Some(12), MAX_DRAG_ASKS), None, "asked enough");
+    }
+
+    /// A drag's transfers that ended keep their last move, so that its time limit runs from it:
+    /// each drag at its latest move, until the manager forgets the drag.
+    #[test]
+    fn the_last_move_of_a_drags_ended_transfers_is_kept() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut moves = Vec::new();
+        note_move(&mut moves, 1, at(10));
+        note_move(&mut moves, 1, at(5));
+        assert_eq!(moves, [(1, at(10))], "the latest move stays");
+        for drag in 2..=5 {
+            note_move(&mut moves, drag, at(drag));
+        }
+        assert_eq!(moves.len(), 5, "no drag is forgotten for a newer one");
     }
 
     #[test]

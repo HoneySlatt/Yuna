@@ -29,7 +29,9 @@
 //! (`answers.rs`); what the state decides goes back to the manager as commands, at the round's
 //! end ([`Xwayland::send_commands`]). The manager also carries the seat's clipboard and primary
 //! selection between X11 and Wayland, both ways: on its thread (`bridge.rs`), Yuna's state
-//! deciding what the seat's Wayland selections are (`selections.rs`).
+//! deciding what the seat's Wayland selections are (`selections.rs`). And it carries drags
+//! between them, both ways: XDND on its thread (`xdnd.rs`), each seat's drags decided on Yuna's
+//! side (`drag_session.rs`, carried out by `drags.rs`).
 //!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
 //! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
@@ -38,6 +40,8 @@
 mod answers;
 mod bridge;
 mod display;
+mod drag_session;
+mod drags;
 mod manager;
 mod menus;
 mod properties;
@@ -45,6 +49,7 @@ mod selections;
 mod server;
 mod shell;
 mod windows;
+mod xdnd;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -672,6 +677,7 @@ impl Xwayland {
     /// an Xwayland whose manager is gone is dropped.
     pub(crate) fn send_commands(&mut self, state: &mut State) {
         state.x11_selection_commands();
+        state.x11_drag_commands();
         for (id, command) in state.x11.take_outbox() {
             if let Some(manager) = self
                 .servers

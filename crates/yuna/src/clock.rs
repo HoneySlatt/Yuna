@@ -32,6 +32,9 @@ pub(crate) enum Deadline {
     /// The earliest time an X11 window's sync request or ping goes unanswered
     /// (`xwayland/answers.rs`).
     X11Answers,
+    /// The earliest time an X11 program's drag released goes without its source's drop or leave
+    /// (`xwayland/drags.rs`).
+    Drags,
 }
 
 /// The time and the armed deadlines. See the module's documentation.

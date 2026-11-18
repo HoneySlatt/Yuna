@@ -587,6 +587,202 @@ fn sharp_lines(drawn: &Image) -> Result<(), String> {
     Ok(())
 }
 
+/// A window of Qt's `qml` that drags and takes drops: its left half starts a drag of text and a
+/// file's URI, named after the platform Qt runs on, once the pointer moves past Qt's threshold
+/// with the left button held; its right half takes any drop, as a copy, and logs what it got on
+/// one line, [`DROPPED`] first.
+const DRAG_QML: &str = r##"import QtQuick
+import QtQuick.Window
+
+Window {
+    width: 800
+    height: 400
+    visible: true
+    title: "Yuna, drags"
+    color: "#203040"
+
+    Rectangle {
+        id: source
+        x: 0; y: 0; width: parent.width / 2; height: parent.height
+        color: "#406080"
+        Drag.active: handler.active
+        Drag.dragType: Drag.Automatic
+        Drag.supportedActions: Qt.CopyAction
+        Drag.mimeData: {
+            "text/plain": "dragged from " + Qt.platform.pluginName,
+            "text/uri-list": "file:///tmp/yuna%20drag/" + Qt.platform.pluginName + ".txt"
+        }
+        DragHandler { id: handler; target: null }
+    }
+
+    DropArea {
+        x: parent.width / 2; y: 0; width: parent.width / 2; height: parent.height
+        onDropped: (drop) => {
+            console.log("yuna-dropped on " + Qt.platform.pluginName + ": text=" + drop.text
+                + " uris=" + drop.urls.join(","))
+            drop.accept(Qt.CopyAction)
+        }
+    }
+}
+"##;
+
+/// What [`DRAG_QML`] logs first on the line of a drop.
+const DROPPED: &str = "yuna-dropped on ";
+
+/// How many moves a drag takes from its source to its target: Qt starts a drag past a threshold
+/// of a few pixels, and an X11 program looks for its target at each motion.
+const DRAG_STEPS: u32 = 24;
+
+/// Qt's `qml` on X11 and on Wayland, side by side on one agent's seat, through MCP as an agent
+/// runs them: the agent's pointer drags from each window's source half into the other's drop
+/// half, and, as a control, from the Wayland window's source into its own drop half. Each drop
+/// lands with the text and the file's URI its source offered, logged by the program that took it:
+/// Qt's own XDND and its own `wl_data_device` at both ends. Yuna then rests
+/// ([ADR-0102](../../../docs/adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md)).
+#[test]
+fn qml_drags_text_and_a_uri_between_x11_and_wayland() {
+    let report = qml_drags().unwrap_or_else(|failure| panic!("{failure}"));
+    eprintln!("{report}");
+}
+
+fn qml_drags() -> Result<String, String> {
+    let mut yuna = Yuna::start_mcp();
+    let scene = yuna.folder.join("drags.qml");
+    fs::write(&scene, DRAG_QML).map_err(|error| format!("the scene: {error}"))?;
+    let scene = scene.to_str().ok_or("a path")?;
+    let seat = yuna.create_seat_with(output_mode(OUTPUT_AT_ONE_AND_A_HALF))?;
+    let on_x11 = yuna.start_program(seat, &["qml", scene], &qt_variables("xcb"))?;
+    yuna.agent_window(seat)?;
+    let on_wayland = yuna.start_program(seat, &["qml", scene], &qt_variables("wayland"))?;
+    let failure = |what: String| {
+        format!(
+            "drags: {what}\nqml on X11: {}\nqml on Wayland: {}",
+            yuna.diagnosis(&on_x11.log),
+            on_wayland.log.display()
+        )
+    };
+    let windows = both_windows(&yuna, seat).map_err(failure)?;
+    let x11 = windows
+        .iter()
+        .find(|window| window["shell"] == json!("x11"))
+        .ok_or_else(|| failure(format!("no X11 window among {windows:?}")))?;
+    let wayland = windows
+        .iter()
+        .find(|window| window["shell"] == json!("xdg"))
+        .ok_or_else(|| failure(format!("no Wayland window among {windows:?}")))?;
+    yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+
+    let mut report = String::new();
+    for (from, to, log, platform) in [
+        (wayland, wayland, &on_wayland.log, "wayland"),
+        (x11, wayland, &on_wayland.log, "xcb"),
+        (wayland, x11, &on_x11.log, "wayland"),
+    ] {
+        let before = dropped_lines(log).len();
+        drag(&yuna, seat, half(from, 0.25)?, half(to, 0.75)?).map_err(failure)?;
+        // Qt logs the URI decoded: its space escaped in the drag, plain in the log.
+        let wanted =
+            format!("text=dragged from {platform} uris=file:///tmp/yuna drag/{platform}.txt");
+        let deadline = Instant::now() + PATIENCE;
+        let line = loop {
+            if let Some(line) = dropped_lines(log).into_iter().nth(before) {
+                break line;
+            }
+            if Instant::now() > deadline {
+                return Err(failure(format!(
+                    "a drag from {} to {} was never dropped",
+                    from["shell"], to["shell"]
+                )));
+            }
+            std::thread::sleep(POLL);
+        };
+        if !line.ends_with(&wanted) {
+            return Err(failure(format!(
+                "a drag from {} to {} dropped \"{line}\", not \"{wanted}\"",
+                from["shell"], to["shell"]
+            )));
+        }
+        report.push_str(&format!("{} to {}: {line}\n", from["shell"], to["shell"]));
+    }
+    // Every drag ended: no time limit of theirs, no proxy and no transfer may keep Yuna awake.
+    yuna.wait_until_quiet(QUIET, PATIENCE).map_err(failure)?;
+    let rest = yuna
+        .measure_rest()
+        .map_err(|activity| failure(format!("Yuna did not rest after the drags: {activity}")))?;
+    yuna.stop()?;
+    report.push_str(&format!("then {rest}"));
+    Ok(report)
+}
+
+/// Waits through MCP until `seat` shows two windows, placed, and gives them.
+fn both_windows(yuna: &Yuna, seat: u64) -> Result<Vec<Value>, String> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let found = yuna.call("windows", json!({"seat": seat}))?;
+        let windows = found["structuredContent"]["windows"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if windows.len() == 2 {
+            return Ok(windows);
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "{} windows, not 2, in {} s",
+                windows.len(),
+                PATIENCE.as_secs()
+            ));
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+/// The point across `window` at `across` of its width, half way down, in its output's logical
+/// units.
+fn half(window: &Value, across: f64) -> Result<(f64, f64), String> {
+    let rect = &window["rect"];
+    let number = |key: &str| rect[key].as_f64().ok_or(format!("no {key} in {window}"));
+    Ok((
+        number("x")? + number("width")? * across,
+        number("y")? + number("height")? / 2.0,
+    ))
+}
+
+/// Drags `seat`'s pointer from `from` to `to` with its left button, in [`DRAG_STEPS`] moves, as
+/// a hand does.
+fn drag(yuna: &Yuna, seat: u64, from: (f64, f64), to: (f64, f64)) -> Result<(), String> {
+    let pointer = |action: &str, (x, y): (f64, f64)| {
+        let mut call = json!({"action": action, "seat": seat, "x": x, "y": y});
+        if action != "move" {
+            call["button"] = json!("left");
+        }
+        yuna.call("pointer", call).map(|_| ())
+    };
+    pointer("press", from)?;
+    for step in 1..=DRAG_STEPS {
+        let along = f64::from(step) / f64::from(DRAG_STEPS);
+        pointer(
+            "move",
+            (
+                from.0 + (to.0 - from.0) * along,
+                from.1 + (to.1 - from.1) * along,
+            ),
+        )?;
+        // A program reads each motion in its own time; a hand moves no faster.
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    pointer("release", to)
+}
+
+/// The lines of `log` that tell of a drop, in order.
+fn dropped_lines(log: &Path) -> Vec<String> {
+    fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.find(DROPPED).map(|at| line[at..].to_owned()))
+        .collect()
+}
+
 /// Wine's own notepad on X11, Wine's X11 driver, through MCP as an agent runs it: one with a
 /// fresh prefix at 144 dots per inch on a seat at 1.5, one at 96 on a seat at 1 beside it, each
 /// prefix made before its first run. Both are tiled, so their windows' sizes are Yuna's; Wine's

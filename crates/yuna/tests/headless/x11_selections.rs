@@ -28,14 +28,14 @@ use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step, step_pumping};
 use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait};
 
-const TEXT: &str = "text/plain;charset=utf-8";
+pub(crate) const TEXT: &str = "text/plain;charset=utf-8";
 
 /// The INCR chunks of the X11 test client that copies: smaller than any X11 server's maximum
 /// request, as an X11 program's.
-const CHUNK: usize = 64 * 1024;
+pub(crate) const CHUNK: usize = 64 * 1024;
 
 /// One mebibyte: above the maximum request of X11's core protocol, 256 KiB, so INCR both ways.
-const MEBIBYTE: usize = 1024 * 1024;
+pub(crate) const MEBIBYTE: usize = 1024 * 1024;
 
 x11rb::atom_manager! {
     /// The atoms the stories name.
@@ -59,7 +59,7 @@ pub(crate) fn atoms_of(client: &X11Client) -> SelectionAtoms {
 
 /// `length` bytes with no period a chunk could hide in: a chunk lost, doubled or swapped changes
 /// them.
-fn pattern(length: usize) -> Vec<u8> {
+pub(crate) fn pattern(length: usize) -> Vec<u8> {
     (0..length as u64)
         .map(|index| {
             let mut x = index + 1;
@@ -73,7 +73,7 @@ fn pattern(length: usize) -> Vec<u8> {
 
 /// Opens a window for `wl` on the seat and waits until it has the seat's keyboard, its client
 /// told so.
-fn open_wayland_window(seat: &mut X11Seat, wl: &mut SelectionClient) -> WindowId {
+pub(crate) fn open_wayland_window(seat: &mut X11Seat, wl: &mut SelectionClient) -> WindowId {
     let window = wl.client.open_window(&mut seat.compositor);
     wl.client.ack(window);
     wl.client.attach(window, 400, 300, 0xFF_20_40_60);
@@ -145,7 +145,7 @@ pub(crate) fn take_selection(client: &mut X11Client, selection: Atom) -> Result<
 }
 
 /// Tells `request`'s requestor its answer is in `property`, or, with none, refused.
-fn notify(
+pub(crate) fn notify(
     client: &X11Client,
     request: &SelectionRequestEvent,
     property: Atom,
@@ -285,7 +285,7 @@ pub(crate) fn paste(
 
 /// [`paste`], the request naming `time`, as ICCCM asks of a program: the time of the event that
 /// made it paste.
-fn paste_at(
+pub(crate) fn paste_at(
     client: &mut X11Client,
     window: Window,
     selection: Atom,
@@ -1031,7 +1031,7 @@ fn reads_past_the_transfers_at_once_are_refused_and_the_others_end_in_time() {
 }
 
 /// The owner of `selection` now, as X11 says: none is `NONE`.
-fn owner_of(client: &X11Client, selection: Atom) -> Result<Window, String> {
+pub(crate) fn owner_of(client: &X11Client, selection: Atom) -> Result<Window, String> {
     Ok(client
         .connection
         .get_selection_owner(selection)

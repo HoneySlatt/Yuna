@@ -70,6 +70,9 @@ pub enum Source {
     ClockHiddenFrames,
     /// The clock's timer, due when an X11 window's sync request or ping goes unanswered.
     ClockX11Answers,
+    /// The clock's timer, due when an X11 program's drag released goes without its source's
+    /// drop or leave.
+    ClockDrags,
     /// SIGTERM or SIGINT, through its pipe.
     StopSignal,
     /// SIGCHLD, through its pipe: a child of `yuna mcp` ended.
@@ -130,7 +133,7 @@ pub enum Source {
 
 impl Source {
     /// How many there are.
-    pub const COUNT: usize = 35;
+    pub const COUNT: usize = 36;
 
     /// Every source, in the order results give them.
     pub const ALL: [Source; Source::COUNT] = [
@@ -141,6 +144,7 @@ impl Source {
         Source::ClockPresentation,
         Source::ClockHiddenFrames,
         Source::ClockX11Answers,
+        Source::ClockDrags,
         Source::StopSignal,
         Source::ChildEnded,
         Source::McpInput,
@@ -181,6 +185,7 @@ impl Source {
             Source::ClockPresentation => "clock_presentation",
             Source::ClockHiddenFrames => "clock_hidden_frames",
             Source::ClockX11Answers => "clock_x11_answers",
+            Source::ClockDrags => "clock_drags",
             Source::StopSignal => "stop_signal",
             Source::ChildEnded => "child_ended",
             Source::McpInput => "mcp_input",
@@ -217,7 +222,8 @@ impl Source {
     /// accessibility bus and calls, its clipboard's reads and writes, and the display's wakes in
     /// which one of its clients had something. The others are Yuna's own parts: the signals,
     /// MCP's input and output, its encoders, its waiting calls and its captures' timers, the
-    /// throttle every program shares, the hidden windows' and the X11 answers' deadlines.
+    /// throttle every program shares, the hidden windows', the X11 answers' and the drags'
+    /// deadlines.
     pub fn serves_a_seat(self) -> bool {
         matches!(
             self,

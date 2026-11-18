@@ -817,6 +817,15 @@ impl X11Client {
         }
     }
 
+    /// The first event that came and was not taken yet, without waiting; none when none came:
+    /// for a client that runs its own loop, as a toolkit does.
+    pub(crate) fn next_event(&mut self) -> Result<Option<Event>, String> {
+        if let Some(event) = self.events.pop_front() {
+            return Ok(Some(event));
+        }
+        self.connection.poll_for_event().map_err(|e| e.to_string())
+    }
+
     /// Every event that came until X11 handled the requests sent so far, taken from the queue.
     pub(crate) fn take_events(&mut self) -> Result<Vec<Event>, String> {
         self.sync()?;

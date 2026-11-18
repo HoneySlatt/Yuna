@@ -389,7 +389,8 @@ impl State {
     }
 
     /// The first step of removing agent seat `id`: releases the keys and buttons it holds, ends
-    /// its popup grab, and moves its focus off every surface, so that its clients are told.
+    /// its drags and its popup grab, and moves its focus off every surface, so that its clients
+    /// are told.
     /// Refused for the owner's seat and for a seat that does not exist.
     pub(crate) fn release_seat(&mut self, id: SeatId) -> Result<(), Error> {
         if id == OWNER_SEAT {
@@ -401,6 +402,7 @@ impl State {
             return Err(Error::Refused(format!("no seat {}", id.0)));
         }
         self.release_held_input(id);
+        self.drags_seat_closed(id);
         self.end_popup_grab(id);
         self.give_keyboard_to(id, None);
         if let Some(pointer) = self.seat(id).and_then(|seat| seat.pointer.clone()) {

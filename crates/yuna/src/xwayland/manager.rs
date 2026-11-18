@@ -12,8 +12,9 @@
 //!    was given ([ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
 //! 3. XSETTINGS: `Xft/DPI` with it, and a window scale of 1, since X11 programs draw in X11
 //!    pixels.
-//! 4. XFixes' selection events on the manager's window, for `CLIPBOARD` and `PRIMARY`: no X11
-//!    client's selection goes unseen (`bridge.rs`).
+//! 4. The drags' proxy, unmapped (`xdnd.rs`), and XFixes' selection events on the manager's
+//!    window, for `CLIPBOARD`, `PRIMARY` and `XdndSelection`: no X11 client's selection or drag
+//!    goes unseen (`bridge.rs`).
 //! 5. Composite's manual redirection of the root's windows, and SubstructureRedirect on the root:
 //!    Yuna draws and places X11 windows.
 //! 6. `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK`, and the root's empty `_NET_CLIENT_LIST`,
@@ -41,7 +42,9 @@
 //!
 //! It also carries the seat's clipboard and primary selection between X11 and Wayland, both ways
 //! (`bridge.rs`): it posts what X11 clients copy and ask, and takes Yuna's word of what Wayland
-//! clients copy, the pipes of their pastes, and the data of their selections.
+//! clients copy, the pipes of their pastes, and the data of their selections. And it speaks XDND
+//! for drags between them, both ways (`xdnd.rs`): it posts what X11 sources and targets say, and
+//! answers them at once from what Yuna last told it.
 //!
 //! **No reparenting.** The manager never puts a window inside a frame of its own: Yuna draws no
 //! title bars ([ADR-0024](../../../../docs/adr/0024-no-title-bars.md)), so a frame would only
@@ -50,10 +53,11 @@
 //! ([debt](../../../../docs/debt.md#xwayland)).
 //!
 //! Between them it sleeps in `poll` on its connection, its wake-up socket and the pipes its
-//! transfers wait on, until the first transfer's time limit: with no transfer, until something
-//! comes. The thread ends when Xwayland closes the connection, when Yuna lets the commands go, or
-//! on an error; its channel's end tells Yuna, which then ends that Xwayland, even when the thread
-//! panicked. Nothing an X11 client sends can make it panic: every value it reads is checked.
+//! transfers wait on, until the first transfer's or drag's time limit: with neither, until
+//! something comes. The thread ends when Xwayland closes the connection, when Yuna lets the
+//! commands go, or on an error; its channel's end tells Yuna, which then ends that Xwayland, even
+//! when the thread panicked. Nothing an X11 client sends can make it panic: every value it reads
+//! is checked.
 
 use std::collections::HashMap;
 use std::io;
@@ -86,10 +90,12 @@ use x11rb::wrapper::ConnectionExt as _;
 use yuna_layout::SeatId;
 
 use super::bridge::{Bridge, Selection};
+use super::drag_session::DragAction;
 use super::properties::{
     self, MAX_EMULATED, MAX_LIST, MAX_STARTUP_ID_BYTES, MAX_TEXT_BYTES, Malformed, Properties,
     Protocols, Raw, TextTypes, WindowType, Wishes, X11Rect,
 };
+use super::xdnd::{self, Xdnd};
 
 /// How many of the manager's events wait for Yuna's loop before the thread waits in turn: X11's
 /// own buffers then hold what comes, rather than Yuna's memory.
@@ -189,9 +195,51 @@ pub(crate) enum ManagerEvent {
         mime_type: String,
         transfer: u64,
     },
-    /// A transfer of [`Command::SendToWayland`] ended, whatever its outcome, refused at once
-    /// included: one fewer runs.
+    /// A transfer of [`Command::SendToWayland`] or [`Command::SendX11Drag`] ended, whatever its
+    /// outcome, refused at once included: one fewer runs.
     TransferToWaylandEnded,
+    /// An X11 client took `XdndSelection`, the `drag`-th taking the manager saw: an X11 drag, if
+    /// Yuna starts it. `client` is the bits of the owner's id that name its client.
+    X11DragOffered { drag: u64, client: u32 },
+    /// X11 drag `drag`'s source sent `XdndEnter` to the proxy, then its first `XdndPosition`: it
+    /// offers these MIME types, and proposes `action`.
+    X11DragEntered {
+        drag: u64,
+        mime_types: Vec<String>,
+        action: DragAction,
+    },
+    /// X11 drag `drag`'s source sent `XdndLeave` to the proxy.
+    X11DragLeft(u64),
+    /// X11 drag `drag`'s source sent `XdndDrop` to the proxy: Yuna answers with
+    /// [`Command::FinishX11Drag`].
+    X11DragDropped(u64),
+    /// The action X11 drag `drag`'s positions propose changed.
+    X11DragAction { drag: u64, action: DragAction },
+    /// X11 drag `drag` ended on X11's side: its source gave `XdndSelection` up or left, another
+    /// took it, or its drop was not finished in time.
+    X11DragEnded(u64),
+    /// The proxy was mapped for X11 drag `drag`.
+    DragProxyMapped(u64),
+    /// The X11 target of Wayland drag `drag` changed its answer: whether it accepts, its action.
+    WaylandDragStatus {
+        drag: u64,
+        accepted: bool,
+        action: DragAction,
+    },
+    /// The X11 target of Wayland drag `drag` reads it as `mime_type`: Yuna answers transfer
+    /// `transfer` with [`Command::WaylandData`].
+    ReadWaylandDrag {
+        drag: u64,
+        mime_type: String,
+        transfer: u64,
+    },
+    /// Wayland drag `drag` ended on X11's side: performed with this action, as its target's
+    /// `XdndFinished` said; or not, refused, never answered, its target or its `XdndSelection`
+    /// gone.
+    WaylandDragEnded {
+        drag: u64,
+        performed: Option<DragAction>,
+    },
     /// The thread ends, for this reason.
     Stopped(Stop),
 }
@@ -279,11 +327,53 @@ pub(crate) enum Command {
         pipe: OwnedFd,
     },
     /// The read end of the pipe the Wayland source writes into for transfer `transfer` of
-    /// [`ManagerEvent::ReadWayland`]; none when the source cannot be read.
+    /// [`ManagerEvent::ReadWayland`] or [`ManagerEvent::ReadWaylandDrag`]; none when the source
+    /// cannot be read.
     WaylandData {
         transfer: u64,
         source: Option<OwnedFd>,
     },
+    /// Shows the proxy for X11 drag `drag`, over a Wayland window or over nothing, or hides it.
+    ShowDragProxy { drag: u64, shown: bool },
+    /// The Wayland target's answer to X11 drag `drag`, which its source's `XdndStatus` carries.
+    AnswerX11Drag {
+        drag: u64,
+        accepted: bool,
+        action: DragAction,
+    },
+    /// A Wayland target reads X11 drag `drag` as `mime_type` into `pipe`. Its end is posted,
+    /// [`ManagerEvent::TransferToWaylandEnded`].
+    SendX11Drag {
+        drag: u64,
+        mime_type: String,
+        pipe: OwnedFd,
+    },
+    /// Ends X11 drag `drag` with `XdndFinished`: accepted and the action performed, or refused.
+    FinishX11Drag {
+        drag: u64,
+        accepted: bool,
+        action: DragAction,
+    },
+    /// Ends X11 drag `drag` with nothing more said to its source.
+    ForgetX11Drag(u64),
+    /// Wayland drag `drag` reached an X11 window for the first time: its MIME types, 64 at most
+    /// of 255 bytes at most, and the action it proposes.
+    StartWaylandDrag {
+        drag: u64,
+        mime_types: Vec<String>,
+        action: DragAction,
+    },
+    /// Wayland drag `drag` is over this X11 window at this point in root pixels, or over none.
+    WaylandDragOver {
+        drag: u64,
+        over: Option<(Window, (i16, i16))>,
+    },
+    /// Wayland drag `drag` was released over its X11 target: dropped if the target accepted, else
+    /// left, and the outcome posted, [`ManagerEvent::WaylandDragEnded`].
+    DropWaylandDrag(u64),
+    /// Wayland drag `drag` ends on X11's side, with nothing posted: left if not dropped, its
+    /// `XdndSelection` released.
+    CancelWaylandDrag(u64),
 }
 
 /// Yuna's side of a manager: its commands, and the socket that wakes its thread for them. When it
@@ -380,7 +470,26 @@ x11rb::atom_manager! {
         TIMESTAMP,
         INCR,
         TEXT,
+        DELETE,
+        NULL,
         _YUNA_SELECTION,
+        XdndAware,
+        XdndProxy,
+        XdndSelection,
+        XdndTypeList,
+        XdndActionList,
+        XdndActionDescription,
+        XdndEnter,
+        XdndPosition,
+        XdndStatus,
+        XdndLeave,
+        XdndDrop,
+        XdndFinished,
+        XdndActionCopy,
+        XdndActionMove,
+        XdndActionLink,
+        XdndActionAsk,
+        XdndActionPrivate,
     }
 }
 
@@ -434,17 +543,21 @@ fn run(
     let (stream, _) = DefaultStream::from_unix_stream(wm)?;
     // Xwayland has a single screen.
     let connection = RustConnection::connect_to_stream(stream, 0)?;
-    let (atoms, own) = take_charge(&connection, scale)?;
+    let (atoms, own, proxy) = take_charge(&connection, scale)?;
     if events.send(ManagerEvent::Ready).is_err() {
         return Ok(());
     }
-    let mut manager = Manager::new(&connection, atoms, own, events, commands)?;
+    let mut manager = Manager::new(&connection, atoms, own, proxy, events, commands)?;
     manager.serve(woken)
 }
 
 /// Takes charge of Xwayland's root, in the order the module's documentation gives, and checks
-/// that `WM_S0` is the manager's. Returns the atoms and the manager's own window.
-fn take_charge(connection: &RustConnection, scale: f64) -> Result<(Atoms, Window), Failure> {
+/// that `WM_S0` is the manager's. Returns the atoms, the manager's own window and the drags'
+/// proxy.
+fn take_charge(
+    connection: &RustConnection,
+    scale: f64,
+) -> Result<(Atoms, Window, Window), Failure> {
     let atoms = Atoms::new(connection)?.reply()?;
     let root = connection
         .setup()
@@ -499,10 +612,15 @@ fn take_charge(connection: &RustConnection, scale: f64) -> Result<(Atoms, Window
     )?;
     take_selection(connection, root, window, atoms._XSETTINGS_S0, &atoms)?;
 
+    let proxy = xdnd::create_proxy(connection, root, &atoms)?;
     let owners = SelectionEventMask::SET_SELECTION_OWNER
         | SelectionEventMask::SELECTION_WINDOW_DESTROY
         | SelectionEventMask::SELECTION_CLIENT_CLOSE;
-    for selection in [atoms.CLIPBOARD, AtomEnum::PRIMARY.into()] {
+    for selection in [
+        atoms.CLIPBOARD,
+        AtomEnum::PRIMARY.into(),
+        atoms.XdndSelection,
+    ] {
         connection.xfixes_select_selection_input(window, selection, owners)?;
     }
 
@@ -558,7 +676,7 @@ fn take_charge(connection: &RustConnection, scale: f64) -> Result<(Atoms, Window
     if owner != window {
         return Err(format!("WM_S0 belongs to window {owner}, not the manager's").into());
     }
-    Ok((atoms, window))
+    Ok((atoms, window, proxy))
 }
 
 /// What the manager supports, for `_NET_SUPPORTED`: the hints it reads or sets and the messages
@@ -731,7 +849,7 @@ struct Manager<'a> {
     /// The order Yuna last stacked windows in, bottom to top.
     restacked: Vec<Window>,
     /// X11's stacking of the root's children, bottom to top, as its events say: the manager's
-    /// own window and every window it follows.
+    /// own window, the drags' proxy and every window it follows.
     order: Vec<Window>,
     /// Whether `clients` or `stacking` changed since the root's lists were last set.
     lists_changed: bool,
@@ -739,6 +857,8 @@ struct Manager<'a> {
     commands: &'a mpsc::Receiver<Command>,
     /// The seat's selections on X11's side.
     bridge: Bridge<'a>,
+    /// The seat's drags on X11's side.
+    xdnd: Xdnd<'a>,
 }
 
 /// Whether the manager goes on: false once Yuna's end of the events' channel has gone.
@@ -749,6 +869,7 @@ impl<'a> Manager<'a> {
         connection: &'a RustConnection,
         atoms: Atoms,
         own: Window,
+        proxy: Window,
         events: &'a SyncSender<ManagerEvent>,
         commands: &'a mpsc::Receiver<Command>,
     ) -> Result<Manager<'a>, Failure> {
@@ -783,23 +904,30 @@ impl<'a> Manager<'a> {
             clients: Vec::new(),
             stacking: Vec::new(),
             restacked: Vec::new(),
-            order: vec![own],
+            // Both made before any client's window, the proxy after the manager's own.
+            order: vec![own, proxy],
             lists_changed: false,
             events,
             commands,
             bridge: Bridge::new(connection, events, atoms, root, own),
+            xdnd: Xdnd::new(connection, events, atoms, own, proxy),
         })
     }
 
-    /// Reads X11's events and Yuna's commands, and moves the transfers of selections, until
-    /// Xwayland closes the connection or Yuna lets the commands go. Sleeps in `poll` between
-    /// them, woken by X11, by Yuna, by a transfer's pipe, or by a transfer's time limit: nothing
-    /// is polled on a timer, and with no transfer the sleep has no end but those.
+    /// Reads X11's events and Yuna's commands, and moves the transfers of selections and the
+    /// drags, until Xwayland closes the connection or Yuna lets the commands go. Sleeps in `poll`
+    /// between them, woken by X11, by Yuna, by a transfer's pipe, or by a transfer's or a drag's
+    /// time limit: nothing is polled on a timer, and with neither the sleep has no end but those.
     fn serve(&mut self, woken: &UnixStream) -> Result<(), Failure> {
         loop {
-            if !self.take_commands()? || !self.bridge.run()? {
+            if !self.take_commands()? || !self.bridge.run()? || !self.xdnd.run(&self.bridge)? {
                 return Ok(());
             }
+            let xdnd = &self.xdnd;
+            self.bridge.keep_drag_moves(
+                |drag| xdnd.follows_x11(drag),
+                |drag| xdnd.follows_wayland(drag),
+            );
             // Flushed before the events are read: a flush that would block reads X11's packets
             // into x11rb's own queue, where `poll` would not see them, so that an event could
             // wait for unrelated traffic. Handling events sends requests too: flushed again, and
@@ -819,7 +947,14 @@ impl<'a> Manager<'a> {
                     break;
                 }
             }
-            let timeout = self.bridge.next_deadline().and_then(|deadline| {
+            let deadline = [
+                self.bridge.next_deadline(),
+                self.xdnd.next_deadline(&self.bridge),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let timeout = deadline.and_then(|deadline| {
                 Timespec::try_from(deadline.saturating_duration_since(Instant::now())).ok()
             });
             let mut sleep = vec![
@@ -901,7 +1036,7 @@ impl<'a> Manager<'a> {
             }
             Event::DestroyNotify(destroyed) => {
                 self.bridge.window_destroyed(destroyed.window);
-                self.forget(destroyed.window)
+                self.xdnd.window_destroyed(destroyed.window)? && self.forget(destroyed.window)
             }
             Event::MapRequest(request) => {
                 if let Some(tracked) = self.windows.get_mut(&request.window) {
@@ -909,6 +1044,7 @@ impl<'a> Manager<'a> {
                 }
                 self.post(ManagerEvent::MapRequest(request.window))
             }
+            Event::MapNotify(mapped) if !self.xdnd.mapped(mapped.window)? => false,
             Event::MapNotify(mapped) => match self.windows.get_mut(&mapped.window) {
                 Some(tracked) if !tracked.mapped => {
                     tracked.mapped = true;
@@ -938,11 +1074,31 @@ impl<'a> Manager<'a> {
                 self.bridge.property(&changed)?
                     && self.property_changed(changed.window, changed.atom)?
             }
+            Event::ClientMessage(message) if self.xdnd.takes(&message) => {
+                self.xdnd.client_message(&message, &mut self.bridge)?
+            }
             Event::ClientMessage(message) => self.client_message(&message),
+            Event::XfixesSelectionNotify(changed)
+                if changed.selection == self.atoms.XdndSelection =>
+            {
+                self.xdnd.owner_changed(&changed, &mut self.bridge)?
+            }
             Event::XfixesSelectionNotify(changed) => self.bridge.owner_changed(&changed)?,
-            Event::SelectionNotify(answer) => self.bridge.converted(&answer)?,
+            Event::SelectionNotify(answer) => {
+                if self.xdnd.converted(&answer)? {
+                    let xdnd = &self.xdnd;
+                    self.bridge
+                        .converted(&answer, |drag: u64| xdnd.drag_time(drag))?
+                } else {
+                    false
+                }
+            }
             // The keyboard may have come to one of the seat's X11 windows just before the
-            // request that follows from it: the commands sent so far are carried out first.
+            // request that follows from it, or a drag moved: the commands sent so far are
+            // carried out first.
+            Event::SelectionRequest(request) if request.selection == self.atoms.XdndSelection => {
+                self.take_commands()? && self.xdnd.requested(&request, &mut self.bridge)?
+            }
             Event::SelectionRequest(request) => {
                 self.take_commands()? && self.bridge.requested(&request)?
             }
@@ -960,6 +1116,7 @@ impl<'a> Manager<'a> {
                 tracing::debug!(?error, "an X11 request of the manager failed");
                 if error.error_kind == ErrorKind::Window {
                     self.bridge.window_failed(error.bad_value)?
+                        && self.xdnd.window_destroyed(error.bad_value)?
                 } else {
                     true
                 }
@@ -980,7 +1137,7 @@ impl<'a> Manager<'a> {
         geometry: X11Rect,
         override_redirect: bool,
     ) -> Result<GoOn, Failure> {
-        if window == self.own || self.windows.contains_key(&window) {
+        if window == self.own || window == self.xdnd.proxy() || self.windows.contains_key(&window) {
             return Ok(true);
         }
         // Selected before the properties are read, so that no change between falls through.
@@ -1035,7 +1192,12 @@ impl<'a> Manager<'a> {
     /// the stacking once it is mapped. A managed window's place is Yuna's own already.
     fn configured(&mut self, configured: &ConfigureNotifyEvent) -> GoOn {
         let window = configured.window;
+        let above = Some(configured.above_sibling).filter(|&sibling| sibling != x11rb::NONE);
         let Some(tracked) = self.windows.get_mut(&window) else {
+            // The proxy, raised: its place counts for the menus mapped above it.
+            if window == self.xdnd.proxy() {
+                return self.restacked(window, above);
+            }
             return true;
         };
         let rect = X11Rect {
@@ -1047,7 +1209,6 @@ impl<'a> Manager<'a> {
         let moved = std::mem::replace(&mut tracked.geometry, rect) != rect;
         tracked.override_redirect = configured.override_redirect;
         let override_redirect = tracked.override_redirect;
-        let above = Some(configured.above_sibling).filter(|&sibling| sibling != x11rb::NONE);
         if override_redirect && moved && !self.post(ManagerEvent::Configured { window, rect }) {
             return false;
         }
@@ -1464,6 +1625,39 @@ impl<'a> Manager<'a> {
             Command::WaylandData { transfer, source } => {
                 return self.bridge.wayland_data(transfer, source);
             }
+            Command::ShowDragProxy { drag, shown } => self.xdnd.show_proxy(drag, shown)?,
+            Command::AnswerX11Drag {
+                drag,
+                accepted,
+                action,
+            } => self.xdnd.answer(drag, accepted, action)?,
+            Command::SendX11Drag {
+                drag,
+                mime_type,
+                pipe,
+            } => {
+                return self
+                    .xdnd
+                    .send_to_wayland(drag, &mime_type, pipe, &mut self.bridge);
+            }
+            Command::FinishX11Drag {
+                drag,
+                accepted,
+                action,
+            } => self.xdnd.finish(drag, accepted, action, &self.bridge)?,
+            Command::ForgetX11Drag(drag) => self.xdnd.forget(drag)?,
+            Command::StartWaylandDrag {
+                drag,
+                mime_types,
+                action,
+            } => {
+                return self
+                    .xdnd
+                    .start_wayland(drag, &mime_types, action, &mut self.bridge);
+            }
+            Command::WaylandDragOver { drag, over } => return self.xdnd.wayland_over(drag, over),
+            Command::DropWaylandDrag(drag) => return self.xdnd.drop_wayland(drag),
+            Command::CancelWaylandDrag(drag) => return self.xdnd.cancel_wayland(drag),
         }
         Ok(true)
     }

@@ -487,10 +487,23 @@ with games' VRR:
   small the same way unless their prefix's DPI is 96 × S: Wine reads its registry's `LogPixels`,
   not `Xft.dpi` (`wine reg add "HKCU\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 144`
   at 1.5). Paid at Stage 2, with the configuration's rules per application.
-- No drag and drop between X11 and Wayland programs yet: M1.12; between X11
-  programs of one seat it works inside Xwayland
-  ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). The clipboard and the primary
-  selection pass both ways ([ARCHITECTURE](ARCHITECTURE.md#between-x11-and-wayland)).
+- Drags between X11 and Wayland programs
+  ([ADR-0102](adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md))
+  were run with one real toolkit, Qt, on X11 and on Wayland. GTK 3 and 4, Chromium and Electron,
+  Java and Wine were not: their sources are read, not run. Chromium's X11 source may look for
+  its target in `_NET_CLIENT_LIST_STACKING`, which never lists the drags' proxy; if it does, its
+  drags never reach a Wayland window. Checked when one of them is first needed.
+- Some of the drags' rules are tested on the drag session and the XDND messages alone, not by a
+  story with Xwayland: a hidden X11 window under a drag, a source naming a version outside 3 to
+  5, a point outside X11's 16 bits, a moving or centred fullscreen window's point, Ask, Link, a
+  seat closed or Xwayland gone mid-drag, a third drag, and the one position kept waiting.
+- An X11 target's `XdndStatus` naming an action the Wayland source did not offer is passed on as
+  it is. An X11 source that changes its proposed action mid-drag, a modifier key pressed, has
+  the new actions offered to its Wayland target, but Smithay chooses the drag's action again
+  only when the target sets its own actions again. An X11 source's `XdndDrop` that reaches the manager after Yuna gave the drag up, 5 s
+  after the release, gets no `XdndFinished`: the source waits for its own time limit.
+- A Wayland drag released over an X11 window relies on the order in which Smithay's drag grab
+  ends its source and then calls its handler; a story holds it. It goes with the seats at Stage 2.
 - An `ext-data-control-v1` source destroyed while it is the owner's seat's selection still
   clears it silently: Yuna's patch of Smithay (patch 6) tells of `wl_data_source`s and primary
   sources alone. The X11 selection Yuna holds for it stays until an X11 program asks for it, which
