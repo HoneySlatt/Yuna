@@ -241,6 +241,8 @@ review at its gate ([ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-pat
 - Parity at every step: the tests unchanged, WLCS at or above its baseline, the real
   applications, protocol traces and captures compared between the cores, rest, memory and a
   frame's cost no worse; a step that regresses is reverted.
+- Captures read back without holding the loop: an agent that captures without pause costs its
+  output no frame, measured against Stage 1's figures ([debt](debt.md#captures)).
 - The clients' messages fuzzed weekly; the GPU's loss on demand for agents.
 
 **Gate.** Smithay is no longer in `Cargo.lock`; parity holds; the headless scenarios of the bar

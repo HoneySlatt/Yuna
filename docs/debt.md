@@ -214,7 +214,7 @@ with games' VRR:
 - Smithay `8fd9fe0` keeps every text field a client makes, unbounded, in its seat's list, and
   walks the list at each `commit` and each object destroyed: a client that makes n fields and
   leaves costs about n² steps on the main thread (`text_input_handle.rs`). Not measured; it
-  matters when agents' seats are in the owner's Yuna (Stage 3), and ADR-0028 bounds the like.
+  goes with Smithay at Stage 2a, whose own text-input is bounded as ADR-0028 bounds the like.
 - The owner's seat has no input method: a real one, `input-method-v2`, comes with the desktop.
 
 ## Keyboard layouts
@@ -252,8 +252,9 @@ with games' VRR:
   pause costs its output 6 % of its frames on the GPU, 37 % on llvmpipe at 4K
   ([measurements](measurements.md)): the full rate of an agent's output is missed meanwhile, and
   on the desktop a capture would cost a game frames. A readback into a buffer the GPU fills
-  while the loop goes on, read at a later refresh, would free it: to be planned with the owner,
-  by Stage 3, when agents capture on the desktop. A client's frame copies the whole output once
+  while the loop goes on, read at a later refresh, would free it. Paid by Stage 2a's renderer,
+  whose acceptance includes it (ROADMAP), the owner chose on 2026-11-18; the same measure
+  compares the two. A client's frame copies the whole output once
   a refresh for all the sessions that wait on it, 16 at most.
 - An agent's capture is refused past 8,000 pixels a side once its pixels are read, not when it
   is asked: one readback wasted, one capture of a seat at a time.
