@@ -16,26 +16,32 @@
 //! the pointer to the X11 source, which looks for its target in X11 itself: the manager's proxy,
 //! a window over the whole root, is shown while the drag is over a Wayland window or over
 //! nothing, and hidden over an X11 window, so that X11's own drags work as they do without Yuna,
-//! and from the drop or the drag's end on. It stays at the release, if the source entered it: the
-//! source may still read the window under the pointer for a motion that came before its release,
-//! and would leave a proxy gone. Once the pointer comes over an X11 window, after the release
-//! too, it is hidden, so that it never takes an X11 window's pointer. A Wayland target is
-//! entered only once the source's `XdndEnter` and first position reached the proxy, its types
-//! and action known, and left at its `XdndLeave`. Nothing happens at the release: the source
-//! decides. Its `XdndDrop` drops on the Wayland target if the target accepted a type and an
-//! action, else it is refused with `XdndFinished`. The target's `finish` is the source's
-//! `XdndFinished`. Without `XdndDrop` or `XdndLeave` within [`X11_DROP_TIMEOUT`] of the release,
-//! the drag ends.
+//! and from the drop or the drag's end on. Once it is shown or hidden, while the button is held,
+//! the pointer's last motion goes again: the source may have looked for its target for that
+//! motion before, and would look no more until the next. A release that reaches the source
+//! before it looked again is not covered: the source decides on the target it found. The proxy
+//! stays at the release, if the source entered it: the source may still read the window under
+//! the pointer for a motion that came before its release, and would leave a proxy gone. Once
+//! the pointer comes over an X11 window, after the release too, it is hidden, so that it never
+//! takes an X11 window's pointer. A Wayland target is entered only once the source's
+//! `XdndEnter` and first position reached the proxy, its types and action known, and left at its
+//! `XdndLeave`; the manager tells no `XdndEnter` again with the same types. Nothing happens at
+//! the release: the source decides. Its `XdndDrop` drops on the Wayland target if the target
+//! accepted a type and an action, else it is refused with `XdndFinished`. The target's `finish`
+//! is the source's `XdndFinished`. Without `XdndDrop` or `XdndLeave` within [`X11_DROP_TIMEOUT`]
+//! of the release, the drag ends.
 //!
 //! **A Wayland client's drag.** Smithay's drag grab carries it among Wayland windows; over an
 //! X11 window it gets no focus, and the drag speaks XDND through the manager instead, its point
 //! in X11's root pixels. Released over an X11 window, the manager drops if the target's last
 //! status accepted, else the source is cancelled; the source is told it was performed only once
-//! the target's `XdndFinished` says so. A drag within one client, which has no data, offers
-//! nothing to X11. An X11 target window gone, `XdndSelection` taken by another X11 client, or
-//! Xwayland gone, while the button is held, ends the drag's X11 side: the grab goes on among
-//! Wayland windows, and a release over an X11 window cancels the source. Dropping on X11, the
-//! source is cancelled at once. A source is cancelled once.
+//! the target's `XdndFinished` says so, with an action it offered (`drags.rs`). Once the grab
+//! ends, the seat's pointer goes back on what is under it, at the round's end: Smithay leaves it
+//! on the grab's last focus, none over an X11 window. A drag within one client, which has no
+//! data, offers nothing to X11. An X11 target window gone, `XdndSelection` taken by another X11
+//! client, or Xwayland gone, while the button is held, ends the drag's X11 side: the grab goes
+//! on among Wayland windows, and a release over an X11 window cancels the source. Dropping on
+//! X11, the source is cancelled at once. A source is cancelled once.
 //!
 //! **Two at most.** A seat holds the drag in the pointer's hand and one ending, whose data or
 //! answer still runs: [`MAX_SESSIONS`]. A new one ends any still in the hand, and the oldest
@@ -52,6 +58,14 @@ pub(crate) const MAX_SESSIONS: usize = 2;
 /// `XdndDrop` or `XdndLeave`: a source sends one at once, or after its own wait for a status,
 /// as long as an X11 transfer waits ([`X11_TRANSFER_TIMEOUT`](crate::X11_TRANSFER_TIMEOUT)).
 pub(crate) const X11_DROP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many times an X11 program's drag may enter the proxy each time the proxy is shown: a
+/// toolkit enters it once, when the pointer comes over a Wayland window or over nothing, which
+/// only the pointer's moves repeat. Each enter offers the Wayland window under the pointer the
+/// drag again, up to 64 types of 255 bytes: past the bound, an X11 program that leaves and enters
+/// again without end gets nothing more until the proxy is shown again, so that it cannot flood a
+/// Wayland program with offers until Yuna cuts it off.
+pub(crate) const MAX_X11_ENTERS: u8 = 2;
 
 /// What a drop does with the data, as Wayland and XDND both name it; none for a target that
 /// accepts nothing.
@@ -181,6 +195,9 @@ struct FromX11<T> {
     /// The source's `XdndEnter` reached the proxy, and no `XdndLeave` since: its types are
     /// known, and a Wayland target may be entered.
     entered: bool,
+    /// How many times the source entered the proxy since it was last shown, up to
+    /// [`MAX_X11_ENTERS`].
+    enters: u8,
     /// What the drag was last over.
     pick: Pick<T>,
     /// Whether the proxy is shown, as the manager was last told.
@@ -308,6 +325,9 @@ impl<T: Clone + PartialEq> FromX11<T> {
     fn show_proxy(&mut self, shown: bool, effects: &mut Vec<Effect<T>>) {
         if shown != self.proxy_shown {
             self.proxy_shown = shown;
+            if shown {
+                self.enters = 0;
+            }
             effects.push(Effect::ShowProxy {
                 server: self.server,
                 drag: self.drag,
@@ -537,6 +557,7 @@ impl<T: Clone + PartialEq> SeatDrags<T> {
             drag,
             stage: X11Stage::Dragging,
             entered: false,
+            enters: 0,
             pick: Pick::Nothing,
             proxy_shown: false,
             target: None,
@@ -632,6 +653,10 @@ impl<T: Clone + PartialEq> SeatDrags<T> {
         if let Some(session) = self.x11_session(server, drag)
             && session.stage == X11Stage::Dragging
         {
+            if session.enters >= MAX_X11_ENTERS {
+                return effects;
+            }
+            session.enters += 1;
             session.leave_target(&mut effects);
             session.entered = true;
             session.follow_pick(&mut effects);
@@ -713,8 +738,24 @@ impl<T: Clone + PartialEq> SeatDrags<T> {
     /// The manager's proxy was mapped for X11 drag `drag`: the source is shown the pointer
     /// again, so that it finds the proxy without waiting for the next motion.
     pub(crate) fn proxy_mapped(&mut self, server: u64, drag: u64) -> Vec<Effect<T>> {
+        self.proxy_now(server, drag, true)
+    }
+
+    /// The manager's proxy was unmapped while X11 drag `drag` is in the hand: the source is
+    /// shown the pointer again, so that a source that looked while the proxy was still there,
+    /// the pointer just come over an X11 window, looks past it, without waiting for the next
+    /// motion.
+    pub(crate) fn proxy_unmapped(&mut self, server: u64, drag: u64) -> Vec<Effect<T>> {
+        self.proxy_now(server, drag, false)
+    }
+
+    /// The proxy is now `shown` or not for X11 drag `drag`: while the drag is in the hand and
+    /// Yuna still wants the proxy so, the pointer's last motion goes again.
+    fn proxy_now(&mut self, server: u64, drag: u64, shown: bool) -> Vec<Effect<T>> {
         match self.x11_session(server, drag) {
-            Some(session) if session.stage == X11Stage::Dragging && session.proxy_shown => {
+            Some(session)
+                if session.stage == X11Stage::Dragging && session.proxy_shown == shown =>
+            {
                 vec![Effect::RepeatMotion]
             }
             _ => Vec::new(),
@@ -1072,6 +1113,38 @@ mod tests {
         assert_eq!(drags.moved(over_x11(6)).1, [shown(false)]);
     }
 
+    /// An X11 program that leaves the proxy and enters it again without end offers the Wayland
+    /// window under the pointer its drag [`MAX_X11_ENTERS`] times while the proxy stays shown,
+    /// then nothing more; a user's drag that comes back over a Wayland window again and again,
+    /// the proxy shown each time, is offered each time.
+    #[test]
+    fn an_x11_drag_entering_again_without_end_is_offered_a_bounded_number_of_times() {
+        let entered = |effects: Vec<Effect<u32>>| {
+            effects
+                .iter()
+                .filter(|effect| matches!(effect, Effect::Enter { .. }))
+                .count()
+        };
+        let mut drags = SeatDrags::default();
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, over_x11(5));
+        drags.moved(Pick::Wayland(30));
+        let mut hostile = 0;
+        for _ in 0..100 {
+            drags.x11_left(SERVER, 1);
+            hostile += entered(drags.x11_entered(SERVER, 1));
+        }
+        assert_eq!(hostile, usize::from(MAX_X11_ENTERS));
+
+        let mut crossing = 0;
+        for _ in 0..40 {
+            drags.moved(over_x11(5));
+            drags.x11_left(SERVER, 1);
+            drags.moved(Pick::Wayland(30));
+            crossing += entered(drags.x11_entered(SERVER, 1));
+        }
+        assert_eq!(crossing, 40, "each return over Wayland is offered");
+    }
+
     /// The proxy after the release: kept for a source that entered it, until the pointer comes
     /// over an X11 window; hidden at once for a source that never entered it, which will send it
     /// nothing. It never takes an X11 window's pointer.
@@ -1350,6 +1423,22 @@ mod tests {
         drags.moved(over_x11(5));
         assert!(drags.proxy_mapped(SERVER, 1).is_empty(), "hidden since");
         assert!(drags.proxy_mapped(SERVER, 2).is_empty(), "another drag");
+    }
+
+    /// The proxy unmapped, the drag over an X11 window, repeats the pointer's motion, so that a
+    /// source that looked while the proxy was still there looks past it; not once the proxy is
+    /// wanted again, nor once the drag is released.
+    #[test]
+    fn the_proxy_unmapped_repeats_the_motion_while_the_drag_is_in_the_hand() {
+        let mut drags = SeatDrags::<u32>::default();
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing);
+        assert!(drags.proxy_unmapped(SERVER, 1).is_empty(), "shown");
+        drags.moved(over_x11(5));
+        assert_eq!(drags.proxy_unmapped(SERVER, 1), [Effect::RepeatMotion]);
+        assert!(drags.proxy_unmapped(SERVER, 2).is_empty(), "another drag");
+        assert!(drags.proxy_mapped(SERVER, 1).is_empty(), "hidden");
+        drags.released(SECOND);
+        assert!(drags.proxy_unmapped(SERVER, 1).is_empty(), "released");
     }
 
     /// R10: a Wayland drag over an X11 window speaks XDND and gives Smithay's grab no focus;

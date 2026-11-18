@@ -1193,13 +1193,16 @@ impl Compositor {
     }
 
     /// Ends a round: frees the clients the display ended, goes on with Yuna's writes of agents'
-    /// selections (`selection.rs`), then frees what closed windows, destroyed popups and
+    /// selections (`selection.rs`), puts back on what is under it each pointer whose drag's
+    /// grab ended (`xwayland/drags.rs`), then frees what closed windows, destroyed popups and
     /// surfaces left behind, then sends the events written to every client. A client that
     /// cannot take them is ended by the display, and freed at the next round's end; the others
     /// go on.
     pub(crate) fn flush(&mut self) {
         self.free_departed_clients();
         self.state.run_clipboard_writes(&self.event_loop.handle());
+        // Before the managers' commands: a pointer put back tells a drag what it is over.
+        self.state.refocus_after_drag_grabs();
         if let Some(xwayland) = &mut self.xwayland {
             xwayland.send_commands(&mut self.state);
         }

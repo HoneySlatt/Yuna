@@ -19,10 +19,14 @@
 //! passes everything to the client's source but a cancel asked while the grab lives: Smithay
 //! cancels a source released over no Wayland target, an X11 window among them, then says the
 //! grab dropped or was cancelled, and the decisions resolve it. The manager is told the drag's
-//! latest point once per round at most, so that a burst of motions sends one.
+//! latest point once per round at most, so that a burst of motions sends one. The source is
+//! told only an action it offered, whatever the X11 target answers ([`offered_action`]). Once
+//! the grab ends, the seat's pointer goes back on what is under it at the round's end
+//! ([`State::refocus_after_drag_grabs`]), out of Smithay's grab, which left it on the grab's
+//! last focus: none over an X11 window.
 
 use std::any::Any;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -76,6 +80,21 @@ fn proposed_action(offered: &[DndAction]) -> DragAction {
         .into_iter()
         .find(|action| offered.contains(action))
         .map_or(DragAction::Copy, drag_action)
+}
+
+/// The action a Wayland source is told its drag takes on X11, its X11 target's being `target`:
+/// that one if the source offers it, else Copy if it offers it, else `proposed`, the one Yuna
+/// proposed to X11 for it. An X11 target may answer and perform any action; a source told an
+/// action it did not offer could lose its data: told Move, a source that offered Copy alone
+/// deletes what it meant to copy.
+fn offered_action(offered: &[DragAction], proposed: DragAction, target: DragAction) -> DragAction {
+    if target != DragAction::None && offered.contains(&target) {
+        target
+    } else if offered.contains(&DragAction::Copy) {
+        DragAction::Copy
+    } else {
+        proposed
+    }
 }
 
 /// An X11 program's drag, as Smithay's data device offers it to a Wayland target.
@@ -300,6 +319,10 @@ pub(crate) struct Drags {
     /// second drag started in one grab makes Smithay end the first grab, the oldest, so that a
     /// grab's end names its own drag, even one whose decisions ended it already.
     grabs: HashMap<SeatId, VecDeque<Grab>>,
+    /// The seats whose Wayland drag's grab ended since the last round's end: Smithay put their
+    /// pointer on the focus the grab was last given, none over an X11 window, and Yuna puts it
+    /// back on what is under it ([`State::refocus_after_drag_grabs`]).
+    refocus: HashSet<SeatId>,
 }
 
 /// Smithay's drag grab of a Wayland drag, while it runs.
@@ -363,6 +386,8 @@ struct FromWayland {
     /// acceptance names.
     mime_types: Vec<String>,
     first_mime_type: Option<String>,
+    /// The actions its source offers, and the one proposed to X11 ([`proposed_action`]).
+    offered: Vec<DragAction>,
     action: DragAction,
     /// The Xwayland whose manager was told of it.
     started_on: Option<u64>,
@@ -472,11 +497,12 @@ impl State {
             .cloned();
         let metadata = source.metadata();
         let data = metadata.is_some();
-        let (mime_types, action) = metadata.map_or_else(
-            || (Vec::new(), DragAction::Copy),
+        let (mime_types, offered, action) = metadata.map_or_else(
+            || (Vec::new(), Vec::new(), DragAction::Copy),
             |metadata| {
                 let action = proposed_action(&metadata.dnd_actions);
-                (metadata.mime_types, action)
+                let offered = metadata.dnd_actions.iter().copied().map(drag_action);
+                (metadata.mime_types, offered.collect(), action)
             },
         );
         let inner: Arc<dyn Source> = Arc::new(source);
@@ -496,6 +522,7 @@ impl State {
                 grab: grab.clone(),
                 first_mime_type: mime_types.first().cloned(),
                 mime_types: for_x11(mime_types),
+                offered,
                 action,
                 started_on: None,
                 pending: None,
@@ -513,8 +540,10 @@ impl State {
 
     /// Smithay's oldest drag grab of `seat` ends, released or cancelled: the cancel it asked
     /// meanwhile goes to the decisions of its drag, and cancels from now on go to the source at
-    /// once. A drag the decisions ended already gets the cancel itself.
+    /// once. A drag the decisions ended already gets the cancel itself. The seat's pointer goes
+    /// back on what is under it at the round's end, outside Smithay's grab, which calls this.
     pub(crate) fn wayland_drag_ended(&mut self, seat: SeatId, released: bool) {
+        self.x11.drags.refocus.insert(seat);
         let Some(grab) = self
             .x11
             .drags
@@ -596,6 +625,9 @@ impl State {
             }
             ManagerEvent::X11DragEnded(drag) => self.seat_drags(seat).x11_ended(server, drag),
             ManagerEvent::DragProxyMapped(drag) => self.seat_drags(seat).proxy_mapped(server, drag),
+            ManagerEvent::DragProxyUnmapped(drag) => {
+                self.seat_drags(seat).proxy_unmapped(server, drag)
+            }
             ManagerEvent::WaylandDragStatus {
                 drag,
                 accepted,
@@ -874,6 +906,7 @@ impl State {
             }
             Effect::Performed { drag, action } => {
                 if let Some(glue) = self.x11.drags.from_wayland.get(&drag) {
+                    let action = offered_action(&glue.offered, glue.action, action);
                     tell_action(glue.data_source.as_ref(), action);
                     glue.inner.drop_performed();
                     glue.inner.finished();
@@ -884,7 +917,8 @@ impl State {
     }
 
     /// The X11 target's answer to Wayland drag `drag` goes to its source: `target` names the
-    /// first type it offers, or none, and `action` the target's.
+    /// first type it offers, or none, and `action` the target's, if the source offers it
+    /// ([`offered_action`]).
     fn tell_wayland_source(&self, drag: u64, accepted: bool, action: DragAction) {
         let Some(glue) = self.x11.drags.from_wayland.get(&drag) else {
             return;
@@ -894,6 +928,11 @@ impl State {
         };
         let mime_type = glue.first_mime_type.clone().filter(|_| accepted);
         data_source.target(mime_type);
+        let action = if accepted {
+            offered_action(&glue.offered, glue.action, action)
+        } else {
+            DragAction::None
+        };
         tell_action(Some(data_source), action);
     }
 
@@ -1005,7 +1044,7 @@ impl State {
     }
 
     /// Sends `seat`'s pointer's motion again where it is, and a frame: the X11 source of a drag
-    /// looks again for the proxy just mapped.
+    /// looks again for its target, the proxy just mapped or unmapped.
     fn repeat_pointer_motion(&mut self, seat: SeatId) {
         let Some(pointer) = self.seat(seat).and_then(|data| data.pointer.clone()) else {
             return;
@@ -1013,6 +1052,16 @@ impl State {
         let location = pointer.current_location();
         let under = self.surface_under(seat, location);
         self.move_pointer(seat, &pointer, location, under);
+    }
+
+    /// At the round's end, outside Smithay's grabs: each seat whose Wayland drag's grab ended
+    /// gets its pointer back on what is under it, so that a click there with no motion between
+    /// reaches it. Smithay put it on the focus the grab was last given, which over an X11 window
+    /// is none, Smithay's grab having no X11 target.
+    pub(crate) fn refocus_after_drag_grabs(&mut self) {
+        for seat in std::mem::take(&mut self.x11.drags.refocus) {
+            self.refresh_pointer_focus(seat);
+        }
     }
 
     /// When the first drag released waits on Yuna's clock no more.
@@ -1052,6 +1101,8 @@ impl State {
 
     /// `seat` closes: its drags end, refused.
     pub(crate) fn drags_seat_closed(&mut self, seat: SeatId) {
+        // Its pointer goes nowhere: the seat moves it off every surface.
+        self.x11.drags.refocus.remove(&seat);
         let Some(mut drags) = self.x11.drags.seats.remove(&seat) else {
             return;
         };
@@ -1090,6 +1141,28 @@ mod tests {
         );
         assert_eq!(proposed_action(&[DndAction::Ask]), DragAction::Ask);
         assert_eq!(proposed_action(&[]), DragAction::Copy);
+    }
+
+    /// A Wayland source is told the X11 target's action only if it offers it; else Copy if it
+    /// offers it; else the action proposed for it. Never an action it did not offer.
+    #[test]
+    fn a_wayland_source_is_told_only_an_action_it_offered() {
+        use DragAction::{Ask, Copy, Move};
+        assert_eq!(offered_action(&[Copy], Copy, Move), Copy, "Copy alone");
+        assert_eq!(offered_action(&[Copy, Move], Copy, Move), Move);
+        assert_eq!(offered_action(&[Move, Copy], Copy, Ask), Copy);
+        assert_eq!(offered_action(&[Move], Move, Copy), Move, "Move alone");
+        assert_eq!(offered_action(&[Ask], Ask, Move), Ask, "Ask alone");
+        assert_eq!(
+            offered_action(&[Copy], Copy, DragAction::None),
+            Copy,
+            "no action named"
+        );
+        assert_eq!(
+            offered_action(&[], Copy, Move),
+            Copy,
+            "a source older than actions"
+        );
     }
 
     /// An X11 drag's offer proposes its source's action with Copy, and a target's answer counts

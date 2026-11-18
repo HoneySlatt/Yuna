@@ -490,15 +490,28 @@ with games' VRR:
 - Drags between X11 and Wayland programs
   ([ADR-0102](adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md))
   were run with one real toolkit, Qt, on X11 and on Wayland. GTK 3 and 4, Chromium and Electron,
-  Java and Wine were not: their sources are read, not run. Chromium's X11 source may look for
-  its target in `_NET_CLIENT_LIST_STACKING`, which never lists the drags' proxy; if it does, its
-  drags never reach a Wayland window. Checked when one of them is first needed.
+  Java and Wine were not: their sources are read, not run. Chromium's X11 source takes as its
+  target only a window with a `WM_NAME` and `XdndAware` 5 or more (its `window_cache.cc` and
+  `x11_drag_drop_client.cc`, read on 2026-11-18): the proxy window has both. Checked when one of
+  them is first needed.
 - Some of the drags' rules are tested on the drag session and the XDND messages alone, not by a
   story with Xwayland: a hidden X11 window under a drag, a source naming a version outside 3 to
   5, a point outside X11's 16 bits, a moving or centred fullscreen window's point, Ask, Link, a
-  seat closed or Xwayland gone mid-drag, a third drag, and the one position kept waiting.
-- An X11 target's `XdndStatus` naming an action the Wayland source did not offer is passed on as
-  it is. An X11 source that changes its proposed action mid-drag, a modifier key pressed, has
+  third drag, and the one position kept waiting.
+- An X11 drag moved from a Wayland window onto an X11 window and released in the same instant,
+  before the manager has hidden the proxy, can still find the proxy and leave: Yuna repeats the
+  motion once the proxy is hidden, but the release reached the source first. The closing review
+  lost 1 such drop in 20 before that repeat, none in 80 after. A hand, or an agent that waits for
+  one call's answer before the next, gives the manager the time. Holding the
+  release back until the manager confirms, or a proxy over Wayland windows alone, would close
+  it; proposed to the owner.
+- After an X11 drag dropped on a Wayland window, as after any press, motion and release, the
+  pointer's focus stays on the pressed window until the next motion: Smithay's grab of a held
+  button does not look again at its end. A click without a motion then reaches the pressed
+  window, not the one under the pointer. Yuna looks again after a Wayland drag's grab only. MCP's answer to
+  the release that ends a Wayland drop on an X11 window names no window, being made before the
+  round's end.
+- An X11 source that changes its proposed action mid-drag, a modifier key pressed, has
   the new actions offered to its Wayland target, but Smithay chooses the drag's action again
   only when the target sets its own actions again. An X11 source's `XdndDrop` that reaches the manager after Yuna gave the drag up, 5 s
   after the release, gets no `XdndFinished`: the source waits for its own time limit.

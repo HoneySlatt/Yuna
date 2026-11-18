@@ -8,20 +8,22 @@
 //! **X11 to Wayland.** When an X11 client takes `XdndSelection`, the manager posts it, numbered,
 //! with the client; Yuna starts a drag only from a button its pointer holds on a window of that
 //! client. The proxy is one InputOnly override-redirect window of the manager's over the whole
-//! root, `XdndAware` 5: never a window or a menu for Yuna, never in `_NET_CLIENT_LIST`, mapped
-//! and raised while Yuna asks, so that the source, which looks for its target in X11, finds it
-//! over Wayland windows. The source's `XdndEnter` on the proxy, from a window of the drag's
+//! root, `XdndAware` 5 and named, as some sources take only a named window: never a window or a
+//! menu for Yuna, never in `_NET_CLIENT_LIST`, mapped and raised while Yuna asks, so that the
+//! source, which looks for its target in X11, finds it over Wayland windows. Yuna is told when
+//! it is mapped, and when it is unmapped while the drag is in the hand, so that the source is
+//! shown the pointer again. The source's `XdndEnter` on the proxy, from a window of the drag's
 //! client and of a version from 3 to 5, gives its types, inline or in `XdndTypeList`, read up to
 //! [`MAX_TYPES`], mapped to MIME types as the clipboard's (`offer_of_targets`). Each
 //! `XdndPosition` is answered at once with `XdndStatus`: accepted as Yuna last said, bit 1 set and
 //! an empty rectangle, so that every motion sends a position. Yuna is told only of the enter, at
 //! the first position after it, with the action it proposes, so that a Wayland target is offered
-//! types and action at once; of the leave, the drop and the action proposed changing; an answer
-//! that changes is sent at once. A
-//! message whose first value is not the drag's source window is left. A Wayland target's read
-//! converts `XdndSelection` with the time of the latest position, or of the drop; refused while
-//! the source sent a newer position, as Qt refuses every time but its last, it is asked again
-//! with the newer one, a few times at most (`bridge.rs`). Yuna's finish is the source's
+//! types and action at once, and not of an enter again from the same window with the same types;
+//! of the leave, the drop and the action proposed changing; an answer that changes is sent at
+//! once. A message whose first value is not the drag's source window is left. A Wayland target's
+//! read converts `XdndSelection` with the time of the latest position, or of the drop; refused
+//! while the source sent a newer position, as Qt refuses every time but its last, it is asked
+//! again with the newer one, a few times at most (`bridge.rs`). Yuna's finish is the source's
 //! `XdndFinished`, after a `DELETE` conversion for a move; without it [`X11_DRAG_TIMEOUT`] after
 //! the drop, with no transfer moving, ended transfers included, the drop is refused.
 //!
@@ -88,6 +90,11 @@ const MAX_DRAGS: usize = 2;
 /// The side of the proxy, in X11 pixels: the largest a window's position reaches, so that it
 /// covers any root.
 const PROXY_SIDE: u16 = 32_767;
+
+/// The proxy's `WM_NAME`. Some X11 sources take only a named window for the one under the
+/// pointer: Chromium's finds its target among windows that have a `WM_NAME`
+/// (`ui/gfx/x/window_cache.cc`, `GetWindowAtPoint`), and would find none over a Wayland window.
+const PROXY_NAME: &[u8] = b"Yuna drags";
 
 /// The 32-bit data of an XDND client message.
 type Data = [u32; 5];
@@ -516,7 +523,11 @@ impl<'a> Xdnd<'a> {
     }
 
     /// `XdndEnter` on the proxy: from a window of the client of the drag in the hand, at a version
-    /// Yuna takes; its types are read, and posted with the first position's action.
+    /// Yuna takes; its types are read, and posted with the first position's action. The same
+    /// window entering again with the same types, without a leave since, is posted nothing: its
+    /// Wayland target, offered them already, is not entered again, so that a source repeating
+    /// `XdndEnter` makes no new offer each time; an action its positions change goes as any
+    /// position's does.
     fn entered(&mut self, data: Data, bridge: &mut Bridge<'_>) -> Result<GoOn, Failure> {
         let Some(enter) = read_enter(data) else {
             tracing::debug!(
@@ -543,10 +554,15 @@ impl<'a> Xdnd<'a> {
         let Some(drag) = self.current_x11() else {
             return Ok(true);
         };
+        let again = drag.announced
+            && drag
+                .source
+                .is_some_and(|(window, _)| window == enter.source)
+            && drag.offer == offer;
         drag.source = Some((enter.source, enter.version));
         drag.offer = offer;
         drag.sent = None;
-        drag.announced = false;
+        drag.announced = again;
         Ok(true)
     }
 
@@ -707,6 +723,19 @@ impl<'a> Xdnd<'a> {
             self.raise_proxy()?;
         }
         Ok(true)
+    }
+
+    /// The proxy was unmapped: Yuna is told, while a drag is in the hand, so that the source is
+    /// shown the pointer again. A source that looked for its target while the proxy was still
+    /// there, the pointer just come over an X11 window, then finds that window.
+    pub(super) fn proxy_unmapped(&mut self) -> GoOn {
+        match self.current_x11() {
+            Some(drag) => {
+                let drag = drag.drag;
+                self.post(ManagerEvent::DragProxyUnmapped(drag))
+            }
+            None => true,
+        }
     }
 
     /// The Wayland target's answer to X11 drag `drag`: its next status says it, and one goes at
@@ -1503,8 +1532,8 @@ fn listed_actions(actions: Actions, proposed: DragAction) -> Option<(Vec<Atom>, 
     (proposed == DragAction::Ask).then(|| (vec![actions.ask], &b"Ask\0"[..]))
 }
 
-/// Makes the proxy, unmapped, over X11's whole root, `XdndAware` 5: before the manager listens to
-/// the root, so that no `CreateNotify` makes a window of it.
+/// Makes the proxy, unmapped, over X11's whole root, `XdndAware` 5 and named [`PROXY_NAME`]:
+/// before the manager listens to the root, so that no `CreateNotify` makes a window of it.
 pub(super) fn create_proxy(
     connection: &RustConnection,
     root: Window,
@@ -1530,6 +1559,13 @@ pub(super) fn create_proxy(
         atoms.XdndAware,
         AtomEnum::ATOM,
         &[u32::from(XDND_VERSION)],
+    )?;
+    connection.change_property8(
+        PropMode::REPLACE,
+        proxy,
+        AtomEnum::WM_NAME,
+        AtomEnum::STRING,
+        PROXY_NAME,
     )?;
     Ok(proxy)
 }

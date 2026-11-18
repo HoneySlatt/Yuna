@@ -220,6 +220,8 @@ pub(crate) enum ManagerEvent {
     X11DragEnded(u64),
     /// The proxy was mapped for X11 drag `drag`.
     DragProxyMapped(u64),
+    /// The proxy was unmapped while X11 drag `drag` is in the hand.
+    DragProxyUnmapped(u64),
     /// The X11 target of Wayland drag `drag` changed its answer: whether it accepts, its action.
     WaylandDragStatus {
         drag: u64,
@@ -1057,6 +1059,9 @@ impl<'a> Manager<'a> {
                 }
                 _ => true,
             },
+            Event::UnmapNotify(unmapped) if unmapped.window == self.xdnd.proxy() => {
+                self.xdnd.proxy_unmapped()
+            }
             // A client withdrawing its window sends a synthetic one too (ICCCM 4.1.4): either
             // comes first, the other finds it unmapped.
             Event::UnmapNotify(unmapped) => self.unmapped(unmapped.window)?,

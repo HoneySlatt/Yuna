@@ -549,6 +549,7 @@ impl State {
             | ManagerEvent::X11DragAction { .. }
             | ManagerEvent::X11DragEnded(_)
             | ManagerEvent::DragProxyMapped(_)
+            | ManagerEvent::DragProxyUnmapped(_)
             | ManagerEvent::WaylandDragStatus { .. }
             | ManagerEvent::ReadWaylandDrag { .. }
             | ManagerEvent::WaylandDragEnded { .. } => self.x11_drag_event(server, event),

@@ -9,10 +9,13 @@
 //! Each runs on a thread of its own, with its own connection, for as long as the story keeps it:
 //! its loop reads its events as they come, and the orders the story sends it between them. The
 //! story's thread meanwhile runs the compositor and drives the seat's pointer. Each records
-//! every XDND message it sends and gets, every request for `XdndSelection` it answers, and every
-//! conversion it makes, in order, in a log the story reads ([`Peer::log`]). A failure of its
-//! own, such as an X11 request that fails, ends its thread and is the log's last entry; the
-//! story's next read of the log panics with it.
+//! every XDND message it sends and gets, every request for `XdndSelection` it answers, every
+//! conversion it makes, and the target every click on its window, in order, in a log the story
+//! reads ([`Peer::log`]). A failure of its own, such as an X11 request that fails, ends its
+//! thread and is the log's last entry; the story's next read of the log panics with it.
+//!
+//! [`named_window_at`] finds the window under a point as Chromium's drag does, among named
+//! windows alone.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -23,9 +26,9 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    Atom, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
-    CreateWindowAux, EventMask, GrabMode, GrabStatus, MapState, PropMode, Property,
-    PropertyNotifyEvent, SelectionRequestEvent, Timestamp, Window, WindowClass,
+    Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux,
+    ConnectionExt as _, CreateWindowAux, EventMask, GrabMode, GrabStatus, MapState, PropMode,
+    Property, PropertyNotifyEvent, SelectionRequestEvent, Timestamp, Window, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::Compositor;
@@ -200,6 +203,8 @@ pub(crate) enum Logged {
     Pressed { time: Timestamp },
     /// The pointer's button was released, at `time`.
     Released { time: Timestamp },
+    /// A button was pressed on the target's window, which takes clicks as any program's.
+    Clicked { window: Window },
     /// A request for `XdndSelection` from `requestor`, for `target`, naming `time`; whether it
     /// was served (`DELETE` done) rather than refused.
     Request {
@@ -1145,6 +1150,64 @@ pub(crate) fn target_at(
     })
 }
 
+/// The window under `root` as Chromium's drag finds its target (`ui/gfx/x/window_cache.cc`,
+/// `GetWindowAtPoint`): the topmost mapped window whose rectangle holds the point, its children
+/// first, that has a `WM_NAME`; an unnamed window is looked through. None when no named window
+/// holds the point.
+pub(crate) fn named_window_at(
+    client: &X11Client,
+    root: (i16, i16),
+) -> Result<Option<Window>, String> {
+    named_window_in(client, client.root, (i32::from(root.0), i32::from(root.1)))
+}
+
+/// [`named_window_at`] within `window`, `point` in its parent's coordinates (the root's own
+/// for the root).
+fn named_window_in(
+    client: &X11Client,
+    window: Window,
+    point: (i32, i32),
+) -> Result<Option<Window>, String> {
+    let connection = &client.connection;
+    let fail = |e: &dyn std::fmt::Display| e.to_string();
+    let attributes = connection
+        .get_window_attributes(window)
+        .map_err(|e| fail(&e))?
+        .reply()
+        .map_err(|e| fail(&e))?;
+    if attributes.map_state == MapState::UNMAPPED {
+        return Ok(None);
+    }
+    let point = if window == client.root {
+        point
+    } else {
+        let place = client.geometry(window)?;
+        let inside = (place.x..place.x + place.width as i32).contains(&point.0)
+            && (place.y..place.y + place.height as i32).contains(&point.1);
+        if !inside {
+            return Ok(None);
+        }
+        (point.0 - place.x, point.1 - place.y)
+    };
+    let children = connection
+        .query_tree(window)
+        .map_err(|e| fail(&e))?
+        .reply()
+        .map_err(|e| fail(&e))?
+        .children;
+    for child in children.into_iter().rev() {
+        if let Some(named) = named_window_in(client, child, point)? {
+            return Ok(Some(named));
+        }
+    }
+    let name = connection
+        .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 1)
+        .map_err(|e| fail(&e))?
+        .reply()
+        .map_err(|e| fail(&e))?;
+    Ok((name.format != 0).then_some(window))
+}
+
 /// The topmost mapped child of the root whose rectangle holds `root`, `skipped` left out.
 fn top_child_at(client: &X11Client, root: (i16, i16), skipped: Window) -> Option<Window> {
     let connection = &client.connection;
@@ -1361,6 +1424,12 @@ struct Taken {
 
 impl Role<TargetOrder> for Target {
     fn event(&mut self, side: &mut Side, event: Event) -> Result<(), String> {
+        if let Event::ButtonPress(press) = event {
+            side.record(Logged::Clicked {
+                window: press.event,
+            });
+            return Ok(());
+        }
         let Event::ClientMessage(message) = event else {
             return Ok(());
         };

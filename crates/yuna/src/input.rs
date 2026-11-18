@@ -1068,7 +1068,8 @@ impl WaylandDndGrabHandler for State {
 
 /// A drag's end: Smithay tells a Wayland target and the source itself; over an X11 window, or with
 /// none, the seat's drags decide (`xwayland/drags.rs`). Both are called from within Smithay's
-/// pointer grab: neither calls the pointer.
+/// pointer grab: neither calls the pointer, which goes back on what is under it at the round's
+/// end.
 impl DndGrabHandler for State {
     fn dropped(
         &mut self,

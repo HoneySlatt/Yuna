@@ -39,8 +39,8 @@ The owner chose, on 2026-11-18:
 
 Chosen while building M1.12, as implementation within ADR-0066 and ADR-0091:
 
-- **The target is a shown window of the layout under the pointer**: never a menu, a tooltip or an
-  X11 drag's icon, never a hidden window.
+- **The target is a shown window of the layout under the pointer**, its popups and subsurfaces
+  included: never an X11 menu, tooltip or drag icon, never a hidden window.
 - **The X11 source decides the drop**: Yuna drops on the Wayland window when the source sends
   `XdndDrop`, never at the release; the Wayland window is offered the drag only once the source
   has entered Yuna's hidden window.
@@ -55,7 +55,7 @@ Chosen while building M1.12, as implementation within ADR-0066 and ADR-0091:
 - **XDND versions 3 to 5**, as the specification asks.
 - **Times.** Every message to an X11 target names the server time at which the manager took
   `XdndSelection`; reads from an X11 source name its latest position's time, or its drop's, and
-  are asked again, four times at most, when the source refuses them for a newer position, as Qt
+  are asked again, four asks in all at most, when the source refuses them for a newer position, as Qt
   serves only its latest.
 - **Bounds**, the clipboard's: a wait without progress ends after 5 s; the data goes through the
   bridge's transfers, their 8 at once each way and their 256 MiB; a type list is read up to 64
@@ -81,7 +81,8 @@ Chosen while building M1.12, as implementation within ADR-0066 and ADR-0091:
   through MCP's pointer as a user does.
 - The way a Wayland drag over an X11 window ends depends on the order Smithay's grab calls its
   source and its handler; a test holds it, and it goes with the seats at Stage 2.
-- The drag's icon is still not drawn ([debt](../debt.md)).
+- A Wayland drag's icon is still not drawn ([debt](../debt.md)); an X11 drag's icon window is
+  drawn as an X11 menu.
 
 ## Validation and reconsideration
 
@@ -91,6 +92,9 @@ cancelled, refused, never finished, its source or its target gone mid-drag, its 
 a drag icon under the pointer, a still pointer, a read before the drop, a move, a proxy, XDND 2
 and 3 targets, made-up messages, an old target's late read, the root point against Xwayland's
 own, two drags at once, and an X11 drag that crosses a Wayland window to another X11 window.
+The closing review added 11: a jump of the pointer out of a Wayland window, the pointer after a
+drop on X11, a flood of `XdndEnter`, a source told only an action it offered, the proxy found as
+Chromium looks, and Xwayland killed or the seat removed mid-drag, 51 in all.
 Qt's `qml` on X11 and on Wayland, driven through MCP, drops text and a URI both ways, and Yuna
 rests after. Not run: GTK, Chromium, Java or Wine ([debt](../debt.md#xwayland)).
 

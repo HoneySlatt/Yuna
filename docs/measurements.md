@@ -4,6 +4,16 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.12 — Drags between X11 and Wayland (2026-11-18)
+
+`qml_drags_text_and_a_uri_between_x11_and_wayland` (`crates/yuna/tests/applications.rs`), on
+the owner's desktop machine, a debug build of M1.12 after its closing review's fixes, llvmpipe,
+one agent seat at 1920 × 1080 and scale 1.5: Qt 6's `qml` on X11 and on Wayland side by side, three drags through MCP's
+pointer, each of 24 moves, Wayland to Wayland, X11 to Wayland and Wayland to X11. Each dropped
+the text and the URI it offered. Then 10 s of rest: 0 context switches in Yuna's 36 threads, 0
+frames, frame callbacks, configures, commits and wake-ups. The test took 17 s. No budget of the
+quality bar is set for a drag; the bar's rest holds after them.
+
 ## M1.11 — `yuna mcp` with a real MCP client (2026-11-18)
 
 Claude Code 2.1.318, `claude -p` with Sonnet 5.5 and `yuna mcp` as its only MCP server, no other

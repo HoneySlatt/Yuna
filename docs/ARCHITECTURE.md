@@ -315,7 +315,10 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   Yuna's side ([An X11 window's life](#an-x11-windows-life)); `menus.rs`, override-redirect
   windows, menus and tooltips; `answers.rs`, the sync requests and pings Yuna waits on;
   `bridge.rs`, the selections on X11's side, on the manager's thread, and `selections.rs`,
-  on Yuna's side ([Selections](#selections)); `mod.rs`, each display's phases on Yuna's loop.
+  on Yuna's side ([Selections](#selections)); `xdnd.rs`, drags on X11's side, on the manager's
+  thread, `drag_session.rs`, each seat's drag decisions, in plain Rust, and `drags.rs`, their
+  glue on Yuna's side ([Between X11 and Wayland](#between-x11-and-wayland-1)); `mod.rs`, each
+  display's phases on Yuna's loop.
 - `process.rs`: what every program Yuna starts shares, MCP's and Xwayland: the descriptors it
   does not inherit; and what Yuna reads of a process in `/proc`, its parent and its group, which
   a client's connection and a seat's closing follow.
@@ -978,7 +981,7 @@ for X11's programs and Wayland's.
 A drag starts from a button an agent's pointer holds: Smithay accepts `start_drag` only with the
 serial of the pointer's grab, which a press starts, and Yuna then gives the pointer Smithay's
 drag grab. The drag offers its source to the surfaces the pointer crosses, all of its seat's,
-never a menu, a tooltip or an X11 drag's icon, and drops where the button is released, once the
+never an X11 menu, tooltip or drag icon, and drops where the button is released, once the
 target accepted a type and an action. A drag from a client of another seat than the pointer's,
 one that bound another agent's `wl_seat` and guessed its serial, is refused, its source
 cancelled. The owner's seat has no pointer headless: its clients start no drag. The drag's icon
@@ -997,26 +1000,33 @@ moves through the clipboard's transfers ([above](#between-x11-and-wayland)), in 
 bounds.
 
 1. **What a drag is over.** At each motion of the pointer, the session is told what is under it
-   among the seat's layout windows shown: a Wayland surface, an X11 window, or nothing. A menu,
-   a tooltip, an X11 drag's icon and a hidden window are never a target.
+   among the seat's layout windows shown, their popups and subsurfaces included: a Wayland
+   surface, an X11 window, or nothing. An X11 menu, tooltip or drag icon and a hidden window are
+   never a target.
 2. **An X11 program's drag starts** when XFixes tells the manager that an X11 client took
    `XdndSelection` while the seat's pointer holds a button on a window of that same client; any
    other taking is left. Smithay's ordinary grab of the press keeps sending the pointer's motion
    and its release to the pressed X11 window, through Xwayland, so the X11 source follows the
    pointer and looks for its target in X11 itself.
 3. **The proxy.** The manager owns one InputOnly override-redirect window over the whole root,
-   `XdndAware` 5, never a window or a menu for Yuna. It is mapped and raised while the drag is
+   `XdndAware` 5 and named `Yuna drags`, since Chromium takes only a named window as a target,
+   never a window or a menu for Yuna. It is mapped and raised while the drag is
    over a Wayland window or over nothing, and unmapped over an X11 window, so that a drag from
    one X11 window to another is X11's alone. It stays at the release if the source entered it,
    until `XdndDrop`, the drag's end, its time limit or the pointer coming over an X11 window: the
    source may still look for its target for a motion that came before its release. Once it maps,
-   Yuna repeats the pointer's last motion, so that the source looks again.
+   and once it unmaps while the button is held, Yuna repeats the pointer's last motion, so that
+   the source looks again: a single jump of the pointer, as an agent's through MCP, finds its
+   target either way.
 4. **Into a Wayland window.** The source's `XdndEnter` on the proxy gives its types, inline or in
    `XdndTypeList`, up to 64 ([ADR-0070](adr/0070-bounds-on-what-one-x11-client-may-ask.md)),
    mapped to MIME types as the clipboard's. At the source's first `XdndPosition` after it, the
    Wayland window under the pointer is entered, offered those types and the action that position
    proposes, with Copy: offered together, so that the window never chooses its action before
-   the source's is known, which Smithay would not choose again. Its answer goes back in each
+   the source's is known, which Smithay would not choose again. A new `XdndEnter` from the same
+   window with the same types, no `XdndLeave` between, enters nothing again; and a drag enters
+   the proxy twice at most each time it is shown (`MAX_X11_ENTERS`), which only the pointer's
+   moves repeat, so that an X11 program cannot flood a Wayland one with offers. Its answer goes back in each
    `XdndStatus`: accepted once it accepted a type and an action, always with an action, bit 1
    set and an empty rectangle, so that every motion sends a position; an answer that changes is
    sent at once. A message that does not name the drag's source window is left.
@@ -1025,7 +1035,7 @@ bounds.
    `XdndFinished`; its `XdndLeave`, or neither within 5 s of the release, leaves the window. The
    window's reads convert `XdndSelection` with the time of the source's latest position, or of
    its drop; a read the source refuses because it sent a newer position since, as Qt refuses
-   every time but its latest, is asked again with the newer time, four times at most. The
+   every time but its latest, is asked again with the newer time, four asks in all at most. The
    window's `finish` becomes `XdndFinished`, after a `DELETE` conversion for a move; with no
    finish 5 s after the drop and no transfer moving, the drop is refused.
 6. **A Wayland program's drag over an X11 window.** Smithay's drag grab carries the drag among
@@ -1037,15 +1047,19 @@ bounds.
    `XdndProxy` when it names a window whose own `XdndProxy` names itself, else the window, at
    `XdndAware` 3 or more. `XdndEnter` lists the source's MIME types and their X11 names as the
    clipboard's; one `XdndPosition` waits for its status at a time, the latest place kept
-   meanwhile. Each status is passed to the Wayland source as its `target` and `action`.
+   meanwhile. Each status is passed to the Wayland source as its `target` and `action`, the
+   action always one the source offered: the target's if offered, else Copy if offered, else the
+   one Yuna proposed, so that a source that offered no move never deletes its data.
 7. **Dropped on X11.** Smithay ends the source of a drag released over no Wayland target; Yuna
    wraps every client's source so that this ending goes to the session, which decides. At the
    release, the kept position goes and its status is awaited, then `XdndDrop` if the target
    accepted, else `XdndLeave` and the source is cancelled; a target that never answered is left
    at once. The target's reads of `XdndSelection` are served from the Wayland source, only to
    the client the messages go to, the window's or its proxy's. Its `XdndFinished` tells the
-   source the drop was performed and finished, with the action; none 5 s after the drop with no
-   transfer moving cancels the source.
+   source the drop was performed and finished, with the action, brought back as for a status;
+   none 5 s after the drop with no transfer moving cancels the source. When Smithay's grab ends,
+   the seat's pointer goes back on what is under it at the round's end, so that a click there
+   reaches it without a motion.
 8. **Ends short.** While the button is held, an X11 target window gone, `XdndSelection` taken by
    another X11 client, or Xwayland gone, ends the drag's X11 side: the drag goes on among Wayland
    windows, and a release over an X11 window cancels its source. An X11 source that leaves, or
@@ -1058,7 +1072,10 @@ bounds.
    end ends its own drag.
    The manager is told a Wayland drag's place once per round at most, and keeps one position
    waiting, replaced. Timers run only while a drag waits on one (`clock_drags` in the rest
-   auditor); with no drag, nothing.
+   auditor); with no drag, nothing. Every Wayland drag's grab now takes its target from
+   `xwayland/drags.rs`, with or without Xwayland; the glue's own choices there, the queue of
+   Smithay's grabs and the Xwayland a drag's place goes to, are tested through the stories, not
+   alone, and go with the seats at Stage 2.
 
 ### Seats and input
 
@@ -1830,7 +1847,17 @@ own thread, both `took_us`.
   gone, each releasing the X11 selection; malformed and made-up answers of an X11 owner; a
   request older than Yuna's taking refused; nine reads at once, the ninth refused; and nothing
   read from Wayland while a Wayland window has the keyboard, the keyboard back on Wayland after a
-  paste, or the X11 window that had it unmapped or destroyed. `x11_misbehaving.rs` in it runs
+  paste, or the X11 window that had it unmapped or destroyed. `x11_drags.rs` in it carries drags
+  between X11 and Wayland, with `xdnd_client.rs`'s X11 programs, which act as Qt's and GTK 4's
+  XDND do (the source owns `XdndSelection` from a hidden window, serves only its latest
+  position's time, then its drop's; the target reads into a hidden window), and
+  `selection_client.rs`'s client: text, a file's URI and a mebibyte through INCR each way, exact
+  bytes; a drag cancelled, refused, never finished; a source or a target gone mid-drag, the
+  selection taken, Xwayland killed and the seat removed mid-drag; an X11 drag icon under the
+  pointer; a still pointer; a read before the drop; a move with its `DELETE`; an `XdndProxy`;
+  XDND 2 and 3 targets; made-up messages; an old target's late read refused; `XdndPosition`'s
+  point against Xwayland's own; two drags at once; and an X11 drag crossing a Wayland window
+  onto another X11 window. `x11_misbehaving.rs` in it runs
   hostile X11 clients on one seat beside a Wayland sentinel on another: a title of 16 MiB,
   invalid UTF-8 and COMPOUND_TEXT, messages and states naming atoms never interned, nonsense size
   hints, cycles of `WM_TRANSIENT_FOR`, 5,000 windows then 5,000 override-redirect windows mapped

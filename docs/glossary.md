@@ -64,8 +64,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
 - **Drag session**: what Yuna's loop knows and decides of one drag between a seat's X11 and
-  Wayland programs, in plain Rust with no Smithay or X11 type (`xwayland/drag_session.rs`); a seat
-  holds two at most ([ADR-0102](adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md)).
+  Wayland programs, in plain Rust with no Smithay, Wayland or X11 type
+  (`xwayland/drag_session.rs`); a seat holds two, three for an instant when a client starts a
+  second drag in one grab ([ADR-0102](adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md)).
 - **Drawn rectangle**: where a frame draws a window during motion, rounded once to the physical
   grid; pointer, clicks and captures use it. Its client is told from its **place**, the
   rectangle the layout gives it ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
@@ -185,9 +186,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   beside the clipboard, from X11.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
   turn stays under Yuna, its **subreaper**, and ends with it.
-- **Proxy** (XDND): the X11 manager's own InputOnly window over the whole root, `XdndAware`,
-  mapped while an X11 program's drag is over a Wayland window or over nothing, so that the X11
-  source finds a target in X11 there and talks to Yuna through it.
+- **Proxy window** (drags): the X11 manager's own InputOnly window over the whole root,
+  `XdndAware` 5, mapped while an X11 program's drag is over a Wayland window or over nothing, so
+  that the X11 source finds a target in X11 there and talks to Yuna through it. It is not an
+  `XdndProxy`, XDND's property by which a window names another to receive its messages.
 - **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
   program, environment and configuration, how it is ready, stopped and driven, and how its frames
   are counted.
