@@ -166,10 +166,10 @@ milestone first needs it.
 - **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N
   `yuna mcp` against one with N seats, up to 10, for Stage 2's choice of
   [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md).
-- **Status.** Built on `main`, ADR-0090 to ADR-0098, its budgets set by the owner
+- **Status.** Built on `main`, ADR-0090 to ADR-0101, its budgets set by the owner
   ([ROADMAP](ROADMAP.md)); Claude Code ran its done-when through MCP alone and found a crash on
-  llvmpipe, fixed ([measurements](measurements.md)). Left: a window's jump the motion's property
-  test found, and the closing review.
+  llvmpipe, fixed ([measurements](measurements.md)); the motion's property test found a jump that
+  M1.7 left, fixed. The closing review's findings are being fixed.
 
 ### M1.12 — Drag and drop between X11 and Wayland
 

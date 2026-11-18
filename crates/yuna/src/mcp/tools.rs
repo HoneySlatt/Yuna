@@ -36,8 +36,9 @@ use yuna_layout::{OutputId, SeatId, WindowId, WorkspaceInfo};
 /// ([survey](../../../../docs/survey.md#agents-and-mcp)).
 pub const MAX_WAIT: Duration = Duration::from_secs(50);
 
-/// How many calls may wait at once, `windows`', `events`', `clipboard get`'s and `rest`'s
-/// together; past it, a call that would wait is refused.
+/// How many calls may wait at once, `windows`', `events`', `clipboard get`'s, `rest`'s and
+/// `accessibility`'s, and programs waiting for their seat's bus, together; past it, a call that
+/// would wait is refused.
 pub const MAX_WAITING_CALLS: usize = 64;
 
 /// How many bytes of a log `spawn log` gives by default.

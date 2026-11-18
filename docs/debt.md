@@ -165,6 +165,10 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
 - `xwayland_starts_on_the_first_connection_and_serves_it` failed once, "the lock was left", in a
   full check under load on 2026-11-18, and passed five runs alone; the stories of one test binary
   share a pid, which an X display's lock holds. Not traced.
+- `yuna mcp`'s start at 4K on the GPU was measured only on a disturbed machine, 126 ms at the
+  longest against a budget of 100: it is measured again on a quiet one. The laptop and the lowest
+  machine are not measured; no budget holds with programs open
+  ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)).
 
 ## Colours
 
@@ -388,9 +392,8 @@ with games' VRR:
 ## Accessibility
 
 - AccessKit's programs, egui's among them, are not read: `accesskit_unix` 0.24 turns on only when
-  a session bus's `org.a11y.Status` says `IsEnabled`, and a program of Yuna's has no session bus.
-  The facts behind M1.11's accessibility, read in the toolkits' sources on 2026-11-17, are not in
-  the [survey](survey.md) yet.
+  a session bus's `org.a11y.Status` says `IsEnabled`, and a program of Yuna's has no session bus
+  ([survey](survey.md#the-agents-toolbox)).
 - Tested: GTK 4.24 on Wayland, Qt 6.12 on Wayland and on X11 at scale 1.5. Untested: GTK 3,
   Firefox, Chromium and Electron (which need `--force-renderer-accessibility`), Java. Their
   coordinates are given as their toolkit counts them, uncorrected: Chromium counts from its
@@ -484,7 +487,7 @@ with games' VRR:
   small the same way unless their prefix's DPI is 96 × S: Wine reads its registry's `LogPixels`,
   not `Xft.dpi` (`wine reg add "HKCU\Control Panel\Desktop" /v LogPixels /t REG_DWORD /d 144`
   at 1.5). Paid at Stage 2, with the configuration's rules per application.
-- No drag and drop between X11 and Wayland programs yet: a later task of M1.11; between X11
+- No drag and drop between X11 and Wayland programs yet: M1.12; between X11
   programs of one seat it works inside Xwayland
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). The clipboard and the primary
   selection pass both ways ([ARCHITECTURE](ARCHITECTURE.md#between-x11-and-wayland)).
