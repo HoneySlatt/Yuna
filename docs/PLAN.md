@@ -182,6 +182,9 @@ milestone first needs it.
 ### M1.13 — The stage's audit
 
 - **Goal.** Stage 1 examined whole before 0.1.
+- **Toolchain.** Rust 1.100 replaces 1.99.1 there, in a commit of its own
+  ([ADR-0016](adr/0016-the-rust-toolchain.md)), chosen by the owner on 2026-11-18; its new
+  features are then put to the owner one at a time, each on a measure.
 - **Delivers.** The audit in `docs/audits/`, its fixes, the stage moved to `docs/history.md`, the tag
   `v0.1.0` on the owner's go. For contributors: the X11 manager and the MCP server split into
   smaller modules; a README that says what to read for each part; `SECURITY.md`; issue and pull
