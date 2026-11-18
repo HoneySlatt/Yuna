@@ -21,8 +21,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - [M1.9](#m19--the-rivals-measured) is done (2026-11-16), with ADR-0072 to ADR-0077.
 - [M1.10](#m110--yuna-for-the-owners-other-projects) is done (2026-11-17), with ADR-0089.
 - [M1.11](#m111--the-agents-toolbox) is done (2026-11-18), with ADR-0090 to ADR-0101; the owner
-  split X11's drag and drop off into [M1.12](#m112--drag-and-drop-between-x11-and-wayland), in
-  review.
+  split X11's drag and drop off into [M1.12](#m112--drag-and-drop-between-x11-and-wayland), done
+  with ADR-0102.
 - From M1.11, the owner chose on 2026-11-17 to work on `main` directly, without a milestone's
   branch: push only a state where `scripts/check.sh` passes, and follow CI to green after each
   push; the closing review reads the milestone's commits on `main`, and its fixes follow there.
@@ -45,7 +45,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 | [M1.9](#m19--the-rivals-measured) | The rivals' figures, the bar's budgets set from them, a Vulkan prototype | Done |
 | [M1.10](#m110--yuna-for-the-owners-other-projects) | The owner's other projects can measure and drive their programs in Yuna | Done |
 | [M1.11](#m111--the-agents-toolbox) | An agent sees inside the programs it drives and makes the situations it tests | Done |
-| [M1.12](#m112--drag-and-drop-between-x11-and-wayland) | Drag and drop between X11 and Wayland programs | In review |
+| [M1.12](#m112--drag-and-drop-between-x11-and-wayland) | Drag and drop between X11 and Wayland programs | Done |
 | [M1.13](#m113--the-stages-audit) | Stage 1 examined whole, 0.1 tagged | Planned |
 
 ## Stage 1 — The headless core
@@ -178,8 +178,8 @@ milestone first needs it.
   X11 manager ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
 - **Done when.** Headless tests drag text and a file's URI both ways, a drag cancelled and a
   source gone mid-drag included.
-- **Status.** Built on 2026-11-18 (ADR-0102), in review; the delegated code's last three
-  defects fixed by the lead.
+- **Result.** Done on 2026-11-18: 51 headless stories, and Qt dragging both ways
+  ([measurements](measurements.md)); the rest is [debt](debt.md).
 
 ### M1.13 — The stage's audit
 
