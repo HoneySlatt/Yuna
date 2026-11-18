@@ -4,6 +4,26 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.11 — `yuna mcp` with a real MCP client (2026-11-18)
+
+Claude Code 2.1.318, `claude -p` with Sonnet 5.5 and `yuna mcp` as its only MCP server, no other
+tool, Yuna's Nix package (llvmpipe, 1920 × 1080 at 60 Hz, scale 1), the programs on a throwaway
+home, asked in plain words to do M1.11's done-when.
+
+- **At `547fdf3`**: the protocol error found (`wl_subcompositor`, object 5, code 0, "Surface already
+  has a role.", through `events` and `spawn list`) and its log read; then Yuna died of SIGSEGV as
+  soon as `gtk4-demo` drew with the machine's GPU, accessibility on or off
+  ([ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)).
+  17 turns, 0.14 USD.
+- **At `85b9d90`, after the fix**: all five steps passed in 30 turns, 0.19 USD: the error found; the
+  "Message Dialog" button found in the accessibility tree and pressed at its centre, the dialog
+  opened and closed by its Cancel button; the window moved to the second output through a named
+  workspace, the output removed, the window hidden with its workspace until shown, then captured;
+  the seat closed with nothing left running.
+- What got in its way: no tool moves a window to an output; a removed output's windows are hidden
+  with their workspace, which only a refused capture tells; a click tells nothing of what it
+  pressed. They are in the PLAN's ideas.
+
 ## M1.11: the rest auditor (2026-11-18)
 
 What the rest auditor costs Yuna (`rest.rs`), measured by `crates/yuna/examples/rest_cost.rs` in

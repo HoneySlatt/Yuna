@@ -166,11 +166,10 @@ milestone first needs it.
 - **Measured.** `yuna mcp`'s start, memory and instances together, which set their budgets; N
   `yuna mcp` against one with N seats, up to 10, for Stage 2's choice of
   [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md).
-- **Status.** The owner chose on 2026-11-18: Yuna as the accessibility registry on a bus of each
-  seat's, off by default, D-Bus on `zvariant`; the trace from the client, protocol errors from
-  Yuna, no wayland-rs fork before Stage 2; layouts changed at run time; the auditor's command a
-  start option until `yuna-ipc`. Done: the fatal path, the debts of `keyboard tap`, encoders and
-  reaping.
+- **Status.** Built on `main`, ADR-0090 to ADR-0098, its budgets set by the owner
+  ([ROADMAP](ROADMAP.md)); Claude Code ran its done-when through MCP alone and found a crash on
+  llvmpipe, fixed ([measurements](measurements.md)). Left: a window's jump the motion's property
+  test found, and the closing review.
 
 ### M1.12 — Drag and drop between X11 and Wayland
 
@@ -209,8 +208,8 @@ milestone first needs it.
   beside variants ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
 - Directional focus that goes on to the next output at a strip's end (niri's `-or-monitor`
   actions).
-- From Claude Code's run of `yuna mcp` (C5): a `wait_ms` on `keyboard` for a text field to be
-  enabled, and a tool that reads a program's log, which an agent without a shell cannot.
+- From Claude Code's run of M1.11: a window moved to an output by one call; a removed output's
+  windows shown, or said hidden; a click's result telling what it pressed.
 
 - A second Xwayland at scale 1 for games, on its own display, so that a game on an output of a
   smaller scale always draws at its mode ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
