@@ -1,0 +1,25 @@
+name: Protocol or feature an application needs
+description: An application fails or lacks something in Yuna because a protocol or a behaviour is missing.
+labels: [enhancement]
+body:
+  - type: input
+    id: application
+    attributes:
+      label: Application
+      description: Its name and version.
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What it needs
+      description: |
+        The protocol or the behaviour, and what the application does without it. docs/protocols.md
+        lists what Yuna offers and what it leaves out, with why.
+    validations:
+      required: true
+  - type: textarea
+    id: others
+    attributes:
+      label: Elsewhere
+      description: Which compositors offer it, if you know.

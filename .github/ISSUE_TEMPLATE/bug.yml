@@ -1,0 +1,41 @@
+name: Bug
+description: Yuna does something wrong, crashes, hangs, or misses a budget.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem goes to a private report instead: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release, or the commit (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: |
+        The commands, from a fresh `nix develop`, that show the problem, and the program that
+        runs in Yuna if one does. The smallest steps you found; a failing test is best.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Yuna's output with `YUNA_LOG=debug`. Remove anything personal from it.
+      render: text
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: Distribution, GPU and driver, or "llvmpipe".

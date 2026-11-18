@@ -1,0 +1,21 @@
+name: Idea
+description: A change to Yuna's behaviour, look or direction.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Yuna's direction is in docs/ROADMAP.md and its decisions in docs/adr/. An idea that changes
+        a decision says which ADR, and what would make it worth changing.
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What it is, why, and what it would gain.
+    validations:
+      required: true
+  - type: input
+    id: adr
+    attributes:
+      label: ADR it touches
+      description: Its number, if any.
