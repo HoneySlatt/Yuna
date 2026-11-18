@@ -405,7 +405,7 @@ impl State {
     /// The last step, once its clients are freed: removes its outputs, its place in the layout
     /// and its `wl_seat` global, which is disabled now and destroyed later, as a removed
     /// output's is. Smithay keeps a record of every seat it made, with no way to drop one: a
-    /// removed seat's record stays, without its keyboard and pointer.
+    /// removed seat's record stays, without its keyboard, its pointer and its selections.
     pub(crate) fn finish_removing_seat(&mut self, id: SeatId) -> Result<(), Error> {
         let outputs = self.layout.outputs(id).unwrap_or_default();
         for output in outputs {
@@ -419,6 +419,8 @@ impl State {
         let Some(index) = self.seats.iter().position(|seat| seat.id == id) else {
             return Ok(());
         };
+        // While Yuna still knows the seat: Smithay keeps its record, and the selections on it.
+        self.forget_seat_selections(id);
         let mut removed = self.seats.remove(index);
         if let Some(global) = removed.seat.global() {
             self.display_handle.disable_global::<State>(global.clone());
@@ -426,7 +428,6 @@ impl State {
         }
         removed.seat.remove_keyboard();
         removed.seat.remove_pointer();
-        self.selections.forget_seat(id);
         // A seat removed takes its outputs away at once, as an output removed does; the other
         // seats' motions go on (ADR-0015).
         self.mark_layout_changed(Change::InstantFor(BTreeSet::from([id])));

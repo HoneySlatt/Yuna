@@ -14,14 +14,18 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use super::events::{Event, EventData, Kind, Reading};
+use super::image::base64;
 use super::programs::{End, LogRead, Program};
 use super::protocol::{self, Revision};
+use super::stdio::MAX_LINE;
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
 use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
+use crate::xwayland::Selection;
 use crate::{
-    CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion, MAX_LAYOUT_NAME,
+    CLIPBOARD_TIMEOUT, CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion,
+    MAX_LAYOUT_NAME,
 };
 use yuna_layout::geometry::Rect;
 use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
@@ -30,8 +34,8 @@ use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
 /// ([survey](../../../../docs/survey.md#agents-and-mcp)).
 pub const MAX_WAIT: Duration = Duration::from_secs(50);
 
-/// How many calls may wait at once, `windows`' and `events`' together; past it, a call that
-/// would wait is refused.
+/// How many calls may wait at once, `windows`', `events`' and `clipboard get`'s together; past it,
+/// a call that would wait is refused.
 pub const MAX_WAITING_CALLS: usize = 64;
 
 /// How many bytes of a log `spawn log` gives by default.
@@ -39,6 +43,30 @@ pub const DEFAULT_LOG_READ: u64 = 64 << 10;
 
 /// How many bytes of a log `spawn log` gives at most.
 pub const MAX_LOG_READ: u64 = 1 << 20;
+
+/// The most bytes of data `clipboard get` gives: 1 MiB, its base64 or its escaped text well
+/// under the replies that may wait ([`MAX_QUEUED_OUTPUT`](super::MAX_QUEUED_OUTPUT)).
+pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
+
+/// The most bytes of text `clipboard set` takes: 256 KiB, a quarter of a request's line
+/// ([`MAX_LINE`]), so that any text but control characters fits it once escaped as JSON. A
+/// client that escapes all but ASCII writes a character of 2 or 3 bytes as `\uXXXX`, 6 bytes, and
+/// one of 4 bytes as two of them, 12: three times its length at most.
+pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 256 << 10;
+
+/// How many bytes of data `clipboard get` gives by default: 64 KiB, more than a text copied by
+/// hand, small beside a model's context.
+pub const DEFAULT_CLIPBOARD_BYTES: usize = 64 << 10;
+
+/// The text types `clipboard get` reads by default, the first a selection offers: UTF-8 first,
+/// in Wayland's name, then X11's, then the others.
+const TEXT_TYPES: [&str; 5] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "STRING",
+    "TEXT",
+];
 
 /// What a seat's id means in a schema: every tool but `clock` acts on one seat.
 const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
@@ -415,6 +443,48 @@ pub fn definitions() -> Value {
             }
         },
         {
+            "name": "clipboard",
+            "title": "Clipboard",
+            "description": format!("Read, set or clear a seat's clipboard, or its primary \
+                selection, which its X11 and Wayland programs copy to and paste from alike. get \
+                gives the MIME types the selection offers, none when it is empty, and the data of \
+                one of them, mime, by default the first text type it offers of {text_types}, \
+                null when it offers none: as text when it is UTF-8, else in base64 with base64 \
+                true; at most max_bytes, with truncated when there was more. It waits for the \
+                program that copied to write the data, {timeout} s at most, then answers with \
+                what came and timed_out. set holds the selection for you, offering text as \
+                {agent_types}, until a program copies something else or clear; a program pastes \
+                it while its window has the seat's keyboard, as any paste. clear empties the \
+                selection, whoever copied it.",
+                text_types = TEXT_TYPES.join(", "),
+                timeout = CLIPBOARD_TIMEOUT.as_secs(),
+                agent_types = crate::selection::AGENT_MIME_TYPES.join(", ")),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["get", "set", "clear"] },
+                    "seat": seat,
+                    "selection": { "type": "string", "enum": ["clipboard", "primary"],
+                        "description": "clipboard by default; primary is the selection a middle \
+                            click pastes" },
+                    "mime": { "type": "string", "minLength": 1,
+                        "description": "get: the MIME type to read, one the selection offers" },
+                    "max_bytes": { "type": "integer", "minimum": 1,
+                        "maximum": MAX_CLIPBOARD_BYTES,
+                        "description": format!(
+                            "get: the most bytes of data given; {DEFAULT_CLIPBOARD_BYTES} by \
+                             default") },
+                    "text": { "type": "string",
+                        "description": format!(
+                            "set: the text, {MAX_CLIPBOARD_TEXT_BYTES} bytes at most in UTF-8; \
+                             the request's line, the text escaped as JSON included, is \
+                             {MAX_LINE} bytes at most") }
+                },
+                "required": ["action", "seat"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "clock",
             "title": "Clock",
             "description": "Read Yuna's clock, on CLOCK_MONOTONIC's scale, in nanoseconds; or \
@@ -772,6 +842,132 @@ impl CaptureCall {
             SizeArgument::Physical => CaptureSize::Physical,
         }
     }
+}
+
+/// `clipboard`'s arguments.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ClipboardCall {
+    Get {
+        seat: u64,
+        #[serde(default)]
+        selection: SelectionArgument,
+        mime: Option<String>,
+        max_bytes: Option<u64>,
+    },
+    Set {
+        seat: u64,
+        #[serde(default)]
+        selection: SelectionArgument,
+        text: String,
+    },
+    Clear {
+        seat: u64,
+        #[serde(default)]
+        selection: SelectionArgument,
+    },
+}
+
+impl ClipboardCall {
+    /// The seat it acts on.
+    pub fn seat(&self) -> u64 {
+        match self {
+            ClipboardCall::Get { seat, .. }
+            | ClipboardCall::Set { seat, .. }
+            | ClipboardCall::Clear { seat, .. } => *seat,
+        }
+    }
+
+    /// Which of the seat's selections it acts on.
+    pub fn selection(&self) -> Selection {
+        let (ClipboardCall::Get { selection, .. }
+        | ClipboardCall::Set { selection, .. }
+        | ClipboardCall::Clear { selection, .. }) = self;
+        match selection {
+            SelectionArgument::Clipboard => Selection::Clipboard,
+            SelectionArgument::Primary => Selection::Primary,
+        }
+    }
+}
+
+/// One of a seat's selections, by name.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionArgument {
+    #[default]
+    Clipboard,
+    Primary,
+}
+
+/// `max_bytes` of `clipboard get`, [`DEFAULT_CLIPBOARD_BYTES`] when left out; refused outside 1
+/// to [`MAX_CLIPBOARD_BYTES`].
+pub fn clipboard_bytes(max_bytes: Option<u64>) -> Result<usize, String> {
+    match max_bytes {
+        None => Ok(DEFAULT_CLIPBOARD_BYTES),
+        Some(bytes) => usize::try_from(bytes)
+            .ok()
+            .filter(|bytes| (1..=MAX_CLIPBOARD_BYTES).contains(bytes))
+            .ok_or_else(|| format!("max_bytes is from 1 to {MAX_CLIPBOARD_BYTES}")),
+    }
+}
+
+/// The text type `clipboard get` reads when it names none: the first of [`TEXT_TYPES`] that
+/// `mime_types` holds.
+pub fn first_text_type(mime_types: &[String]) -> Option<String> {
+    TEXT_TYPES
+        .into_iter()
+        .find(|text| mime_types.iter().any(|mime_type| mime_type == text))
+        .map(str::to_owned)
+}
+
+/// What `clipboard get` read of its selection, as one of its types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardData {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+    /// Whether the selection's source had more than was read.
+    pub truncated: bool,
+    /// Whether its source had not closed its pipe within [`CLIPBOARD_TIMEOUT`].
+    pub timed_out: bool,
+}
+
+/// `clipboard get`'s result: the MIME types the selection offers and, when one was read, its
+/// data, as text when it is UTF-8, else in base64 with `base64` true, and its length in bytes.
+/// Data cut inside a character, by `max_bytes` or the time limit, is text up to that character.
+pub fn clipboard_json(mime_types: &[String], data: Option<&ClipboardData>) -> Value {
+    let Some(data) = data else {
+        return json!({
+            "mime_types": mime_types,
+            "mime": null,
+            "data": null,
+            "base64": false,
+            "bytes": 0,
+            "truncated": false,
+            "timed_out": false,
+        });
+    };
+    let cut = data.truncated || data.timed_out;
+    let text = match std::str::from_utf8(&data.bytes) {
+        Ok(text) => Some(text),
+        // An incomplete character at the end alone: the rest is whole text.
+        Err(error) if cut && error.error_len().is_none() => {
+            std::str::from_utf8(&data.bytes[..error.valid_up_to()]).ok()
+        }
+        Err(_) => None,
+    };
+    let (given, bytes, in_base64) = match text {
+        Some(text) => (text.to_owned(), text.len(), false),
+        None => (base64(&data.bytes), data.bytes.len(), true),
+    };
+    json!({
+        "mime_types": mime_types,
+        "mime": data.mime,
+        "data": given,
+        "base64": in_base64,
+        "bytes": bytes,
+        "truncated": data.truncated,
+        "timed_out": data.timed_out,
+    })
 }
 
 /// `clock`'s arguments.
@@ -1182,6 +1378,7 @@ mod tests {
                 "capture",
                 "pointer",
                 "keyboard",
+                "clipboard",
                 "clock"
             ]
         );
@@ -1732,5 +1929,108 @@ mod tests {
         assert_eq!(done["structuredContent"], json!({"a": 1}));
         assert_eq!(done["content"][0]["text"], json!("{\"a\":1}"));
         assert_eq!(done["resultType"], json!("complete"));
+    }
+
+    #[test]
+    fn clipboard_reads_its_properties_and_refuses_the_others() {
+        let get: Result<ClipboardCall, _> = arguments(args(json!({
+            "action": "get", "seat": 2, "selection": "primary", "mime": "image/png",
+            "max_bytes": 10
+        })));
+        let get = get.expect("a get");
+        assert_eq!(get.seat(), 2);
+        assert_eq!(get.selection(), Selection::Primary);
+        assert!(matches!(
+            get,
+            ClipboardCall::Get {
+                mime: Some(_),
+                max_bytes: Some(10),
+                ..
+            }
+        ));
+        let set: ClipboardCall =
+            arguments(args(json!({"action": "set", "seat": 3, "text": "ユナ"}))).expect("a set");
+        assert_eq!(set.selection(), Selection::Clipboard, "by default");
+        assert!(matches!(set, ClipboardCall::Set { seat: 3, .. }));
+        assert!(matches!(
+            arguments(args(json!({"action": "clear", "seat": 2}))),
+            Ok(ClipboardCall::Clear { seat: 2, .. })
+        ));
+        for refused in [
+            json!({"action": "set", "seat": 2}),
+            json!({"action": "get"}),
+            json!({"action": "get", "seat": 2, "selection": "secondary"}),
+            json!({"action": "clear", "seat": 2, "text": "a"}),
+            json!({"action": "get", "seat": 2, "max_bytes": -1}),
+            json!({"action": "copy", "seat": 2}),
+        ] {
+            assert!(
+                arguments::<ClipboardCall>(args(refused.clone())).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(clipboard_bytes(None), Ok(DEFAULT_CLIPBOARD_BYTES));
+        assert_eq!(
+            clipboard_bytes(Some(MAX_CLIPBOARD_BYTES as u64)),
+            Ok(MAX_CLIPBOARD_BYTES)
+        );
+        assert!(clipboard_bytes(Some(0)).is_err());
+        assert!(clipboard_bytes(Some(MAX_CLIPBOARD_BYTES as u64 + 1)).is_err());
+    }
+
+    #[test]
+    fn a_text_type_is_read_by_default_utf_8_first() {
+        let types = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let first = |names: &[&str]| first_text_type(&types(names));
+        assert_eq!(
+            first(&["TEXT", "text/plain", "text/plain;charset=utf-8"]),
+            Some("text/plain;charset=utf-8".to_owned())
+        );
+        assert_eq!(
+            first(&["STRING", "UTF8_STRING", "text/plain"]),
+            Some("UTF8_STRING".to_owned())
+        );
+        assert_eq!(first(&["text/html", "TEXT"]), Some("TEXT".to_owned()));
+        assert_eq!(first(&["image/png", "text/html"]), None);
+    }
+
+    #[test]
+    fn clipboard_data_is_text_when_utf_8_else_base64() {
+        let read = |bytes: &[u8], truncated: bool, timed_out: bool| {
+            let data = ClipboardData {
+                mime: "text/plain".to_owned(),
+                bytes: bytes.to_vec(),
+                truncated,
+                timed_out,
+            };
+            clipboard_json(&["text/plain".to_owned()], Some(&data))
+        };
+        let text = read("ユナ".as_bytes(), false, false);
+        assert_eq!(
+            (&text["data"], &text["base64"], &text["bytes"]),
+            (&json!("ユナ"), &json!(false), &json!(6))
+        );
+        // Cut inside its last character by max_bytes or the time limit: text up to it.
+        for (truncated, timed_out) in [(true, false), (false, true)] {
+            let cut = read(&"ユナ".as_bytes()[..5], truncated, timed_out);
+            assert_eq!((&cut["data"], &cut["bytes"]), (&json!("ユ"), &json!(3)));
+            assert_eq!(cut["base64"], json!(false));
+        }
+        // Whole yet ending inside a character: not text.
+        let whole = read(&"ユナ".as_bytes()[..5], false, false);
+        assert_eq!(whole["base64"], json!(true));
+        assert_eq!(whole["bytes"], json!(5));
+        let binary = read(&[0xFF, 0x00, b'a'], true, false);
+        assert_eq!(
+            (&binary["data"], &binary["base64"]),
+            (&json!("/wBh"), &json!(true))
+        );
+        assert_eq!(
+            clipboard_json(&[], None),
+            json!({"mime_types": [], "mime": null, "data": null, "base64": false, "bytes": 0,
+                   "truncated": false, "timed_out": false})
+        );
     }
 }

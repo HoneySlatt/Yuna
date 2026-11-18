@@ -526,6 +526,57 @@
     "title": "Keyboard"
   },
   {
+    "description": "Read, set or clear a seat's clipboard, or its primary selection, which its X11 and Wayland programs copy to and paste from alike. get gives the MIME types the selection offers, none when it is empty, and the data of one of them, mime, by default the first text type it offers of text/plain;charset=utf-8, UTF8_STRING, text/plain, STRING, TEXT, null when it offers none: as text when it is UTF-8, else in base64 with base64 true; at most max_bytes, with truncated when there was more. It waits for the program that copied to write the data, 5 s at most, then answers with what came and timed_out. set holds the selection for you, offering text as text/plain;charset=utf-8, text/plain, UTF8_STRING, until a program copies something else or clear; a program pastes it while its window has the seat's keyboard, as any paste. clear empties the selection, whoever copied it.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "set",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "get: the most bytes of data given; 65536 by default",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mime": {
+          "description": "get: the MIME type to read, one the selection offers",
+          "minLength": 1,
+          "type": "string"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "selection": {
+          "description": "clipboard by default; primary is the selection a middle click pastes",
+          "enum": [
+            "clipboard",
+            "primary"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "description": "set: the text, 262144 bytes at most in UTF-8; the request's line, the text escaped as JSON included, is 1048576 bytes at most",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "clipboard",
+    "title": "Clipboard"
+  },
+  {
     "description": "Read Yuna's clock, on CLOCK_MONOTONIC's scale, in nanoseconds; or advance it, when Yuna was started with --manual-clock, running every frame due on the way. It never moves past real time. It is the whole Yuna's.",
     "inputSchema": {
       "additionalProperties": false,

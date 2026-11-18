@@ -39,7 +39,7 @@ const MEBIBYTE: usize = 1024 * 1024;
 
 x11rb::atom_manager! {
     /// The atoms the stories name.
-    SelectionAtoms: SelectionAtomsCookie {
+    pub(crate) SelectionAtoms: SelectionAtomsCookie {
         CLIPBOARD,
         TARGETS,
         INCR,
@@ -50,7 +50,7 @@ x11rb::atom_manager! {
     }
 }
 
-fn atoms_of(client: &X11Client) -> SelectionAtoms {
+pub(crate) fn atoms_of(client: &X11Client) -> SelectionAtoms {
     SelectionAtoms::new(&client.connection)
         .expect("the atoms are asked")
         .reply()
@@ -124,7 +124,7 @@ fn open_x11_window(seat: &mut X11Seat, client: X11Client, title: &str) -> (X11Cl
 
 /// Makes a window of `client`'s own, never mapped, the owner of `selection`, as an X11 program
 /// that copies does; returns the window.
-fn take_selection(client: &mut X11Client, selection: Atom) -> Result<Window, String> {
+pub(crate) fn take_selection(client: &mut X11Client, selection: Atom) -> Result<Window, String> {
     let owner = client.create(&WindowSpec::named("owner"))?;
     let fail = |error: &dyn std::fmt::Display| error.to_string();
     client
@@ -170,7 +170,7 @@ fn notify(
 /// `TARGETS` lists `UTF8_STRING`, and `UTF8_STRING` is `data`, in INCR chunks of [`CHUNK`] bytes
 /// when it is longer (ICCCM 2.7.2); other targets are refused. Returns once `data` went whole,
 /// or, with `leave_after_first_chunk`, once its first chunk did.
-fn serve(
+pub(crate) fn serve(
     client: &mut X11Client,
     owner: Window,
     data: &[u8],
@@ -270,11 +270,11 @@ fn serve(
 }
 
 /// What a paste got: the type its owner gave and the bytes, or nothing when it was refused.
-type Pasted = Option<(Atom, Vec<u8>)>;
+pub(crate) type Pasted = Option<(Atom, Vec<u8>)>;
 
 /// Converts `selection` to `target` onto `window`, as an X11 program that pastes does, and reads
 /// the answer whole, INCR included.
-fn paste(
+pub(crate) fn paste(
     client: &mut X11Client,
     window: Window,
     selection: Atom,

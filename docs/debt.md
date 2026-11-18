@@ -312,6 +312,24 @@ with games' VRR:
   not one that emptied its environment.
 - The programs' logs and runtime folders are deleted when Yuna stops: an agent reads them
   before it closes Yuna's input.
+- `clipboard set` takes 256 KiB of text, a quarter of a request's line (`MAX_LINE`, 1 MiB), so
+  that any text but control characters fits it once escaped as JSON; a text of control
+  characters, 6 bytes each once escaped, may still pass the line, which ends the connection
+  rather than refusing the call.
+- `clipboard get` lists a client's first 64 MIME types of 255 bytes at most, those X11 is
+  offered: a longer type is not listed, and cannot be named.
+- `clipboard get`'s data is held whole until it is answered: up to `max_bytes`, 1 MiB, in a
+  buffer that may grow to twice that, for each of the 64 calls that may wait.
+- A `clipboard get` of the agent's own text, answered at once, is refused all the same while 64
+  calls wait: the bound is checked before Yuna knows who holds the selection, so that no program
+  is asked for data in vain.
+- A `clipboard get` that the X11 bridge refuses, past its 8 transfers, or whose program closes
+  its pipe at once, answers empty data, as a paste would: nothing tells a refusal from an empty
+  copy.
+- Yuna's writes of an agent's text are bounded per seat, not per client: a client that starts 8
+  reads and never drains them holds every other program's paste of it up to the time limit, 5 s.
+  An offer a client keeps keeps the text it offered, 256 KiB at most, until the client destroys
+  it.
 
 ## Motion
 
@@ -403,7 +421,12 @@ with games' VRR:
   X11 clipboard manager cannot keep a Wayland selection after its source goes, and nothing asks
   several targets at once of Yuna yet.
 - Text crosses as its bytes, never encoded again: `STRING`, Latin-1 by ICCCM, is served from
-  UTF-8 text as it is, and an X11 reply is passed in whatever type and format its owner gave.
+  UTF-8 text as it is, an agent's text included, and an X11 reply is passed in whatever type and
+  format its owner gave.
+- MCP's `clipboard clear` of a selection an X11 program owns empties it on Wayland's side alone:
+  the X11 program keeps X11's selection, and the seat's other X11 programs still paste it. The
+  manager would have to take X11's selection and release it. A test pins it
+  (`an_x11_copy_is_read_through_the_bridge_and_cleared_on_waylands_side_alone`).
 - An X11 owner that lost its selection, then exits mid-transfer, ends its transfers only at the
   time limit, 5 s: XFixes tells of a client gone only while it owns the selection.
 - The MIME types of Wayland selections are interned as atoms in Xwayland, which never frees one:
@@ -531,6 +554,10 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - GLES types reach three modules beside `render.rs`: `state.rs` holds the renderer, `output.rs`
   each output's buffer and damage tracker, `dmabuf.rs` the import. Stage 2's Vulkan renderer
   replaces all four.
+- Yuna's writes of agents' selections live in the shared `State`, beside Smithay's selection
+  state (`Selections` in `crates/yuna/src/selection.rs`: the writes, their next key, those to
+  start, and the keys their sources note), since Smithay hands a client's read of a selection
+  Yuna holds to its `SelectionHandler`. Stage 2's core gives them to the clipboard's own module.
 - Two places say which output shows a window: `scale.rs` reads the last arrangement, `colour/`
   the layout as it is; between a change and the next arrangement they may differ. Stage 2's core
   gives each fact one owner. Found by the [audit of 2026-11-17](audits/2026-11-17-architecture.md).

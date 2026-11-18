@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::PoisonError;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
@@ -32,8 +32,9 @@ use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
 use crate::process::lineage_under_yuna;
 use crate::render::Device;
+use crate::selection::SelectionRead;
 use crate::state::{OWNER_SEAT, State};
-use crate::xwayland::{DrawnX11Menu, X11Display, Xwayland, XwaylandConfig};
+use crate::xwayland::{DrawnX11Menu, Selection, X11Display, Xwayland, XwaylandConfig};
 
 /// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
 /// listens again.
@@ -651,6 +652,37 @@ impl Compositor {
         self.state.keyboard_layout(seat)
     }
 
+    /// The MIME types `seat`'s `selection` offers, none when it is empty, for MCP's `clipboard`.
+    pub(crate) fn selection_mime_types(&self, seat: SeatId, selection: Selection) -> Vec<String> {
+        self.state.selection_mime_types(seat, selection)
+    }
+
+    /// Reads `seat`'s `selection` as `mime_type`, one of its types, as a Wayland client's paste
+    /// would, for MCP's `clipboard get`: an agent's text whole, or a pipe its source writes into.
+    pub(crate) fn read_selection(
+        &mut self,
+        seat: SeatId,
+        selection: Selection,
+        mime_type: String,
+    ) -> Result<SelectionRead, Error> {
+        self.state.read_selection(seat, selection, mime_type)
+    }
+
+    /// Makes `text` `seat`'s `selection`, held by Yuna for an agent, for MCP's `clipboard set`.
+    pub(crate) fn hold_agent_selection(
+        &mut self,
+        seat: SeatId,
+        selection: Selection,
+        text: Arc<[u8]>,
+    ) {
+        self.state.hold_agent_selection(seat, selection, text);
+    }
+
+    /// Empties `seat`'s `selection`, whoever holds it, for MCP's `clipboard clear`.
+    pub(crate) fn clear_selection(&mut self, seat: SeatId, selection: Selection) {
+        self.state.clear_selection_for_agent(seat, selection);
+    }
+
     /// Whether a text field is enabled where agent seat `seat`'s keyboard is: its client asked
     /// for an input method through `text-input-v3`, and Yuna is its seat's.
     pub fn text_field_enabled(&self, seat: SeatId) -> bool {
@@ -1059,12 +1091,14 @@ impl Compositor {
         Ok(())
     }
 
-    /// Ends a round: frees the clients the display ended, then what closed windows, destroyed
-    /// popups and surfaces left behind, then sends the events written to every client. A client
-    /// that cannot take them is ended by the display, and freed at the next round's end; the
-    /// others go on.
+    /// Ends a round: frees the clients the display ended, goes on with Yuna's writes of agents'
+    /// selections (`selection.rs`), then frees what closed windows, destroyed popups and
+    /// surfaces left behind, then sends the events written to every client. A client that
+    /// cannot take them is ended by the display, and freed at the next round's end; the others
+    /// go on.
     pub(crate) fn flush(&mut self) {
         self.free_departed_clients();
+        self.state.run_clipboard_writes(&self.event_loop.handle());
         if let Some(xwayland) = &mut self.xwayland {
             xwayland.send_commands(&mut self.state);
         }

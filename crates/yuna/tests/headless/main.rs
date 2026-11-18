@@ -30,6 +30,7 @@ mod screencopy;
 mod seats;
 mod selection;
 mod selection_client;
+mod selection_mcp;
 mod text_input;
 mod virtual_input;
 mod virtual_input_client;

@@ -1,6 +1,7 @@
 //! A capture's image as MCP gives it: a PNG, in base64
 //! ([ADR-0034](../../../../docs/adr/0034-captures.md)). Made on a thread of its own, from the
-//! pixels the compositor copied, so that no frame waits for it.
+//! pixels the compositor copied, so that no frame waits for it. Its base64 gives `clipboard
+//! get`'s data that is not text too.
 
 use crate::CapturedFrame;
 
@@ -55,7 +56,7 @@ fn png_of(rgb: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
 }
 
 /// `bytes` in base64, RFC 4648's alphabet, padded.
-fn base64(bytes: &[u8]) -> String {
+pub(super) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

@@ -11,8 +11,10 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
 
+use smithay::reexports::rustix::event::{PollFd, PollFlags, poll};
 use smithay::reexports::rustix::fs::{OFlags, fcntl_setfl};
 use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
+use smithay::reexports::rustix::time::Timespec;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{
     wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_keyboard,
@@ -105,6 +107,38 @@ impl Pipe {
                 panic!("a writer still holds the pipe open, after {data:?}")
             }
             Err(error) => panic!("the pipe cannot be read: {error}"),
+        }
+    }
+
+    /// Whether every writer has closed the pipe, seen without reading it: what it holds stays.
+    pub fn writer_closed(&self) -> bool {
+        let mut fds = [PollFd::new(&self.0, PollFlags::IN)];
+        let now = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        match poll(&mut fds, Some(&now)) {
+            Ok(_) => fds[0].revents().contains(PollFlags::HUP),
+            Err(error) => panic!("the pipe cannot be polled: {error}"),
+        }
+    }
+
+    /// Adds to `data` at most `at_most` bytes of what the pipe holds now, in one read, without
+    /// waiting, as a reader that drains it slowly; true once every writer has closed it and it is
+    /// drained.
+    pub fn read_at_most(&mut self, data: &mut Vec<u8>, at_most: usize) -> bool {
+        let mut bytes = vec![0; at_most];
+        loop {
+            match self.0.read(&mut bytes) {
+                Ok(0) => return true,
+                Ok(read) => {
+                    data.extend_from_slice(&bytes[..read]);
+                    return false;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return false,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => panic!("the pipe cannot be read: {error}"),
+            }
         }
     }
 

@@ -272,8 +272,9 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `activation.rs`: `xdg-activation-v1`: tokens, activation through the layout, urgent windows.
 - `dialog.rs`: `xdg-dialog-v1`: offered; the modal hint is read, and nothing uses it yet.
 - `selection.rs`: the clipboard (`wl_data_device`), the primary selection and
-  `ext-data-control-v1`, on Smithay's handlers; the selection Yuna holds for an X11 owner, and
-  the record of what Wayland clients set, for X11 ([below](#selections)).
+  `ext-data-control-v1`, on Smithay's handlers; the selection Yuna holds for an X11 owner or an
+  agent, its writes of an agent's text, its reads for MCP, and the record of what Wayland's side
+  set, for X11 ([below](#selections)).
 - `frames.rs`: the frame loop: when an output refreshes, what is arranged, the motion each frame
   samples, what is drawn, called back and reported presented, what clients are told, and the
   hidden windows.
@@ -790,8 +791,9 @@ file shrunk in between would kill Yuna with SIGBUS, which Smithay catches only f
 
 Each seat has its own clipboard and primary selection, which follow its keyboard focus: a seat's
 focus is only ever on its own clients, so a selection never crosses seats. Between Wayland
-clients Yuna passes pipes and never touches the data. It holds a selection itself for one kind of
-owner alone, an X11 program of the seat ([below](#between-x11-and-wayland)).
+clients Yuna passes pipes and never touches the data. It holds a selection itself for two kinds
+of owner: an X11 program of the seat ([below](#between-x11-and-wayland)), and an agent, through
+MCP ([An agent's clipboard](#an-agents-clipboard)).
 
 1. When the keyboard focus moves to another client's window, that client gets the selections
    just before its keyboard `enter`, as `wl_data_device` asks: each device it has is told what
@@ -816,7 +818,7 @@ owner alone, an X11 program of the seat ([below](#between-x11-and-wayland)).
 Each seat's X11 window manager carries the clipboard (`CLIPBOARD`) and the primary selection
 (`PRIMARY`) between the seat's X11 and Wayland programs, both ways, on its own thread
 (`xwayland/bridge.rs`); Yuna's loop decides what the seat's Wayland selections are
-(`xwayland/selections.rs`, `selection.rs`), and never reads, writes or waits on the data.
+(`xwayland/selections.rs`, `selection.rs`), and never reads, writes or waits on X11's data.
 
 1. **X11 to Wayland.** XFixes tells the manager when an X11 client takes a selection. The manager
    converts the owner's `TARGETS` and maps them to MIME types: a target named as a MIME type is
@@ -833,21 +835,22 @@ Each seat's X11 window manager carries the clipboard (`CLIPBOARD`) and the prima
    end, empty.
 3. The owner gone empties the seat's selection: its selection set to none, its window destroyed,
    its client gone, or its Xwayland ended. A client gone also ends the transfers it was serving.
-4. **Wayland to X11.** When a Wayland client of the seat sets a selection, Yuna records its MIME
-   types, 64 at most of 255 bytes at most, and tells the seat's manager at the round's end, once
-   however often it changed. The manager takes the X11 selection on its own window and answers
-   each `SelectionRequest`: `TARGETS`, each MIME type under its own name, and `UTF8_STRING`,
-   `STRING` and `TEXT` from the text types; `TIMESTAMP`; and each data target by asking Yuna's
-   loop, which makes a pipe, gives its write end to the source
-   (`request_data_device_client_selection`, `request_primary_client_selection`) and sends its
-   read end back. The manager sets what comes on the requestor's property whole, or, above the
-   core protocol's maximum request (256 KiB), in INCR's chunks, each once the requestor deleted
-   the last. The bytes go as the source wrote them: text is never encoded again. An unknown
-   target, or a failure before the answer, is refused: the property none. So is a request named
-   with a time before the manager took the selection, as ICCCM asks (`CurrentTime` is
-   answered), and a request for the manager's other selections, `WM_S0` and `_XSETTINGS_S0`,
-   which serve no data. An answer to one of the manager's own conversions that names another
-   selection or target than it asked, which any X11 client can make up, is left.
+4. **Wayland to X11.** When a Wayland client of the seat sets a selection, or an agent does through
+   MCP, Yuna records its MIME types, 64 at most of 255 bytes at most, and tells the seat's manager
+   at the round's end, once however often it changed. The manager takes the X11 selection on its own
+   window and answers each `SelectionRequest`: `TARGETS`, each MIME type under its own name, and
+   `UTF8_STRING`, `STRING` and `TEXT` from the text types; `TIMESTAMP`; and each data target by
+   asking Yuna's loop, which makes a pipe, gives its write end to the source
+   (`request_data_device_client_selection`, `request_primary_client_selection`), or writes an
+   agent's text into it itself ([below](#an-agents-clipboard)), and sends its read end back. The
+   manager sets what comes on the requestor's property whole, or, above the core protocol's maximum
+   request (256 KiB), in INCR's chunks, each once the requestor deleted the last. The bytes go as
+   the source wrote them: text is never encoded again. An unknown target, or a failure before the
+   answer, is refused: the property none. So is a request named with a time before the manager took
+   the selection, as ICCCM asks (`CurrentTime` is answered), and a request for the manager's other
+   selections, `WM_S0` and `_XSETTINGS_S0`, which serve no data. An answer to one of the manager's
+   own conversions that names another selection or target than it asked, which any X11 client can
+   make up, is left.
 5. When the Wayland selection ends, cleared, replaced or its source gone, the manager releases the
    X11 selection, naming the time it took it, so that an X11 client that took it since keeps it.
    A source destroyed, by its client or with it, reaches Yuna as a cleared selection: Yuna's fork
@@ -871,6 +874,40 @@ A Wayland copy and an X11 copy made at once end as one selection on both sides: 
 Wayland selections clients set, and an X11 owner the manager saw before it learnt of a newer one
 is left, since the manager then takes X11's selection for the newer. Drag and drop between X11 and
 Wayland does not exist yet ([debt](debt.md#xwayland)).
+
+#### An agent's clipboard
+
+MCP's `clipboard` tool reads, sets and clears a seat's clipboard or primary selection
+([The MCP server](#the-mcp-server)); `selection.rs` does it on the compositor's side, the same way
+for X11's programs and Wayland's.
+
+1. **Reading.** `get` lists the selection's MIME types: those of a selection Yuna holds, or a
+   client's first 64 of 255 bytes at most, as X11 is offered them. It reads one, the one it names
+   or the first text type offered, as a Wayland client's paste would: an agent's text Yuna holds
+   is answered at once; a client is asked to write into a new pipe; an X11 owner's selection goes
+   to the seat's manager with the pipe's write end, among its 8 transfers. The MCP server watches
+   the pipe's read end on the loop and, after each round, reads it as far as it goes, never
+   waiting. It answers once the source closes the pipe; once it wrote one byte past `max_bytes`,
+   `truncated`; or 5 s after the call (`CLIPBOARD_TIMEOUT`), with what came, `timed_out`. Closing
+   the read end then tells a source still writing that no one reads.
+2. **Setting.** `set` makes the text the seat's selection, held by Yuna for the agent
+   (`HeldSelection::Agent`), offered as `text/plain;charset=utf-8`, `text/plain` and
+   `UTF8_STRING`. It replaces a client's selection, which is cancelled, or an X11 owner's. Yuna
+   records the types as Wayland's side's selection, with a new serial, so that the seat's manager
+   takes X11's selection for them, as for a client's. The usual rules decide who reads it: the
+   client with the keyboard, or X11 while one of the seat's X11 windows has it.
+3. **Writing.** Each read of the agent's text is a write of Yuna's own, run at each round's end
+   (`run_clipboard_writes`): its pipe made non-blocking, as much written as the pipe takes, then
+   more each time the loop says it takes more. It closes once the text is written, its reader
+   leaves, its seat closes, or 5 s pass without the reader taking a byte, as an X11 transfer's
+   limit: a reader that drains it slowly is never cut. At most 8 run on a seat
+   (`MAX_CLIPBOARD_WRITES`): a ninth reader's pipe closes at once, empty. Every write and every
+   offer shares the one copy of the text, which a seat removed keeps none of: its selections are
+   emptied before Smithay is left with its record.
+4. **Ending.** The agent's selection lasts until a client or X11 sets another, or `clear`.
+   `clear` empties the seat's selection whoever holds it: a client's is cancelled, and the
+   manager releases X11's selection if it holds it for Wayland. An X11 owner's selection empties
+   on Wayland's side alone: X11 programs still paste it among themselves ([debt](debt.md#xwayland)).
 
 #### Drag and drop
 
@@ -1230,16 +1267,18 @@ standard input, one per line, and writes the replies to its standard output, not
 - `mod.rs`: `Server`, which holds the compositor and runs the tools.
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
-of SIGCHLD, of the waiting calls' timers and of the encoders' channel only note what came; after each round,
+of SIGCHLD, of the waiting calls' timers, of the clipboard reads' pipes and of the encoders'
+channel only note what came; after each round,
 `Server::dispatch` reaps the children that ended, handing the compositor the status of each that
 is not a program ([XWayland](#xwayland)), reads one chunk of input, answers each whole
-line, answers the calls whose window came or whose time is up, starts encoding the captures copied
-and answers those encoded whose frame's boundary came, sends the compositor's events, records
-the round's events in the seats' logs and answers the `events` calls waiting for them, and
-writes the replies. SIGCHLD comes when a child ends, never when it is stopped or continued
-(`SA_NOCLDSTOP`), so that a program frozen or slowed wakes nothing. While 16 MiB of replies
-wait, no further line is answered and the client's input is not read. A line over 1 MiB, or an input
-or output that fails, ends the connection.
+line, reads the clipboard reads' pipes and answers those that ended, answers the calls whose
+window came or whose time is up, starts encoding the captures copied and answers those encoded
+whose frame's boundary came, sends the compositor's events, records the round's events in the
+seats' logs and answers the `events` calls waiting for them, and writes the replies. SIGCHLD comes
+when a child ends, never when it is stopped or continued (`SA_NOCLDSTOP`), so that a program
+frozen or slowed wakes nothing. While 16 MiB of replies wait, no further line is answered and the
+client's input is not read. A line over 1 MiB, or an input or output that fails, ends the
+connection.
 
 `yuna mcp` starts with no output and no socket of the owner's seat, which announces no
 `wl_seat`: everything is on agents' seats ([ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)).
@@ -1281,7 +1320,8 @@ window or program unknown there:
   so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
   real time whatever the clock's, for one that matches. A waiting call is answered once the
   layout has placed the window, which on the manual clock takes a `clock` advance;
-  `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`' with them.
+  `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`' and
+  `clipboard get`'s with them.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -1290,10 +1330,18 @@ window or program unknown there:
   types text, shows text being composed and changes the seat's layout, and tells the window the
   keyboard is on and whether a text field is enabled there; `get` and a change also tell the
   seat's layout, variant and options ([Seats and input](#seats-and-input)).
+- `clipboard` reads, sets and clears a seat's clipboard or primary selection
+  ([An agent's clipboard](#an-agents-clipboard)). `get` gives its MIME types and the data of one,
+  as text when it is UTF-8, else in base64, 64 KiB by default and 1 MiB at most, `truncated` past
+  them, text cut inside a character given up to it. It waits, 5 s at most, on real time, for the
+  program that copied, then answers with what came and `timed_out`; it counts among the 64 calls
+  that wait, fails when its seat closes, and `notifications/cancelled` drops it. `set` holds the
+  text until a program copies another or `clear`: 256 KiB at most, so that any text but control
+  characters fits the request's line once escaped as JSON.
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
-fails the `windows` and `events` calls waiting on it, drops its events and ends its programs'
+fails the `windows`, `events`, `capture` and `clipboard` calls waiting on it, drops its events and ends its programs'
 pace, then ends its processes: every process under Yuna that
 is, or descends from, one of the seat's programs still running, is in a process group one of
 them led, is one of its clients, or has `YUNA_SEAT=<id>` in `/proc/<pid>/environ`; unless
@@ -1513,7 +1561,17 @@ own thread, both `took_us`.
   wait failed by its seat's closing or cancelled, an output removed with its windows, a client's
   protocol error, a client that reads nothing closed, a client that only draws making no look, a
   wait whose cursor missed events answered at once, and one bound for `windows`' and `events`'
-  waits. `motion.rs` in it turns animations on: each boundary of two retargeted scrolls checked
+  waits. `selection_mcp.rs` in it drives `clipboard`
+  with the server in process, on the real clock: a Wayland copy and an X11 copy read exactly with
+  their types; the agent's text pasted exactly by a Wayland client and by an X11 window with the
+  keyboard, from `CLIPBOARD` and `PRIMARY`, and an empty one; the primary selection apart; a
+  program that never finishes writing, answered at the time limit; 3 MiB read to `max_bytes`;
+  base64 for data that is not text; text cut inside a character; a text past `set`'s bound
+  refused; `clear`, an X11 owner's kept in X11; a seat closed and a call cancelled while a read
+  waits, and the bound on waiting calls; a seat closed while writes run; readers that never read,
+  bounded, open until the limit and closed after it, and one that reads slowly past it; Yuna at
+  rest after.
+  `motion.rs` in it turns animations on: each boundary of two retargeted scrolls checked
   against a `Motion` of the test's own, fed the same
   layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
   drawn at once sampled and shown at the next boundary, or, its drawing across that one, at the

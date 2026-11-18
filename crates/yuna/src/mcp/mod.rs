@@ -8,7 +8,10 @@
 //! has placed the window or the round that recorded the event has ended, or when its time is
 //! up, on the real clock whatever the compositor's:
 //! [`tools::MAX_WAIT`] at most, under the time a client gives a call. On a manual clock, the
-//! window is placed only once the clock moves to its output's refresh.
+//! window is placed only once the clock moves to its output's refresh. A `clipboard get` waits
+//! for the program that copied to write into a pipe, which each round reads as far as it goes,
+//! never waiting, and is answered once the program closes it, past its `max_bytes`, or at
+//! [`CLIPBOARD_TIMEOUT`] with what came.
 //! `notifications/cancelled` drops a waiting call unanswered.
 //!
 //! Everything an agent does is on a seat of its own, which `seat create` makes
@@ -50,6 +53,7 @@ use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
@@ -65,16 +69,22 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 use crate::colour::description::PG32UCDM;
 use crate::compositor::{Compositor, WindowDescription};
 use crate::output::{InvalidOutput, OutputMode};
+use crate::selection::SelectionRead;
 use crate::state::OWNER_SEAT;
-use crate::{CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error, KeyboardLayout};
+use crate::xwayland::Selection;
+use crate::{
+    CLIPBOARD_TIMEOUT, CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error,
+    KeyboardLayout,
+};
 use events::{EventData, EventLog, Kind, Observer};
 use image::Encoded;
 use programs::{End, Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
 use tools::{
-    ButtonCall, CaptureCall, ClockCall, CopiedCapture, EventsCall, KeyboardCall, OutputsCall,
-    PointerCall, SeatCall, SpawnCall, ToolResult, WindowsCall, WorkspacesCall,
+    ButtonCall, CaptureCall, ClipboardCall, ClipboardData, ClockCall, CopiedCapture, EventsCall,
+    KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall, ToolResult, WindowsCall,
+    WorkspacesCall,
 };
 
 pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
@@ -85,7 +95,10 @@ pub use programs::{
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
-pub use tools::{DEFAULT_LOG_READ, MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS};
+pub use tools::{
+    DEFAULT_CLIPBOARD_BYTES, DEFAULT_LOG_READ, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES,
+    MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS,
+};
 
 /// How many bytes of replies may wait for the client before its input stops being read: 16 MiB,
 /// room for a few captures (M1.5's C4) beside the replies to a burst of calls.
@@ -123,6 +136,8 @@ struct Events {
     stop: bool,
     /// The waiting calls whose time is up, by key.
     timed_out: Vec<u64>,
+    /// The `clipboard get` calls whose pipe may be read, by key.
+    clipboards_readable: Vec<u64>,
     /// The seat closings whose stage is up, by key.
     closings_due: Vec<u64>,
     /// The captures' images encoded, by key.
@@ -179,6 +194,42 @@ enum CaptureStage {
     },
 }
 
+/// A `clipboard get` reading its selection from the program that copied it, until it is
+/// answered.
+#[derive(Debug)]
+struct ClipboardRead {
+    key: u64,
+    id: Value,
+    revision: Revision,
+    seat: SeatId,
+    /// The MIME types the selection offered, which the answer gives.
+    mime_types: Vec<String>,
+    /// The type read.
+    mime: String,
+    max_bytes: usize,
+    /// The read end of the pipe the program writes into, non-blocking.
+    pipe: OwnedFd,
+    /// What came, up to one byte past `max_bytes`, which tells that the program had more.
+    data: Vec<u8>,
+    /// The source that wakes the loop when the pipe may be read, on a copy of it.
+    source: RegistrationToken,
+    /// The timer that answers it [`CLIPBOARD_TIMEOUT`] after it started.
+    timer: RegistrationToken,
+}
+
+/// How a `clipboard get`'s read ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadEnd {
+    /// The program closed its pipe: the data came whole.
+    Closed,
+    /// It wrote more than `max_bytes`.
+    Truncated,
+    /// Its time is up, with what came.
+    TimedOut,
+    /// The pipe failed.
+    Failed(rustix::io::Errno),
+}
+
 /// A `seat close` waiting for the seat's processes to end.
 #[derive(Debug)]
 struct SeatClosing {
@@ -229,6 +280,7 @@ pub struct Server {
     next_wait: u64,
     closings: Vec<SeatClosing>,
     captures: Vec<CaptureWait>,
+    clipboard_reads: Vec<ClipboardRead>,
     /// Where the encoders send the captures' images, by key.
     encoder_results: Sender<(u64, Result<Encoded, String>)>,
     /// Each seat's last captures, newest last, by id, which `pointer` takes.
@@ -387,6 +439,7 @@ impl Server {
             next_wait: 1,
             closings: Vec::new(),
             captures: Vec::new(),
+            clipboard_reads: Vec::new(),
             encoder_results,
             recent_captures: HashMap::new(),
             next_capture: 1,
@@ -456,9 +509,9 @@ impl Server {
     }
 
     /// Runs one round of the compositor's loop, waiting up to `timeout` (`None`: as long as it
-    /// takes), then answers what came: requests, cancellations, ended programs, calls whose time
-    /// is up or whose window opened; records the round's events and answers the calls waiting
-    /// for them; then writes the replies.
+    /// takes), then answers what came: requests, cancellations, ended programs, clipboard reads
+    /// whose data came, calls whose time is up or whose window opened; records the round's events
+    /// and answers the calls waiting for them; then writes the replies.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         let wakeups = self.compositor.counters().wakeups;
         self.compositor.dispatch(timeout)?;
@@ -483,6 +536,8 @@ impl Server {
             self.read_input();
         }
         self.answer_lines();
+        // Before the times up, so that a read whose data came is answered with it.
+        self.read_clipboards(events.clipboards_readable);
         for key in events.timed_out {
             self.answer_timed_out(key);
         }
@@ -740,6 +795,11 @@ impl Server {
                     "capture" => match self.capture(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits for its frame, and is answered later.
+                        None => return,
+                    },
+                    "clipboard" => match self.clipboard(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It waits for its selection's data, and is answered later.
                         None => return,
                     },
                     "clock" => self.clock(arguments),
@@ -1025,8 +1085,8 @@ impl Server {
         None
     }
 
-    /// Answers the `windows`, `events` and `capture` calls that wait on `seat`, which closed,
-    /// and forgets its captures and its events: a stale handle fails plainly
+    /// Answers the `windows`, `events`, `capture` and `clipboard` calls that wait on `seat`,
+    /// which closed, and forgets its captures and its events: a stale handle fails plainly
     /// ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
         self.recent_captures.remove(&seat);
@@ -1043,6 +1103,18 @@ impl Server {
             self.queue.push(&protocol::response(
                 wait.id,
                 result.into_result(wait.revision),
+            ));
+        }
+        while let Some(index) = self
+            .clipboard_reads
+            .iter()
+            .position(|read| read.seat == seat)
+        {
+            let read = self.drop_clipboard_read(index);
+            let result = ToolResult::failed(format!("seat {} was closed", seat.0));
+            self.queue.push(&protocol::response(
+                read.id,
+                result.into_result(read.revision),
             ));
         }
         while let Some(index) = self
@@ -1723,10 +1795,10 @@ impl Server {
         None
     }
 
-    /// The calls waiting, `windows`' and `events`' together, which [`MAX_WAITING_CALLS`]
-    /// bounds.
+    /// The calls waiting, `windows`', `events`' and `clipboard get`'s together, which
+    /// [`MAX_WAITING_CALLS`] bounds.
     fn waiting_calls(&self) -> usize {
-        self.waits.len() + self.event_waits.len()
+        self.waits.len() + self.event_waits.len() + self.clipboard_reads.len()
     }
 
     /// Arms the timer that ends waiting call `key`'s time `after` from now, on real time.
@@ -1865,6 +1937,240 @@ impl Server {
             timer,
         });
         None
+    }
+
+    /// `clipboard`: the result now, or none while a `get` waits for its selection's data.
+    fn clipboard(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call: ClipboardCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        let seat = match self.agent_seat(call.seat()) {
+            Ok(seat) => seat,
+            Err(failed) => return Some(failed),
+        };
+        let selection = call.selection();
+        match call {
+            ClipboardCall::Get {
+                mime, max_bytes, ..
+            } => match tools::clipboard_bytes(max_bytes) {
+                Ok(max_bytes) => self.clipboard_get(id, revision, seat, selection, mime, max_bytes),
+                Err(reason) => Some(ToolResult::failed(reason)),
+            },
+            ClipboardCall::Set { text, .. } => {
+                if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
+                    return Some(ToolResult::failed(format!(
+                        "the text takes {} bytes, over the {MAX_CLIPBOARD_TEXT_BYTES} set takes",
+                        text.len()
+                    )));
+                }
+                let bytes = text.len();
+                let text: Arc<[u8]> = Arc::from(text.into_bytes());
+                self.compositor.hold_agent_selection(seat, selection, text);
+                Some(ToolResult::done(json!({
+                    "mime_types": self.compositor.selection_mime_types(seat, selection),
+                    "bytes": bytes,
+                })))
+            }
+            ClipboardCall::Clear { .. } => {
+                self.compositor.clear_selection(seat, selection);
+                Some(ToolResult::done(json!({ "mime_types": [] })))
+            }
+        }
+    }
+
+    /// `clipboard get` of `seat`'s `selection`, as `mime` or its first text type: the answer
+    /// now when the selection is empty, offers no text type, or Yuna holds its text; else none,
+    /// while its pipe is read, counted among the waiting calls.
+    fn clipboard_get(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        seat: SeatId,
+        selection: Selection,
+        mime: Option<String>,
+        max_bytes: usize,
+    ) -> Option<ToolResult> {
+        let mime_types = self.compositor.selection_mime_types(seat, selection);
+        if mime_types.is_empty() {
+            return Some(ToolResult::done(tools::clipboard_json(&[], None)));
+        }
+        let mime = match mime {
+            Some(mime) if mime_types.contains(&mime) => mime,
+            Some(mime) => {
+                return Some(ToolResult::failed(format!(
+                    "the selection offers no {mime}: it offers {}",
+                    mime_types.join(", ")
+                )));
+            }
+            None => match tools::first_text_type(&mime_types) {
+                Some(text) => text,
+                None => return Some(ToolResult::done(tools::clipboard_json(&mime_types, None))),
+            },
+        };
+        // Before the source is asked, so that none is asked in vain.
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_WAITING_CALLS} calls wait already"
+            )));
+        }
+        let pipe = match self
+            .compositor
+            .read_selection(seat, selection, mime.clone())
+        {
+            Ok(SelectionRead::Pipe(pipe)) => pipe,
+            Ok(SelectionRead::Empty) => {
+                return Some(ToolResult::done(tools::clipboard_json(&[], None)));
+            }
+            Ok(SelectionRead::Held(text)) => {
+                let data = ClipboardData {
+                    mime,
+                    bytes: text[..text.len().min(max_bytes)].to_vec(),
+                    truncated: text.len() > max_bytes,
+                    timed_out: false,
+                };
+                let answer = tools::clipboard_json(&mime_types, Some(&data));
+                return Some(ToolResult::done(answer));
+            }
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
+        };
+        let key = self.next_wait;
+        let (source, timer) = match self.watch_clipboard_read(key, &pipe) {
+            Ok(tokens) => tokens,
+            Err(error) => return Some(ToolResult::failed(error)),
+        };
+        self.next_wait += 1;
+        self.clipboard_reads.push(ClipboardRead {
+            key,
+            id: id.clone(),
+            revision,
+            seat,
+            mime_types,
+            mime,
+            max_bytes,
+            pipe,
+            data: Vec::new(),
+            source,
+            timer,
+        });
+        None
+    }
+
+    /// The sources of clipboard read `key`: one noting when `pipe` may be read, and the timer of
+    /// [`CLIPBOARD_TIMEOUT`]. Neither is left when one cannot be made.
+    fn watch_clipboard_read(
+        &self,
+        key: u64,
+        pipe: &OwnedFd,
+    ) -> Result<(RegistrationToken, RegistrationToken), String> {
+        let handle = self.compositor.loop_handle();
+        let watched = pipe.try_clone().map_err(|error| error.to_string())?;
+        let events = self.events.clone();
+        let source = handle
+            .insert_source(
+                Generic::new(watched, Interest::READ, Mode::Level),
+                move |_, _, state| {
+                    state.woke = true;
+                    let readable = &mut events.borrow_mut().clipboards_readable;
+                    if !readable.contains(&key) {
+                        readable.push(key);
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|error| error.error.to_string())?;
+        let events = self.events.clone();
+        let timer = handle.insert_source(
+            Timer::from_duration(CLIPBOARD_TIMEOUT),
+            move |_, _, state| {
+                state.woke = true;
+                events.borrow_mut().timed_out.push(key);
+                TimeoutAction::Drop
+            },
+        );
+        match timer {
+            Ok(timer) => Ok((source, timer)),
+            Err(error) => {
+                handle.remove(source);
+                Err(error.error.to_string())
+            }
+        }
+    }
+
+    /// Reads what the pipes of the clipboard reads `keys` hold now, and answers each that ended.
+    fn read_clipboards(&mut self, keys: Vec<u64>) {
+        for key in keys {
+            let Some(index) = self.clipboard_reads.iter().position(|read| read.key == key) else {
+                continue;
+            };
+            if let Some(end) = self.drain_clipboard_read(index) {
+                self.answer_clipboard_read(index, end);
+            }
+        }
+    }
+
+    /// Reads what the pipe of the clipboard read at `index` holds now, never waiting: how the
+    /// read ended, or none while the program may write more.
+    fn drain_clipboard_read(&mut self, index: usize) -> Option<ReadEnd> {
+        let read = &mut self.clipboard_reads[index];
+        let buffer = &mut self.read_buffer;
+        loop {
+            // One byte past max_bytes tells that the program had more.
+            let room = (read.max_bytes + 1 - read.data.len()).min(buffer.len());
+            match rustix::io::read(&read.pipe, &mut buffer[..room]) {
+                Ok(0) => return Some(ReadEnd::Closed),
+                Ok(count) => {
+                    read.data.extend_from_slice(&buffer[..count]);
+                    if read.data.len() > read.max_bytes {
+                        return Some(ReadEnd::Truncated);
+                    }
+                }
+                Err(rustix::io::Errno::AGAIN) => return None,
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => return Some(ReadEnd::Failed(error)),
+            }
+        }
+    }
+
+    /// Answers the clipboard read at `index`, which ended so; its pipe closes, and a program
+    /// still writing sees it closed.
+    fn answer_clipboard_read(&mut self, index: usize, end: ReadEnd) {
+        let read = self.drop_clipboard_read(index);
+        let result = match end {
+            ReadEnd::Failed(error) => {
+                ToolResult::failed(format!("the selection could not be read: {error}"))
+            }
+            ReadEnd::Closed | ReadEnd::Truncated | ReadEnd::TimedOut => {
+                let mut bytes = read.data;
+                bytes.truncate(read.max_bytes);
+                let data = ClipboardData {
+                    mime: read.mime,
+                    bytes,
+                    truncated: end == ReadEnd::Truncated,
+                    timed_out: end == ReadEnd::TimedOut,
+                };
+                ToolResult::done(tools::clipboard_json(&read.mime_types, Some(&data)))
+            }
+        };
+        self.queue.push(&protocol::response(
+            read.id,
+            result.into_result(read.revision),
+        ));
+    }
+
+    /// Takes the clipboard read at `index` out, unanswered, its sources removed.
+    fn drop_clipboard_read(&mut self, index: usize) -> ClipboardRead {
+        let read = self.clipboard_reads.remove(index);
+        let handle = self.compositor.loop_handle();
+        handle.remove(read.source);
+        // A timer that fired has dropped itself: its token is then stale, and nothing happens.
+        handle.remove(read.timer);
+        read
     }
 
     /// `capture`: a failure now, or none while the capture waits for its frame; one capture of
@@ -2144,7 +2450,7 @@ impl Server {
     }
 
     /// Answers the call `key` whose time is up, if it still waits: no window matched, no event
-    /// came, or no frame came for a capture.
+    /// came, no frame came for a capture, or a clipboard read's program did not close its pipe.
     fn answer_timed_out(&mut self, key: u64) {
         if let Some(index) = self.event_waits.iter().position(|wait| wait.key == key) {
             // Its timer removed itself.
@@ -2159,6 +2465,15 @@ impl Server {
                 wait.id,
                 result.into_result(wait.revision),
             ));
+            return;
+        }
+        if let Some(index) = self.clipboard_reads.iter().position(|read| read.key == key) {
+            // What came last is read first: a program that closed its pipe meanwhile is
+            // answered whole.
+            let end = self
+                .drain_clipboard_read(index)
+                .unwrap_or(ReadEnd::TimedOut);
+            self.answer_clipboard_read(index, end);
             return;
         }
         if let Some(index) = self.captures.iter().position(|capture| {
@@ -2205,6 +2520,10 @@ impl Server {
         while let Some(index) = self.captures.iter().position(|capture| &capture.id == id) {
             self.drop_capture(index);
             tracing::debug!(request = %id, "a capture is cancelled");
+        }
+        while let Some(index) = self.clipboard_reads.iter().position(|read| &read.id == id) {
+            self.drop_clipboard_read(index);
+            tracing::debug!(request = %id, "a clipboard read is cancelled");
         }
         let handle = self.compositor.loop_handle();
         self.waits.retain(|wait| {

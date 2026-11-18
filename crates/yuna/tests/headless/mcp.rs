@@ -38,6 +38,11 @@ impl Mcp {
             ..Config::default()
         })
         .expect("the compositor starts");
+        Mcp::serving(compositor)
+    }
+
+    /// A server for `compositor`, a story's own: one with XWayland on, say.
+    pub fn serving(compositor: Compositor) -> Mcp {
         let (input, requests) = UnixStream::pair().expect("a socket pair");
         let (output, replies) = UnixStream::pair().expect("a socket pair");
         replies.set_nonblocking(true).expect("non-blocking");
@@ -63,6 +68,19 @@ impl Mcp {
         self.requests
             .write_all(line.as_bytes())
             .expect("the request is sent");
+    }
+
+    /// Sends a request on a thread of its own: one longer than the socket's buffer, which the
+    /// story's thread, the server's too, would wait on for ever. Join it once it is answered.
+    pub fn send_on_thread(&mut self, message: &Value) -> std::thread::JoinHandle<()> {
+        let mut line = message.to_string();
+        line.push('\n');
+        let mut writer = self.requests.try_clone().expect("a second handle");
+        std::thread::spawn(move || {
+            writer
+                .write_all(line.as_bytes())
+                .expect("the request is sent");
+        })
     }
 
     /// Lets the server run a round, then reads the replies that came.
