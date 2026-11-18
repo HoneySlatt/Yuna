@@ -162,6 +162,9 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   ([ADR-0090](adr/0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md)).
 - No test drives an X11 window that keeps its size across an output's change: its answer is
   taken from its first commit after the size is told, read but not run.
+- `xwayland_starts_on_the_first_connection_and_serves_it` failed once, "the lock was left", in a
+  full check under load on 2026-11-18, and passed five runs alone; the stories of one test binary
+  share a pid, which an X display's lock holds. Not traced.
 
 ## Colours
 
@@ -414,11 +417,9 @@ with games' VRR:
 - While a special workspace fades out, `Motion::update` asks the layout where each of its
   windows is, a search of the seat's workspaces each: the cost grows with the square of the
   windows for that time. A lookup by window in `yuna-layout` would make it linear.
-- A workspace that leaves its output while a switch shows it (an empty one the layout removes,
-  one moved to another output) closes up the switch: the workspace beside it shows at once. So
-  does leaving, with dynamic workspaces, a workspace whose last window just closed: it is gone
-  before the switch starts, and the one shown appears without sliding. Keeping a gone workspace
-  as an empty slot until the switch ends would let it slide.
+- Leaving an unnamed workspace whose last window closed shows the workspace focused without
+  sliding: the layout removes the empty one left in the same operation, so no switch starts from
+  it.
 - A second special workspace shown while the first fades out replaces it at once.
 - On llvmpipe at 1080p, motion misses more than half its frames, against 1.9 % still: Yuna's
   main thread takes 2.7 ms a frame in motion against 1.0 ms, and clients in view draw on the

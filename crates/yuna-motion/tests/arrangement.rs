@@ -614,25 +614,23 @@ fn a_switch_retargeted_between_keeps_the_nearer_workspace_where_it_is() {
     );
     let three_before = rig.drawn(3, turn).rect;
     assert!(rig.find(1, turn).is_some());
-    // Workspace 2 goes into the stack between 1 and 3: [1, 2, 3].
+    // Workspace 2 goes into the stack between 1 and 3, on rows next to each other: it takes the
+    // place of 1, the farther from the view, which leaves the switch. The stack is [2, 3].
     rig.op(|l| l.focus_workspace(SEAT, "2"));
     rig.animated();
     assert_eq!(rig.drawn(3, turn).rect, three_before);
-    assert!(
-        rig.find(1, turn).is_none(),
-        "workspace 1 is now two heights away"
-    );
-    let position = first.shifted(HEIGHT).retarget(turn, HEIGHT);
+    assert!(rig.find(1, turn).is_none(), "workspace 1 left the switch");
+    let position = first.retarget(turn, 0.0);
     assert_eq!(rig.end(), Some(position.end()));
     let (place2, place3) = (rig.place(2).rect, rig.peek(three, 3).rect);
     assert_eq!(rig.place(2).workspace, two);
     for at in samples(turn, position.end()) {
         let p = position.value(at);
         if let Some(drawn) = rig.find(2, at) {
-            assert_eq!(drawn.rect.y, moved(place2.y, HEIGHT - p), "at {at:?}");
+            assert_eq!(drawn.rect.y, moved(place2.y, -p), "at {at:?}");
         }
         if let Some(drawn) = rig.find(3, at) {
-            assert_eq!(drawn.rect.y, moved(place3.y, 2.0 * HEIGHT - p), "at {at:?}");
+            assert_eq!(drawn.rect.y, moved(place3.y, HEIGHT - p), "at {at:?}");
         }
     }
     // Workspace 2 comes in from above, where it lies.
@@ -640,6 +638,57 @@ fn a_switch_retargeted_between_keeps_the_nearer_workspace_where_it_is() {
     // The velocity is kept: workspace 3 goes on up a little before it turns back down.
     assert!(rig.drawn(3, turn + ms(4)).rect.y < three_before.y);
     rig.assert_at_rest(position.end());
+}
+
+/// The farther workspace leaves the switch rather than moving a row away: a window of it that
+/// shows past its workspace's edge, here one taller than its place, would jump a height.
+#[test]
+fn a_workspace_shown_between_takes_the_farther_ones_place_and_nothing_drawn_jumps() {
+    let settings = Settings::default();
+    let mut rig = three_workspaces(settings);
+    // Window 1's client commits more than its place's height, which the strip takes.
+    let tall = Size {
+        w: 936.0,
+        h: 2000.0,
+    };
+    rig.op(|l| l.commit_size(w(1), tall));
+    rig.instant();
+    let one = rig.workspace("1");
+    assert!(
+        rig.peek(one, 1).rect.bottom() > HEIGHT,
+        "window 1 hangs below"
+    );
+    rig.wait(ms(5));
+    rig.op(|l| l.focus_workspace(SEAT, "3"));
+    rig.animated();
+    rig.wait(ms(80));
+    let turn = rig.now;
+    let output = rig.layout.output_rect(OUTPUT).unwrap();
+    // Workspace 3 is the nearer; window 1 shows from above, its workspace out of view.
+    let three_before = rig.drawn(3, turn).rect;
+    assert!(three_before.y < HEIGHT / 2.0);
+    let one_before = rig.drawn(1, turn).rect;
+    assert!(one_before.overlaps(&output));
+    rig.op(|l| l.focus_workspace(SEAT, "2"));
+    rig.animated();
+    assert_eq!(rig.drawn(3, turn).rect, three_before);
+    // Workspace 1 left the switch: window 1 is no longer drawn, rather than a height away.
+    assert_eq!(
+        rig.find(1, turn).map(|d| d.rect),
+        None,
+        "window 1 was drawn at {one_before:?}"
+    );
+    let end = rig.end().unwrap();
+    let mut previous = three_before.y;
+    for at in samples(turn, end) {
+        assert!(rig.find(1, at).is_none(), "workspace 1 is drawn at {at:?}");
+        if let Some(drawn) = rig.find(3, at) {
+            let step = drawn.rect.y - previous;
+            assert!(step.abs() < 60.0, "a step of {step} at {at:?}");
+            previous = drawn.rect.y;
+        }
+    }
+    rig.assert_at_rest(end);
 }
 
 #[test]
@@ -665,8 +714,7 @@ fn a_workspace_gone_mid_switch_leaves_its_stack_and_nothing_shown_jumps() {
     rig.wait(ms(70));
     let at = rig.now;
     let (one, two) = (rig.drawn(1, at).rect, rig.drawn(2, at).rect);
-    // Workspace a, empty and unnamed, goes: the stack becomes [b, c], and the view moves up a
-    // height with it.
+    // Workspace a, empty and unnamed, goes: its row stays empty, and nothing moves.
     rig.op(|l| l.remove_workspace(SEAT, "a"));
     rig.animated();
     assert_eq!(rig.layout.workspaces(OUTPUT).unwrap().len(), 2);
@@ -682,6 +730,77 @@ fn a_workspace_gone_mid_switch_leaves_its_stack_and_nothing_shown_jumps() {
             y - previous
         );
         previous = y;
+    }
+    rig.assert_at_rest(end);
+}
+
+/// The case the property test found on 2026-11-18, without its steps that change nothing. The
+/// view slides over the empty workspace "a", between the first workspace, one of whose windows
+/// its offset draws past its workspace's edge into the view, and the empty "b". When "a" goes,
+/// its row stays empty: neither neighbour moves, and the window drawn does not jump a height.
+#[test]
+fn a_workspace_gone_while_it_fills_the_view_leaves_its_row_empty() {
+    let spring = SpringParams::new(0.6, 300.0).unwrap();
+    let settings = Settings {
+        camera: spring,
+        windows: spring,
+        workspace_switch: spring,
+        ..Settings::default()
+    };
+    let options = Options {
+        default_tiling: Tiling::Dwindle,
+        ..Options::default()
+    };
+    let mut rig = Rig::new(options, settings);
+    for n in 1..=3 {
+        rig.open(n);
+    }
+    rig.instant();
+    let first = rig.layout.shown_workspaces(OUTPUT).unwrap().main.id;
+    let start = rig.now;
+    // "a" and "b" are made below the first workspace; the switch goes to "a", then on to "b":
+    // its stack is [first, a, b], a height apart.
+    for name in ["a", "b", "a"] {
+        rig.op(|l| l.focus_workspace(SEAT, name));
+        rig.animated();
+    }
+    rig.wait(ms(18));
+    rig.op(|l| l.focus_workspace(SEAT, "b"));
+    rig.animated();
+    rig.wait(ms(70));
+    let view = Spring::new(spring, 0.0, HEIGHT, 0.0, start, TOLERANCE)
+        .retarget(start + ms(18), 2.0 * HEIGHT)
+        .value(rig.now);
+    assert!(
+        HEIGHT < view && view < 1.5 * HEIGHT,
+        "\"a\" fills most of the view, at {view}"
+    );
+    // Window 1 closes on the first workspace, sliding out above: window 3 takes the whole
+    // height, drawn from where it was, so that it hangs past its workspace into the view.
+    rig.op(|l| l.close_window(w(1)));
+    rig.animated();
+    let at = rig.now;
+    let before = rig.drawn(3, at).rect;
+    let output = rig.layout.output_rect(OUTPUT).unwrap();
+    assert!(before.overlaps(&output), "window 3 is drawn in the view");
+    assert!(
+        before.y < rig.peek(first, 3).rect.y,
+        "the first workspace is above the view"
+    );
+    // "a", empty, loses its name and goes, while it fills most of the view.
+    rig.op(|l| l.remove_workspace(SEAT, "a"));
+    rig.animated();
+    assert_eq!(rig.layout.workspaces(OUTPUT).unwrap().len(), 2);
+    assert_eq!(rig.drawn(3, at).rect, before);
+    let end = rig.end().unwrap();
+    let mut previous = before.y;
+    for at in samples(at, end) {
+        let Some(drawn) = rig.find(3, at) else {
+            break;
+        };
+        let step = drawn.rect.y - previous;
+        assert!(step <= 0.0 && step > -60.0, "a step of {step} at {at:?}");
+        previous = drawn.rect.y;
     }
     rig.assert_at_rest(end);
 }

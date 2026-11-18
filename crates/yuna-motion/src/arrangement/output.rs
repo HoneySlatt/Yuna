@@ -36,7 +36,7 @@ pub(super) struct OutputMotion {
     /// workspace it slides still moves, so that none is cut off on its way.
     switch_end: Duration,
     /// While a switch is drawn, the windows of its workspaces but the main one, as the output
-    /// would show each alone, without pinned windows: each workspace's in a row, in the stack's
+    /// would show each alone, without pinned windows: each workspace's together, in the stack's
     /// order.
     sliding: Vec<Placed>,
     /// The special workspace's fade, while it runs.
@@ -258,7 +258,7 @@ impl OutputMotion {
         let order = || workspace_order(layout, output);
         self.switch = Switch::follow(drawn, previous.main, self.main, order, now, slide);
         if let Some(switch) = &self.switch {
-            for &workspace in switch.stack() {
+            for workspace in switch.workspaces() {
                 if workspace != self.main {
                     let placed = layout
                         .arrange_workspace(output, workspace)
@@ -290,10 +290,9 @@ impl OutputMotion {
             .filter_map(|placed| self.offsets.get(&placed.window))
             .map(Offset::end);
         let cameras = switch
-            .stack()
-            .iter()
-            .filter(|&&workspace| workspace != self.main)
-            .filter_map(|workspace| self.cameras.get(workspace))
+            .workspaces()
+            .filter(|&workspace| workspace != self.main)
+            .filter_map(|workspace| self.cameras.get(&workspace))
             .map(Camera::end);
         self.switch_end = windows.chain(cameras).fold(switch.end(), Duration::max);
         if self.switch_end <= self.updated {
@@ -371,7 +370,7 @@ impl OutputMotion {
         let beside = self
             .switch
             .iter()
-            .flat_map(|switch| switch.stack().iter().copied())
+            .flat_map(Switch::workspaces)
             .chain(self.fade.as_ref().map(|fade| fade.workspace))
             .filter(|&workspace| workspace != self.main && Some(workspace) != self.special);
         let mut kept = Vec::new();
@@ -530,10 +529,9 @@ impl OutputMotion {
             Vec::with_capacity(self.arranged.len() + self.sliding.len() + hidden.len());
         match self.switch_at(at) {
             Some(switch) => {
-                // `sliding` holds each workspace's windows in a row, in the stack's order.
+                // `sliding` holds each workspace's windows together, in the stack's order.
                 let mut rest = self.sliding.as_slice();
-                for (index, &workspace) in switch.stack().iter().enumerate() {
-                    let slide = switch.slide(index, at);
+                for (workspace, slide) in switch.slides(at) {
                     if workspace == self.main {
                         self.push_in_view(&mut windows, self.main_windows(), slide, at);
                     } else {
@@ -702,7 +700,7 @@ impl OutputMotion {
             || Some(workspace) == self.special
             || self
                 .switch_at(at)
-                .is_some_and(|switch| switch.stack().contains(&workspace))
+                .is_some_and(|switch| switch.workspaces().any(|w| w == workspace))
             || self
                 .fading_out(at)
                 .is_some_and(|fade| fade.workspace == workspace)

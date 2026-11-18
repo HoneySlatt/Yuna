@@ -118,3 +118,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0096](0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md) | A rest auditor naming what wakes Yuna or makes it draw | Accepted |
 | [0097](0097-the-budgets-of-yuna-mcp.md) | The budgets of `yuna mcp` | Accepted |
 | [0098](0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md) | On llvmpipe, dmabufs offered for no device and checked as llvmpipe maps them | Accepted |
+| [0099](0099-a-workspace-switch-keeps-each-workspace-on-its-row.md) | A workspace switch keeps each workspace on its row | Accepted |

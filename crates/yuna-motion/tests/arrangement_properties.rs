@@ -10,12 +10,10 @@
 //!   workspace and layer, or floating and tiled within one workspace, or pinned), its fullscreen
 //!   unchanged and its workspace's too, is drawn with its corner at the same place, to 1e-6; its
 //!   size may jump
-//!   ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)). One exception: when a
-//!   workspace leaves the output during a switch (one starting or one drawn), the switch's stack
-//!   closes up, and if it filled the view, the workspaces beside it cannot all keep their places;
-//!   at such an update, the main workspaces' windows are not checked, the special and pinned ones
-//!   are. A window that vanishes at an update is not checked: closing, or moving to a workspace
-//!   not shown, takes it away at once;
+//!   ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)), a workspace leaving a switch
+//!   included: its row stays and the view slides on. A window that vanishes at an update is not
+//!   checked: closing, moving to a workspace not shown, or its workspace leaving a switch, takes
+//!   it away at once;
 //! - an update instant for an output's seat ends that output's motions;
 //! - at rest, from the end the motion gives on, the frame is exactly the layout's arrangement,
 //!   and the end is then `None`;
@@ -474,18 +472,9 @@ fn fullscreen_windows(layout: &Layout, output: OutputId) -> HashSet<(WorkspaceId
         .collect()
 }
 
-/// The workspaces the layout lists on `output`.
-fn workspaces_of(layout: &Layout, output: OutputId) -> HashSet<WorkspaceId> {
-    let workspaces = layout.workspaces(output).unwrap_or_default();
-    workspaces
-        .into_iter()
-        .map(|workspace| workspace.id)
-        .collect()
-}
-
 /// No window that keeps its motion jumps on screen at the update. The windows of `exempt`, but
 /// pinned ones, are not checked: workspaces where a window went fullscreen or left it, which are
-/// instant, and the main workspaces when one left the output.
+/// instant.
 fn check_continuity(
     before: &Frame,
     after: &Frame,
@@ -638,16 +627,6 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
                     .keys()
                     .map(|&output| (output, fullscreen_windows(&world.layout, output)))
                     .collect();
-                let workspaces: HashMap<OutputId, _> = before
-                    .keys()
-                    .map(|&output| (output, workspaces_of(&world.layout, output)))
-                    .collect();
-                let shown_before: HashMap<OutputId, _> = before
-                    .keys()
-                    .filter_map(|&output| {
-                        Some((output, world.layout.shown_workspaces(output).ok()?))
-                    })
-                    .collect();
                 world.apply(op);
                 world.update(change.clone());
                 let after = world.frames(world.now);
@@ -664,29 +643,10 @@ fn run(options: Options, settings: Settings, steps: &[Step]) -> Result<(), TestC
                         if let Some((was, was_rect, was_scale)) = before.get(output)
                             && (was_rect, was_scale) == (rect, scale)
                         {
-                            let mut exempt: HashSet<WorkspaceId> = fullscreen[output]
+                            let exempt: HashSet<WorkspaceId> = fullscreen[output]
                                 .symmetric_difference(&fullscreen_windows(&world.layout, *output))
                                 .map(|&(workspace, _)| workspace)
                                 .collect();
-                            let now_there = workspaces_of(&world.layout, *output);
-                            let switching = shown_before.get(output).is_some_and(|shown| {
-                                let main_changed = world
-                                    .layout
-                                    .shown_workspaces(*output)
-                                    .is_ok_and(|now| now.main.id != shown.main.id);
-                                let mains_drawn: HashSet<WorkspaceId> = was
-                                    .windows
-                                    .iter()
-                                    .filter(|d| d.placed.layer != Layer::Pinned)
-                                    .filter(|d| Some(d.workspace) != shown.special.map(|v| v.id))
-                                    .map(|d| d.workspace)
-                                    .collect();
-                                main_changed || mains_drawn.len() > 1
-                            });
-                            if switching && !workspaces[output].is_subset(&now_there) {
-                                exempt.extend(&workspaces[output]);
-                                exempt.extend(now_there);
-                            }
                             check_continuity(was, frame, &exempt)?;
                         }
                     }

@@ -146,15 +146,18 @@
 //! When an output's main workspace changes, by its id, and the one left is still on the output,
 //! the output slides along [ADR-0018](../../../docs/adr/0018-workspaces.md)'s vertical stack: up
 //! is the previous workspace, down the next. The switch keeps a stack of its own, the
-//! workspaces it involves in the output's order, a height apart: the one left and the one shown,
-//! not those between, so that a far switch shows only those two. Retargeted mid-way, it inserts
-//! the newly shown workspace into its stack and slides on from where it is, keeping its
-//! velocity; the workspace on screen nearest the view keeps its place. A workspace gone from the
-//! output leaves the stack, the position re-expressed so that the nearest of those left keeps
-//! its place, and both on screen when the one gone was not between them. A workspace removed
-//! elsewhere changes no id, and starts no switch. While a switch is drawn, a frame lists
-//! the windows of its workspaces that show on the output; it is drawn until its slide ends and
-//! the windows of the workspaces sliding out stop moving. Pinned windows stay above it, unmoved.
+//! workspaces it involves in the output's order, each on a row, the rows a height apart: the one
+//! left and the one shown, not those between, so that a far switch shows only those two.
+//! No workspace of the stack ever changes row, so that nothing drawn of it jumps, whatever shows
+//! past its workspace's edge. Retargeted mid-way, the switch puts the newly shown workspace on
+//! the row after the one before it in the output's order, and slides on from where it is,
+//! keeping its velocity. If that row is taken, the workspace shown lies between two on rows next
+//! to each other: it takes the place of the one farther from the view, which leaves the switch.
+//! A workspace gone from the output leaves its row empty, and the view slides on over it. A
+//! workspace removed elsewhere changes no id, and starts no switch. While a switch is drawn, a
+//! frame lists the windows of its workspaces that show on the output; it is drawn until its
+//! slide ends and the windows of the workspaces sliding out stop moving. Pinned windows stay
+//! above it, unmoved.
 //!
 //! ## The special workspace's fade
 //!
@@ -208,12 +211,12 @@
 //! - A workspace sliding out of a switch, or fading out, keeps its camera as it was: the layout
 //!   gives no view for a workspace it does not show. If the layout moves that view meanwhile,
 //!   the windows whose places change reach them on their offsets.
-//! - A workspace that leaves the output while it fills the view, an empty one that the layout
-//!   removes or one that goes to another output, closes up the switch's stack: the workspace
-//!   beside it comes into view at once.
 //! - A switch slides by the output's height, so a window taller than its place, whose client
 //!   committed more than it was asked, shows that much past its workspace's edge until the
 //!   switch ends.
+//! - A workspace that leaves a switch, gone from the output or replaced by one shown between it
+//!   and its neighbour, is no longer drawn from then on: what of it was in the view vanishes
+//!   rather than slides away.
 //! - Windows do not fade in when they open nor out when they close: that comes with the effects
 //!   ([ADR-0055](../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
 //!

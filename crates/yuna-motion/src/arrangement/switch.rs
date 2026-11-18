@@ -12,17 +12,29 @@ use crate::{Spring, SpringParams};
 /// Only the workspaces it involves are in its stack, in the order the output lists them: the
 /// one left and the one shown, and those a retarget went through, so that nothing between them
 /// crosses the view ([ADR-0055](../../../../docs/adr/0055-what-moves-first-and-animations-off-headless.md)).
-/// The workspace at index `i` of the stack sits `i` output heights down; the view's position
-/// along the stack is a spring, whose target is the shown workspace's. The output decides how
-/// long it draws the switch: until its slide ends, and the motions of the workspaces it slides.
+/// Each sits on a row, that many output heights down, the rows growing along the stack. No
+/// workspace ever changes row, so that nothing drawn of it jumps: one that leaves the output
+/// leaves its row empty, and one shown between two on rows next to each other takes the place
+/// of the one farther from the view, which leaves the stack. The view's position along the stack
+/// is a spring, whose target is the shown workspace's row. The output decides how long it draws
+/// the switch: until its slide ends, and the motions of the workspaces it slides.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Switch {
-    /// The workspaces involved, in the output's order.
-    stack: Vec<WorkspaceId>,
+    /// The workspaces involved that are still on the output, in its order.
+    stack: Vec<Stacked>,
     /// The top edge of the view along the stack, in logical units.
     position: Spring,
-    /// The output's height: how far apart the workspaces of the stack are.
+    /// The output's height: how far apart two rows are.
     height: f64,
+}
+
+/// A workspace of a switch's stack, on its row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Stacked {
+    workspace: WorkspaceId,
+    /// How many output heights down the workspace sits: 0 for the first of a new switch, below 0
+    /// for one a retarget put above it.
+    row: i64,
 }
 
 /// What a switch needs to start: the output's height, its tolerance and the spring's parameters.
@@ -42,10 +54,10 @@ impl Switch {
     /// output drew at `now`, if it drew one. `None` when there is no switch to draw.
     ///
     /// A new switch starts when the shown workspace changed and the one left is still on the
-    /// output. A switch drawn takes the newly shown workspace into its stack, drops the
-    /// workspaces gone from the output, and slides on toward the shown one from where it is,
-    /// keeping its velocity. A switch with nowhere to go ends. `order` is called only when the
-    /// shown workspace changed or a switch is drawn: reading it lists every workspace's windows.
+    /// output. A switch drawn drops the workspaces gone from the output, takes the newly shown
+    /// workspace into its stack, and slides on toward it from where it is, keeping its velocity.
+    /// A switch with nowhere to go ends. `order` is called only when the shown workspace changed
+    /// or a switch is drawn: reading it lists every workspace's windows.
     pub fn follow(
         drawn: Option<&Switch>,
         was_shown: WorkspaceId,
@@ -59,14 +71,15 @@ impl Switch {
         }
         let order = order();
         match drawn {
-            Some(switch) => {
-                let mut involved = switch.stack.clone();
-                involved.push(shown);
-                switch.restacked(in_order(&order, &involved), shown, now)
-            }
+            Some(switch) => switch.restacked(&order, shown, now),
             None if order.contains(&was_shown) => {
-                let stack = in_order(&order, &[was_shown, shown]);
-                let place = |workspace| index_of(&stack, workspace).map(|i| i * slide.height);
+                let stack: Vec<Stacked> = order
+                    .iter()
+                    .filter(|&&workspace| workspace == was_shown || workspace == shown)
+                    .zip(0..)
+                    .map(|(&workspace, row)| Stacked { workspace, row })
+                    .collect();
+                let place = |workspace| Some(row_of(&stack, workspace)? as f64 * slide.height);
                 let position = Spring::new(
                     slide.params,
                     place(was_shown)?,
@@ -85,36 +98,35 @@ impl Switch {
         }
     }
 
-    /// This switch with its stack replaced by `stack`, sliding toward `shown` from `now`.
+    /// This switch after an update that found the output's workspaces in `order`, sliding
+    /// toward `shown` from `now`, keeping its velocity.
     ///
-    /// Of the workspaces in both stacks, the one nearest the view keeps its place on screen: the
-    /// position moves by as many heights as that workspace moves in the stack, its velocity kept.
-    /// So a workspace inserted outside the two on screen moves neither, and one gone moves
-    /// neither of those that stay. A workspace inserted between the two on screen puts one of
-    /// them out of view: the nearer stays. `None` when `shown` is not in `stack`, or when no
-    /// workspace is in both.
+    /// No workspace of the stack ever changes row, so that nothing drawn of it jumps: a
+    /// workspace gone from the output leaves its row empty, and `shown`, if new to the stack,
+    /// takes a row of its own ([`insert`]), or the place of a workspace that leaves the stack.
+    /// `None` when no workspace of the stack is still on the output, or when `shown` is not on
+    /// it.
     fn restacked(
         &self,
-        stack: Vec<WorkspaceId>,
+        order: &[WorkspaceId],
         shown: WorkspaceId,
         now: Duration,
     ) -> Option<Switch> {
-        let target = index_of(&stack, shown)? * self.height;
-        let position = self.position.value(now);
-        let distance = |index: usize| (index as f64 * self.height - position).abs();
-        let (old_index, new_index) = self
+        let mut stack: Vec<Stacked> = self
             .stack
             .iter()
-            .enumerate()
-            .filter_map(|(old, &workspace)| {
-                Some((old, stack.iter().position(|&w| w == workspace)?))
-            })
-            .min_by(|a, b| distance(a.0).total_cmp(&distance(b.0)))?;
-        let shift = (new_index as f64 - old_index as f64) * self.height;
-        let position = if shift == 0.0 && self.position.target() == target {
+            .copied()
+            .filter(|stacked| order.contains(&stacked.workspace))
+            .collect();
+        if row_of(&stack, shown).is_none() {
+            let view = self.position.value(now) / self.height;
+            insert(&mut stack, order, shown, view)?;
+        }
+        let target = row_of(&stack, shown)? as f64 * self.height;
+        let position = if self.position.target() == target {
             self.position
         } else {
-            self.position.shifted(shift).retarget(now, target)
+            self.position.retarget(now, target)
         };
         Some(Switch {
             stack,
@@ -124,13 +136,18 @@ impl Switch {
     }
 
     /// The workspaces involved, in the output's order.
-    pub fn stack(&self) -> &[WorkspaceId] {
-        &self.stack
+    pub fn workspaces(&self) -> impl Iterator<Item = WorkspaceId> + '_ {
+        self.stack.iter().map(|stacked| stacked.workspace)
     }
 
-    /// How far down the workspace at `index` of the stack is drawn at `at`, in logical units.
-    pub fn slide(&self, index: usize, at: Duration) -> f64 {
-        index as f64 * self.height - self.position.value(at)
+    /// Each workspace involved, in the output's order, and how far down it is drawn at `at`, in
+    /// logical units.
+    pub fn slides(&self, at: Duration) -> impl Iterator<Item = (WorkspaceId, f64)> + '_ {
+        let position = self.position.value(at);
+        self.stack.iter().map(move |stacked| {
+            let slide = stacked.row as f64 * self.height - position;
+            (stacked.workspace, slide)
+        })
     }
 
     /// When the slide arrives.
@@ -139,19 +156,56 @@ impl Switch {
     }
 }
 
-/// The workspaces of `involved` that `order` lists, in its order.
-fn in_order(order: &[WorkspaceId], involved: &[WorkspaceId]) -> Vec<WorkspaceId> {
-    order
-        .iter()
-        .copied()
-        .filter(|workspace| involved.contains(workspace))
-        .collect()
+/// Puts `shown`, which `stack` does not hold, between the workspaces before and after it in
+/// the output's `order`: on the row after the one before it, or on the row above the first.
+/// When that row is taken, the two around it are on rows next to each other, and `shown` takes
+/// the place of the one farther from `view`, the view's position in rows; that one leaves the
+/// stack, and the screen. Moving it a row away instead would make whatever of it shows jump: a
+/// window taller than its place, or carried past its workspace's edge by its offset. On a tie,
+/// the one after `shown` leaves. `None`, changing nothing, when `stack` is empty or `shown` is
+/// not in `order`.
+fn insert(
+    stack: &mut Vec<Stacked>,
+    order: &[WorkspaceId],
+    shown: WorkspaceId,
+    view: f64,
+) -> Option<()> {
+    let rank = |workspace| order.iter().position(|&w| w == workspace);
+    let shown_rank = rank(shown)?;
+    // An output's workspaces keep their order (the layout only adds at the end and removes), so
+    // the stack's ranks grow.
+    let at = stack.partition_point(|stacked| rank(stacked.workspace) < Some(shown_rank));
+    let before = at.checked_sub(1);
+    let row = match before {
+        Some(before) => stack[before].row + 1,
+        None => stack.first()?.row - 1,
+    };
+    if let Some(before) = before
+        && stack.get(at).is_some_and(|next| next.row == row)
+    {
+        let distance = |index: usize| (stack[index].row as f64 - view).abs();
+        let farther = if distance(before) > distance(at) {
+            before
+        } else {
+            at
+        };
+        stack[farther].workspace = shown;
+        return Some(());
+    }
+    stack.insert(
+        at,
+        Stacked {
+            workspace: shown,
+            row,
+        },
+    );
+    Some(())
 }
 
-/// The index of `workspace` in `stack`, as a number of heights.
-fn index_of(stack: &[WorkspaceId], workspace: WorkspaceId) -> Option<f64> {
+/// The row of `workspace` in `stack`.
+fn row_of(stack: &[Stacked], workspace: WorkspaceId) -> Option<i64> {
     stack
         .iter()
-        .position(|&w| w == workspace)
-        .map(|index| index as f64)
+        .find(|stacked| stacked.workspace == workspace)
+        .map(|stacked| stacked.row)
 }
