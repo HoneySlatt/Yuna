@@ -89,7 +89,7 @@ use yuna_motion::{Change, Drawn};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
-use crate::output::{RefreshAt, Timing, VirtualOutput};
+use crate::output::{RefreshAt, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
 use crate::seats::seat_of_surface;
@@ -150,7 +150,7 @@ impl State {
         let output = &mut self.outputs[index];
         let paced = !output.content_pending || output.content_misses >= 2;
         // At a fixed rate nothing is paced: a refresh armed stands, as before VRR.
-        let variable = matches!(output.timing, Timing::Variable(_));
+        let variable = output.timing.is_variable();
         if self.clock.is_armed(deadline) && (!variable || paced || output.armed_for_content) {
             return;
         }
@@ -349,9 +349,7 @@ impl State {
             // where this refresh is counted and keeps the motion's pace: shown nothing, it would
             // show the next frame sooner than a shortest refresh after this one, and after a few
             // such refreshes insert its own below its range.
-            Drawing::Unchanged
-                if output.in_motion && matches!(output.timing, Timing::Variable(_)) =>
-            {
+            Drawing::Unchanged if output.in_motion && output.timing.is_variable() => {
                 output.timing.present(now, aimed, output.last_refresh)
             }
             // Nothing new to show: content updates show with the frame this refresh aimed at.

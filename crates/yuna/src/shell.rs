@@ -7,8 +7,10 @@
 //! A toplevel's life: its initial commit gets a first configure with the size
 //! [`Layout::size_on_open`](yuna_layout::Layout::size_on_open) foretells; its first buffer opens
 //! it in the layout, with its parent, its limits and its window geometry; each later commit
-//! passes on its limits and geometry when they change; a commit without a buffer, or the
-//! destruction of its toplevel or of its surface, closes it. Its configures follow the layout's
+//! passes on its limits and geometry when they change, and its geometry, changed or not, when it
+//! answers the configure of a size its output's change of mode asked
+//! ([`Layout::awaits_commit`](yuna_layout::Layout::awaits_commit)); a commit without a buffer,
+//! or the destruction of its toplevel or of its surface, closes it. Its configures follow the layout's
 //! arrangement, at refresh boundaries (`frames.rs`). Fullscreen and maximise requests always get
 //! a configure, as xdg-shell asks, even when the layout refuses them or nothing changes. A window
 //! the layout refuses to open, or that would pass a cap on windows ([`MAX_WINDOWS_PER_CLIENT`],
@@ -92,6 +94,11 @@ pub(crate) struct Toplevel {
     pub urgent: bool,
     /// The token of an activation asked before it was mapped: judged when it is.
     pub waiting_activation: Option<TokenOrigin>,
+    /// The first configure sent with a size while the layout awaits its commit, after its
+    /// output's change of mode asked it another size: the commit that acknowledges it, or a
+    /// later one, reaches the layout whatever its size, so that a client that keeps its size is
+    /// placed by it again. An `xdg_toplevel`'s alone: an X11 window's record keeps its own.
+    pub size_asked: Option<Serial>,
     /// Whose window it counts as against the cap on windows, while it is mapped.
     owner: Option<WindowOwner>,
 }
@@ -128,6 +135,7 @@ impl Toplevel {
             configure_owed: false,
             urgent: false,
             waiting_activation: None,
+            size_asked: None,
             owner: None,
         }
     }
@@ -252,6 +260,12 @@ fn committed_size(geometry: Rectangle<i32, Logical>) -> Option<Size> {
     };
     let valid = |side: f64| side > 0.0 && side <= MAX_SIZE;
     (valid(size.w) && valid(size.h)).then_some(size)
+}
+
+/// The serial of the configure `surface`'s client had acknowledged when it made its current
+/// commit; none before its first acknowledgement.
+fn acked_serial(surface: &ToplevelSurface) -> Option<Serial> {
+    surface.with_cached_state(|state| state.last_acked.as_ref().map(|configure| configure.serial))
 }
 
 /// Ends the client that gave a surface a second role object of a kind it has a live one of
@@ -478,7 +492,8 @@ impl State {
     }
 
     /// A commit of a mapped toplevel: its limits and window geometry go to the layout when they
-    /// changed.
+    /// changed, and its geometry, changed or not, when the commit answers the size its output's
+    /// change of mode asked ([`Toplevel::size_asked`]).
     fn update_window(&mut self, root: &WlSurface) {
         let geometry = window_geometry(root);
         let limits = size_limits(root);
@@ -500,7 +515,16 @@ impl State {
         // the commit's frame redraws, not the layout.
         let resized = geometry.size != toplevel.geometry.size;
         toplevel.geometry = geometry;
-        if resized && let Some(size) = committed_size(geometry) {
+        let answers = match (&toplevel.shell, toplevel.size_asked) {
+            (Shell::Xdg(surface), Some(asked)) => {
+                acked_serial(surface).is_some_and(|acked| acked.is_no_older_than(&asked))
+            }
+            _ => false,
+        };
+        if (resized || answers)
+            && let Some(size) = committed_size(geometry)
+        {
+            toplevel.size_asked = None;
             match self.layout.commit_size(window, size) {
                 Ok(()) => changed = true,
                 Err(error) => tracing::debug!(%error, window = window.0, "size refused"),
@@ -542,6 +566,7 @@ impl State {
         toplevel.limits = (Size::default(), Size::default());
         toplevel.geometry = Rectangle::default();
         toplevel.urgent = false;
+        toplevel.size_asked = None;
         self.windows.remove(&window);
         if let Some(output) = shown_on {
             self.leave_output(root, output);
@@ -573,7 +598,15 @@ impl State {
         match &toplevel.shell {
             Shell::Xdg(surface) => {
                 let surface = surface.clone();
-                self.configure(&surface, told, owed);
+                let window = toplevel.window;
+                let sent = self.configure(&surface, told, owed);
+                let awaits = window.is_some_and(|window| self.layout.awaits_commit(window));
+                if let (Some(serial), Some(_), true) = (sent, told.size, awaits)
+                    && let Some(toplevel) = self.toplevels.get_mut(&root.id())
+                    && toplevel.size_asked.is_none()
+                {
+                    toplevel.size_asked = Some(serial);
+                }
             }
             Shell::X11(x11) => {
                 let x11 = x11.clone();
@@ -584,9 +617,10 @@ impl State {
     }
 
     /// Tells an `xdg_toplevel` its size and states, if they changed since its last configure, or
-    /// if a request of its client is owed one. A size of none keeps the last one. `suspended`
-    /// reaches only clients whose version has it.
-    fn configure(&mut self, surface: &ToplevelSurface, told: Told, owed: bool) {
+    /// if a request of its client is owed one, and returns the configure's serial; none when
+    /// nothing was sent. A size of none keeps the last one. `suspended` reaches only clients
+    /// whose version has it.
+    fn configure(&mut self, surface: &ToplevelSurface, told: Told, owed: bool) -> Option<Serial> {
         let suspended = told.hidden && surface.version() >= SUSPENDED_SINCE;
         surface.with_pending_state(|state| {
             if let Some(size) = told.size {
@@ -594,13 +628,13 @@ impl State {
             }
             state.states = toplevel_states(told.fullscreen, told.activated, suspended);
         });
-        let changed = surface.send_pending_configure().is_some();
-        if !changed && owed {
-            surface.send_configure();
-        }
-        if changed || owed {
+        let sent = surface
+            .send_pending_configure()
+            .or_else(|| owed.then(|| surface.send_configure()));
+        if sent.is_some() {
             self.counters.configures += 1;
         }
+        sent
     }
 
     /// Makes the decoration server side, and tells the client so when it is past its first

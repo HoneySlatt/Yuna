@@ -2,12 +2,13 @@
 //! ([ADR-0047](../../../../docs/adr/0047-color-management-v1-kwins-list.md),
 //! [ADR-0048](../../../../docs/adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
 //!
-//! An output announces one description for its life: the monitor's PQ volume when it is HDR,
-//! gamma 2.2 and sRGB otherwise. A surface's preferred description is its window's workspace's
-//! output's, whether the window is scrolled into view or not; before its window maps, its seat's
-//! focused output's. Each surface's own description is recorded at its commit, for tests and
-//! agents to read (`Compositor::window_colours`). Yuna draws as before: nothing is converted until
-//! Stage 5.
+//! An output announces one description: the monitor's PQ volume when it is HDR, gamma 2.2 and
+//! sRGB otherwise, a new one when its HDR is turned on or off (`State::configure_output`), which
+//! its `wp_color_management_output_v1` objects are told. A surface's preferred description is
+//! its window's workspace's output's, whether the window is scrolled into view or not; before
+//! its window maps, its seat's focused output's. Each surface's own description is recorded at
+//! its commit, for tests and agents to read (`Compositor::window_colours`). Yuna draws as
+//! before: nothing is converted until Stage 5.
 //!
 //! [`description`] holds the descriptions, with no Wayland object; `protocol.rs` the handler.
 
@@ -19,6 +20,7 @@ use std::sync::Arc;
 
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
+    wp_color_management_output_v1::WpColorManagementOutputV1,
     wp_color_management_surface_feedback_v1::WpColorManagementSurfaceFeedbackV1,
     wp_image_description_info_v1::WpImageDescriptionInfoV1,
 };
@@ -53,13 +55,16 @@ pub(crate) struct SurfaceColour {
 }
 
 /// What the compositor keeps for colours: the next identity, the live feedback objects, told
-/// when their surface's preferred description changes, and a fallback SDR record.
+/// when their surface's preferred description changes, the live output objects, told when their
+/// output's description changes, and a fallback SDR record.
 #[derive(Debug)]
 pub(crate) struct ColourState {
     next_identity: u64,
     /// By object, so that each one's destruction costs a constant time, however many a client
     /// holds.
     pub feedbacks: HashMap<ObjectId, WpColorManagementSurfaceFeedbackV1>,
+    /// By object, as `feedbacks`.
+    pub outputs: HashMap<ObjectId, WpColorManagementOutputV1>,
     /// The SDR record of surfaces whose seat has no output, made when first needed.
     sdr: Option<Arc<Record>>,
     /// Information objects made during the dispatch, answered after it.
@@ -72,6 +77,7 @@ impl ColourState {
             // 0 is invalid in the protocol.
             next_identity: 1,
             feedbacks: HashMap::new(),
+            outputs: HashMap::new(),
             sdr: None,
             pending_information: Vec::new(),
         }

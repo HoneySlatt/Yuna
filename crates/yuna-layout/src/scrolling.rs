@@ -10,7 +10,8 @@
 //! ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)). Columns and windows are
 //! placed from the sizes their clients committed: a column is as wide as its widest window, and
 //! windows stack by their committed heights. Before its first commit, a window counts at the
-//! size it is asked. When a column changes width, the focused column stays where it is on
+//! size it is asked, as it does after its output's mode changed that size, until it commits
+//! again. When a column changes width, the focused column stays where it is on
 //! screen and the columns on its left move, as in niri.
 
 use crate::area::Area;

@@ -128,6 +128,11 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   refresh for each of the 16 capture sessions: a copy that keeps failing while drawing works
   writes one a frame. A failed drawing fails its captures without a copy, so a lost renderer
   does not reach it. Found at M1.10, beside the failed drawings' bound (`FailedDrawings`).
+- After `outputs configure` shrinks an output, the pointer keeps its logical place, as after an
+  output's removal: it may sit on no output until it moves
+  ([ADR-0090](adr/0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md)).
+- No test drives an X11 window that keeps its size across an output's change: its answer is
+  taken from its first commit after the size is told, read but not run.
 
 ## Colours
 
@@ -209,6 +214,10 @@ with games' VRR:
 - Every client of `yuna --headless` may capture its seat's outputs without being asked; consent
   comes with the desktop ([ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)).
 - A capture waiting for its frame times out after 50 s; no test waits that long.
+- A capture waiting on an output whose size or scale changes fails, an agent's with a reason, an
+  `ext-image-copy-capture-v1` frame as `unknown` rather than `buffer_constraints`, after its
+  session is told its new size: the client asks again either way. A frame whose buffer is
+  larger than the new size is not refused.
 - `png` and `flate2` build two versions of `miniz_oxide`, 0.8 and 0.9, until `png` moves to 0.9.
 
 ## The MCP server

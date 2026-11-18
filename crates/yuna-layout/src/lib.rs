@@ -248,7 +248,8 @@ pub struct Placed {
     pub window: WindowId,
     /// Where it is drawn, in logical coordinates, on the output's physical grid: the window's
     /// top-left corner at the rectangle's, the window clipped to it. Its size is what the client
-    /// committed; before its first commit, the size it is asked, or for a floating window that
+    /// committed; before its first commit, or after its output's mode changed the size it is
+    /// asked until it commits again, the size it is asked, or for a floating window that
     /// chooses its own, the size it opened at. A dwindle window is clipped to its slot, a
     /// fullscreen one to the output. Columns scrolled out of view lie outside the output. Empty only for a dwindle
     /// window whose slot is empty, in a tree deeper than its space.

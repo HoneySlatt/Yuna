@@ -36,14 +36,20 @@ const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
 /// Every tool's definition, for `tools/list`, always in this order.
 pub fn definitions() -> Value {
     let seat = json!({ "type": "integer", "minimum": 2, "description": SEAT_PROPERTY });
-    // `seat create`'s output and `outputs create`'s take the same two (ADR-0049).
-    let vrr_min = json!({ "type": "number", "minimum": 1, "maximum": 500,
-        "description": "create: run under VRR, from this many refreshes a second up to \
-            rate, which must be at least twice it; by default a fixed rate, or the server's \
-            default output's range when rate is left out too" });
-    let hdr = json!({ "type": "boolean",
-        "description": "create: true announces the HDR colours of the owner's monitor, a \
-            PG32UCDM; false, SDR; by default as the server's default output" });
+    // `seat create`'s output and `outputs create`'s take the same two (ADR-0049); `outputs
+    // configure` takes them too, the output's own by default, and 0 for no VRR range.
+    let vrr_min_create = "create: run under VRR, from this many refreshes a second up to rate, \
+        which must be at least twice it; by default a fixed rate, or the server's default \
+        output's range when rate is left out too";
+    let hdr_create = "create: true announces the HDR colours of the owner's monitor, a \
+        PG32UCDM; false, SDR; by default as the server's default output";
+    let vrr_min = |minimum: u32, more: &str| {
+        json!({ "type": "number", "minimum": minimum, "maximum": 500,
+            "description": format!("{vrr_min_create}{more}") })
+    };
+    let hdr =
+        |more: &str| json!({ "type": "boolean", "description": format!("{hdr_create}{more}") });
+    let own = "; configure: the output's own by default";
     json!([
         {
             "name": "seat",
@@ -67,8 +73,8 @@ pub fn definitions() -> Value {
                         "description": "create: refreshes a second; default 240" },
                     "scale": { "type": "number", "minimum": 0.25, "maximum": 8,
                         "description": "create: physical pixels per logical unit; default 1.5" },
-                    "vrr_min": vrr_min,
-                    "hdr": hdr,
+                    "vrr_min": vrr_min(1, ""),
+                    "hdr": hdr(""),
                     "seat": { "type": "integer", "minimum": 2, "description": "close: its handle" }
                 },
                 "required": ["action"],
@@ -78,28 +84,38 @@ pub fn definitions() -> Value {
         {
             "name": "outputs",
             "title": "Virtual outputs",
-            "description": "List, create or remove a seat's virtual outputs: screens no monitor \
-                shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, \
-                announcing SDR or HDR colours. Windows open on the seat's focused output. \
-                Coordinates are logical: physical pixels divided by the scale. A seat keeps \
-                one output at least. list gives each output's VRR range in Hz and the monitor \
-                whose HDR colours it announces, each null when it has none.",
+            "description": "List, create, configure or remove a seat's virtual outputs: screens \
+                no monitor shows, drawn at their own size, rate and scale, at a fixed rate or \
+                under VRR, announcing SDR or HDR colours. Windows open on the seat's focused \
+                output. Coordinates are logical: physical pixels divided by the scale. A seat \
+                keeps one output at least. list gives each output's VRR range in Hz and the \
+                monitor whose HDR colours it announces, each null when it has none. configure \
+                changes an output as a monitor set to another mode, whole or not at all: it \
+                keeps its top-left corner, the seat's outputs on its right move with its right \
+                edge so that none overlaps it, and its windows are placed again in it; X11 \
+                windows keep the scale their X server started with. create and configure \
+                answer with the output as list gives it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "create", "remove"] },
+                    "action": { "type": "string",
+                        "enum": ["list", "create", "configure", "remove"] },
                     "seat": seat,
                     "width": { "type": "integer", "minimum": 1,
-                        "description": "create: physical pixels; default 3840" },
+                        "description": format!("create: physical pixels; default 3840{own}") },
                     "height": { "type": "integer", "minimum": 1,
-                        "description": "create: physical pixels; default 2160" },
+                        "description": format!("create: physical pixels; default 2160{own}") },
                     "rate": { "type": "number", "minimum": 1, "maximum": 1000,
-                        "description": "create: refreshes a second; default 240" },
+                        "description": format!("create: refreshes a second; default 240{own}") },
                     "scale": { "type": "number", "minimum": 0.25, "maximum": 8,
-                        "description": "create: physical pixels per logical unit; default 1.5" },
-                    "vrr_min": vrr_min,
-                    "hdr": hdr,
-                    "output": { "type": "integer", "description": "remove: the output's id" }
+                        "description": format!(
+                            "create: physical pixels per logical unit; default 1.5{own}") },
+                    "vrr_min": vrr_min(0, &format!(
+                        "{own}, kept when rate changes; 0 runs it at a fixed rate"
+                    )),
+                    "hdr": hdr(own),
+                    "output": { "type": "integer",
+                        "description": "remove, configure: the output's id" }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false
@@ -349,6 +365,16 @@ pub enum OutputsCall {
     },
     Create {
         seat: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+        rate: Option<f64>,
+        scale: Option<f64>,
+        vrr_min: Option<f64>,
+        hdr: Option<bool>,
+    },
+    Configure {
+        seat: u64,
+        output: u64,
         width: Option<u32>,
         height: Option<u32>,
         rate: Option<f64>,
@@ -1015,6 +1041,42 @@ mod tests {
                 by_ns: None
             })
         ));
+    }
+
+    #[test]
+    fn configure_reads_every_value_of_a_mode_and_needs_its_output() {
+        let call: Result<OutputsCall, _> = arguments(args(json!({
+            "action": "configure", "seat": 2, "output": 3, "width": 1280, "height": 720,
+            "rate": 120, "scale": 2, "vrr_min": 48, "hdr": true
+        })));
+        assert!(
+            matches!(
+                call,
+                Ok(OutputsCall::Configure {
+                    seat: 2,
+                    output: 3,
+                    width: Some(1280),
+                    height: Some(720),
+                    vrr_min: Some(_),
+                    hdr: Some(true),
+                    ..
+                })
+            ),
+            "{call:?}"
+        );
+        assert!(matches!(
+            arguments(args(json!({"action": "configure", "seat": 2, "output": 1}))),
+            Ok(OutputsCall::Configure {
+                width: None,
+                rate: None,
+                hdr: None,
+                ..
+            })
+        ));
+        assert!(
+            arguments::<OutputsCall>(args(json!({"action": "configure", "seat": 2, "scale": 1})))
+                .is_err()
+        );
     }
 
     #[test]

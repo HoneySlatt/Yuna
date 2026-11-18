@@ -13,8 +13,9 @@ The parts, bottom up:
   Wayland, Smithay or a renderer.
 - **The headless compositor**, the `yuna` crate's library on Smithay: the
   [protocols](#a-windows-life) and [XWayland](#xwayland) in front, the layout and the motion
-  behind, virtual [outputs](#outputs-added-and-removed) with their [clock](#time-and-deadlines),
-  drawn through Smithay's GLES renderer, on llvmpipe or the GPU's render node.
+  behind, virtual [outputs](#outputs-added-changed-and-removed) with their
+  [clock](#time-and-deadlines), drawn through Smithay's GLES renderer, on llvmpipe or the GPU's
+  render node.
 - **The [MCP server](#the-mcp-server)** around it, for agents; the [program](#the-program),
   `yuna --headless` and `yuna mcp`.
 - **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
@@ -167,7 +168,8 @@ sizes:
   dwindle, its slot, whatever its minimum; fullscreen, the output's size; both rounded. Floating,
   0 on each axis its minimum and maximum leave free, to let the client choose, unless a rule or
   the compositor set its size.
-- **Drawn**: what its client committed, or what it is asked before its first commit. Scrolling
+- **Drawn**: what its client committed, or what it is asked before its first commit, and after
+  its output's change of mode asked it another size, until its client answers. Scrolling
   columns are as wide as their widest window and stack windows by their drawn heights; minimums
   that do not fit overflow the column. When a column changes width, for a commit or any other
   reason, the focused column stays where it is on screen and the columns on its left move, as in
@@ -182,18 +184,34 @@ Coordinates are logical and shared by all outputs, as `f64`; rectangles are snap
 physical pixels of their output, so that they stay crisp at scale 1.5
 ([ADR-0020](adr/0020-the-layout-models-shape.md)).
 
+An output given another mode, its physical size or its scale (`Layout::configure_output`),
+keeps its top-left corner, on its new pixel grid; its seat's outputs whose left edge lies right
+of its own move with its right edge, so that none overlaps it, and another seat's never move.
+Its workspaces and windows keep their order and focus and are placed again in its new
+rectangle, as when a workspace moves to another output: floating windows keep their place
+relative to the working area, moved only to stay within reach. A window the change asks
+another size counts at that size until its next commit (`Layout::awaits_commit`): placed by its
+old commit, a strip would keep its view where the old sizes needed it, and once its clients
+commit, the columns on the focused one's left would be left off the screen. The compositor
+gives the layout the commit that answers that size whatever its size, though it passes on
+other commits only when their size changes: for an `xdg_toplevel`, the first commit that
+acknowledges the configure carrying it, or a later one; for an X11 window, which acknowledges
+nothing, the first commit after Yuna told it that size. A client that keeps its size, a fullscreen
+game at its own resolution, is then placed by it again, centred; frames it commits before it
+answers do not count. One that never answers stays placed at the size it is asked.
+
 `Layout::check_invariants` checks every rule the model keeps. The tests call it after every
 operation, and an example measures the model:
 
 - `crates/yuna-layout/tests/scenarios/`: one test per behaviour; those that rewrite niri's or
   Hyprland's name their source ([ADR-0019](adr/0019-the-layouts-behaviours.md));
 - `crates/yuna-layout/tests/properties.rs`: random sequences of operations over two seats and up
-  to three outputs, with clients that ask limits, commit sizes of their own and open dialogs,
-  checking the invariants, that one seat never changes another's, that a refused operation
-  changes nothing, that `Layout::size_on_open` foretells a new window's size, that a peek
-  at each workspace shows its own windows, the one shown as its output draws them, that each
-  window's workspace and layer are right, that no workspace or column id comes back once gone,
-  and that moving the focus moves no window along its strip;
+  to three outputs, added, removed and given other modes, with clients that ask limits, commit
+  sizes of their own and open dialogs, checking the invariants, that one seat never changes
+  another's, that a refused operation changes nothing, that `Layout::size_on_open` foretells a
+  new window's size, that a peek at each workspace shows its own windows, the one shown as its
+  output draws them, that each window's workspace and layer are right, that no workspace or
+  column id comes back once gone, and that moving the focus moves no window along its strip;
 - `crates/yuna-layout/examples/timing.rs`: an operation's time on workspaces of 100 and 1,000
   windows.
 
@@ -265,8 +283,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
 - `scale.rs`: the scale each surface is told: `wp_fractional_scale_v1`, and `wl_surface`'s
   preferred buffer scale and transform.
 - `dmabuf.rs`: `linux-dmabuf`: its global, and the import of each client's dmabuf.
-- `output.rs`: virtual outputs: their mode, checked when they are created; their buffer and
-  damage tracker; their refresh boundaries; their removal.
+- `output.rs`: virtual outputs: their mode, checked when they are created or changed; their
+  buffer and damage tracker; their refresh boundaries; their removal.
 - `render.rs`: the one GLES renderer, on Mesa's llvmpipe or, with `--gpu`, the GPU's render node;
   the module that draws ([ADR-0012](adr/0012-opengl-first.md)), though GLES types reach
   `state.rs` (the renderer), `output.rs` (each output's buffer and damage tracker) and
@@ -305,7 +323,11 @@ An output's refresh boundary `k` comes `k / rate` seconds after the output was c
 from the rate each time, so that errors never add up. An output under VRR has no fixed
 boundaries: its panel (`vrr.rs`) says when a frame ready at a given time starts showing, and
 counts its refreshes ([VRR outputs](#vrr-outputs)). The frame loop asks both kinds the same
-questions, through `Timing` (`output.rs`).
+questions, through `Timing` (`output.rs`). A change of an output's rate or VRR range
+([Outputs added, changed and removed](#outputs-added-changed-and-removed)) makes new boundaries,
+or a new panel, from the change, or from the refresh already promised a frame if that is later;
+the refresh armed is armed again for them, and the first refresh after the change takes the
+number the old timing's next would have had, so that presentation feedback counts on.
 
 A commit, or a change of the layout, arms its output's refresh
 ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)); while the output's motion runs,
@@ -343,7 +365,9 @@ a drawing at once is expected to take none.
    logged once per window. A refused window is not shown, and its client gets frame callbacks at
    the hidden windows' rate, never left waiting; its next buffer tries again.
 4. Each later commit passes its limits (`set_size_limits`) and its geometry (`commit_size`) on
-   when they changed, and arms its output's next refresh when it is shown.
+   when they changed, and its geometry, changed or not, when it answers a size its output's
+   change of mode asked ([The layout model](#the-layout-model)); it arms its output's next
+   refresh when it is shown.
 5. Fullscreen and maximise requests become `set_fullscreen` and `set_full_width`, and each gets a
    configure, as xdg-shell asks: at the next arrangement when the layout takes it, even if
    nothing changes; at once, with the state the window has, when the layout refuses it. Before
@@ -697,12 +721,13 @@ layout refused is treated the same way.
 
 Each surface is told the scale of the output its window is shown on: `wp_fractional_scale_v1`'s
 preferred scale, in 120ths, and `wl_surface.preferred_buffer_scale`, that scale's integer
-ceiling. It is told when its fractional scale object is created, at its first commit, and when
-its window enters an output; only a change sends anything. A popup's surfaces are told what
-their window is told, from the popup's creation on. A surface whose window is shown on no output
-keeps the last value. One never told anything learns what its window's surface was last told, so
-that a subsurface or a popup added to a hidden window matches its window; a new window learns the
-scale of its seat's active output, where it opens, else the first output's.
+ceiling. It is told when its fractional scale object is created, at its first commit, when its
+window enters an output, and when the output's scale changes; only a change sends anything. A
+popup's surfaces are told what their window is told, from the popup's creation on. A surface
+whose window is shown on no output keeps the last value. One never told anything learns what its
+window's surface was last told, so that a subsurface or a popup added to a hidden window matches
+its window; a new window learns the scale of its seat's active output, where it opens, else the
+first output's.
 When a window moves to another output, it is told the new scale before the configure that gives
 its size there, so that its client draws the buffer that acknowledges it at that scale.
 
@@ -716,14 +741,16 @@ A client that draws at an integer buffer scale is scaled when drawn ([debt](debt
 X11 windows are drawn by an element of Yuna's own (`render/x11_surface.rs`,
 [ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). Rootless Xwayland
 draws each window at XWayland's scale S, the largest of its seat's outputs when it started, into
-a buffer of scale 1: a buffer pixel is an X11 pixel. On an output of scale s, the buffer takes
+a buffer of scale 1: a buffer pixel is an X11 pixel; S stays for that Xwayland's life, whatever
+the outputs' scales become. On an output of scale s, the buffer takes
 s / S physical pixels per X11 pixel, its window geometry's corner, past its frame extents, at the
 window's rectangle's, its far edges the geometry's size × s / S from that corner, rounded once,
 cut to the rectangle. At s = S it is copied texel for texel. Below S each pixel is the average of
 the X11 pixels it covers, weighted by how much of each, in a texture shader of Yuna's, the *area
 filter*: the average the captures' encoder takes ([Captures](#captures)), of the stored
 sRGB-encoded values, not of linear light, as every other drawing of Yuna's blends today. Above S, on
-an output added since Xwayland started, the renderer's bilinear filter scales it up. A surface with
+an output added or given a larger scale since Xwayland started, the renderer's bilinear filter
+scales it up. A surface with
 a viewport, which Xwayland sets while a fullscreen client emulates a mode, is as large as its
 viewport's destination and shows its source: a game at the output's own mode is copied pixel for
 pixel. Smithay's surface element is not used for them: it rounds a client-scaled surface to whole
@@ -864,7 +891,7 @@ output's is. A seat's outputs added or removed, or the seat removed, never end a
 motion ([A frame](#a-frame)). Smithay keeps a record of every seat it made: a removed one's
 stays, without its keyboard and pointer.
 
-### Outputs added and removed
+### Outputs added, changed and removed
 
 An output belongs to one seat. An output added while Yuna runs goes to the right of every
 output, and its first frame is armed; its `wl_output` global is announced at the round's end. A
@@ -876,6 +903,38 @@ is disabled at once and destroyed 10 s later on Yuna's clock, at the end of a ro
 client that asked to bind it before it learnt of the removal is not ended for it; a closed seat's
 `wl_seat` goes the same way. A seat's last output is removed
 only with the seat, and a compositor keeps 16 at most (`MAX_OUTPUTS`), each about 33 MB at 4K.
+
+An output given another mode (`Compositor::configure_output`, MCP's `outputs configure`) takes
+it whole or not at all, as a monitor set to another mode would
+([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md),
+item 7). Everything that can refuse it runs first: the renderer's limit on a side, the new
+buffer, made before anything changes, and the layout's own checks; a refused change leaves the
+output, its windows and its clients as they were, and a mode equal to its own changes nothing.
+Then, in the call:
+
+- the layout places its windows again, and moves the seat's outputs on its right
+  ([The layout model](#the-layout-model)); each output that moved tells its clients its place;
+- a new size takes the new buffer, and a new size or scale a new damage tracker: its next frame
+  is drawn whole;
+- a new rate or VRR range makes its refresh timing again
+  ([Time and deadlines](#time-and-deadlines));
+- HDR turned on or off gives it a new description, and each of its
+  `wp_color_management_output_v1` objects is told `image_description_changed`; its surfaces are
+  told their preferred description changed at the arrangement ([Colours](#colours));
+- `wl_output` and `xdg_output` tell the new mode and scale, then `done`, sent even when only
+  the colours changed; a virtual output announces one mode, the one it has, so that changes
+  never grow the list a new client is sent;
+- each surface of a window shown on it, its popups' included, is told a new scale
+  ([Scale](#scale)), before the configure that gives its window its size there;
+- a new size or scale fails the captures waiting on it, asked of the old one, and gives its
+  capture sessions their new buffer size ([Captures](#captures)).
+
+The arrangement this asks comes at the output's next refresh, as for any change of the layout:
+the outputs whose rectangle or scale changed start at rest in their new places, and every other
+output's motion goes on. A `windows` call waiting goes on waiting. The pointer keeps its place in
+logical coordinates, as when an output is removed: it may be left on no output until it moves.
+An X11 window keeps XWayland's scale ([XWayland](#xwayland)): placed again in X11 pixels, it is
+drawn at the output's new scale over that one.
 
 ### XWayland
 
@@ -966,10 +1025,13 @@ KWin's set at the version each client bound. `description.rs` holds the image de
 their checks, with no Wayland object; `protocol.rs` the dispatch of every object, each keeping
 its state in its own user data. A record of a description gets an identity never used again.
 
-- Each output announces one description for its life, made when it is created: the owner's
-  monitor's PQ volume for an HDR output, gamma 2.2 and sRGB otherwise
-  ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). A removed
-  output's colour objects fail at once, with `no_output`.
+- Each output announces one description, made when it is created: the owner's monitor's PQ
+  volume for an HDR output, gamma 2.2 and sRGB otherwise
+  ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)); a new one, with
+  a new identity, when its HDR is turned on or off, which each of its
+  `wp_color_management_output_v1` objects is told by `image_description_changed`. Yuna keeps
+  those objects by id, as it keeps feedback objects. A removed output's colour objects fail at
+  once, with `no_output`.
 - A surface's description is double-buffered in Smithay's cached state, applied at its commit
   as subsurfaces' state is; `Compositor::window_colours` reads a window's tree.
 - A surface's preferred description is its window's workspace's output's, else its seat's
@@ -1068,15 +1130,20 @@ window or program unknown there:
   socket, `seat-<id>` in Yuna's folder, and an X display ([XWayland](#xwayland)); lists the
   seats; closes one. A manual-clock Yuna holds one
   seat at a time.
-- `outputs` lists, creates and removes a seat's outputs; `workspaces` lists them with their
-  windows, creates, removes and shows a named one, and moves a window to one. `seat` and
+- `outputs` lists, creates, configures and removes a seat's outputs; `workspaces` lists them
+  with their windows, creates, removes and shows a named one, and moves a window to one. `seat` and
   `outputs` create an output under VRR with `vrr_min`, over `vrr_min` to its rate, refused
   unless the rate is at least twice it ([VRR outputs](#vrr-outputs)), and an HDR one, which
   announces the colours of the owner's monitor, a PG32UCDM, with `hdr` ([Colours](#colours),
   [ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)). Each value a call leaves out is
   `--output`'s, `hdr` included, which `hdr: false` turns off; `--output`'s VRR range only when
-  the call leaves out `rate` too, since a range belongs with its rate. An output is told with its VRR range in Hz and its monitor's name,
-  each null when it has none.
+  the call leaves out `rate` too, since a range belongs with its rate. `outputs configure`
+  gives an output another mode, whole or not at all
+  ([Outputs added, changed and removed](#outputs-added-changed-and-removed)): each value it
+  leaves out is the output's own, its VRR range included when it names another rate, which
+  must then be at least twice the range's least; `vrr_min: 0` runs it at a fixed rate, a
+  value `create` refuses. An output is told with its VRR range in Hz and its monitor's name,
+  each null when it has none; `create` and `configure` answer with it so.
 - `spawn` starts, lists and stops a seat's programs.
 - `windows` lists a seat's windows, as `Compositor::windows` describes them, each with its
   `shell`, `xdg` or `x11`: its `rect`, where

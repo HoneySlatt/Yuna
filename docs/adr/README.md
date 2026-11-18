@@ -109,3 +109,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0087](0087-a-locker-that-stops-answering-counts-as-dead.md) | A locker that stops answering counts as dead | Superseded by 0088 |
 | [0088](0088-a-locker-that-stops-answering-counts-as-dead-its-answer-from-the-thread-that-draws-it.md) | A locker that stops answering counts as dead, its answer from the thread that draws it | Accepted; supersedes 0087 |
 | [0089](0089-yuna-for-the-owners-other-projects.md) | Yuna for the owner's other projects: an agent's seat, wlr-screencopy, its own Mesa | Accepted |
+| [0090](0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md) | An output's mode and scale changed whole, through MCP | Accepted |

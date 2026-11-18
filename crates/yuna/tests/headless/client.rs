@@ -158,6 +158,11 @@ pub struct ClientState {
     outputs: Vec<(u32, wl_output::WlOutput)>,
     /// The name each output gave (`wl_output.name`), by its registry name.
     pub output_names: Vec<(u32, String)>,
+    /// Each `wl_output.mode` an output sent, by its registry name: width, height and refresh
+    /// in millihertz.
+    pub output_modes: Vec<(u32, (i32, i32, i32))>,
+    /// Each `wl_output.scale` an output sent, by its registry name.
+    pub output_scales: Vec<(u32, i32)>,
     /// The registry names of the globals removed (`wl_registry.global_remove`).
     pub removed_globals: Vec<u32>,
     /// Every global announced, by its registry name and interface.
@@ -891,8 +896,16 @@ impl Dispatch<wl_output::WlOutput, u32> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_output::Event::Name { name } = event {
-            state.output_names.push((*global, name));
+        match event {
+            wl_output::Event::Name { name } => state.output_names.push((*global, name)),
+            wl_output::Event::Mode {
+                width,
+                height,
+                refresh,
+                ..
+            } => state.output_modes.push((*global, (width, height, refresh))),
+            wl_output::Event::Scale { factor } => state.output_scales.push((*global, factor)),
+            _ => {}
         }
     }
 }

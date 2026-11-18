@@ -415,3 +415,68 @@ fn buffers_outside_the_output_never_make_callbacks_loop() {
     run_armed_deadlines(&mut compositor);
     assert_rests(&mut compositor);
 }
+
+/// An output at a fixed 240 Hz switched to VRR from 48 Hz shows a frame as its panel does from
+/// the change: a blank after it is ready, told no fixed refresh. Switched back a second later,
+/// it presents at boundaries a period apart from that change, refresh 1/240 s. Its refreshes
+/// are numbered on across both: the first after the change takes the number the panel's next
+/// would have had, after its own 48 refreshes of 1/48 s in the second it waited.
+#[test]
+fn an_output_switched_to_vrr_and_back_presents_as_its_new_mode_from_each_change() {
+    let mut compositor = compositor(false);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    let fixed = OutputMode::new(1920, 1080, 240.0, 1.0).expect("a mode");
+    let output = compositor.outputs()[0];
+
+    let to_vrr = compositor.now() + Duration::from_secs(1);
+    compositor
+        .advance(to_vrr - compositor.now())
+        .expect("the manual clock moves");
+    compositor
+        .configure_output(output, fixed.with_vrr(48.0).expect("a range"))
+        .expect("the output turns VRR on");
+    // The change's own refresh, which finds nothing new to draw.
+    run_armed_deadlines(&mut compositor);
+    let ready = to_vrr + Duration::from_millis(10);
+    compositor
+        .advance(ready - compositor.now())
+        .expect("the manual clock moves");
+    client.attach(window, 400, 300, BLUE);
+    client.request_feedback(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    let shown = presented(&client.window(window).feedback);
+    let &(time, seq) = shown.last().expect("a frame presented");
+    assert_eq!(time, ready + BLANK);
+    assert!(matches!(
+        client.window(window).feedback.last(),
+        Some(Feedback::Presented { refresh, .. }) if refresh.is_zero()
+    ));
+
+    let to_fixed = ready + Duration::from_secs(1);
+    compositor
+        .advance(to_fixed - compositor.now())
+        .expect("the manual clock moves");
+    compositor
+        .configure_output(output, fixed)
+        .expect("the output turns VRR off");
+    client.attach(window, 400, 300, RED);
+    client.request_feedback(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    assert_eq!(
+        client.window(window).feedback.last(),
+        Some(&Feedback::Presented {
+            time: to_fixed + SHORTEST,
+            refresh: SHORTEST,
+            seq: seq + 49,
+            flags: crate::client::Kind::Vsync,
+        })
+    );
+    assert_rests(&mut compositor);
+}

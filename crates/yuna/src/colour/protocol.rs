@@ -31,7 +31,7 @@ use smithay::wayland::compositor::{Cacheable, with_states};
 use super::description::{
     Chromaticities, Description, Luminances, NamedPrimaries, Params, ParamsError, TransferFunction,
 };
-use super::{Record, SurfaceColour};
+use super::{ColourState, Record, SurfaceColour};
 use crate::state::State;
 
 /// The version Yuna offers: wayland-protocols 0.32.13's.
@@ -127,7 +127,11 @@ impl Dispatch<WpColorManagerV1, ()> for State {
             Request::GetOutput { id, output } => {
                 // Inert from the start when the output is gone already.
                 let output = Output::from_resource(&output);
-                data_init.init(id, output.map(|o| o.downgrade()));
+                let colour_output = data_init.init(id, output.map(|o| o.downgrade()));
+                state
+                    .colour
+                    .outputs
+                    .insert(colour_output.id(), colour_output);
             }
             Request::GetSurface { id, surface } => {
                 let taken = with_states(&surface, |states| {
@@ -214,6 +218,30 @@ impl Dispatch<WpColorManagementOutputV1, Option<smithay::output::WeakOutput>> fo
                     );
                 }
             }
+        }
+    }
+
+    fn destroyed(
+        state: &mut State,
+        _client: smithay::reexports::wayland_server::backend::ClientId,
+        object: &WpColorManagementOutputV1,
+        _output: &Option<smithay::output::WeakOutput>,
+    ) {
+        state.colour.outputs.remove(&object.id());
+    }
+}
+
+/// Sends `image_description_changed` to every `wp_color_management_output_v1` of `output`, whose
+/// colours changed; the `wl_output.done` that must follow is the caller's.
+pub(crate) fn tell_output_colours_changed(colour: &ColourState, output: &Output) {
+    for colour_output in colour.outputs.values() {
+        let of_output = colour_output
+            .data::<Option<smithay::output::WeakOutput>>()
+            .and_then(|weak| weak.as_ref())
+            .and_then(|weak| weak.upgrade())
+            .is_some_and(|candidate| candidate == *output);
+        if of_output {
+            colour_output.image_description_changed();
         }
     }
 }

@@ -736,6 +736,15 @@ impl Compositor {
         self.state.remove_output(output)
     }
 
+    /// Gives `output` the mode `mode`, as a monitor set to another one: its size, rate, scale,
+    /// VRR range and HDR, applied whole, or refused with nothing changed, for an output that
+    /// does not exist, a side beyond the renderer's limit, and a mode the layout refuses. It
+    /// keeps its top-left corner; its seat's outputs on its right move with its right edge. Its
+    /// clients are told at once, its windows placed again at its next refresh.
+    pub fn configure_output(&mut self, output: OutputId, mode: OutputMode) -> Result<(), Error> {
+        self.state.configure_output(output, mode)
+    }
+
     /// Every output, in the order they were created.
     pub fn output_descriptions(&self) -> Vec<OutputDescription> {
         self.state.describe_outputs()

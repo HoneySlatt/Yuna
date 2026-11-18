@@ -30,6 +30,7 @@ use smithay::wayland::image_copy_capture::{
 use smithay::wayland::shm::with_buffer_contents_mut;
 use yuna_layout::OutputId;
 
+use crate::OutputMode;
 use crate::capture::{Destination, Failure};
 use crate::output::to_i32;
 use crate::seats::seat_of_client;
@@ -137,12 +138,35 @@ impl State {
         }
     }
 
+    /// Tells every session of output `id`, whose size changed, its new buffer constraints: the
+    /// frames it asks from then on are of that size.
+    pub(crate) fn update_capture_constraints(&mut self, id: OutputId) {
+        let Some(index) = self.output_index(id) else {
+            return;
+        };
+        let constraints = buffer_constraints(&self.outputs[index].mode);
+        for (session, output, _) in &self.screencopy.sessions {
+            if *output == id {
+                session.update_constraints(constraints.clone());
+            }
+        }
+    }
+
     /// Stops every session of output `id`, which is being removed: their waiting frames fail.
     pub(crate) fn stop_capture_sessions(&mut self, id: OutputId) {
         // Dropping a session sends `stopped` and fails its frame.
         self.screencopy
             .sessions
             .retain(|(_, output, _)| *output != id);
+    }
+}
+
+/// What a session's buffers must be for an output of `mode`: its physical size, in one of
+/// [`FORMATS`].
+fn buffer_constraints(mode: &OutputMode) -> BufferConstraints {
+    BufferConstraints {
+        size: (to_i32(mode.width()), to_i32(mode.height())).into(),
+        shm: FORMATS.to_vec(),
     }
 }
 
@@ -243,11 +267,7 @@ impl ImageCopyCaptureHandler for State {
     /// which stops the session.
     fn capture_constraints(&mut self, source: &ImageCaptureSource) -> Option<BufferConstraints> {
         let index = source_output(source).and_then(|id| self.output_index(id))?;
-        let mode = self.outputs[index].mode;
-        Some(BufferConstraints {
-            size: (to_i32(mode.width()), to_i32(mode.height())).into(),
-            shm: FORMATS.to_vec(),
-        })
+        Some(buffer_constraints(&self.outputs[index].mode))
     }
 
     /// Keeps a session of the client's own seat's output, within the bounds; drops any other,

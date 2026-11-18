@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::area::Area;
-use crate::geometry::{Rect, Scale, Size};
+use crate::geometry::{EPSILON, Point, Rect, Scale, Size};
 use crate::ids::Ids;
 use crate::scrolling::ColumnWidth;
 use crate::sizing::Sizing;
@@ -437,16 +437,12 @@ impl Layout {
             return Err(LayoutError::AlreadyExists);
         }
         let scale = Scale::new(config.scale).ok_or(LayoutError::InvalidValue)?;
-        let position = config.position;
-        let logical = |pixels: u32| f64::from(pixels) / scale.get();
-        let size = Size {
-            w: logical(config.physical_width),
-            h: logical(config.physical_height),
-        };
-        if !valid_coordinate(position.x) || !valid_coordinate(position.y) || !valid_size(size) {
-            return Err(LayoutError::InvalidValue);
-        }
-        let rect = scale.snap_rect(Rect::new(position.x, position.y, size.w, size.h));
+        let rect = output_rect(
+            config.position,
+            config.physical_width,
+            config.physical_height,
+            scale,
+        )?;
         let seat_ref = &mut self.seats[si];
         let mut workspaces: Vec<Workspace> = std::mem::take(&mut seat_ref.detached);
         seat_ref.outputs.push(Output {
@@ -524,6 +520,95 @@ impl Layout {
         }
         self.tidy(si);
         Ok(())
+    }
+
+    /// Gives an output another mode, as a monitor set to another one: `physical_width` ×
+    /// `physical_height` pixels at `scale`. It keeps its top-left corner, on its new pixel grid.
+    /// Its seat's outputs whose left edge lies right of its own move along with its right edge,
+    /// each kept on its own grid, so that the seat's outputs keep their distances and none comes
+    /// to overlap it; another seat's outputs never move
+    /// ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md)). Its workspaces and windows,
+    /// and those of the outputs that moved, keep their order and their focus and are placed
+    /// again: tiled ones in the new working area, fullscreen ones at the output's new size,
+    /// floating ones where they were relative to the working area, moved only as far as needed
+    /// to stay within reach, as when a workspace moves to another output. A window the change
+    /// asks another size counts at that size until its next commit ([`Layout::awaits_commit`]):
+    /// the size it committed answered the old one, and placing the strip by it would keep the
+    /// view where the old sizes needed it. One whose client never commits again stays at that
+    /// size. Refused, changing nothing, for an unknown output, a mode
+    /// [`Layout::add_output`] refuses, and a move that would take an output past the
+    /// coordinates' range.
+    pub fn configure_output(
+        &mut self,
+        output: OutputId,
+        physical_width: u32,
+        physical_height: u32,
+        scale: f64,
+    ) -> Result<(), LayoutError> {
+        let (si, oi) = self.output_index(output)?;
+        let scale = Scale::new(scale).ok_or(LayoutError::InvalidValue)?;
+        let old = self.seats[si].outputs[oi].rect;
+        let corner = Point { x: old.x, y: old.y };
+        let rect = output_rect(corner, physical_width, physical_height, scale)?;
+        let shift = rect.right() - old.right();
+        // Every value is checked before anything changes, so that a refusal changes nothing.
+        let mut moved = Vec::new();
+        if shift.abs() > EPSILON {
+            for (index, other) in self.seats[si].outputs.iter().enumerate() {
+                if index == oi || other.rect.x <= old.x + EPSILON {
+                    continue;
+                }
+                // Its corner alone is snapped: its size, on its grid already, stays.
+                let x = other.scale.snap(other.rect.x + shift);
+                if !valid_coordinate(x) {
+                    return Err(LayoutError::InvalidValue);
+                }
+                moved.push((index, Rect { x, ..other.rect }));
+            }
+        }
+        let asked_before = self.asked_on_output(si, oi);
+        let seat = &mut self.seats[si];
+        seat.outputs[oi].rect = rect;
+        seat.outputs[oi].scale = scale;
+        for (index, rect) in moved {
+            seat.outputs[index].rect = rect;
+        }
+        for (window, asked) in self.asked_on_output(si, oi) {
+            if asked_before.get(&window) != Some(&asked)
+                && let Some(record) = self.windows.get_mut(&window)
+            {
+                record.sizing.committed = None;
+            }
+        }
+        // `tidy` places every workspace of the seat's outputs again in its output's area.
+        self.tidy(si);
+        Ok(())
+    }
+
+    /// Whether `window` is placed at the size it is asked rather than one its client committed:
+    /// before its first commit, and after its output's change of mode asked it another size,
+    /// until the next commit given to [`Layout::commit_size`]. The compositor then gives the
+    /// commit that answers that size whatever its size, so that a client that keeps its own is
+    /// placed by it again. False for a window the model does not know.
+    pub fn awaits_commit(&self, window: WindowId) -> bool {
+        self.windows
+            .get(&window)
+            .is_some_and(|record| record.sizing.committed.is_none())
+    }
+
+    /// The size each window of output `oi` of seat `si` is asked, on every workspace it holds:
+    /// those not shown and the special one over it included.
+    fn asked_on_output(&self, si: usize, oi: usize) -> HashMap<WindowId, Size> {
+        let output = &self.seats[si].outputs[oi];
+        let area = output.area(self.options.gap, &self.windows);
+        let mut arranged = Vec::new();
+        for workspace in output.workspaces.iter().chain(&output.special) {
+            workspace.arrange_with_hidden(&area, &mut arranged);
+        }
+        arranged
+            .into_iter()
+            .map(|a| (a.window, a.configure))
+            .collect()
     }
 
     /// Makes `output` the seat's active output, where its keys act and its windows open. Refused
@@ -2084,6 +2169,25 @@ fn valid_limits(min: Size, max: Size) -> bool {
 
 fn valid_coordinate(value: f64) -> bool {
     (-MAX_COORDINATE..=MAX_COORDINATE).contains(&value)
+}
+
+/// The rectangle of an output of `physical_width` × `physical_height` pixels at `scale`, its
+/// top-left corner at `corner`, on its pixel grid. Refused for a corner or a size out of range.
+fn output_rect(
+    corner: Point,
+    physical_width: u32,
+    physical_height: u32,
+    scale: Scale,
+) -> Result<Rect, LayoutError> {
+    let logical = |pixels: u32| f64::from(pixels) / scale.get();
+    let size = Size {
+        w: logical(physical_width),
+        h: logical(physical_height),
+    };
+    if !valid_coordinate(corner.x) || !valid_coordinate(corner.y) || !valid_size(size) {
+        return Err(LayoutError::InvalidValue);
+    }
+    Ok(scale.snap_rect(Rect::new(corner.x, corner.y, size.w, size.h)))
 }
 
 /// A proportion between [`ColumnWidth::MIN_PROPORTION`] and 1, or a fixed width up to

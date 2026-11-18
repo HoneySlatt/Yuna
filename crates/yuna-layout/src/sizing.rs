@@ -6,8 +6,10 @@
 //! configure: whole logical units, as Wayland carries them; widths of scrolling columns are
 //! floored, every other length rounded. The size it is **drawn** at is what
 //! its client **committed**, its xdg window geometry; before its first commit, the size it is
-//! asked. Scrolling columns and floating windows are placed from drawn sizes, as in niri;
-//! dwindle draws each window inside its slot, clipped to it.
+//! asked, and so after its output's mode changed the size it is asked, until it commits again
+//! ([`Layout::configure_output`](crate::Layout::configure_output)). Scrolling columns and
+//! floating windows are placed from drawn sizes, as in niri; dwindle draws each window inside
+//! its slot, clipped to it.
 
 use crate::geometry::Size;
 
@@ -18,7 +20,8 @@ pub(crate) struct Sizing {
     pub min: Size,
     /// The largest size its client asks; 0 on an axis for none.
     pub max: Size,
-    /// Its window geometry as its client last committed it; none before its first commit.
+    /// Its window geometry as its client last committed it; none before its first commit, and
+    /// after its output's change of mode asked it another size, until it commits again.
     pub committed: Option<Size>,
     /// A rule or the compositor set its floating size: floating, it is asked that size and keeps
     /// it, rather than following what its client commits.

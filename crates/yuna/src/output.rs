@@ -216,9 +216,10 @@ pub(crate) struct VirtualOutput {
     /// How many frames were drawn on it: a capture session's later frame waits for new content
     /// only while this is what it was at the session's last frame.
     pub drawn_frames: u64,
-    /// The colours it announces, for its whole life (`colour/`).
+    /// The colours it announces (`colour/`), new when its HDR is turned on or off.
     pub colour: Arc<Record>,
-    /// When it refreshes: at fixed boundaries from its creation, or as a VRR panel.
+    /// When it refreshes: at fixed boundaries from its creation or the last change of its rate,
+    /// or as a VRR panel.
     pub timing: Timing,
     /// The refresh its armed refresh aims at, and when that refresh is due.
     pub armed_refresh: RefreshAt,
@@ -290,14 +291,7 @@ impl State {
                 "Yuna has {MAX_OUTPUTS} outputs already, the most it keeps"
             )));
         }
-        let limit = self.max_output_side;
-        if mode.width() > limit || mode.height() > limit {
-            return Err(Error::InvalidOutput(InvalidOutput(format!(
-                "an output of {} × {} pixels is larger than the renderer's limit of {limit}",
-                mode.width(),
-                mode.height()
-            ))));
-        }
+        self.check_renderer_limit(mode)?;
         let buffer = crate::render::create_buffer(&mut self.renderer, mode.width(), mode.height())?;
         let id = self.take_output_id();
         let right_edge = self
@@ -331,10 +325,7 @@ impl State {
                 serial_number: id.0.to_string(),
             },
         );
-        let smithay_mode = Mode {
-            size: (to_i32(mode.width()), to_i32(mode.height())).into(),
-            refresh: to_i32(mode.refresh_millihertz()),
-        };
+        let smithay_mode = smithay_mode(&mode);
         output.change_current_state(
             Some(smithay_mode),
             Some(Transform::Normal),
@@ -353,13 +344,7 @@ impl State {
                 .map_or_else(sdr_description, |monitor| monitor.hdr_description()),
         );
         let created_at = self.clock.now();
-        let timing = match mode.vrr_min_millihertz() {
-            Some(min) => Timing::Variable(Panel::new(min, mode.refresh_millihertz(), created_at)),
-            None => Timing::Fixed(Boundaries {
-                created_at,
-                refresh_millihertz: mode.refresh_millihertz(),
-            }),
-        };
+        let timing = Timing::new(&mode, created_at, 0);
         let creation = RefreshAt {
             seq: 0,
             at: created_at,
@@ -410,6 +395,182 @@ impl State {
 }
 
 impl State {
+    /// Refuses a mode wider or taller than the renderer's `GL_MAX_RENDERBUFFER_SIZE`.
+    fn check_renderer_limit(&self, mode: OutputMode) -> Result<(), Error> {
+        let limit = self.max_output_side;
+        if mode.width() > limit || mode.height() > limit {
+            return Err(Error::InvalidOutput(InvalidOutput(format!(
+                "an output of {} × {} pixels is larger than the renderer's limit of {limit}",
+                mode.width(),
+                mode.height()
+            ))));
+        }
+        Ok(())
+    }
+
+    /// Gives output `id` another mode, as a monitor set to one, applied whole or not at all
+    /// ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md),
+    /// item 7). Refused, with nothing changed, for an unknown output, a side beyond the
+    /// renderer's limit, a buffer the renderer cannot make, and a mode the layout refuses
+    /// ([`Layout::configure_output`](yuna_layout::Layout::configure_output)); a mode equal to
+    /// its own changes nothing. Then, at once:
+    ///
+    /// - the layout places its windows again, and moves its seat's outputs on its right with
+    ///   its right edge;
+    /// - a new size gets a new buffer; a new size or scale a new damage tracker, so that its
+    ///   next frame is drawn whole, and captures wait for it;
+    /// - a new rate or VRR range starts its refresh boundaries, or its VRR panel, again, at the
+    ///   change or at the refresh already promised a frame if that is later; the first refresh
+    ///   after takes the number the old timing's next would have had;
+    /// - HDR turned on or off gives it its new colours, and `color-management-v1` tells them;
+    /// - `wl_output` and `xdg_output` tell its clients its mode, scale and place, and those of
+    ///   the outputs that moved;
+    /// - each surface shown on it is told its new scale, before the configure that gives its
+    ///   window its size there;
+    /// - a new size or scale fails the captures waiting on it, asked of the old one, and tells
+    ///   capture sessions its new size.
+    ///
+    /// Its windows show their new places from its next refresh, which the change arms. An X11
+    /// window keeps XWayland's scale, fixed for its life
+    /// ([ADR-0068](../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)):
+    /// it is placed again in X11 pixels and drawn at the output's new scale over that one.
+    pub(crate) fn configure_output(&mut self, id: OutputId, mode: OutputMode) -> Result<(), Error> {
+        let index = self
+            .output_index(id)
+            .ok_or_else(|| Error::Refused(format!("no output {}", id.0)))?;
+        let old = self.outputs[index].mode;
+        if mode == old {
+            return Ok(());
+        }
+        self.check_renderer_limit(mode)?;
+        let resized = (mode.width(), mode.height()) != (old.width(), old.height());
+        let rescaled = mode.scale() != old.scale();
+        let retimed = (mode.refresh_millihertz(), mode.vrr_min_millihertz())
+            != (old.refresh_millihertz(), old.vrr_min_millihertz());
+        // Made before anything changes: a renderer that cannot make it refuses the change.
+        let buffer = if resized {
+            Some(crate::render::create_buffer(
+                &mut self.renderer,
+                mode.width(),
+                mode.height(),
+            )?)
+        } else {
+            None
+        };
+        self.layout
+            .configure_output(id, mode.width(), mode.height(), mode.scale())
+            .map_err(|e| {
+                Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
+            })?;
+        // Nothing is refused from here.
+        let now = self.clock.now();
+        let colour = (mode.hdr() != old.hdr()).then(|| {
+            self.colour.record(
+                mode.hdr()
+                    .map_or_else(sdr_description, |monitor| monitor.hdr_description()),
+            )
+        });
+        let output = &mut self.outputs[index];
+        output.mode = mode;
+        if let Some(buffer) = buffer {
+            output.buffer = buffer;
+        }
+        if retimed {
+            // The new timing begins at the change, or at the refresh already promised a frame
+            // if that is later, which is still presented as promised. Its first refresh after
+            // that takes the number the old timing's next would have had, so that refreshes
+            // keep counting through the change.
+            let last = output.last_refresh;
+            let next = output.timing.reachable(now, last, false);
+            output.timing = Timing::new(&mode, now.max(last.at), next.seq.saturating_sub(1));
+            // Its refresh armed aimed at a refresh of the old timing.
+            self.clock.disarm(Deadline::Refresh(id));
+        }
+        let output = &mut self.outputs[index];
+        if let Some(colour) = colour {
+            output.colour = colour;
+            crate::colour::protocol::tell_output_colours_changed(&self.colour, &output.output);
+        }
+        let (new_mode, old_mode) = (smithay_mode(&mode), smithay_mode(&old));
+        if new_mode != old_mode {
+            // A virtual output announces one mode, the one it has, so that changes in a loop
+            // never grow the list every new client is sent.
+            output.output.delete_mode(old_mode);
+            output.output.set_preferred(new_mode);
+        }
+        // `done` ends what changed, colours included, and is sent even when only they did.
+        output.output.change_current_state(
+            (new_mode != old_mode).then_some(new_mode),
+            None,
+            rescaled.then_some(Scale::Fractional(mode.scale())),
+            None,
+        );
+        if resized || rescaled {
+            output.damage = OutputDamageTracker::from_output(&output.output);
+            output.drawn_once = false;
+        }
+        self.move_outputs_to_their_places();
+        if rescaled {
+            self.tell_scale_of(id);
+        }
+        if resized || rescaled {
+            self.fail_captures(
+                id,
+                "its output's mode changed: capture it again",
+                Failure::ForNow,
+            );
+        }
+        if resized {
+            self.update_capture_constraints(id);
+        }
+        tracing::info!(
+            output = id.0,
+            width = mode.width(),
+            height = mode.height(),
+            millihertz = mode.refresh_millihertz(),
+            scale = mode.scale(),
+            "virtual output configured"
+        );
+        // Its windows, and those of the outputs that moved, start at rest in their new places
+        // (ADR-0052); every other output's motion goes on.
+        self.mark_layout_changed(Change::Animated);
+        Ok(())
+    }
+
+    /// Gives each output the rectangle the layout has for it, and tells the clients of those
+    /// that moved their new place.
+    fn move_outputs_to_their_places(&mut self) {
+        for output in &mut self.outputs {
+            let Ok(rect) = self.layout.output_rect(output.id) else {
+                continue;
+            };
+            let corner = |rect: Rect| (rect.x.round() as i32, rect.y.round() as i32);
+            let moved = corner(rect) != corner(output.rect);
+            output.rect = rect;
+            if moved {
+                output
+                    .output
+                    .change_current_state(None, None, None, Some(corner(rect).into()));
+            }
+        }
+    }
+
+    /// Tells every surface of the windows shown on output `id`, their popups' included, the
+    /// output's scale.
+    fn tell_scale_of(&mut self, id: OutputId) {
+        let shown: Vec<WlSurface> = self
+            .toplevels
+            .values()
+            .filter(|toplevel| toplevel.shown_on == Some(id))
+            .map(|toplevel| toplevel.wl_surface().clone())
+            .collect();
+        for root in shown {
+            for tree in self.window_trees(&root) {
+                self.tell_preferred_scale(&tree, id);
+            }
+        }
+    }
+
     /// Removes output `id`. Its windows go to another output of its seat, as the layout moves its
     /// workspaces ([`Layout::remove_output`](yuna_layout::Layout::remove_output)). Refused for an
     /// unknown output, and for its seat's last one: a seat keeps one while it lives, so that its
@@ -510,6 +671,14 @@ pub const MAX_OUTPUTS: usize = 16;
 /// would be for binding a global that no longer exists.
 pub const RETIRED_GLOBAL_LIFETIME: Duration = Duration::from_secs(10);
 
+/// `mode`'s size and rate as `wl_output` tells them.
+fn smithay_mode(mode: &OutputMode) -> Mode {
+    Mode {
+        size: (to_i32(mode.width()), to_i32(mode.height())).into(),
+        refresh: to_i32(mode.refresh_millihertz()),
+    }
+}
+
 /// A rate in Hz, from millihertz.
 fn hertz(millihertz: u32) -> f64 {
     f64::from(millihertz) / 1_000.0
@@ -532,28 +701,68 @@ pub(crate) struct RefreshAt {
 /// When an output refreshes: at boundaries a fixed period apart, or as a VRR panel does
 /// ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
 /// [ADR-0046](../../../docs/adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+///
+/// Its boundaries, or its panel, count refreshes from 0 at their start: the output's creation,
+/// or the last change of its rate or VRR range. The output's own numbers go on across a change:
+/// their refresh `k` is the output's refresh `first_seq + k`, so that presentation feedback
+/// never counts back.
 #[derive(Debug)]
-pub(crate) enum Timing {
+pub(crate) struct Timing {
+    /// The output's refresh that is its boundaries' or its panel's refresh 0.
+    first_seq: u64,
+    cadence: Cadence,
+}
+
+#[derive(Debug)]
+enum Cadence {
     Fixed(Boundaries),
     Variable(Panel),
 }
 
 impl Timing {
+    /// The timing of `mode` whose refresh `first_seq` begins at `start`: at a fixed rate,
+    /// boundaries a period apart from then; under VRR, a panel whose refresh in progress began
+    /// then.
+    pub fn new(mode: &OutputMode, start: Duration, first_seq: u64) -> Timing {
+        let rate = mode.refresh_millihertz();
+        let cadence = match mode.vrr_min_millihertz() {
+            Some(min) => Cadence::Variable(Panel::new(min, rate, start)),
+            None => Cadence::Fixed(Boundaries {
+                created_at: start,
+                refresh_millihertz: rate,
+            }),
+        };
+        Timing { first_seq, cadence }
+    }
+
+    /// Whether it runs under VRR.
+    pub fn is_variable(&self) -> bool {
+        matches!(self.cadence, Cadence::Variable(_))
+    }
+
+    /// The output's refresh `seq` as its boundaries or its panel number it. A refresh is never
+    /// asked of before `first_seq`: the output's last refresh is that one at least.
+    fn own(&self, seq: u64) -> u64 {
+        seq.saturating_sub(self.first_seq)
+    }
+
     /// The first refresh a frame ready at `ready` can show at, after the output's `last`: at a
     /// fixed rate, the first boundary at or after it; under VRR, the panel's answer. With
     /// `paced`, for a refresh with nothing new to draw, not before a shortest refresh after
     /// `last` either: at rest the panel never learns of a refresh that drew nothing, and callbacks
     /// asked without damage must come once a shortest refresh, never in a loop.
     pub fn reachable(&self, ready: Duration, last: RefreshAt, paced: bool) -> RefreshAt {
-        match self {
-            Timing::Fixed(boundaries) => {
-                let seq = boundaries.first_at_or_after(ready).max(last.seq + 1);
+        match &self.cadence {
+            Cadence::Fixed(boundaries) => {
+                let k = boundaries
+                    .first_at_or_after(ready)
+                    .max(self.own(last.seq) + 1);
                 RefreshAt {
-                    seq,
-                    at: boundaries.at(seq),
+                    seq: self.first_seq.saturating_add(k),
+                    at: boundaries.at(k),
                 }
             }
-            Timing::Variable(panel) => {
+            Cadence::Variable(panel) => {
                 let ready = if paced {
                     let after_last = last.at.saturating_add(panel.shortest());
                     ready.max(after_last.saturating_sub(panel.blank()))
@@ -562,7 +771,7 @@ impl Timing {
                 };
                 let (seq, at) = panel.first_reachable(ready);
                 RefreshAt {
-                    seq: seq.max(last.seq + 1),
+                    seq: self.first_seq.saturating_add(seq).max(last.seq + 1),
                     at,
                 }
             }
@@ -572,9 +781,9 @@ impl Timing {
     /// Whether a frame drawn at `now` shows at once: the output is idle. Under VRR, a frame
     /// shows a vertical blank after it is ready at the soonest.
     pub fn is_idle(&self, now: Duration, last: RefreshAt, paced: bool) -> bool {
-        match self {
-            Timing::Fixed(boundaries) => now >= boundaries.at(last.seq + 1),
-            Timing::Variable(panel) => {
+        match &self.cadence {
+            Cadence::Fixed(boundaries) => now >= boundaries.at(self.own(last.seq) + 1),
+            Cadence::Variable(panel) => {
                 self.reachable(now, last, paced).at == now.saturating_add(panel.blank())
             }
         }
@@ -591,25 +800,28 @@ impl Timing {
         } else {
             reached
         };
-        if let Timing::Variable(panel) = self {
-            panel.flip(ready, presented.seq, presented.at);
+        let own = self.own(presented.seq);
+        if let Cadence::Variable(panel) = &mut self.cadence {
+            panel.flip(ready, own, presented.at);
         }
         presented
     }
 
     /// The refresh `wp_presentation` gives: the period, or a VRR panel's shortest refresh.
     pub fn refresh(&self, period: Duration) -> Refresh {
-        match self {
-            Timing::Fixed(_) => Refresh::Fixed(period),
-            Timing::Variable(panel) => Refresh::Variable(panel.shortest()),
+        match &self.cadence {
+            Cadence::Fixed(_) => Refresh::Fixed(period),
+            Cadence::Variable(panel) => Refresh::Variable(panel.shortest()),
         }
     }
 }
 
-/// An output's refresh boundaries: boundary 0 is its creation, and boundary `k` comes `k`
-/// periods later, to the nanosecond below, computed from the rate so that errors never add up.
+/// An output's refresh boundaries at one rate: boundary 0 is when they were made, and boundary
+/// `k` comes `k` periods later, to the nanosecond below, computed from the rate so that errors
+/// never add up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Boundaries {
+    /// When they were made: the output's creation, or the last change of its rate.
     pub created_at: Duration,
     pub refresh_millihertz: u32,
 }

@@ -134,6 +134,10 @@ pub(super) struct X11Window {
     state: Option<NetState>,
     /// The size last given to the layout, in logical units.
     committed: Option<Size>,
+    /// Yuna told it a size while the layout awaits its commit, after its output's change of mode
+    /// asked it another size: its next commit reaches the layout whatever its size. X11
+    /// acknowledges no configure, so the first commit after it answers.
+    size_asked: bool,
     /// Where it is drawn while it is an override-redirect window shown (`menus.rs`).
     pub(super) menu: Option<MenuPlace>,
     /// When its surface was last called back while it was a menu no output drew.
@@ -436,6 +440,7 @@ impl State {
                             asked: None,
                             state: None,
                             committed: None,
+                            size_asked: false,
                             menu: None,
                             menu_frame_sent: None,
                             waits: Waits::default(),
@@ -720,7 +725,10 @@ impl State {
     /// its size and limits while it is open, and closes without a buffer.
     pub(crate) fn x11_toplevel_committed(&mut self, root: &WlSurface, mapped: bool, buffer: bool) {
         match (mapped, buffer) {
-            (true, true) => self.x11_update_window(root),
+            (true, true) => {
+                self.x11_answer_size_asked(root);
+                self.x11_update_window(root);
+            }
             (true, false) => {
                 self.close(root);
                 // It left the layout though X11 still maps it: its menus go to the rules again.
@@ -735,6 +743,24 @@ impl State {
             }
             (false, true) => self.x11_try_open(root),
             (false, false) => {}
+        }
+    }
+
+    /// A commit of the open X11 window of `root` that answers the size its output's change of
+    /// mode asked: the size it last gave the layout is forgotten, so that
+    /// [`State::x11_update_window`] gives it again, changed or not.
+    fn x11_answer_size_asked(&mut self, root: &WlSurface) {
+        let Some(x11) = self
+            .toplevels
+            .get(&root.id())
+            .and_then(|toplevel| toplevel.x11().cloned())
+        else {
+            return;
+        };
+        if let Some(record) = self.x11_window_mut(x11.server, x11.window)
+            && std::mem::take(&mut record.size_asked)
+        {
+            record.committed = None;
         }
     }
 
@@ -873,6 +899,7 @@ impl State {
             x11_window.requested = false;
             x11_window.state = None;
             x11_window.committed = None;
+            x11_window.size_asked = false;
             x11_window.asked = None;
             // Its manager deletes `_NET_WM_STATE` at withdrawal; the property's own change may
             // come after the window asks to be mapped again.
@@ -1129,12 +1156,20 @@ impl State {
             _ => None,
         };
         let set_state = Some(state) != x11_window.state || owed;
+        let awaits = self
+            .toplevels
+            .get(&x11.surface.id())
+            .and_then(|toplevel| toplevel.window)
+            .is_some_and(|window| self.layout.awaits_commit(window));
         if let Some(x11_window) = self.x11_window_mut(x11.server, x11.window) {
             if set_state {
                 x11_window.state = Some(state);
             }
             if placed.is_some() && !told.hidden {
                 x11_window.asked = told.size;
+                // Configured to it, or kept at a rectangle that already gives it, as an
+                // emulated mode's: either way its next commit is its answer.
+                x11_window.size_asked |= awaits;
             }
         }
         if let Some(rect) = configure {

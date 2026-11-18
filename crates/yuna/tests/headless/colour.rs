@@ -318,6 +318,60 @@ fn a_windows_preferred_description_follows_its_workspaces_output() {
     }
 }
 
+/// HDR turned off on an output, then on again, gives it a new description each time: each
+/// `wp_color_management_output_v1` of it is told `image_description_changed`, its description
+/// asked again is the new one, and a window shown on it is told its preferred description
+/// changed, once each time. The other output's objects are told nothing.
+#[test]
+fn hdr_turned_off_and_on_gives_an_output_new_colours_and_tells_them() {
+    let mut compositor = compositor();
+    let mut colour = ColourClient::connect(&mut compositor, OWNER_SEAT, 3);
+    let hdr_before = colour.output_description(0);
+    colour.output_description(1);
+    let window = mapped_window(&mut compositor, &mut colour);
+    let surface = colour.client.window(window).surface.clone();
+    let feedback = colour.feedback(&surface);
+    colour.roundtrip(&mut compositor);
+    let hdr_before = colour.events(hdr_before).ready.expect("ready");
+    assert_eq!(colour.state.output_description_changes, 0);
+
+    let sdr_mode = OutputMode::new(1920, 1080, 60.0, 1.0).expect("a mode");
+    compositor
+        .configure_output(HDR_OUTPUT, sdr_mode)
+        .expect("HDR turned off");
+    colour.roundtrip(&mut compositor);
+    assert_eq!(colour.state.output_description_changes, 1);
+    let now_sdr = colour.output_description(0);
+    colour.roundtrip(&mut compositor);
+    colour.information(now_sdr);
+    colour.roundtrip(&mut compositor);
+    let events = colour.events(now_sdr).clone();
+    let sdr_identity = events.ready.expect("ready");
+    assert_ne!(sdr_identity, hdr_before);
+    let info = events.information.expect("information");
+    assert_eq!(info.tf_named, Some(TransferFunction::Gamma22 as u32));
+    run_armed_deadlines(&mut compositor);
+    colour.roundtrip(&mut compositor);
+    assert_eq!(colour.preferred_changes(feedback), [sdr_identity]);
+
+    compositor
+        .configure_output(HDR_OUTPUT, sdr_mode.with_hdr(PG32UCDM))
+        .expect("HDR turned on");
+    colour.roundtrip(&mut compositor);
+    // Two objects of the HDR output now, each told.
+    assert_eq!(colour.state.output_description_changes, 3);
+    let hdr_again = colour.output_description(0);
+    colour.roundtrip(&mut compositor);
+    let hdr_identity = colour.events(hdr_again).ready.expect("ready");
+    assert!(hdr_identity != hdr_before && hdr_identity != sdr_identity);
+    run_armed_deadlines(&mut compositor);
+    colour.roundtrip(&mut compositor);
+    assert_eq!(
+        colour.preferred_changes(feedback),
+        [sdr_identity, hdr_identity]
+    );
+}
+
 #[test]
 fn a_removed_outputs_description_fails_at_once() {
     let mut compositor = compositor();

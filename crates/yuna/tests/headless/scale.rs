@@ -540,3 +540,77 @@ fn a_viewports_nonsense_ends_its_client_alone() {
     advance_to(&mut compositor, &mut staying, boundary(start, k));
     assert_rests(&mut compositor);
 }
+
+/// On the default output, at scale 1.5, a window and its popup are told 180. The output's scale
+/// changes to 2, its pixels kept: both are told 240 at once, before the configure that gives the
+/// window its place in the output's 1920 × 1080 units, half its width less the gaps, 936 × 1048
+/// at (16, 16); their buffer scale, 2 both times, is not sent again, and `wl_output` says 2.
+/// The client draws at the new scale, and its window sits there.
+#[test]
+fn a_new_scale_is_told_before_the_configure_that_places_the_window_again() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let w = client.create_window();
+    client.get_fractional_scale(w);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    client.ack(w);
+    client.attach(w, TILE.0, TILE.1, RED);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    let p = client.create_popup(Parent::Window(w), menu());
+    client.get_popup_fractional_scale(p);
+    client.roundtrip(&mut compositor);
+    assert_eq!(client.window(w).preferred_scales, vec![180]);
+    assert_eq!(client.popup(p).preferred_scales, vec![180]);
+    let configures = client.window(w).configures.len();
+
+    compositor
+        .configure_output(
+            OUTPUT,
+            OutputMode::new(3840, 2160, 240.0, 2.0).expect("a valid mode"),
+        )
+        .expect("the output takes the scale");
+    client.roundtrip(&mut compositor);
+    let window = client.window(w);
+    assert_eq!(window.preferred_scales, vec![180, 240]);
+    assert_eq!(window.preferred_buffer_scales, vec![2]);
+    assert_eq!(client.popup(p).preferred_scales, vec![180, 240]);
+    assert_eq!(client.popup(p).preferred_buffer_scales, vec![2]);
+    assert_eq!(window.configures.len(), configures, "placed at the refresh");
+    let scales: Vec<i32> = client
+        .state
+        .output_scales
+        .iter()
+        .map(|&(_, scale)| scale)
+        .collect();
+    assert_eq!(scales, vec![2, 2]);
+
+    crate::run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    let placed = client
+        .window(w)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    assert_eq!((placed.width, placed.height), (936, 1048));
+    assert_eq!(placed.preferred_scales_before, 2);
+    client.ack(w);
+    client.get_viewport(w);
+    client.attach(w, 936 * 2, 1048 * 2, RED);
+    client.set_viewport_destination(w, 936, 1048);
+    client.commit(w);
+    client.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    let rect = compositor
+        .layout()
+        .arrange(OUTPUT)
+        .expect("the output exists")[0]
+        .rect;
+    assert_eq!(
+        (rect.x, rect.y, rect.w, rect.h),
+        (16.0, 16.0, 936.0, 1048.0)
+    );
+}

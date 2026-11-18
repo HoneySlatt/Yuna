@@ -59,7 +59,7 @@
     "title": "Seats"
   },
   {
-    "description": "List, create or remove a seat's virtual outputs: screens no monitor shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's focused output. Coordinates are logical: physical pixels divided by the scale. A seat keeps one output at least. list gives each output's VRR range in Hz and the monitor whose HDR colours it announces, each null when it has none.",
+    "description": "List, create, configure or remove a seat's virtual outputs: screens no monitor shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's focused output. Coordinates are logical: physical pixels divided by the scale. A seat keeps one output at least. list gives each output's VRR range in Hz and the monitor whose HDR colours it announces, each null when it has none. configure changes an output as a monitor set to another mode, whole or not at all: it keeps its top-left corner, the seat's outputs on its right move with its right edge so that none overlaps it, and its windows are placed again in it; X11 windows keep the scale their X server started with. create and configure answer with the output as list gives it.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -67,31 +67,32 @@
           "enum": [
             "list",
             "create",
+            "configure",
             "remove"
           ],
           "type": "string"
         },
         "hdr": {
-          "description": "create: true announces the HDR colours of the owner's monitor, a PG32UCDM; false, SDR; by default as the server's default output",
+          "description": "create: true announces the HDR colours of the owner's monitor, a PG32UCDM; false, SDR; by default as the server's default output; configure: the output's own by default",
           "type": "boolean"
         },
         "height": {
-          "description": "create: physical pixels; default 2160",
+          "description": "create: physical pixels; default 2160; configure: the output's own by default",
           "minimum": 1,
           "type": "integer"
         },
         "output": {
-          "description": "remove: the output's id",
+          "description": "remove, configure: the output's id",
           "type": "integer"
         },
         "rate": {
-          "description": "create: refreshes a second; default 240",
+          "description": "create: refreshes a second; default 240; configure: the output's own by default",
           "maximum": 1000,
           "minimum": 1,
           "type": "number"
         },
         "scale": {
-          "description": "create: physical pixels per logical unit; default 1.5",
+          "description": "create: physical pixels per logical unit; default 1.5; configure: the output's own by default",
           "maximum": 8,
           "minimum": 0.25,
           "type": "number"
@@ -102,13 +103,13 @@
           "type": "integer"
         },
         "vrr_min": {
-          "description": "create: run under VRR, from this many refreshes a second up to rate, which must be at least twice it; by default a fixed rate, or the server's default output's range when rate is left out too",
+          "description": "create: run under VRR, from this many refreshes a second up to rate, which must be at least twice it; by default a fixed rate, or the server's default output's range when rate is left out too; configure: the output's own by default, kept when rate changes; 0 runs it at a fixed rate",
           "maximum": 500,
-          "minimum": 1,
+          "minimum": 0,
           "type": "number"
         },
         "width": {
-          "description": "create: physical pixels; default 3840",
+          "description": "create: physical pixels; default 3840; configure: the output's own by default",
           "minimum": 1,
           "type": "integer"
         }

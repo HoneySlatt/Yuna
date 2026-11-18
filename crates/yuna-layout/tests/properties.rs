@@ -1,6 +1,6 @@
 //! Property tests: random sequences of operations, over two seats and up to three outputs of
-//! different sizes and scales, with ids drawn from small ranges so that stale and duplicate ids
-//! occur. After every operation:
+//! different sizes and scales, added, removed and given other modes, with ids drawn from small
+//! ranges so that stale and duplicate ids occur. After every operation:
 //!
 //! - every invariant of [`Layout::check_invariants`] holds;
 //! - what every other seat's outputs show, and what it focuses, is unchanged: one seat never
@@ -49,6 +49,11 @@ enum Op {
         x: i16,
     },
     RemoveOutput(u64),
+    ConfigureOutput {
+        output: u64,
+        scale: usize,
+        size: usize,
+    },
     FocusOutput {
         seat: u64,
         output: u64,
@@ -221,6 +226,8 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (seat(), output(), 0..SCALES.len(), 0..SIZES.len(), -4000..4000i16)
             .prop_map(|(seat, output, scale, size, x)| Op::AddOutput { seat, output, scale, size, x }),
         1 => output().prop_map(Op::RemoveOutput),
+        1 => (output(), 0..SCALES.len(), 0..SIZES.len())
+            .prop_map(|(output, scale, size)| Op::ConfigureOutput { output, scale, size }),
         1 => (seat(), output()).prop_map(|(seat, output)| Op::FocusOutput { seat, output }),
         1 => (seat(), name.clone(), proptest::option::of(output()))
             .prop_map(|(seat, name, output)| Op::AddWorkspace { seat, name, output }),
@@ -327,7 +334,7 @@ fn acting_seat(layout: &Layout, op: &Op) -> Option<SeatId> {
         | Op::MoveToWorkspaceRelative { seat, .. }
         | Op::MoveToSpecial { seat, .. }
         | Op::Open { seat, .. } => Some(SeatId(seat)),
-        Op::RemoveOutput(o) => output_seat(o),
+        Op::RemoveOutput(o) | Op::ConfigureOutput { output: o, .. } => output_seat(o),
         Op::Close(w)
         | Op::FocusWindow(w)
         | Op::SetFloating(w, _)
@@ -662,6 +669,16 @@ fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
             },
         ),
         Op::RemoveOutput(o) => layout.remove_output(OutputId(o)),
+        Op::ConfigureOutput {
+            output,
+            scale,
+            size,
+        } => layout.configure_output(
+            OutputId(output),
+            SIZES[size].0,
+            SIZES[size].1,
+            SCALES[scale],
+        ),
         Op::FocusOutput { seat, output } => layout.focus_output(s(seat), OutputId(output)),
         Op::AddWorkspace { seat, name, output } => {
             layout.add_workspace(s(seat), NAMES[name], output.map(OutputId))

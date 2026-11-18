@@ -812,3 +812,238 @@ fn seats_through_mcp_keep_to_their_own() {
     assert!(text.contains("no seat 2"), "{text}");
     assert_eq!(mcp.server.compositor().windows(), Vec::new());
 }
+
+/// `outputs configure` gives an output another mode, each value left out its own, and answers
+/// with the output as `list` gives it; the seat's output on its right moves with its right
+/// edge. A rate alone keeps its VRR range, which a rate too low for it refuses. A mode refused
+/// (scale 0, a rate past 1,000 Hz, a range too narrow, an unknown output, a call without its
+/// output) is a tool error, and the outputs stay as they were.
+#[test]
+fn outputs_are_configured_whole_or_not_at_all() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let created = mcp.call(
+        "seat",
+        json!({"action": "create", "width": 1920, "height": 1080, "rate": 60, "scale": 1}),
+    );
+    let seat = created["structuredContent"]["seat"]
+        .as_u64()
+        .expect("a handle");
+    let side = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 640, "height": 480, "rate": 60,
+               "scale": 1}),
+    );
+    assert_eq!(
+        side["structuredContent"]["output"]["logical"]["x"],
+        json!(1920.0)
+    );
+    let configure = |mcp: &mut Mcp, values: Value| {
+        let mut arguments = json!({"action": "configure", "seat": seat, "output": 1});
+        for (key, value) in values.as_object().expect("an object") {
+            arguments[key] = value.clone();
+        }
+        mcp.call("outputs", arguments)
+    };
+    let side_x = |mcp: &mut Mcp| {
+        let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+        listed["structuredContent"]["outputs"][1]["logical"]["x"].clone()
+    };
+
+    let larger = configure(&mut mcp, json!({"width": 2560, "height": 1440}));
+    assert_eq!(larger["isError"], json!(false), "{larger}");
+    let output = &larger["structuredContent"]["output"];
+    let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    assert_eq!(output, &listed["structuredContent"]["outputs"][0]);
+    assert_eq!(
+        (
+            &output["width"],
+            &output["height"],
+            &output["refresh_mhz"],
+            &output["scale"]
+        ),
+        (&json!(2560), &json!(1440), &json!(60_000), &json!(1.0))
+    );
+    assert_eq!(
+        output["logical"],
+        json!({"x": 0.0, "y": 0.0, "width": 2560.0, "height": 1440.0})
+    );
+    assert_eq!(side_x(&mut mcp), json!(2560.0));
+
+    let scaled = configure(&mut mcp, json!({"scale": 2}));
+    let output = &scaled["structuredContent"]["output"];
+    assert_eq!(output["width"], json!(2560));
+    assert_eq!(output["logical"]["width"], json!(1280.0));
+    assert_eq!(side_x(&mut mcp), json!(1280.0));
+
+    let vrr = configure(&mut mcp, json!({"rate": 120, "vrr_min": 48, "hdr": true}));
+    let output = &vrr["structuredContent"]["output"];
+    assert_eq!(output["vrr"], json!({"min": 48.0, "max": 120.0}), "{vrr}");
+    assert_eq!(output["hdr"], json!("PG32UCDM"));
+    let faster = configure(&mut mcp, json!({"rate": 144}));
+    let output = &faster["structuredContent"]["output"];
+    assert_eq!(
+        output["vrr"],
+        json!({"min": 48.0, "max": 144.0}),
+        "{faster}"
+    );
+    assert_eq!(output["hdr"], json!("PG32UCDM"));
+
+    let before = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    for (values, reason) in [
+        (json!({"scale": 0}), "scale of 0"),
+        (json!({"rate": 5000}), "5000 Hz"),
+        (json!({"rate": 60}), "VRR range of 48 to 60 Hz"),
+        (json!({"vrr_min": 100}), "VRR range of 100 to 144 Hz"),
+        (json!({"output": 9}), "no output 9"),
+    ] {
+        let refused = configure(&mut mcp, values.clone());
+        assert_eq!(refused["isError"], json!(true), "{values}: {refused}");
+        let text = refused["content"][0]["text"].as_str().expect("a reason");
+        assert!(text.contains(reason), "{values}: {text}");
+    }
+    let without_output = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "scale": 1}),
+    );
+    assert_eq!(without_output["isError"], json!(true));
+    let after = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    assert_eq!(after["structuredContent"], before["structuredContent"]);
+}
+
+/// An output configured while a `windows` call waits leaves the call waiting, unanswered until
+/// its window comes; it is then answered with the window where the new mode places it: at
+/// scale 2, half of 1920 units less the gaps, 936 wide.
+#[test]
+fn a_waiting_windows_call_outlives_its_outputs_new_mode() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 400, "method": "tools/call",
+                      "params": modern(json!({"name": "windows", "arguments": {
+                          "seat": seat, "app_id": "org.example.Late", "wait_ms": 10_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+
+    let configured = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "scale": 2}),
+    );
+    assert_eq!(configured["isError"], json!(false), "{configured}");
+    assert_eq!(
+        configured["structuredContent"]["output"]["logical"]["width"],
+        json!(1920.0)
+    );
+    crate::run_armed_deadlines(mcp.server.compositor());
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = client.create_window();
+    client.set_app_id_and_title(window, "org.example.Late", "Late");
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    let asked = client
+        .window(window)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    assert_eq!((asked.width, asked.height), (936, 1048));
+    client.ack(window);
+    client.attach(window, asked.width, asked.height, RED);
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    crate::run_armed_deadlines(mcp.server.compositor());
+    let found = mcp.reply_to(400);
+    let windows = &found["result"]["structuredContent"]["windows"];
+    assert_eq!(windows[0]["app_id"], json!("org.example.Late"));
+    assert_eq!(
+        windows[0]["rect"],
+        json!({"x": 16.0, "y": 16.0, "width": 936.0, "height": 1048.0})
+    );
+}
+
+/// `outputs configure` with `vrr_min: 0` runs a VRR output at a fixed rate, which then takes a
+/// rate below twice its old range's least; `create` refuses 0.
+#[test]
+fn vrr_min_0_turns_vrr_off_in_configure_alone() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let created = mcp.call(
+        "seat",
+        json!({"action": "create", "width": 1920, "height": 1080, "rate": 144, "scale": 1,
+               "vrr_min": 48}),
+    );
+    let seat = created["structuredContent"]["seat"]
+        .as_u64()
+        .expect("a handle");
+    let low = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "rate": 60}),
+    );
+    assert_eq!(low["isError"], json!(true), "{low}");
+
+    let off = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "vrr_min": 0}),
+    );
+    let output = &off["structuredContent"]["output"];
+    assert_eq!(output["vrr"], Value::Null, "{off}");
+    assert_eq!(output["refresh_mhz"], json!(144_000));
+    let low = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "rate": 60}),
+    );
+    let output = &low["structuredContent"]["output"];
+    assert_eq!(output["refresh_mhz"], json!(60_000), "{low}");
+    assert_eq!(output["vrr"], Value::Null);
+    let on = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "vrr_min": 24}),
+    );
+    assert_eq!(
+        on["structuredContent"]["output"]["vrr"],
+        json!({"min": 24.0, "max": 60.0}),
+        "{on}"
+    );
+
+    let refused = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "vrr_min": 0}),
+    );
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+}
+
+/// A `windows` call waiting for a window that is mapped but not yet placed is answered at the
+/// arrangement that places it, after its output's change: with the place the new mode gives
+/// it, at scale 2 half of 1920 units less the gaps, though the window opened at scale 1.5.
+#[test]
+fn a_waiting_windows_call_on_a_mapped_window_gets_its_place_in_the_new_mode() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = client.create_window();
+    client.set_app_id_and_title(window, "org.example.Mapped", "Mapped");
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    client.ack(window);
+    client.attach(window, crate::TILE.0, crate::TILE.1, RED);
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    // Mapped; placed only at the next refresh, which the manual clock has not reached.
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 410, "method": "tools/call",
+                      "params": modern(json!({"name": "windows", "arguments": {
+                          "seat": seat, "app_id": "org.example.Mapped", "wait_ms": 10_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+
+    let configured = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": 1, "scale": 2}),
+    );
+    assert_eq!(configured["isError"], json!(false), "{configured}");
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    crate::run_armed_deadlines(mcp.server.compositor());
+    let found = mcp.reply_to(410);
+    let windows = &found["result"]["structuredContent"]["windows"];
+    assert_eq!(windows[0]["app_id"], json!("org.example.Mapped"));
+    assert_eq!(
+        windows[0]["place"],
+        json!({"x": 16.0, "y": 16.0, "width": 936.0, "height": 1048.0})
+    );
+}

@@ -79,6 +79,9 @@ pub struct ColourState {
         wp_image_description_v1::WpImageDescriptionV1,
         DescriptionEvents,
     )>,
+    /// How many `image_description_changed` its `wp_color_management_output_v1` objects were
+    /// sent, all together.
+    pub output_description_changes: usize,
     /// Each feedback object, and the identities its `preferred_changed` gave, in order.
     feedbacks: Vec<(
         wp_color_management_surface_feedback_v1::WpColorManagementSurfaceFeedbackV1,
@@ -326,13 +329,16 @@ impl Dispatch<wp_color_manager_v1::WpColorManagerV1, ()> for ColourState {
 
 impl Dispatch<wp_color_management_output_v1::WpColorManagementOutputV1, ()> for ColourState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &wp_color_management_output_v1::WpColorManagementOutputV1,
-        _: wp_color_management_output_v1::Event,
+        event: wp_color_management_output_v1::Event,
         _: &(),
         _: &wayland_client::Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wp_color_management_output_v1::Event::ImageDescriptionChanged = event {
+            state.output_description_changes += 1;
+        }
     }
 }
 
