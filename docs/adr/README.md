@@ -44,7 +44,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0022](0022-the-headless-backend-in-yuna.md) | The headless backend: Yuna's own code, drawn on llvmpipe by default | Accepted; amends 0011; amended by 0029 |
 | [0023](0023-frames-presentation-and-the-clock.md) | Frames, presentation times and the clock | Accepted; amended by 0031, 0046, 0054 and 0058 |
 | [0024](0024-no-title-bars.md) | No title bars: decorations on the server's side | Accepted |
-| [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029 and 0050 |
+| [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Accepted; amended by 0029, 0050 and 0104 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Accepted |
 | [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Superseded by 0042 |
 | [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted |
@@ -123,3 +123,5 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0101](0101-an-agents-clipboard-through-mcp.md) | An agent's clipboard through MCP | Accepted |
 | [0102](0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md) | Drag and drop between X11 and Wayland: a drag session beside Smithay's grabs | Accepted |
 | [0103](0103-crates-updates-wait-three-days.md) | Crates' updates wait three days | Accepted |
+| [0104](0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md) | Stage 1's exit: Opium in Aerith's place, and its exceptions written | Accepted; amends 0025 |
+| [0105](0105-an-agents-programs-on-a-throwaway-home.md) | An agent's programs on a throwaway home | Accepted |

@@ -2,7 +2,8 @@
 
 - Status: Accepted; amended by [0029](0029-the-rest-of-animated-applications.md) (when an
   animated application's rest is checked; SlimeEngine's job a workflow of its own),
-  [0050](0050-mpv-in-the-applications-tests.md) (mpv)
+  [0050](0050-mpv-in-the-applications-tests.md) (mpv),
+  [0104](0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md) (Opium in Stage 1's exit)
 - Date: 2026-11-12
 
 ## Context

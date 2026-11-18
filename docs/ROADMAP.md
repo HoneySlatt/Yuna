@@ -212,12 +212,13 @@ audit.
   `docs/client-needs.md`; every protocol in `docs/protocols.md`, kept true by a test;
   `scripts/test-check.sh`.
 
-**Exit.** SlimeEngine's and Aerith's windowed examples, and uwui's once it has some
-([ADR-0025](adr/0025-applications-in-ci.md)), run in Yuna headless in CI, driven by an agent
-through MCP; every layout behaviour of ADR-0005 has its tests, except terminal swallowing
-and per-application rules, which need clients and come at Stage 2; the HDR prototype has its
-verdict; the rivals' figures and the Vulkan prototype's are in `docs/measurements.md`; the owner's
-other projects can add Yuna to their shells and drive programs in it as they drive them in sway.
+**Exit.** SlimeEngine's windowed examples and Opium's window, and uwui's once it has some
+([ADR-0025](adr/0025-applications-in-ci.md), [ADR-0104](adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)),
+run in Yuna headless in CI, driven by an agent through MCP; every layout behaviour of ADR-0005
+has its tests, except terminal swallowing, per-application rules and tabbed columns, which come at
+Stage 2; the HDR prototype has its verdict; the rivals' figures and the Vulkan prototype's are in
+`docs/measurements.md`; the owner's other projects can add Yuna to their shells and drive programs
+in it as they drive them in sway, but for sway's IPC, which Yuna does not offer.
 
 ### Stage 2 — The desktop → 0.2
 
