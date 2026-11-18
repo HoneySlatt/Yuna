@@ -87,6 +87,9 @@ pub(crate) struct SeatData {
     /// The clients connected through its socket, or for it through `connect_client_to`, while
     /// they are served.
     pub clients: Vec<ClientId>,
+    /// The commits of its clients' surfaces: a seat's accessibility call walks its trees again
+    /// when they move, never for another seat's drawing.
+    pub commits: u64,
 }
 
 impl SeatData {
@@ -162,6 +165,7 @@ impl SeatData {
             pointer_origin: None,
             keymap: None,
             clients: Vec::new(),
+            commits: 0,
         }
     }
 }

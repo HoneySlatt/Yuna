@@ -798,3 +798,18 @@ fn a_closed_seats_global_is_destroyed_after_its_lifetime_on_yunas_clock() {
         "the global was destroyed: binding it is a protocol error"
     );
 }
+
+/// Each seat's commits are counted apart: what a seat's waiting accessibility call walks its
+/// trees again for, never another seat's drawing.
+#[test]
+fn each_seats_commits_are_counted_apart() {
+    let (mut compositor, a, b) = two_seats();
+    let before = (compositor.seat_commits(a), compositor.seat_commits(b));
+    let mut on_a = InputClient::connect(&mut compositor, a, "agent-2");
+    open(&mut on_a, &mut compositor);
+    settle(&mut compositor);
+    let after = (compositor.seat_commits(a), compositor.seat_commits(b));
+    assert!(after.0 > before.0, "{before:?} -> {after:?}");
+    assert_eq!(after.1, before.1, "seat B counted seat A's commits");
+    assert!(compositor.counters().commits >= after.0);
+}

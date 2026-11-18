@@ -69,6 +69,11 @@
         # Tells scripts/check.sh that it runs in this shell.
         YUNA_DEV_SHELL = "1";
 
+        # The dbus-daemon Yuna runs for each agent's seat's accessibility bus, by its absolute
+        # path, nixpkgs' own, never the host's (crates/yuna/src/dbus/mod.rs); the package's
+        # wrapper sets the same.
+        YUNA_DBUS_DAEMON = "${pkgs.dbus}/bin/dbus-daemon";
+
         # Yuna draws with EGL, loaded at run time (ADR-0022): libglvnd's dispatcher, which this
         # file points at the shell's own Mesa only, so that Yuna never loads the host's drivers.
         LD_LIBRARY_PATH = "${pkgs.libglvnd}/lib";
@@ -178,6 +183,7 @@
             --set YUNA_WRAPPED_VARIABLES "PATH LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES" \
             --prefix LD_LIBRARY_PATH : ${pkgs.libglvnd}/lib \
             --set __EGL_VENDOR_LIBRARY_FILENAMES ${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json \
+            --set YUNA_DBUS_DAEMON ${pkgs.dbus}/bin/dbus-daemon \
             --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.xwayland ]}
         '';
         meta = {

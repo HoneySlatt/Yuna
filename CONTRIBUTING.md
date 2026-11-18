@@ -22,6 +22,9 @@ The shell gives:
 - `lychee`, which checks the links between the Markdown files;
 - git, which the link check uses to list the Markdown files;
 - libxkbcommon, which Smithay's keyboard links;
+- `YUNA_DBUS_DAEMON`, the absolute path of nixpkgs' `dbus-daemon`, which Yuna runs for each
+  agent's seat's accessibility bus and the D-Bus code's tests run, never the host's; Yuna's
+  package sets the same;
 - `YUNA_DEV_SHELL`, which `scripts/check.sh` requires;
 - what Yuna draws with, loaded at run time: `LD_LIBRARY_PATH` names libglvnd's EGL, and
   `__EGL_VENDOR_LIBRARY_FILENAMES` the shell's own Mesa, so that Yuna and its tests draw on that
@@ -325,10 +328,12 @@ What other programs and projects rely on
 
 - the command line: `yuna --headless`, `yuna mcp`, their options, the `WAYLAND_DISPLAY=<socket>`
   line printed at start, the exit codes;
-- the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`) and gives its programs (`YUNA_SEAT`);
+- the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`, `YUNA_DBUS_DAEMON`) and gives its
+  programs (`YUNA_SEAT`; with accessibility, `AT_SPI_BUS_ADDRESS` and the switches that turn
+  toolkits' accessibility on; without, `NO_AT_BRIDGE` and `GTK_A11Y`);
 - the MCP server: its revisions, its tools' names, arguments and results;
 - the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
-  draws with its own Mesa and finds Xwayland ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md));
+  draws with its own Mesa and finds Xwayland and dbus-daemon ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md));
 - Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
   `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 

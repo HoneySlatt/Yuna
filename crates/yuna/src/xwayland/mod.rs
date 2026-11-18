@@ -48,9 +48,7 @@ mod windows;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs;
 use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -64,6 +62,7 @@ use smithay::reexports::rustix::io::Errno;
 use smithay::reexports::rustix::process::{Pid, WaitStatus};
 use yuna_layout::SeatId;
 
+use crate::process::{End, find_program, kill, kill_and_reap, reap};
 use crate::render::Device;
 use crate::state::State;
 pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
@@ -74,7 +73,6 @@ pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
 use manager::{Commands, ManagerEvent, Stop};
 pub(crate) use menus::ShownMenus;
 pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
-use server::End;
 pub(crate) use shell::{SURFACE_ROLE, shell_global};
 pub(crate) use windows::{X11Client, X11Toplevel, X11Windows};
 
@@ -272,7 +270,7 @@ impl XServer {
     /// Ends it: SIGKILL, its sources but its pidfd's removed, its manager let go. Its pidfd's
     /// source reaps it, and its exit is handled then.
     fn end(&mut self, handle: &LoopHandle<'static, State>) {
-        server::kill(&self.pidfd);
+        kill(&self.pidfd);
         self.release(handle);
     }
 
@@ -532,7 +530,7 @@ impl Xwayland {
         self.next_server += 1;
         if let Err(error) = reap_on_exit(&spawned.pidfd, id, handle) {
             tracing::warn!(%error, seat = seat.0, "Xwayland cannot be watched: it ends");
-            server::kill_and_reap(&spawned.pidfd);
+            kill_and_reap(&spawned.pidfd);
             self.after_server(seat, true, handle);
             return;
         }
@@ -814,7 +812,7 @@ impl Drop for Xwayland {
     /// displays' files go after.
     fn drop(&mut self) {
         for xserver in self.servers.values() {
-            server::kill_and_reap(&xserver.pidfd);
+            kill_and_reap(&xserver.pidfd);
         }
     }
 }
@@ -871,7 +869,7 @@ fn reap_on_exit(
         .insert_source(
             Generic::new(pidfd, Interest::READ, Mode::Level),
             move |_, pidfd, state| {
-                let Some(end) = server::reap(pidfd.as_fd()) else {
+                let Some(end) = reap(pidfd.as_fd()) else {
                     return Ok(PostAction::Continue);
                 };
                 state.woke = true;
@@ -942,20 +940,11 @@ fn listen_to_manager(
         .map_err(|error| error.error.to_string())
 }
 
-/// The first executable file named `name` in the folders of `search_path`.
-fn find_program(name: &str, search_path: &OsString) -> Option<PathBuf> {
-    std::env::split_paths(search_path)
-        .filter(|folder| folder.is_absolute())
-        .map(|folder| folder.join(name))
-        .find(|path| {
-            fs::metadata(path).is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     #[test]

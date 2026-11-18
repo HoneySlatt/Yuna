@@ -372,6 +372,12 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
+        let seat = surface
+            .client()
+            .and_then(|client| client.get_data::<ClientState>().map(|state| state.seat));
+        if let Some(seat) = seat.and_then(|seat| self.seat_mut(seat)) {
+            seat.commits += 1;
+        }
         // Read before the buffer handler takes them: a buffer attached or removed anywhere in the
         // tree this commit applies is something new to draw. Damage alone is not: Smithay keeps
         // it until a buffer comes, and draws nothing new for it.

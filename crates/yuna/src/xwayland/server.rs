@@ -16,28 +16,24 @@
 //! makes its opener its master. X11 programs that need OpenGL get it with `--gpu` alone.
 //!
 //! Its exit is read through a pidfd, which the event loop watches and which reaps it, in both
-//! headless modes and in tests alike. Yuna handles SIGCHLD only in `yuna mcp`, whose reaping of
-//! every child may take Xwayland first: that reaping then gives the compositor its status
+//! headless modes and in tests alike, through what every process Yuna starts shares
+//! (`process.rs`). Yuna handles SIGCHLD only in `yuna mcp`, whose reaping of every child may take
+//! Xwayland first: that reaping then gives the compositor its status
 //! ([`Compositor::child_reaped`](crate::Compositor::child_reaped)), and the pidfd finds it
-//! reaped, its end then unknown and come after. A pidfd names this one process, so that a signal
-//! sent through it never reaches a process that took its pid.
+//! reaped, its end then unknown and come after.
 
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use smithay::reexports::rustix;
-use smithay::reexports::rustix::io::{Errno, FdFlags};
 use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::process::{
-    Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, WaitStatus, pidfd_open,
-};
+use smithay::reexports::rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
 
 use super::display::Display;
-use crate::process::keep_descriptors_from_the_program;
+use crate::process::{give_descriptors, keep_descriptors_from_the_program};
 
 /// The variables of Yuna's environment Xwayland does not get: those that name a display, which
 /// Xwayland is, or a Wayland connection, which it gets through `WAYLAND_SOCKET`.
@@ -107,21 +103,10 @@ pub(crate) fn spawn(
     .into_iter()
     .chain(sockets.iter().map(|socket| socket.as_raw_fd()))
     .collect();
-    // SAFETY: the closure runs in the child between fork and exec, after the one that marks
-    // every descriptor close-on-exec (`pre_exec` closures run in the order they were added),
-    // where only async-signal-safe calls are sound: it makes one `fcntl` system call per
-    // descriptor through rustix, which allocates nothing, on numbers it was given, owned by
-    // values that live in the parent until `spawn` returns, so that they are open in the child.
-    unsafe {
-        command.pre_exec(move || {
-            for &fd in &given {
-                // SAFETY: `fd` is open in the child for the closure's whole run, as above.
-                let fd = BorrowedFd::borrow_raw(fd);
-                rustix::io::fcntl_setfd(fd, FdFlags::empty())?;
-            }
-            Ok(())
-        });
-    }
+    // SAFETY: each number is owned by a value above, `wayland_theirs`, `wm_theirs`,
+    // `displayfd_theirs` and `display`'s sockets, none of which is dropped or moved before
+    // `spawn` returns.
+    unsafe { give_descriptors(&mut command, given) };
     let child = command.spawn()?;
     // Its ends close here: Yuna sees `-displayfd` close, and the manager's connection end, when
     // Xwayland's do.
@@ -145,71 +130,4 @@ pub(crate) fn spawn(
         wm,
         displayfd,
     })
-}
-
-/// How an Xwayland ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum End {
-    /// It exited with this status: 0 when `-terminate` ended it, idle.
-    Exited(i32),
-    /// This signal ended it.
-    Killed(i32),
-    /// Another reaped it first: `yuna mcp`'s reaping of every child, which gave its status
-    /// to the compositor before.
-    Unknown,
-}
-
-impl End {
-    /// The end `status` tells, as `wait` gave it; none for a process stopped or continued.
-    pub(crate) fn of(status: WaitStatus) -> Option<End> {
-        match (status.exit_status(), status.terminating_signal()) {
-            (Some(code), _) => Some(End::Exited(code)),
-            (None, Some(signal)) => Some(End::Killed(signal)),
-            (None, None) => None,
-        }
-    }
-}
-
-/// Reaps the process of `pidfd` if it has ended: none while it runs.
-pub(crate) fn reap(pidfd: BorrowedFd<'_>) -> Option<End> {
-    loop {
-        match rustix::process::waitid(
-            WaitId::PidFd(pidfd),
-            WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
-        ) {
-            Ok(Some(status)) => {
-                return Some(match (status.exit_status(), status.terminating_signal()) {
-                    (Some(code), _) => End::Exited(code),
-                    (None, Some(signal)) => End::Killed(signal),
-                    (None, None) => End::Unknown,
-                });
-            }
-            Ok(None) => return None,
-            Err(Errno::INTR) => {}
-            // ECHILD: reaped already.
-            Err(_) => return Some(End::Unknown),
-        }
-    }
-}
-
-/// Ends the process of `pidfd` at once. A process that has ended is not signalled again, and
-/// never another that took its pid.
-pub(crate) fn kill(pidfd: impl AsFd) {
-    if let Err(error) = rustix::process::pidfd_send_signal(pidfd, Signal::KILL)
-        && error != Errno::SRCH
-    {
-        tracing::warn!(%error, "Xwayland could not be ended");
-    }
-}
-
-/// Ends the process of `pidfd` and waits until it is reaped: when the compositor drops, with no
-/// loop left to watch it. SIGKILL cannot be ignored: the wait is the kernel's tearing down.
-pub(crate) fn kill_and_reap(pidfd: &OwnedFd) {
-    kill(pidfd);
-    loop {
-        match rustix::process::waitid(WaitId::PidFd(pidfd.as_fd()), WaitIdOptions::EXITED) {
-            Err(Errno::INTR) => continue,
-            _ => return,
-        }
-    }
 }

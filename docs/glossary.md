@@ -2,6 +2,12 @@
 
 Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 
+- **Accessibility bus**: a D-Bus bus of an agent's seat of its own, on which programs started
+  with `accessibility: true` publish their accessibility trees and Yuna is the registry; its
+  `dbus-daemon` starts with the seat's first such program.
+- **Accessibility tree**: what a program's toolkit tells of its interface through AT-SPI: nodes,
+  each with a role, a name, states and extents, from an application's root down to its windows,
+  their widgets and their text.
 - **Achieved rate** (bench): the frames a second a compositor really drew in a cost window: its
   own exact count, else in `pacing` the frames it presented, else the frames window's capture, a
   lower bound. On wlroots' headless timer, a frame 4 ms after each commit, it is up to 250 for a
@@ -19,6 +25,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
   an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+- **AT-SPI**: the accessibility interface of Linux desktops, over D-Bus: GTK, Qt, the ATK bridge
+  of Firefox and Chromium, and AccessKit speak it; screen readers and Yuna's `accessibility` tool
+  read it.
 - **Bench shell**: `nix develop .#bench`, the development shell with the compositors and clients
   the rivals' bench runs, which CI's shell leaves out.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
@@ -65,6 +74,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   last, as niri does ([ADR-0018](adr/0018-workspaces.md)).
 - **EDID**: what a monitor tells the computer of itself: its modes, its VRR range, its colours
   and HDR luminances; the owner's monitor's give the HDR outputs' colours.
+- **Embed**: an AT-SPI program's announcement of its tree to the registry, `Socket.Embed`; GTK 4
+  publishes nothing until the registry has answered it.
 - **Equal work**: a rival run with its effects, wallpaper and XWayland off in the rivals' bench, so
   that compositors that draw more are compared on the same work
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
@@ -174,6 +185,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
   program, environment and configuration, how it is ready, stopped and driven, and how its frames
   are counted.
+- **Registry** (AT-SPI): the program that owns `org.a11y.atspi.Registry` on an accessibility bus
+  and knows the applications embedded; on an agent's seat, Yuna itself, without
+  `at-spi2-registryd`.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
   come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
   A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
@@ -235,6 +249,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   client, a new connection or the clock's timer. At rest there are none.
   In the rivals' bench, a voluntary context switch of a thread, which the kernel counts for any
   process: each time the thread slept, and was woken later.
+- **Window node**: in an accessibility tree, a window's own node, a child of its application's
+  root; Yuna places the nodes below it from its origin, and maps it to a window by its process
+  and title.
 - **Working area**: the part of an output tiled windows go in; the whole output until panels
   reserve zones of it.
 - **XWayland's scale**: S, the largest scale among a seat's outputs when its Xwayland started,

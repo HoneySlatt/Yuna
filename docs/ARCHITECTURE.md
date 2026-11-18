@@ -16,7 +16,8 @@ The parts, bottom up:
   behind, virtual [outputs](#outputs-added-changed-and-removed) with their
   [clock](#time-and-deadlines), drawn through Smithay's GLES renderer, on llvmpipe or the GPU's
   render node.
-- **The [MCP server](#the-mcp-server)** around it, for agents; the [program](#the-program),
+- **The [MCP server](#the-mcp-server)** around it, for agents, with each seat's
+  [accessibility bus](#accessibility); the [program](#the-program),
   `yuna --headless` and `yuna mcp`.
 - **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
   Yuna included, from outside.
@@ -62,7 +63,10 @@ One Cargo workspace; its crates live in `crates/`.
 - `yuna` → Smithay, at a pinned git revision, with only its `wayland_frontend`, `desktop` and
   `renderer_gl` features ([ADR-0011](adr/0011-built-on-smithay.md),
   [ADR-0022](adr/0022-the-headless-backend-in-yuna.md)); `tracing` and `tracing-subscriber` for
-  its logs; `serde`, with its derive, and `serde_json` for MCP's messages
+  its logs; zbus's `wire` module alone, without zbus's default features, for the D-Bus wire
+  format of the accessibility buses' messages, encoding and decoding only, under Yuna's own
+  connection ([Accessibility](#accessibility)); `serde`, with its derive, and `serde_json` for
+  MCP's messages
   ([ADR-0033](adr/0033-the-mcp-server.md)); `png` for a capture's image
   ([ADR-0034](adr/0034-captures.md)), which builds `miniz_oxide` twice, 0.8 for itself and 0.9
   for `flate2`; x11rb's `RustConnection`, the X11 protocol in Rust, for its X11 window manager
@@ -86,6 +90,10 @@ One Cargo workspace; its crates live in `crates/`.
   clients; Xwayland, which the rivals as shipped start; ffmpeg, for its clips; D-Bus's
   `dbus-run-session` and `dbus-daemon`; coreutils' `env`, and bash; `git`, for the commit it
   records; and the host's `systemd-run`, which makes each sandbox.
+- At run time, from the development shell and Yuna's package: `dbus-daemon`, nixpkgs' `dbus`, run
+  for each seat's accessibility bus, by the absolute path `YUNA_DBUS_DAEMON` gives, which both
+  set, else found on Yuna's `PATH`; the tests that give Yuna an environment of their own pass the
+  shell's `YUNA_DBUS_DAEMON` on.
 - At run time, from the development shell: libxkbcommon, linked; libglvnd's EGL and the shell's
   own Mesa, loaded, never the host's drivers; Xwayland, run, found on `PATH`.
 
@@ -1264,6 +1272,8 @@ standard input, one per line, and writes the replies to its standard output, not
 - `events.rs`: each agent seat's log of events, and how window and output events are told from
   what the compositor describes.
 - `image.rs`: a capture's PNG and its base64, made on a thread of its own.
+- `accessibility/`: each seat's accessibility bus and the `accessibility` tool's walks
+  ([Accessibility](#accessibility)).
 - `mod.rs`: `Server`, which holds the compositor and runs the tools.
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
@@ -1307,9 +1317,14 @@ window or program unknown there:
   slows them. `list` gives, for each program, the last protocol error Yuna closed one of its
   connections for, and how much of the time it may run (`run_percent`). Its description names
   `env: {"WAYLAND_DEBUG": "client"}`, which has a program write its own Wayland trace to its
-  log: Yuna keeps no trace of a client.
+  log: Yuna keeps no trace of a client. With `accessibility: true`, a program joins its seat's
+  accessibility bus, the first one starting it, and `spawn` answers once the program has
+  started or with the bus's failure.
 - `events` reads a seat's events after a cursor the agent keeps, or waits for the first that
   matches, as `windows` waits ([below](#events)).
+- `accessibility` finds nodes of the accessibility trees of a seat's programs started with
+  accessibility: each node's window, process, role, name, description, states and rectangle on
+  its output, in `pointer`'s units ([Accessibility](#accessibility)).
 - `windows` lists a seat's windows, as `Compositor::windows` describes them, each with its
   `shell`, `xdg` or `x11`: its `rect`, where
   it is drawn at the call's time, read as hit tests read it ([A frame](#a-frame)); its `place`,
@@ -1320,8 +1335,9 @@ window or program unknown there:
   so that it does not grow for agents that do not ask. With `wait_ms`, it waits up to 50 s, on
   real time whatever the clock's, for one that matches. A waiting call is answered once the
   layout has placed the window, which on the manual clock takes a `clock` advance;
-  `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`' and
-  `clipboard get`'s with them.
+  `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`',
+  `clipboard get`'s, `accessibility`'s and the `spawn` starts waiting for their seat's
+  accessibility bus with them.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -1341,10 +1357,12 @@ window or program unknown there:
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
-fails the `windows`, `events`, `capture` and `clipboard` calls waiting on it, drops its events and ends its programs'
+fails the `windows`, `events`, `capture`, `clipboard` and `accessibility` calls waiting on it and
+the `spawn` starts waiting for its accessibility bus, drops its events and ends its programs'
 pace, then ends its processes: every process under Yuna that
 is, or descends from, one of the seat's programs still running, is in a process group one of
-them led, is one of its clients, or has `YUNA_SEAT=<id>` in `/proc/<pid>/environ`; unless
+them led, is one of its clients or its accessibility bus's daemon, or has `YUNA_SEAT=<id>` in
+`/proc/<pid>/environ`; unless
 another seat's `YUNA_SEAT`, or another seat's running program or its group, says it is that
 seat's, as a reused pid would be. Each gets SIGTERM, then SIGCONT, so that a stopped one acts on
 it at once; 2 s later, SIGKILL goes to those still under Yuna and to any found again; the call
@@ -1360,7 +1378,11 @@ file, when the seat has one, with `DBUS_SESSION_BUS_ADDRESS=disabled:`, since D-
 would otherwise launch a bus of its own through X11 that holds the seat's Xwayland for ever; an
 empty `XDG_RUNTIME_DIR` of its own, where neither the user's session bus nor their sound server
 is found; then the agent's variables; then `YUNA_SEAT`, its
-seat's id, which the agent's cannot replace. It inherits no descriptor of
+seat's id, which the agent's cannot replace; then each accessibility variable the agent did not
+give: with `accessibility: true`, `AT_SPI_BUS_ADDRESS`, its seat's bus, and
+`GNOME_ACCESSIBILITY=1`, `ACCESSIBILITY_ENABLED=1`, `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1`;
+without, `NO_AT_BRIDGE=1` and `GTK_A11Y=none`, so that no toolkit even looks for a bus. It
+inherits no descriptor of
 Yuna's but its standard input, `/dev/null`, and its output and errors: a pipe Yuna reads into a
 log file. A log keeps the first 256 KiB of the program's output, where a failure to start
 shows, and its newest 1 MiB: one file, the newest in a ring after the first (`LOG_HEAD`,
@@ -1439,6 +1461,65 @@ cursor, which may hold the one it waits for; it counts among the 64 calls that m
 when its seat closes, and `notifications/cancelled` drops it. The server keeps no state of a call:
 the
 cursor is the agent's ([ADR-0033](adr/0033-the-mcp-server.md)).
+
+### Accessibility
+
+An agent reads the accessibility trees of the programs it started with `accessibility: true`,
+through MCP alone (`mcp/accessibility/`, Yuna's D-Bus code in `dbus/`). Each agent's seat has
+an accessibility bus of its own, on which Yuna is the AT-SPI registry and the one reader; there
+is no `at-spi2-registryd`. Everything runs on Yuna's loop: the bus's sources only note what
+came, and the server serves them after each round, as it does its client's input.
+
+The bus:
+
+1. The seat's first `spawn start` with `accessibility: true` starts `dbus-daemon`, never before:
+   the one `YUNA_DBUS_DAEMON` names, which Yuna's package and development shell set to
+   nixpkgs' own, else the first on Yuna's `PATH`. Its folder, `seat-<id>.a11y` in the
+   programs' folder, holds its configuration, its socket and its log, where its output goes
+   through a pipe Yuna reads, bounded as a program's log is. Its configuration is at-spi's, its
+   limits lowered: messages of 4 MiB at most, 8 MiB queued to or from a connection, replies
+   awaited 5 s at most, 256 connections, no service started. Its environment is Yuna's kept
+   variables, no session bus, and its seat's `YUNA_SEAT`.
+2. It prints its address on a pipe; Yuna connects to it, authenticates (SASL's `EXTERNAL`), says
+   `Hello`, owns `org.a11y.atspi.Registry` and asks for the bus's `NameOwnerChanged` signals. The
+   whole start has 5 s. The program, and every other that waits, then starts with the bus's
+   address; a start that fails answers each `spawn` with the reason and the log's path, and a
+   `spawn` while a bus is being ended is refused, to be made again once it has.
+3. Toolkits embed their applications in Yuna's registry, which answers what GTK 4, Qt and the
+   ATK bridge ask of it at once: `Embed` and `Unembed`, `GetRegisteredEvents`, which lists no
+   listener, so that no toolkit sends events and Qt holds no key, the key notifications, and the
+   root's `Accessible` (the table is in `registry.rs`). For each application embedded the first
+   time, Yuna asks the bus for its connection's process; an application embedding again is
+   answered and not counted again.
+4. Its daemon's exit is watched through its pidfd. A bus that ends is forgotten and its socket
+   removed, so that a GTK 4 program, which connects without a time limit, never finds a socket
+   with no daemon; the next `accessibility: true` starts another. The daemon is one of the seat's
+   processes, ended when the seat closes and when Yuna stops, its folder removed with the seat.
+
+An `accessibility` call walks the trees of the applications embedded on its seat's bus, those of
+its `window` or `pid` alone when it names one, each through `GetChildren`, `GetRole` and its
+`Name`, calls pipelined: 32 in flight to one application, 512 on one bus. An application whose
+process the bus has not told yet is left out until it has. A node whose role and name pass the
+call's filter is asked its states, description and extents in window coordinates; a window's own
+node, a child of an application's root, is asked its extents too. A node's window is its
+application's process's window on the seat; when the process has several, the one whose title
+is its window node's name. Its rectangle is where Yuna draws the window, from its output's
+corner, plus its extents less its window node's: GTK 4 counts from its window widget's origin,
+Qt from its window's corner, Qt on X11 in its own logical pixels, which at Xwayland's scale are
+Yuna's logical units ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). A walk visits 10,000 nodes at most, 64 levels deep, and gives
+256; each application has 3 s, and one that does not answer by then is told so, the others'
+trees given whole. Each walk has a serial its calls carry, so that a late reply of a walk cut at
+its deadline never reaches the next walk of the same call. With `wait_ms`, a call walks again while nothing matches, once an application
+embeds, a client of its seat commits or a process is known, no sooner than 100 ms after its last
+walk, and at
+least every second; a later walk the wait's end cuts tells its applications so; the call counts
+among the waiting calls, fails when its seat closes, and is dropped by `notifications/cancelled`. At rest, nothing runs: no timer and no call
+([measurements](measurements.md#m111-accessibility-at-rest-2026-11-18)).
+
+Seats are no security boundary between agents
+([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)): any process of the
+user reaches any seat's bus, as it reaches any seat's Wayland socket. What is left undone is in
+[debt](debt.md#accessibility).
 
 ### The program
 

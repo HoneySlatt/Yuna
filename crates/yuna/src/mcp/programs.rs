@@ -12,10 +12,18 @@
 //! their sound server there; with a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that
 //! D-Bus's library does not launch a bus of its own through X11, which would hold the seat's
 //! Xwayland. Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own
-//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Its
-//! standard input is `/dev/null`; its output and errors go, through a pipe Yuna reads, to a log
-//! file the agent reads through `spawn log`, which keeps its first [`LOG_HEAD`] bytes and its
-//! newest [`LOG_TAIL`] ([`LogRead`]).
+//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Then the
+//! accessibility variables, each one the agent did not give ([`add_accessibility_variables`]):
+//! with `accessibility: true`, its seat's accessibility bus and the switches that turn every
+//! toolkit's accessibility on ([`ACCESSIBILITY_VARIABLES`]); without, the two that keep GTK
+//! and the ATK bridge from looking for a bus ([`NO_ACCESSIBILITY_VARIABLES`]). Its standard
+//! input is `/dev/null`; its output and errors go, through a pipe Yuna reads, to a log file the
+//! agent reads through `spawn log`, which keeps its first [`LOG_HEAD`] bytes and its newest
+//! [`LOG_TAIL`] ([`LogRead`]).
+//!
+//! A seat's accessibility bus (`accessibility/bus.rs`) runs `dbus-daemon` with an environment of
+//! Yuna's kept variables alone ([`daemon_environment`]): its own folder, `seat-<id>.a11y`, is in
+//! the programs' folder.
 //!
 //! Each program leads a process group of its own, which `stop` signals, and which `freeze`,
 //! `thaw` and `slow` stop and continue ([`Pace`]). Every path that ends processes with SIGTERM
@@ -106,6 +114,26 @@ pub const CALLER_PREFIX: &str = "YUNA_CALLER_";
 /// Vulkan's loader and of Mesa.
 pub const KEPT_PREFIXES: &[&str] = &["LC_", "VK_", "MESA_"];
 
+/// The variables a program started with `accessibility: true` gets, beside
+/// `AT_SPI_BUS_ADDRESS`, its seat's bus: GTK 4 and AccessKit find the bus through the address
+/// alone; Qt turns on with it, `QT_LINUX_ACCESSIBILITY_ALWAYS_ON` past it; the ATK bridge of
+/// GTK 3, Firefox, Chromium and Electron, which ask whether accessibility is on, read
+/// `GNOME_ACCESSIBILITY` and `ACCESSIBILITY_ENABLED`. Chromium and Electron also need
+/// `--force-renderer-accessibility` in their command for a page's own tree.
+pub const ACCESSIBILITY_VARIABLES: &[(&str, &str)] = &[
+    ("GNOME_ACCESSIBILITY", "1"),
+    ("ACCESSIBILITY_ENABLED", "1"),
+    ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1"),
+];
+
+/// The variable that names an accessibility bus.
+pub const BUS_VARIABLE: &str = "AT_SPI_BUS_ADDRESS";
+
+/// The variables a program started without accessibility gets, so that no toolkit even looks
+/// for a bus: the ATK bridge's switch and GTK 4's.
+pub const NO_ACCESSIBILITY_VARIABLES: &[(&str, &str)] =
+    &[("NO_AT_BRIDGE", "1"), ("GTK_A11Y", "none")];
+
 /// How many programs may run at once.
 pub const MAX_RUNNING: usize = 64;
 
@@ -151,6 +179,8 @@ pub struct Program {
     pub seat: SeatId,
     pub pid: Pid,
     pub command: Vec<String>,
+    /// Whether it was started with accessibility, on its seat's bus.
+    pub accessible: bool,
     /// How it ended; none while it runs.
     pub end: Option<End>,
     /// Its log file: its standard output and errors, in the order they came, its first
@@ -380,6 +410,8 @@ pub struct Start {
     pub env: BTreeMap<String, String>,
     /// Its working folder; Yuna's own without one.
     pub cwd: Option<PathBuf>,
+    /// The address of its seat's accessibility bus, when it is started with accessibility.
+    pub accessibility: Option<String>,
 }
 
 /// The programs of one `yuna mcp`, and the folder of the seats' sockets, the programs' logs and
@@ -435,6 +467,32 @@ impl Programs {
     /// Where seat `seat`'s Wayland socket goes, in the folder.
     pub fn socket_path(&self, seat: SeatId) -> PathBuf {
         self.folder.join(format!("seat-{}", seat.0))
+    }
+
+    /// The folder of seat `seat`'s accessibility bus, in the folder.
+    pub fn accessibility_folder(&self, seat: SeatId) -> PathBuf {
+        self.folder.join(format!("seat-{}.a11y", seat.0))
+    }
+
+    /// A log at `path`, made anew, kept as a program's is: the write end of a pipe whose output
+    /// a source of `handle`'s loop reads into it, its first [`LOG_HEAD`] bytes and its newest
+    /// [`LOG_TAIL`], throttled past them with the programs' own. What a seat's dbus-daemon
+    /// writes goes there.
+    pub fn bounded_log(
+        &self,
+        handle: &LoopHandle<'static, State>,
+        path: &Path,
+    ) -> io::Result<OwnedFd> {
+        let log = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        let (output_read, output_write) = pipe_with(PipeFlags::CLOEXEC)?;
+        let log_state = Rc::new(RefCell::new(ProgramLog::new(log)));
+        watch_output(handle, output_read, log_state, self.throttled.clone())?;
+        Ok(output_write)
     }
 
     /// The folder of the seats' sockets, the programs' logs and their runtime folders.
@@ -499,8 +557,9 @@ impl Programs {
         self.next_id += 1;
         let runtime = self.folder.join("runtime").join(id.to_string());
         let log = self.folder.join("logs").join(format!("{id}.log"));
-        let environment =
+        let mut environment =
             program_environment(std::env::vars_os(), &runtime, socket, x11, seat, &start.env);
+        add_accessibility_variables(&mut environment, start.accessibility.as_deref(), &start.env);
         let (pid, log_state) = match self.launch(handle, environment, &start, &runtime, &log) {
             Ok(launched) => launched,
             Err(reason) => {
@@ -515,6 +574,7 @@ impl Programs {
             seat,
             pid,
             command: start.command,
+            accessible: start.accessibility.is_some(),
             end: None,
             log,
             protocol_error: None,
@@ -1141,6 +1201,71 @@ pub fn program_environment(
     seat: SeatId,
     added: &BTreeMap<String, String>,
 ) -> BTreeMap<OsString, OsString> {
+    let mut environment = kept_environment(inherited);
+    environment.insert("XDG_RUNTIME_DIR".into(), runtime_dir.into());
+    environment.insert("WAYLAND_DISPLAY".into(), wayland_display.into());
+    environment.insert("XDG_SESSION_TYPE".into(), "wayland".into());
+    if let Some(x11) = x11 {
+        environment.insert("DISPLAY".into(), x11.name().into());
+        environment.insert("XAUTHORITY".into(), x11.xauthority.clone().into());
+        // Without a bus's address and with a DISPLAY, D-Bus's library launches a bus of its own
+        // through X11 (`dbus-launch --autolaunch`), the machine's, which stays connected to the
+        // seat's Xwayland and keeps it from ever stopping. `disabled:` says there is no bus.
+        environment.insert("DBUS_SESSION_BUS_ADDRESS".into(), "disabled:".into());
+    }
+    for (name, value) in added {
+        environment.insert(name.into(), value.into());
+    }
+    environment.insert(SEAT_VARIABLE.into(), seat.0.to_string().into());
+    environment
+}
+
+/// Adds a program's accessibility variables to its `environment`, each but those the agent's
+/// `added` give: with `bus`, its seat's accessibility bus's address, those that point every
+/// toolkit at it and turn it on; without, those that keep GTK and the ATK bridge from looking for
+/// one.
+pub fn add_accessibility_variables(
+    environment: &mut BTreeMap<OsString, OsString>,
+    bus: Option<&str>,
+    added: &BTreeMap<String, String>,
+) {
+    let mut add = |name: &str, value: &str| {
+        if !added.contains_key(name) {
+            environment.insert(name.into(), value.into());
+        }
+    };
+    match bus {
+        Some(address) => {
+            add(BUS_VARIABLE, address);
+            for (name, value) in ACCESSIBILITY_VARIABLES {
+                add(name, value);
+            }
+        }
+        None => {
+            for (name, value) in NO_ACCESSIBILITY_VARIABLES {
+                add(name, value);
+            }
+        }
+    }
+}
+
+/// The environment of a seat's `dbus-daemon`: Yuna's kept variables, no session bus, and its
+/// seat's `YUNA_SEAT`, which finds it among the seat's processes.
+pub fn daemon_environment(
+    inherited: impl Iterator<Item = (OsString, OsString)>,
+    seat: SeatId,
+) -> BTreeMap<OsString, OsString> {
+    let mut environment = kept_environment(inherited);
+    environment.insert("DBUS_SESSION_BUS_ADDRESS".into(), "disabled:".into());
+    environment.insert(SEAT_VARIABLE.into(), seat.0.to_string().into());
+    environment
+}
+
+/// The variables of `inherited` that [`KEPT_VARIABLES`] and [`KEPT_PREFIXES`] name, those Yuna's
+/// package set for Yuna alone given back their caller's values.
+fn kept_environment(
+    inherited: impl Iterator<Item = (OsString, OsString)>,
+) -> BTreeMap<OsString, OsString> {
     let kept = |name: &OsStr| {
         name.to_str().is_some_and(|name| {
             KEPT_VARIABLES.contains(&name) || KEPT_PREFIXES.iter().any(|p| name.starts_with(p))
@@ -1163,21 +1288,6 @@ pub fn program_environment(
             None => environment.remove(OsStr::new(name)),
         };
     }
-    environment.insert("XDG_RUNTIME_DIR".into(), runtime_dir.into());
-    environment.insert("WAYLAND_DISPLAY".into(), wayland_display.into());
-    environment.insert("XDG_SESSION_TYPE".into(), "wayland".into());
-    if let Some(x11) = x11 {
-        environment.insert("DISPLAY".into(), x11.name().into());
-        environment.insert("XAUTHORITY".into(), x11.xauthority.clone().into());
-        // Without a bus's address and with a DISPLAY, D-Bus's library launches a bus of its own
-        // through X11 (`dbus-launch --autolaunch`), the machine's, which stays connected to the
-        // seat's Xwayland and keeps it from ever stopping. `disabled:` says there is no bus.
-        environment.insert("DBUS_SESSION_BUS_ADDRESS".into(), "disabled:".into());
-    }
-    for (name, value) in added {
-        environment.insert(name.into(), value.into());
-    }
-    environment.insert(SEAT_VARIABLE.into(), seat.0.to_string().into());
     environment
 }
 
@@ -1464,6 +1574,64 @@ mod tests {
             &added,
         );
         assert_eq!(environment[OsStr::new("DISPLAY")], ":5");
+    }
+
+    /// With accessibility, a program gets its seat's bus and the switches that turn its toolkit
+    /// on; without, the two that keep its toolkit from looking; an agent's own value of any of
+    /// them wins, as for every variable.
+    #[test]
+    fn a_program_gets_its_seats_bus_or_the_switches_that_keep_its_toolkit_off() {
+        let mut accessible = BTreeMap::new();
+        add_accessibility_variables(
+            &mut accessible,
+            Some("unix:path=/r/seat-2.a11y/bus"),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            accessible[OsStr::new(BUS_VARIABLE)],
+            "unix:path=/r/seat-2.a11y/bus"
+        );
+        for (name, value) in ACCESSIBILITY_VARIABLES {
+            assert_eq!(accessible[OsStr::new(name)], *value, "{name}");
+        }
+        assert!(!accessible.contains_key(OsStr::new("NO_AT_BRIDGE")));
+        let mut plain = BTreeMap::new();
+        add_accessibility_variables(&mut plain, None, &BTreeMap::new());
+        assert_eq!(plain[OsStr::new("NO_AT_BRIDGE")], "1");
+        assert_eq!(plain[OsStr::new("GTK_A11Y")], "none");
+        assert!(!plain.contains_key(OsStr::new(BUS_VARIABLE)));
+        // The agent's own choice stays: a GTK program asked to use AccessKit.
+        let added = BTreeMap::from([("GTK_A11Y".to_owned(), "accesskit".to_owned())]);
+        let mut chosen =
+            BTreeMap::from([(OsString::from("GTK_A11Y"), OsString::from("accesskit"))]);
+        add_accessibility_variables(&mut chosen, None, &added);
+        assert_eq!(chosen[OsStr::new("GTK_A11Y")], "accesskit");
+    }
+
+    /// A seat's dbus-daemon gets Yuna's kept variables, no session bus and its seat's
+    /// `YUNA_SEAT`: never Yuna's own display, socket or bus.
+    #[test]
+    fn a_seats_daemon_gets_the_kept_variables_and_no_session_bus() {
+        let inherited = [
+            ("PATH", "/bin"),
+            ("DISPLAY", ":0"),
+            ("WAYLAND_DISPLAY", "wayland-1"),
+            ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus"),
+            ("AT_SPI_BUS_ADDRESS", "unix:path=/run/user/1000/at-spi/bus"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        let environment = daemon_environment(inherited, SeatId(3));
+        let names: Vec<&str> = environment
+            .keys()
+            .map(|name| name.to_str().expect("UTF-8"))
+            .collect();
+        assert_eq!(names, ["DBUS_SESSION_BUS_ADDRESS", "PATH", "YUNA_SEAT"]);
+        assert_eq!(
+            environment[OsStr::new("DBUS_SESSION_BUS_ADDRESS")],
+            "disabled:"
+        );
+        assert_eq!(environment[OsStr::new("YUNA_SEAT")], "3");
     }
 
     #[test]

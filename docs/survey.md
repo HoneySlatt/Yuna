@@ -577,7 +577,8 @@ servers named below.
   application every 30 s; Qt holds each key until the registry answers, 100 ms at most. On
   Wayland, extents are read in window coordinates; an application maps to its window by its bus
   peer's pid, then its title. kwin-mcp, swampcy, KDE's selenium-webdriver-at-spi and Dogtail each
-  run a private bus and force accessibility on.
+  run a private bus and force accessibility on. `xdg-dbus-annotation-v1`, which would link a
+  surface to its accessible root, was an open merge request of wayland-protocols on 2026-11-11.
 - **D-Bus in Rust.** RustSec marked `zvariant` unmaintained on 2026-10-16
   (RUSTSEC-2026-0370), its code moved into zbus 6 as `zbus::wire`; zbus 6.3 without default
   features adds six crates and no runtime.

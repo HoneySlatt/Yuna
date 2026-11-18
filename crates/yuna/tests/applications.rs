@@ -1403,10 +1403,12 @@ impl Yuna {
         command
             .args(mode)
             .args(["--output", &output])
-            // What it draws with, from the shell; Xwayland, for its seats' X11 programs; a
-            // throwaway home, so that Mesa reads none of the user's settings.
+            // What it draws with, from the shell; Xwayland, for its seats' X11 programs, and
+            // dbus-daemon, for their accessibility buses; a throwaway home, so that Mesa reads
+            // none of the user's settings.
             .env_clear()
             .env("PATH", shell_variable("YUNA_XWAYLAND_PATH"))
+            .env("YUNA_DBUS_DAEMON", shell_variable("YUNA_DBUS_DAEMON"))
             .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH"))
             .env(
                 "__EGL_VENDOR_LIBRARY_FILENAMES",

@@ -1,14 +1,27 @@
-//! What every program Yuna starts shares: the descriptors it does not inherit. MCP's programs
-//! (`mcp/programs.rs`) and Xwayland (`xwayland/server.rs`) start through it. And what Yuna reads
-//! of a process in `/proc`: its parent, its group, and the processes above it up to Yuna, which
-//! a client's connection records (`state.rs`) and a seat's closing follows (`mcp/programs.rs`).
+//! What every program Yuna starts shares: the descriptors it does not inherit and those it is
+//! given, how its program is found, and how a process Yuna watches through a pidfd is ended and
+//! reaped. MCP's programs (`mcp/programs.rs`), Xwayland (`xwayland/server.rs`) and the
+//! accessibility buses' dbus-daemon (`mcp/accessibility/bus.rs`) start through it. And what Yuna
+//! reads of a process in `/proc`: its parent, its group, and the processes above it up to Yuna,
+//! which a client's connection records (`state.rs`) and a seat's closing follows
+//! (`mcp/programs.rs`).
+//!
+//! A pidfd names one process: a signal sent through it never reaches a process that took its
+//! pid. `yuna mcp`'s reaping of every child, on SIGCHLD, may reap a process before its own
+//! pidfd's wait does: that wait then finds it reaped, its end [`End::Unknown`].
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 
 use smithay::reexports::rustix;
+use smithay::reexports::rustix::io::{Errno, FdFlags};
+use smithay::reexports::rustix::process::{Signal, WaitId, WaitIdOptions, WaitStatus};
 
 /// How many processes above a client its lineage follows before giving up: deeper trees are not
 /// under Yuna, or not worth the reads.
@@ -17,8 +30,8 @@ const MAX_LINEAGE: usize = 64;
 /// Marks every descriptor of the program above 2 close-on-exec, in the child just before it runs
 /// the program, so that it inherits none of Yuna's: llvmpipe opens some without
 /// `O_CLOEXEC`, `/dev/udmabuf` and the memory of its buffers among them. Marked, not closed:
-/// the pipe through which the standard library reports a failed `exec` must stay open. Xwayland's
-/// start uses it too, then clears the flag of the descriptors it gives (`xwayland/server.rs`).
+/// the pipe through which the standard library reports a failed `exec` must stay open.
+/// [`give_descriptors`] then clears the flag of those a program is given.
 pub(crate) fn keep_descriptors_from_the_program(command: &mut Command) {
     // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
     // calls are sound: it makes one system call, `close_range`, and allocates nothing, an errno
@@ -30,6 +43,32 @@ pub(crate) fn keep_descriptors_from_the_program(command: &mut Command) {
             } else {
                 Err(io::Error::last_os_error())
             }
+        });
+    }
+}
+
+/// Gives the program the descriptors `given`, by number: their close-on-exec flag is cleared in
+/// its own process alone, after [`keep_descriptors_from_the_program`] marked every other.
+///
+/// # Safety
+///
+/// Each number in `given` must be an open descriptor, owned by a value of the caller's that
+/// stays open, and keeps its number, until `command` has been spawned for the last time: the
+/// child borrows each one by its number between fork and exec.
+pub(crate) unsafe fn give_descriptors(command: &mut Command, given: Vec<RawFd>) {
+    // SAFETY: the closure runs in the child between fork and exec, after the one that marks
+    // every descriptor close-on-exec (`pre_exec` closures run in the order they were added),
+    // where only async-signal-safe calls are sound: it makes one `fcntl` system call per
+    // descriptor through rustix, which allocates nothing, on numbers that this function's caller
+    // keeps open until the spawn, as its `# Safety` asks, so that they are open in the child.
+    unsafe {
+        command.pre_exec(move || {
+            for &fd in &given {
+                // SAFETY: `fd` is open in the child for the closure's whole run, as above.
+                let fd = BorrowedFd::borrow_raw(fd);
+                rustix::io::fcntl_setfd(fd, FdFlags::empty())?;
+            }
+            Ok(())
         });
     }
 }
@@ -93,6 +132,85 @@ pub(crate) fn lineage_under_yuna(pid: i32) -> (Vec<i32>, Option<i32>) {
         current = stat.parent;
     }
     (Vec::new(), None)
+}
+
+/// The first executable file named `name` in the folders of `search_path`.
+pub(crate) fn find_program(name: &str, search_path: &OsString) -> Option<PathBuf> {
+    std::env::split_paths(search_path)
+        .filter(|folder| folder.is_absolute())
+        .map(|folder| folder.join(name))
+        .find(|path| {
+            fs::metadata(path).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+}
+
+/// How a process watched through its pidfd ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum End {
+    /// It exited with this status: 0 for an Xwayland that `-terminate` ended, idle.
+    Exited(i32),
+    /// This signal ended it.
+    Killed(i32),
+    /// Another reaped it first: `yuna mcp`'s reaping of every child, which gave its status
+    /// to the compositor before.
+    Unknown,
+}
+
+impl End {
+    /// The end `status` tells, as `wait` gave it; none for a process stopped or continued.
+    pub(crate) fn of(status: WaitStatus) -> Option<End> {
+        match (status.exit_status(), status.terminating_signal()) {
+            (Some(code), _) => Some(End::Exited(code)),
+            (None, Some(signal)) => Some(End::Killed(signal)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// Reaps the process of `pidfd` if it has ended: none while it runs.
+pub(crate) fn reap(pidfd: BorrowedFd<'_>) -> Option<End> {
+    loop {
+        match rustix::process::waitid(
+            WaitId::PidFd(pidfd),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
+        ) {
+            Ok(Some(status)) => {
+                return Some(match (status.exit_status(), status.terminating_signal()) {
+                    (Some(code), _) => End::Exited(code),
+                    (None, Some(signal)) => End::Killed(signal),
+                    (None, None) => End::Unknown,
+                });
+            }
+            Ok(None) => return None,
+            Err(Errno::INTR) => {}
+            // ECHILD: reaped already.
+            Err(_) => return Some(End::Unknown),
+        }
+    }
+}
+
+/// Ends the process of `pidfd` at once. A process that has ended is not signalled again, and
+/// never another that took its pid.
+pub(crate) fn kill(pidfd: impl AsFd) {
+    if let Err(error) = rustix::process::pidfd_send_signal(pidfd, Signal::KILL)
+        && error != Errno::SRCH
+    {
+        tracing::warn!(%error, "a process Yuna started could not be ended");
+    }
+}
+
+/// Ends the process of `pidfd` and waits until it is reaped: when its owner drops, with no
+/// loop left to watch it. SIGKILL cannot be ignored: the wait is the kernel's tearing down.
+pub(crate) fn kill_and_reap(pidfd: &OwnedFd) {
+    kill(pidfd);
+    loop {
+        match rustix::process::waitid(WaitId::PidFd(pidfd.as_fd()), WaitIdOptions::EXITED) {
+            Err(Errno::INTR) => continue,
+            _ => return,
+        }
+    }
 }
 
 #[cfg(test)]

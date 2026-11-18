@@ -3,8 +3,9 @@
 //! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md),
 //! [ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
 //! The protocol's exchanges are tested in the test's own process (`tests/headless/mcp.rs`);
-//! here, what needs a process of its own: the programs' environment, their logs, and a whole
-//! tree of processes ended when Yuna stops.
+//! here, what needs a process of its own: the programs' environment, their logs, a whole tree of
+//! processes ended when Yuna stops, and the accessibility trees of GTK 4 and Qt programs on their
+//! seat's accessibility bus, which `yuna mcp` starts and serves as the AT-SPI registry.
 
 #[path = "common/application_environment.rs"]
 mod application_environment;
@@ -18,7 +19,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use application_environment::application_environment;
+use application_environment::{application_environment, shell_variable};
 use serde_json::{Value, json};
 use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 
@@ -1053,6 +1054,244 @@ fn a_programs_log_is_read_by_offsets_and_keeps_its_head_and_tail() {
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
+/// The environment a test's real application gets, through `spawn`'s `env`: the tests' pinned
+/// one, GTK's cursor that never blinks and animations off, and `extra` over it.
+fn pinned_environment(yuna: &Yuna, extra: &[(&str, String)]) -> BTreeMap<String, String> {
+    let home = yuna.folder.join("home");
+    let settings = home.join("config/gtk-4.0");
+    fs::create_dir_all(&settings).expect("GTK's settings folder");
+    fs::write(
+        settings.join("settings.ini"),
+        "[Settings]\ngtk-cursor-blink=false\ngtk-enable-animations=false\n",
+    )
+    .expect("GTK's settings");
+    let mut env: BTreeMap<String, String> = application_environment(&home)
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_string_lossy().into_owned()))
+        .collect();
+    env.extend(
+        extra
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone())),
+    );
+    env
+}
+
+/// GTK 4's variables: Wayland, its Vulkan renderer on lavapipe, as `tests/applications.rs` runs it.
+fn gtk_variables() -> Vec<(&'static str, String)> {
+    vec![
+        ("GDK_BACKEND", "wayland".to_owned()),
+        ("GSK_RENDERER", "vulkan".to_owned()),
+    ]
+}
+
+/// Qt's QML runner's variables on `platform`, `wayland` or `xcb`, as `tests/applications.rs`
+/// gives them.
+fn qt_variables(platform: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("QT_QPA_PLATFORM", platform.to_owned()),
+        ("QT_PLUGIN_PATH", shell_variable("YUNA_QT_PLUGINS")),
+        ("QML_IMPORT_PATH", shell_variable("YUNA_QML_IMPORTS")),
+        ("QSG_RHI_BACKEND", "opengl".to_owned()),
+        ("QT_FORCE_STDERR_LOGGING", "1".to_owned()),
+    ]
+}
+
+/// The QML scene of the accessibility tests: a button named "Press me" that becomes "Pressed".
+fn accessible_scene() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/accessible.qml")
+        .display()
+        .to_string()
+}
+
+impl Yuna {
+    /// Starts `command` on `seat` through `spawn`, with `env`, on the seat's accessibility bus
+    /// when `accessibility`; gives the program, as `spawn` tells it.
+    fn start_program(
+        &mut self,
+        seat: u64,
+        command: &[&str],
+        env: &BTreeMap<String, String>,
+        accessibility: bool,
+    ) -> Value {
+        let started = self.call(
+            "spawn",
+            json!({"action": "start", "seat": seat, "command": command, "env": env,
+                   "accessibility": accessibility}),
+        );
+        assert_eq!(
+            started["isError"],
+            json!(false),
+            "{started}\n{}",
+            self.log()
+        );
+        started["structuredContent"]["program"].clone()
+    }
+
+    /// Calls `accessibility` and gives its result, which must not have failed.
+    fn accessible_nodes(&mut self, arguments: Value) -> Value {
+        let found = self.call("accessibility", arguments.clone());
+        assert_eq!(
+            found["isError"],
+            json!(false),
+            "{arguments}: {found}\n{}",
+            self.log()
+        );
+        found["structuredContent"].clone()
+    }
+}
+
+/// The first node of `found`, an `accessibility` result, and its rectangle's centre, which a
+/// pointer clicks.
+fn first_node_centre(found: &Value, what: &str) -> (Value, f64, f64) {
+    let node = found["nodes"][0].clone();
+    let rect = &node["rect"];
+    let (Some(x), Some(y), Some(width), Some(height)) = (
+        rect["x"].as_f64(),
+        rect["y"].as_f64(),
+        rect["width"].as_f64(),
+        rect["height"].as_f64(),
+    ) else {
+        panic!("{what} has no rectangle: {found}");
+    };
+    (node, x + width / 2.0, y + height / 2.0)
+}
+
+/// The `dbus-daemon` processes whose parent is `yuna`: its seats' accessibility buses.
+fn daemons_of(yuna: i32) -> Vec<i32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+            let name = fs::read_to_string(entry.path().join("comm")).ok()?;
+            (name.trim() == "dbus-daemon" && parent_of(pid) == Some(yuna)).then_some(pid)
+        })
+        .collect()
+}
+
+/// A variable program `log` printed as `name=value` with `env`, or none once it printed its
+/// environment without it.
+fn printed_variable(log: &std::path::Path, name: &str) -> Option<String> {
+    let output = wait_for("the program's environment", || {
+        let output = fs::read_to_string(log).ok()?;
+        output.contains("\nYUNA_SEAT=").then_some(output)
+    });
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name}=")))
+        .map(str::to_owned)
+}
+
+/// An agent finds a GTK 4 button through MCP alone and presses it: gtk4-demo's Dialogs window,
+/// started with accessibility, has a button named "Message Dialog", found by a part of its name
+/// in any case and its role, with a rectangle on its output; `pointer` clicks the rectangle's
+/// centre, and the dialog the button opens, "Test message", is read through `accessibility`
+/// again, a window of its own. The same program started without accessibility is not on the bus,
+/// and the tool says so.
+#[test]
+fn an_agent_finds_a_gtk_button_by_its_name_and_presses_it_at_its_centre() {
+    let mut yuna = Yuna::start("a11y-gtk");
+    let env = pinned_environment(&yuna, &gtk_variables());
+    let demo = yuna.start_program(SEAT, &["gtk4-demo", "--run=dialog"], &env, true);
+    assert_eq!(demo["accessibility"], json!(true), "{demo}");
+    let found = yuna.accessible_nodes(json!({
+        "seat": SEAT, "role": "button", "name": "message dialog", "wait_ms": 40_000
+    }));
+    let (button, x, y) = first_node_centre(&found, "the Message Dialog button");
+    // GTK names it without its mnemonic's underscore.
+    assert_eq!(button["name"], json!("Message Dialog"), "{found}");
+    assert_eq!(button["app"], demo["pid"], "{found}");
+    assert!(
+        button["states"]
+            .as_array()
+            .is_some_and(|states| states.contains(&json!("showing"))),
+        "{found}"
+    );
+    let window = button["window"].clone();
+    assert!(window.is_u64(), "{found}");
+    eprintln!("GTK 4's button: {button}");
+
+    let windows_before =
+        yuna.call("windows", json!({"seat": SEAT}))["structuredContent"]["windows"]
+            .as_array()
+            .map_or(0, Vec::len);
+    let clicked = yuna.call(
+        "pointer",
+        json!({"action": "click", "seat": SEAT, "x": x, "y": y, "output": button["output"]}),
+    );
+    assert_eq!(
+        clicked["structuredContent"]["pointer"]["window"], window,
+        "{clicked}"
+    );
+    let dialog = yuna.accessible_nodes(json!({
+        "seat": SEAT, "name": "Test message", "wait_ms": 30_000
+    }));
+    assert!(
+        !dialog["nodes"].as_array().is_none_or(Vec::is_empty),
+        "{dialog}"
+    );
+    let windows_after = wait_for("the dialog's window", || {
+        let listed = yuna.call("windows", json!({"seat": SEAT}));
+        let count = listed["structuredContent"]["windows"]
+            .as_array()
+            .map_or(0, Vec::len);
+        (count > windows_before).then_some(count)
+    });
+    assert!(windows_after > windows_before);
+
+    // The dialog's own button, in a window of its own that floats over the first: its rectangle
+    // is placed from that window, and its click closes the dialog.
+    let cancel = yuna.accessible_nodes(json!({
+        "seat": SEAT, "role": "button", "name": "cancel", "wait_ms": 30_000
+    }));
+    let (cancel_button, x, y) = first_node_centre(&cancel, "the dialog's Cancel button");
+    eprintln!("GTK 4's dialog's button: {cancel_button}");
+    assert_ne!(cancel_button["window"], window, "{cancel}");
+    let clicked = yuna.call(
+        "pointer",
+        json!({"action": "click", "seat": SEAT, "x": x, "y": y, "output": cancel_button["output"]}),
+    );
+    assert_eq!(
+        clicked["structuredContent"]["pointer"]["window"], cancel_button["window"],
+        "{clicked}"
+    );
+    wait_for("the dialog's end", || {
+        let listed = yuna.call("windows", json!({"seat": SEAT}));
+        let count = listed["structuredContent"]["windows"]
+            .as_array()
+            .map_or(0, Vec::len);
+        (count == windows_before).then_some(())
+    });
+
+    // Without accessibility, the same program is not on the bus, and is said not to be.
+    let plain = yuna.start_program(SEAT, &["gtk4-demo", "--run=dialog"], &env, false);
+    let plain_pid = plain["pid"].clone();
+    wait_for("the plain demo's window", || {
+        let listed = yuna.call("windows", json!({"seat": SEAT, "pid": plain_pid}));
+        (!listed["structuredContent"]["windows"]
+            .as_array()?
+            .is_empty())
+        .then_some(())
+    });
+    let refused = yuna.call("accessibility", json!({"seat": SEAT, "pid": plain_pid}));
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    let text = refused["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        text.contains("is not on seat 2's accessibility bus")
+            && text.contains("accessibility: true"),
+        "{text}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
 /// The state letter `/proc/<pid>/stat` gives a process: `T` while it is stopped.
 fn state_of(pid: i32) -> Option<char> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -1115,6 +1354,73 @@ fn a_frozen_program_stops_and_thaws() {
         json!({"action": "freeze", "seat": SEAT, "program": 9}),
     );
     assert_eq!(unknown["isError"], json!(true));
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// Finds Qt's button named "Press me" on `seat`, clicks its centre through `pointer`, and reads
+/// its new name, "Pressed", through `accessibility`: Qt's state change seen again.
+fn press_qt_button(yuna: &mut Yuna, seat: u64, qml: &Value) -> Value {
+    let found = yuna.accessible_nodes(json!({
+        "seat": seat, "role": "button", "name": "Press me", "wait_ms": 40_000
+    }));
+    let (button, x, y) = first_node_centre(&found, "Qt's button");
+    assert_eq!(button["app"], qml["pid"], "{found}");
+    eprintln!("Qt's button on seat {seat}: {button}");
+    let clicked = yuna.call(
+        "pointer",
+        json!({"action": "click", "seat": seat, "x": x, "y": y, "output": button["output"]}),
+    );
+    assert_eq!(
+        clicked["structuredContent"]["pointer"]["window"], button["window"],
+        "{clicked}"
+    );
+    let pressed = yuna.accessible_nodes(json!({
+        "seat": seat, "role": "button", "name": "Pressed", "wait_ms": 30_000
+    }));
+    assert_eq!(pressed["nodes"][0]["name"], json!("Pressed"), "{pressed}");
+    button
+}
+
+/// The same for Qt 6 on Wayland: a QML button away from its window's corner, whose name changes
+/// once pressed.
+#[test]
+fn an_agent_finds_a_qt_button_and_reads_its_new_name_once_pressed() {
+    let mut yuna = Yuna::start("a11y-qt");
+    let env = pinned_environment(&yuna, &qt_variables("wayland"));
+    let scene = accessible_scene();
+    let qml = yuna.start_program(SEAT, &["qml", &scene], &env, true);
+    let button = press_qt_button(&mut yuna, SEAT, &qml);
+    // The QML scene places it at (200, 180) in its window, 240 × 80.
+    assert_eq!(button["rect"]["width"], json!(240), "{button}");
+    assert_eq!(button["rect"]["height"], json!(80), "{button}");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// And for Qt on X11, through the seat's Xwayland at scale 1.5: Qt counts in its own logical
+/// pixels, X11's divided by its device pixel ratio, 1.5, which are Yuna's logical units.
+#[test]
+fn an_agent_finds_and_presses_a_qt_button_on_x11_at_one_and_a_half() {
+    let mut yuna = Yuna::start("a11y-x11");
+    let created = yuna.call(
+        "seat",
+        json!({"action": "create", "width": 1920, "height": 1080, "scale": 1.5}),
+    );
+    let seat = created["structuredContent"]["seat"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{created}"));
+    let env = pinned_environment(&yuna, &qt_variables("xcb"));
+    let scene = accessible_scene();
+    let qml = yuna.start_program(seat, &["qml", &scene], &env, true);
+    let button = press_qt_button(&mut yuna, seat, &qml);
+    let windows = yuna.call("windows", json!({"seat": seat}));
+    assert_eq!(
+        windows["structuredContent"]["windows"][0]["shell"],
+        json!("x11"),
+        "{windows}"
+    );
+    assert_eq!(button["rect"]["width"], json!(240), "{button}");
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
@@ -1367,4 +1673,406 @@ fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
     drop(held);
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A seat's bus starts with its first program started with accessibility, never before; a
+/// program started without gets the variables that keep its toolkit from looking for one, and
+/// the tool says plainly there is none; with no application on it, a call answers at once; each
+/// seat's programs get their own seat's bus alone.
+/// The daemon killed, Yuna and the seat go on, its socket is removed, and the next program with
+/// accessibility starts another; the seat closed, its daemon is ended among its processes.
+#[test]
+fn a_seats_bus_starts_on_demand_is_its_own_and_ends_with_its_seat() {
+    let mut yuna = Yuna::start("a11y-bus");
+    let yuna_pid = yuna.child.id() as i32;
+    let env = BTreeMap::new();
+    let print = ["sh", "-c", "env; sleep 600"];
+    let plain = yuna.start_program(SEAT, &print, &env, false);
+    let plain_log = PathBuf::from(plain["log"].as_str().expect("a log"));
+    assert_eq!(
+        printed_variable(&plain_log, "NO_AT_BRIDGE").as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        printed_variable(&plain_log, "GTK_A11Y").as_deref(),
+        Some("none")
+    );
+    assert_eq!(printed_variable(&plain_log, "AT_SPI_BUS_ADDRESS"), None);
+    assert!(
+        daemons_of(yuna_pid).is_empty(),
+        "a bus before any accessible program"
+    );
+    let folder = yuna
+        .runtime_dir()
+        .join(format!("yuna-mcp-{yuna_pid}"))
+        .join("seat-2.a11y");
+    assert!(!folder.exists(), "{}", folder.display());
+    let none = yuna.call("accessibility", json!({"seat": SEAT}));
+    assert_eq!(none["isError"], json!(true), "{none}");
+    assert!(
+        none["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("seat 2 has no accessibility bus")),
+        "{none}"
+    );
+
+    let accessible = yuna.start_program(SEAT, &print, &env, true);
+    let log = PathBuf::from(accessible["log"].as_str().expect("a log"));
+    let address = printed_variable(&log, "AT_SPI_BUS_ADDRESS").expect("its seat's bus");
+    assert_eq!(
+        address,
+        format!("unix:path={}", folder.join("bus").display())
+    );
+    for (name, value) in yuna::mcp::ACCESSIBILITY_VARIABLES {
+        assert_eq!(
+            printed_variable(&log, name).as_deref(),
+            Some(*value),
+            "{name}"
+        );
+    }
+    assert_eq!(printed_variable(&log, "NO_AT_BRIDGE"), None);
+    let first = daemons_of(yuna_pid);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(folder.join("bus").exists());
+    // An empty name, which would match every node, is refused.
+    let empty_name = yuna.call("accessibility", json!({"seat": SEAT, "name": ""}));
+    assert_eq!(empty_name["isError"], json!(true), "{empty_name}");
+    // A shell embeds no tree: the bus has no application, and a call says so at once.
+    let began = Instant::now();
+    let empty = yuna.accessible_nodes(json!({"seat": SEAT}));
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(
+        (&empty["nodes"], &empty["apps"]),
+        (&json!([]), &json!([])),
+        "{empty}"
+    );
+
+    // Another seat's programs get its own bus, never seat 2's.
+    let other = yuna.call("seat", json!({"action": "create"}));
+    let other = other["structuredContent"]["seat"].as_u64().expect("a seat");
+    let neighbour = yuna.start_program(other, &print, &env, true);
+    let neighbour_log = PathBuf::from(neighbour["log"].as_str().expect("a log"));
+    let neighbour_address = printed_variable(&neighbour_log, "AT_SPI_BUS_ADDRESS").expect("a bus");
+    assert_ne!(neighbour_address, address);
+    assert!(
+        neighbour_address.ends_with(&format!("seat-{other}.a11y/bus")),
+        "{neighbour_address}"
+    );
+    let neighbour_plain = yuna.start_program(other, &print, &env, false);
+    let neighbour_plain_log = PathBuf::from(neighbour_plain["log"].as_str().expect("a log"));
+    assert_eq!(
+        printed_variable(&neighbour_plain_log, "AT_SPI_BUS_ADDRESS"),
+        None
+    );
+    assert!(
+        !fs::read_to_string(&neighbour_plain_log)
+            .unwrap_or_default()
+            .contains("seat-2.a11y"),
+        "seat 2's bus reached seat {other}'s program"
+    );
+    assert_eq!(daemons_of(yuna_pid).len(), 2);
+
+    // The daemon killed: the seat goes on, its socket goes, and the next program starts another.
+    kill_process(Pid::from_raw(first[0]).expect("a pid"), Signal::KILL).expect("SIGKILL is sent");
+    wait_for("the dead bus's socket removed", || {
+        (!folder.join("bus").exists()).then_some(())
+    });
+    let listed = yuna.call("seat", json!({"action": "list"}));
+    assert_eq!(
+        listed["structuredContent"]["seats"][0]["seat"],
+        json!(SEAT),
+        "{listed}"
+    );
+    let again = yuna.start_program(SEAT, &print, &env, true);
+    let again_log = PathBuf::from(again["log"].as_str().expect("a log"));
+    assert_eq!(
+        printed_variable(&again_log, "AT_SPI_BUS_ADDRESS"),
+        Some(address)
+    );
+    let second = wait_for("the new bus", || {
+        let daemons: Vec<i32> = daemons_of(yuna_pid)
+            .into_iter()
+            .filter(|pid| *pid != first[0])
+            .collect();
+        (daemons.len() == 2).then_some(daemons)
+    });
+    assert!(folder.join("bus").exists());
+
+    // The seat closed, its daemon is ended among its processes; the other seat's runs on.
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    let ended = closed["structuredContent"]["ended"].clone();
+    let seat_daemon = second
+        .iter()
+        .copied()
+        .find(|pid| {
+            ended
+                .as_array()
+                .is_some_and(|ended| ended.contains(&json!(pid)))
+        })
+        .unwrap_or_else(|| panic!("no daemon among {ended}: {second:?}"));
+    assert!(!alive(seat_daemon));
+    assert!(!folder.exists(), "{}", folder.display());
+    assert_eq!(daemons_of(yuna_pid).len(), 1);
+    // The other seat's daemon ends with Yuna: by its pid, since one that outlived Yuna would
+    // have another parent.
+    let other_daemon = second
+        .iter()
+        .copied()
+        .find(|pid| *pid != seat_daemon)
+        .expect("the other seat's daemon");
+    assert!(alive(other_daemon));
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    wait_for("the other seat's daemon's end", || {
+        (!alive(other_daemon)).then_some(())
+    });
+}
+
+/// A program that stops answering, stopped by SIGSTOP, costs a call its deadline and no more, is
+/// told as such, and never keeps another program's tree from being read.
+#[test]
+fn a_program_that_stops_answering_costs_its_deadline_alone() {
+    let mut yuna = Yuna::start("a11y-stopped");
+    let env = pinned_environment(&yuna, &gtk_variables());
+    let demo = yuna.start_program(SEAT, &["gtk4-demo", "--run=dialog"], &env, true);
+    let qt_env = pinned_environment(&yuna, &qt_variables("wayland"));
+    let scene = accessible_scene();
+    let qml = yuna.start_program(SEAT, &["qml", &scene], &qt_env, true);
+    for (program, name) in [(&demo, "message dialog"), (&qml, "Press me")] {
+        yuna.accessible_nodes(json!({
+            "seat": SEAT, "pid": program["pid"], "name": name, "wait_ms": 40_000
+        }));
+    }
+    let stopped = Pid::from_raw(demo["pid"].as_i64().expect("a pid") as i32).expect("a pid");
+    kill_process(stopped, Signal::STOP).expect("SIGSTOP is sent");
+    // Qt's own walk must end within its deadline too, which a loaded machine may keep it from:
+    // an attempt in which Qt did not answer in time is made again, up to three, each one checked
+    // whole.
+    let mut attempts = 0;
+    let found = loop {
+        attempts += 1;
+        let began = Instant::now();
+        let found = yuna.accessible_nodes(json!({"seat": SEAT, "role": "button"}));
+        let took = began.elapsed();
+        eprintln!(
+            "attempt {attempts}: the call with a stopped program took {} ms",
+            took.as_millis()
+        );
+        assert!(
+            took >= yuna::mcp::APP_DEADLINE
+                && took < yuna::mcp::APP_DEADLINE + Duration::from_secs(2),
+            "{took:?}"
+        );
+        let status_of = |pid: &Value| {
+            found["apps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|app| &app["pid"] == pid)
+                .map(|app| app["status"].clone())
+                .unwrap_or_else(|| panic!("no application {pid} in {found}"))
+        };
+        assert_eq!(
+            status_of(&demo["pid"]),
+            json!("no answer within 3 s"),
+            "{found}"
+        );
+        if status_of(&qml["pid"]) == json!("complete") || attempts == 3 {
+            assert_eq!(status_of(&qml["pid"]), json!("complete"), "{found}");
+            break found;
+        }
+    };
+    kill_process(stopped, Signal::CONT).expect("SIGCONT is sent");
+    assert!(
+        found["nodes"]
+            .as_array()
+            .is_some_and(|nodes| nodes.iter().any(|node| node["name"] == json!("Press me"))),
+        "{found}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The context switches of every thread of process `pid`, from `/proc/<pid>/task/*/status`.
+fn context_switches(pid: i32) -> u64 {
+    let Ok(tasks) = fs::read_dir(format!("/proc/{pid}/task")) else {
+        return 0;
+    };
+    tasks
+        .flatten()
+        .filter_map(|task| fs::read_to_string(task.path().join("status")).ok())
+        .flat_map(|status| {
+            status
+                .lines()
+                .filter(|line| line.contains("ctxt_switches:"))
+                .filter_map(|line| line.split_whitespace().last()?.parse::<u64>().ok())
+                .collect::<Vec<u64>>()
+        })
+        .sum()
+}
+
+/// How long the rest is measured: 30 s.
+const ACCESSIBLE_REST: Duration = Duration::from_secs(30);
+
+/// How long Yuna and the bus must go without a context switch before the rest is measured:
+/// longer than the bus's reply timeout, 5 s. dbus-daemon arms a timer for the calls it forwards
+/// that wait for a reply; a reply that comes removes its call but leaves the timer armed
+/// (dbus 1.16.2, `bus/expirelist.c`), so that it fires once, up to 5 s after the walk's last
+/// call, finds nothing to expire and stops.
+const SETTLED: Duration = Duration::from_secs(6);
+
+/// At rest, once a tree was read, nothing runs in Yuna or in the seat's bus: once both have
+/// settled, over 30 s with an accessible GTK 4 program open, neither Yuna's threads nor the
+/// daemon switch context once.
+#[test]
+fn yuna_and_the_bus_rest_once_a_tree_is_read() {
+    let mut yuna = Yuna::start("a11y-rest");
+    let env = pinned_environment(&yuna, &gtk_variables());
+    yuna.start_program(SEAT, &["gtk4-demo", "--run=dialog"], &env, true);
+    let found = yuna.accessible_nodes(json!({
+        "seat": SEAT, "role": "button", "name": "message dialog", "wait_ms": 40_000
+    }));
+    let walked = Instant::now();
+    let visited: u64 = found["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|app| app["nodes_visited"].as_u64())
+        .sum();
+    let yuna_pid = yuna.child.id() as i32;
+    let daemon = daemons_of(yuna_pid)[0];
+    // Settled first: the walk's replies, the program's own start and the bus's last timer
+    // behind.
+    let settled_by = Instant::now() + Duration::from_secs(90);
+    let mut last = (context_switches(yuna_pid), context_switches(daemon));
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < SETTLED {
+        std::thread::sleep(Duration::from_millis(500));
+        let now = (context_switches(yuna_pid), context_switches(daemon));
+        if now != last {
+            last = now;
+            quiet_since = Instant::now();
+        }
+        assert!(
+            Instant::now() < settled_by,
+            "Yuna and the bus never settled"
+        );
+    }
+    eprintln!(
+        "settled {} ms after the walk, Yuna and the bus without a context switch for {} s",
+        walked.elapsed().as_millis() - SETTLED.as_millis(),
+        SETTLED.as_secs()
+    );
+    let before = last;
+    std::thread::sleep(ACCESSIBLE_REST);
+    let after = (context_switches(yuna_pid), context_switches(daemon));
+    eprintln!(
+        "over {} s at rest after a walk of {visited} nodes: Yuna {} context switches ({} -> {}), \
+         dbus-daemon {} ({} -> {})",
+        ACCESSIBLE_REST.as_secs(),
+        after.0 - before.0,
+        before.0,
+        after.0,
+        after.1 - before.1,
+        before.1,
+        after.1
+    );
+    assert_eq!(after.0, before.0, "Yuna woke at rest");
+    assert_eq!(after.1, before.1, "the bus woke at rest");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A daemon that never prints its address, named by `YUNA_DBUS_DAEMON`, is ended at the start's
+/// limit, 5 s, and the program that waited for it is told so; what it wrote, 2 MiB, is kept in its
+/// log as a program's output is, its first 256 KiB and its newest 1 MiB; a name that is no
+/// executable file is refused at once.
+/// Yuna and its seat go on.
+#[test]
+fn a_bus_that_never_starts_fails_its_program_at_the_limit() {
+    let scripts = std::env::temp_dir().join(format!("yuna-fake-daemon-{}", std::process::id()));
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&scripts)
+        .expect("a folder");
+    let silent = scripts.join("dbus-daemon");
+    fs::write(
+        &silent,
+        format!(
+            "#!{}\nhead -c 2097152 /dev/zero\nexec sleep 600\n",
+            in_path("sh").display()
+        ),
+    )
+    .expect("a script");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&silent, fs::Permissions::from_mode(0o755)).expect("executable");
+    let print = ["sh", "-c", "sleep 600"];
+    let env: BTreeMap<String, String> = BTreeMap::new();
+
+    let silent_path = silent.display().to_string();
+    let mut yuna = Yuna::launch(
+        "a11y-silent",
+        None,
+        &[("YUNA_DBUS_DAEMON", silent_path.as_str())],
+    );
+    yuna.call("seat", json!({"action": "create"}));
+    let began = Instant::now();
+    let refused = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": print, "env": env, "accessibility": true}),
+    );
+    let took = began.elapsed();
+    let text = refused["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    assert!(text.contains("was not ready in 5 s"), "{text}");
+    assert!(
+        took >= Duration::from_secs(5) && took < Duration::from_secs(8),
+        "{took:?}"
+    );
+    let listed = yuna.call("seat", json!({"action": "list"}));
+    assert_eq!(
+        listed["structuredContent"]["seats"][0]["seat"],
+        json!(SEAT),
+        "{listed}"
+    );
+    let log = yuna
+        .runtime_dir()
+        .join(format!("yuna-mcp-{}", yuna.child.id()))
+        .join("seat-2.a11y/bus.log");
+    let kept = wait_for("the daemon's log", || {
+        let size = fs::metadata(&log).ok()?.len();
+        (size == yuna::mcp::LOG_HEAD + yuna::mcp::LOG_TAIL).then_some(size)
+    });
+    assert_eq!(kept, (256 << 10) + (1 << 20));
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+
+    let mut yuna = Yuna::launch(
+        "a11y-nowhere",
+        None,
+        &[("YUNA_DBUS_DAEMON", "/nonexistent/dbus-daemon")],
+    );
+    yuna.call("seat", json!({"action": "create"}));
+    let refused = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": print, "env": env, "accessibility": true}),
+    );
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("not an absolute path to an executable file")),
+        "{refused}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    let _ = fs::remove_dir_all(&scripts);
 }

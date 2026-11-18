@@ -172,10 +172,14 @@
     "title": "Workspaces"
   },
   {
-    "description": "Start a program on a seat, list a seat's programs, stop one, read its log, or make it stuck or slow. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log of its output and errors; its windows open on its seat. env {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives each program's state, its log's size, its run_percent (100 free, 0 frozen) and protocol_error: the last Wayland protocol error one of its connections was ended for (interface, object, code, message), null for none. stop sends its process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of them, 64 KiB by default, 1 MiB at most, from the byte offset from since it started, or its newest without from; size is every byte it wrote, dropped those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; ended is true once its output has closed. freeze stops its process group (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of each 100 ms and stops it the rest, on real time whatever the clock, until thaw, freeze, stop or the end of its group. A frozen program reads no event: once its Wayland socket's buffer fills, Yuna closes its connection, and events tells client_left with reason closed. Logs go when the seat closes.",
+    "description": "Start a program on a seat, list a seat's programs, stop one, read its log, or make it stuck or slow. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log of its output and errors; its windows open on its seat. env {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives each program's state, its log's size, its run_percent (100 free, 0 frozen) and protocol_error: the last Wayland protocol error one of its connections was ended for (interface, object, code, message), null for none. stop sends its process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of them, 64 KiB by default, 1 MiB at most, from the byte offset from since it started, or its newest without from; size is every byte it wrote, dropped those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; ended is true once its output has closed. freeze stops its process group (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of each 100 ms and stops it the rest, on real time whatever the clock, until thaw, freeze, stop or the end of its group. A frozen program reads no event: once its Wayland socket's buffer fills, Yuna closes its connection, and events tells client_left with reason closed. Logs go when the seat closes. With accessibility, it joins its seat's accessibility bus, which the first such program starts, and the accessibility tool reads its tree: GTK, Qt and the ATK bridge's toolkits turn their accessibility on; Chromium and Electron also need --force-renderer-accessibility in their command for a page's own content. Without it, a program runs with its toolkit's accessibility off.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "accessibility": {
+          "description": "start: on its seat's accessibility bus, its tree read by the accessibility tool; false by default",
+          "type": "boolean"
+        },
         "action": {
           "enum": [
             "start",
@@ -334,6 +338,61 @@
     },
     "name": "events",
     "title": "Events"
+  },
+  {
+    "description": "Find nodes of the accessibility trees of a seat's programs started with spawn start and accessibility: true, a button by its name for one: each node's window, app (its process id), role and name as AT-SPI gives them, description, states, and rect, its rectangle in its output's logical units from the output's top-left corner, the units pointer takes: click its centre to press it. name is a part of the node's name, compared without regard to case; role an AT-SPI role name (button, check box, text, frame, label…); states AT-SPI state names the node must all have (focused, checked, sensitive, showing…). window or pid limit the walk to that program's tree. A walk visits max_nodes nodes at most, 10000 by default, and gives 256 nodes at most, more true past them; each program has 3 s to answer, and one that does not is told so in apps, never holding the others. With wait_ms, waits up to that long for a node that matches, walking again as the programs change. A program started without accessibility is not on the bus.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "max_nodes": {
+          "description": "the most nodes visited; 10000 by default",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "name": {
+          "description": "a part of the name, any case",
+          "minLength": 1,
+          "type": "string"
+        },
+        "pid": {
+          "description": "only this process's tree",
+          "type": "integer"
+        },
+        "role": {
+          "description": "an AT-SPI role name",
+          "type": "string"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "states": {
+          "description": "AT-SPI state names the node must all have",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "wait_ms": {
+          "description": "how long to wait for a match; 0 by default",
+          "maximum": 50000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "description": "only this window's program",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "accessibility",
+    "title": "Accessibility tree"
   },
   {
     "description": "Capture what one of a seat's outputs shows, as a PNG image of its newest frame: the one being drawn when a change is on its way, else the last one drawn. All of the output, its first by default, a region of it, or a window: what the output shows where the window is, what covers it included; a hidden window is refused. By default at the logical size, where a pixel is a logical unit, the units pointer takes; size physical gives every physical pixel. The result tells how the image maps to its output, logical = x + pixel × units_per_pixel, and gives a capture id: pointer takes it, with x and y in that image's pixels. One capture of a seat at a time. It comes once the clock reaches the boundary its frame is presented at: on a manual clock, advance it.",

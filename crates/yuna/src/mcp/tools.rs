@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
+use super::accessibility::MAX_NODES;
 use super::events::{Event, EventData, Kind, Reading};
 use super::image::base64;
 use super::programs::{End, LogRead, Program};
@@ -205,7 +206,12 @@ pub fn definitions() -> Value {
                 each 100 ms and stops it the rest, on real time whatever the clock, until thaw, \
                 freeze, stop or the end of its group. A frozen program reads no event: once its \
                 Wayland socket's buffer fills, Yuna closes its connection, and events tells \
-                client_left with reason closed. Logs go when the seat closes.",
+                client_left with reason closed. Logs go when the seat closes. \
+                With accessibility, it joins its seat's accessibility bus, which the first such \
+                program starts, and the accessibility tool reads its tree: GTK, Qt and the ATK \
+                bridge's toolkits turn their accessibility on; Chromium and Electron also need \
+                --force-renderer-accessibility in their command for a page's own content. \
+                Without it, a program runs with its toolkit's accessibility off.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -217,6 +223,9 @@ pub fn definitions() -> Value {
                     "env": { "type": "object", "additionalProperties": { "type": "string" },
                         "description": "start: variables added to its environment" },
                     "cwd": { "type": "string", "description": "start: its working folder" },
+                    "accessibility": { "type": "boolean",
+                        "description": "start: on its seat's accessibility bus, its tree read \
+                            by the accessibility tool; false by default" },
                     "program": { "type": "integer",
                         "description": "stop, log, freeze, thaw, slow: the program's id" },
                     "force": { "type": "boolean",
@@ -314,6 +323,43 @@ pub fn definitions() -> Value {
                         "description": "only these kinds; every kind by default" },
                     "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
                         "description": "how long to wait for a first event; 0 by default" }
+                },
+                "required": ["seat"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "accessibility",
+            "title": "Accessibility tree",
+            "description": "Find nodes of the accessibility trees of a seat's programs started \
+                with spawn start and accessibility: true, a button by its name for one: each \
+                node's window, app (its process id), role and name as AT-SPI gives them, \
+                description, states, and rect, its rectangle in its output's logical units from \
+                the output's top-left corner, the units pointer takes: click its centre to press \
+                it. name is a part of the node's name, compared without regard to case; role an \
+                AT-SPI role name (button, check box, text, frame, label…); states AT-SPI state \
+                names the node must all have (focused, checked, sensitive, showing…). window or \
+                pid limit the walk to that program's tree. A walk visits max_nodes nodes at \
+                most, 10000 by default, and gives 256 nodes at most, more true past them; each \
+                program has 3 s to answer, and one that does not is told so in apps, never \
+                holding the others. With wait_ms, waits up to that long for a node that matches, \
+                walking again as the programs change. A program started without accessibility \
+                is not on the bus.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seat": seat,
+                    "window": { "type": "integer", "description": "only this window's program" },
+                    "pid": { "type": "integer", "description": "only this process's tree" },
+                    "name": { "type": "string", "minLength": 1,
+                        "description": "a part of the name, any case" },
+                    "role": { "type": "string", "description": "an AT-SPI role name" },
+                    "states": { "type": "array", "items": { "type": "string" },
+                        "description": "AT-SPI state names the node must all have" },
+                    "max_nodes": { "type": "integer", "minimum": 1, "maximum": MAX_NODES,
+                        "description": "the most nodes visited; 10000 by default" },
+                    "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
+                        "description": "how long to wait for a match; 0 by default" }
                 },
                 "required": ["seat"],
                 "additionalProperties": false
@@ -718,6 +764,9 @@ pub enum SpawnCall {
         #[serde(default)]
         env: BTreeMap<String, String>,
         cwd: Option<String>,
+        /// Whether it joins its seat's accessibility bus.
+        #[serde(default)]
+        accessibility: bool,
     },
     List {
         seat: u64,
@@ -784,6 +833,22 @@ impl WindowsCall {
                 .is_none_or(|app_id| window.app_id.as_ref() == Some(app_id))
             && self.pid.is_none_or(|pid| window.pid == Some(pid))
     }
+}
+
+/// `accessibility`'s arguments.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccessibilityCall {
+    pub seat: u64,
+    pub window: Option<u64>,
+    pub pid: Option<i32>,
+    pub name: Option<String>,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub states: Vec<String>,
+    pub max_nodes: Option<u64>,
+    #[serde(default)]
+    pub wait_ms: u64,
 }
 
 /// `capture`'s arguments.
@@ -1225,6 +1290,7 @@ pub fn program_json(program: &Program) -> Value {
         "seat": program.seat.0,
         "pid": program.pid.as_raw_nonzero().get(),
         "command": program.command,
+        "accessibility": program.accessible,
         "state": state,
         "group_running": program.group_runs(),
         "exit_code": exit_code,
@@ -1375,6 +1441,7 @@ mod tests {
                 "spawn",
                 "windows",
                 "events",
+                "accessibility",
                 "capture",
                 "pointer",
                 "keyboard",

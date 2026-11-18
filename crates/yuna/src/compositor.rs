@@ -528,6 +528,11 @@ impl Compositor {
         Ok(pids)
     }
 
+    /// The commits of `seat`'s clients' surfaces since it was made; none for a seat that is not.
+    pub fn seat_commits(&self, seat: SeatId) -> u64 {
+        self.state.seat(seat).map_or(0, |seat| seat.commits)
+    }
+
     /// The process ids of `seat`'s clients, as the kernel gave them for their sockets.
     pub fn client_pids(&self, seat: SeatId) -> Vec<i32> {
         self.state.client_pids(seat)

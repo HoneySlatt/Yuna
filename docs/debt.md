@@ -331,6 +331,33 @@ with games' VRR:
   An offer a client keeps keeps the text it offered, 256 KiB at most, until the client destroys
   it.
 
+## Accessibility
+
+- AccessKit's programs, egui's among them, are not read: `accesskit_unix` 0.24 turns on only when
+  a session bus's `org.a11y.Status` says `IsEnabled`, and a program of Yuna's has no session bus.
+  The facts behind M1.11's accessibility, read in the toolkits' sources on 2026-11-17, are not in
+  the [survey](survey.md) yet.
+- Tested: GTK 4.24 on Wayland, Qt 6.12 on Wayland and on X11 at scale 1.5. Untested: GTK 3,
+  Firefox, Chromium and Electron (which need `--force-renderer-accessibility`), Java. Their
+  coordinates are given as their toolkit counts them, uncorrected: Chromium counts from its
+  surface, its shadow included, and an X11 toolkit that does not scale by `Xft.dpi`, GTK 3 on
+  X11, counts in X11 pixels, 1.5 times Yuna's units at scale 1.5.
+- A node on a surface of its own, a GTK 4 popover or a menu in a window of its own, is placed as
+  its toolkit counts it from its window: untested.
+- Yuna registers no event listener, so that programs send nothing: a waiting call walks the trees
+  again when a client commits, an application embeds, and every second, rather than when a tree
+  changes. A walk makes three calls a node; the ATK bridge's `Collection.GetMatches`, which
+  would search Firefox's and Chromium's large trees on their side, is not used.
+- Yuna's registry sets no application's `Id` and sends no `ChildrenChanged`: an assistive program
+  other than Yuna on a seat's bus would not see applications come and go.
+- The daemon wakes once, up to 5 s after a walk's last call, its timer of calls waiting for a
+  reply firing to find none ([measurements](measurements.md#m111-accessibility-at-rest-2026-11-18)).
+- A Flatpak program's connection is its D-Bus proxy's, whose process is not the program's: its
+  nodes would get no window.
+- The D-Bus code has property tests on random and broken messages, no fuzz target yet
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md),
+  item 22).
+
 ## Motion
 
 - While a special workspace fades out, `Motion::update` asks the layout where each of its

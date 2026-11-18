@@ -94,6 +94,29 @@ shared their xkb states:
 Not measured: a change with clients connected, each of which is sent the keymap's file; a
 change while a program types.
 
+## M1.11: accessibility at rest (2026-11-18)
+
+Whether anything runs in Yuna or in a seat's accessibility bus once an agent has read a tree.
+`yuna mcp`, debug build of the M1.11 accessibility work on `6e271a3`, on the desktop (Ryzen 7
+5800X, Linux 7.3.1, dbus 1.16.2 and GTK 4.24.0 of the shell). The test
+`yuna_and_the_bus_rest_once_a_tree_is_read` (`crates/yuna/tests/mcp.rs`) starts `gtk4-demo
+--run=dialog` with `accessibility: true` on llvmpipe and lavapipe, finds its "Message Dialog"
+button, waits until Yuna and the daemon have gone 6 s without a context switch, then reads the
+context switches of every thread of each, `/proc/<pid>/task/*/status`, before and after 30 s.
+
+| What | Settled after the walk | Yuna over 30 s | dbus-daemon over 30 s |
+|---|---|---|---|
+| A walk of 24 nodes | 5.1 s | 0 context switches (289 → 289) | 0 (54 → 54) |
+
+- The daemon wakes once after a walk, up to its reply timeout, 5 s, later: its timer of calls
+  waiting for a reply stays armed when the replies come, fires once, finds nothing and stops
+  (dbus 1.16.2, `bus/expirelist.c`). A first run that waited 2 s of quiet saw that one wake,
+  dbus-daemon 1 context switch and Yuna 0 over 30 s.
+- Disturbed: other sessions' builds kept the load average at 28 to 40 during both runs. A process
+  at rest does not switch context under load; nothing here is a time.
+- Not measured: a walk's time on a large tree, Qt's programs at rest, several programs on one
+  bus.
+
 ## M1.10 — A program's presentation in Yuna against a headless sway (2026-11-17)
 
 uwui's own `scripts/measure.py`, at the revision `flake.nix` pins (`fb77f0d`), measures `vkcube`

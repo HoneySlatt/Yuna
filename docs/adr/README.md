@@ -113,4 +113,5 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0091](0091-the-clipboard-between-x11-and-wayland-who-reads-and-its-bounds.md) | The clipboard between X11 and Wayland: who reads it, and its bounds | Accepted |
 | [0092](0092-a-programs-protocol-trace-its-errors-and-its-log-through-mcp.md) | A program's protocol trace, its errors and its log through MCP | Accepted |
 | [0093](0093-a-call-that-waits-for-the-seats-events.md) | A call that waits for the seat's events, and programs made stuck or slow | Accepted |
+| [0094](0094-the-accessibility-tree-yuna-as-the-registry-of-each-seats-bus.md) | The accessibility tree: Yuna as the registry of each seat's bus | Accepted |
 | [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard and layouts, its closing | Accepted; supersedes 0037; supersedes in part 0043 |

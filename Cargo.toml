@@ -35,6 +35,10 @@ png = "0.18.1"
 # redirect the root's windows; XFixes, for the disconnection mode `-terminate` needs; RandR, for
 # Xwayland's outputs; XRes, for the client behind a window; Sync, for `_NET_WM_SYNC_REQUEST`.
 x11rb = { version = "0.14.0", default-features = false, features = ["composite", "xfixes", "randr", "res", "sync"] }
+# The D-Bus wire format of the accessibility bus's messages, zbus's `wire` module alone: without
+# its default features it holds no connection, no runtime and no executor (crates/yuna/src/dbus/).
+# zvariant, its former home, is unmaintained (RUSTSEC-2026-0370).
+zbus = { version = "6.3.0", default-features = false }
 # Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
 # Wayland protocol and of the protocols beyond the core one, unstable and staging ones included
 # (`ext-data-control-v1`, fractional scale, xdg-activation, xdg-dialog).

@@ -34,6 +34,7 @@ mod capture;
 mod clock;
 pub mod colour;
 mod compositor;
+mod dbus;
 mod dialog;
 mod dmabuf;
 mod frames;

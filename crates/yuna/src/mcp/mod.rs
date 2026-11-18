@@ -23,12 +23,18 @@
 //! SIGKILL [`END_GRACE`] later; it is answered once they are gone, [`KILL_WAIT`] after SIGKILL at
 //! most.
 //!
+//! A program started with `accessibility: true` joins its seat's accessibility bus, which the
+//! seat's first such program starts, and on which Yuna is the AT-SPI registry; `accessibility`
+//! reads the trees there (`accessibility/`). A `spawn start` with accessibility waits for its
+//! seat's bus, and is answered once the program has started, or with the bus's failure.
+//!
 //! Bounds: a line over [`stdio::MAX_LINE`] ends the connection; while more than
 //! [`MAX_QUEUED_OUTPUT`] of replies wait, because the client does not read them, no further
 //! request is answered and its input is not read; at most [`tools::MAX_WAITING_CALLS`] calls wait
-//! at once; at most [`MAX_ENCODERS`] captures are encoded at once. The protocol is in
-//! `protocol.rs`, the framing in `stdio.rs`, the tools' schemas and results in `tools.rs`, the
-//! programs in `programs.rs`, the seats' events in `events.rs`.
+//! at once, `windows`, `events`, `clipboard get`, `spawn` waiting for its seat's accessibility
+//! bus and `accessibility` together; at most [`MAX_ENCODERS`] captures are encoded at once. The
+//! protocol is in `protocol.rs`, the framing in `stdio.rs`, the tools' schemas and results in
+//! `tools.rs`, the programs in `programs.rs`, the seats' events in `events.rs`.
 //!
 //! What happens on agents' seats is recorded once a round in each seat's log, `events.rs`: the
 //! windows and outputs as the compositor describes them, compared with the last look; the
@@ -41,6 +47,7 @@
 //! removes their folder ([`Server::programs_folder`], [`end_after_panic`]), then stops Yuna. In a
 //! debug build, `PANIC_ON_TOOL` makes a tool's call panic, for the tests of that path.
 
+mod accessibility;
 mod events;
 mod image;
 mod programs;
@@ -76,22 +83,27 @@ use crate::{
     CLIPBOARD_TIMEOUT, CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error,
     KeyboardLayout,
 };
+use accessibility::{Accessibility, BusState, Outcome};
 use events::{EventData, EventLog, Kind, Observer};
 use image::Encoded;
 use programs::{End, Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
 use tools::{
-    ButtonCall, CaptureCall, ClipboardCall, ClipboardData, ClockCall, CopiedCapture, EventsCall,
-    KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall, ToolResult, WindowsCall,
-    WorkspacesCall,
+    AccessibilityCall, ButtonCall, CaptureCall, ClipboardCall, ClipboardData, ClockCall,
+    CopiedCapture, EventsCall, KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall,
+    ToolResult, WindowsCall, WorkspacesCall,
 };
 
+pub use accessibility::{
+    APP_DEADLINE, MAX_IN_FLIGHT, MAX_NODES, MAX_TEXT, REWALK_AFTER, REWALK_INTERVAL,
+};
 pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use programs::{
-    END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT, LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT,
-    MAX_RUNNING, PACE_PERIOD, SEAT_VARIABLE, end_after_panic,
+    ACCESSIBILITY_VARIABLES, BUS_VARIABLE, END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT,
+    LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT, MAX_RUNNING, NO_ACCESSIBILITY_VARIABLES, PACE_PERIOD,
+    SEAT_VARIABLE, end_after_panic,
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
@@ -164,6 +176,15 @@ struct EventWait {
     after: u64,
     kinds: Option<Vec<Kind>>,
     timer: RegistrationToken,
+}
+
+/// A `spawn start` with accessibility, waiting for its seat's bus.
+#[derive(Debug)]
+struct SpawnWait {
+    id: Value,
+    revision: Revision,
+    seat: SeatId,
+    start: Start,
 }
 
 /// A `capture` call, until it is answered.
@@ -299,6 +320,10 @@ pub struct Server {
     programs: Option<(Programs, OwnedFd)>,
     /// Whether the timer that ends the programs' throttle is armed.
     throttle_armed: bool,
+    /// The seats' accessibility buses and the `accessibility` calls in flight.
+    accessibility: Accessibility,
+    /// The programs waiting for their seat's accessibility bus, in the order they were asked.
+    spawn_waits: Vec<SpawnWait>,
     /// Why the server stops, once it does.
     stopping: Option<Stop>,
     /// The tool whose calls panic, from [`PANIC_ON_TOOL`].
@@ -448,6 +473,8 @@ impl Server {
             seat_output: OutputMode::default(),
             programs,
             throttle_armed: false,
+            accessibility: Accessibility::new(handle.clone()),
+            spawn_waits: Vec::new(),
             stopping: None,
             #[cfg(debug_assertions)]
             panic_on_tool: std::env::var(PANIC_ON_TOOL).ok(),
@@ -524,7 +551,11 @@ impl Server {
         {
             programs::drain(children.as_fd());
             let compositor = &mut self.compositor;
-            let ended = programs.reap(|pid, status| compositor.child_reaped(pid, status));
+            let accessibility = &mut self.accessibility;
+            let ended = programs.reap(|pid, status| {
+                compositor.child_reaped(pid, status);
+                accessibility.child_reaped(pid, status);
+            });
             self.program_exits.extend(ended);
         }
         for key in events.closings_due {
@@ -548,6 +579,10 @@ impl Server {
         // A window is told once it is placed: after the arrangement that follows its mapping.
         if !self.waits.is_empty() && !self.compositor.arrangement_pending() {
             self.answer_waits();
+        }
+        if self.accessibility.has_work() {
+            let outcome = self.accessibility.service(&self.compositor);
+            self.take_accessibility(outcome);
         }
         // What the calls changed reaches the compositor's clients now.
         self.compositor.flush();
@@ -656,6 +691,8 @@ impl Server {
             }
         }
         let _ = rustix::fs::fcntl_setfl(&self.output, self.output_flags);
+        // The buses' daemons end among every process under Yuna.
+        self.accessibility.stop();
         if let Some((mut programs, children)) = self.programs.take() {
             self.end_programs(&mut programs, &children);
             programs.remove_folder();
@@ -781,7 +818,16 @@ impl Server {
                     "workspaces" => self.workspaces(arguments),
                     "pointer" => self.pointer(arguments),
                     "keyboard" => self.keyboard(arguments),
-                    "spawn" => self.spawn(arguments),
+                    "spawn" => match self.spawn(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It waits for its seat's accessibility bus, and is answered later.
+                        None => return,
+                    },
+                    "accessibility" => match self.accessibility_call(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It walks or waits, and is answered later.
+                        None => return,
+                    },
                     "windows" => match self.windows(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits, and is answered later.
@@ -1036,10 +1082,13 @@ impl Server {
     /// Closes `seat`: what the compositor holds of it at once, then its processes, SIGTERM
     /// first. Answered now when none is left, else once they end (`answer_closings_done`).
     fn close_seat(&mut self, id: &Value, revision: Revision, seat: SeatId) -> Option<ToolResult> {
-        let client_pids = match self.compositor.remove_seat(seat) {
+        let daemon = self.accessibility.daemon_pid(seat);
+        let mut client_pids = match self.compositor.remove_seat(seat) {
             Ok(pids) => pids,
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
+        // The accessibility bus's daemon is one of the seat's processes.
+        client_pids.extend(daemon.map(|pid| pid.as_raw_nonzero().get()));
         self.fail_waits_of(seat);
         let handle = self.compositor.loop_handle();
         let processes = match &mut self.programs {
@@ -1085,8 +1134,9 @@ impl Server {
         None
     }
 
-    /// Answers the `windows`, `events`, `capture` and `clipboard` calls that wait on `seat`,
-    /// which closed, and forgets its captures and its events: a stale handle fails plainly
+    /// Answers the `windows`, `events`, `capture`, `clipboard`, `accessibility` calls and the
+    /// `spawn` starts waiting for its bus that wait on `seat`, which closed, and forgets its
+    /// captures, its events and its accessibility bus: a stale handle fails plainly
     /// ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
         self.recent_captures.remove(&seat);
@@ -1117,6 +1167,11 @@ impl Server {
                 result.into_result(read.revision),
             ));
         }
+        for (id, revision, result) in self.accessibility.remove_seat(seat) {
+            self.queue
+                .push(&protocol::response(id, result.into_result(revision)));
+        }
+        self.fail_spawn_waits(seat, &format!("seat {} was closed", seat.0));
         while let Some(index) = self
             .captures
             .iter()
@@ -1621,11 +1676,185 @@ impl Server {
         ToolResult::done(told)
     }
 
-    fn spawn(&mut self, arguments: Map<String, Value>) -> ToolResult {
+    /// `spawn`: the result now, or none when a start waits for its seat's accessibility bus.
+    fn spawn(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
         let call = match tools::arguments(arguments) {
             Ok(call) => call,
-            Err(reason) => return ToolResult::failed(reason),
+            Err(reason) => return Some(ToolResult::failed(reason)),
         };
+        if let SpawnCall::Start {
+            seat,
+            accessibility: true,
+            ..
+        } = &call
+        {
+            let seat = SeatId(*seat);
+            if seat != OWNER_SEAT && self.compositor.seats().contains(&seat) {
+                return self.start_accessible(id, revision, seat, call);
+            }
+        }
+        Some(self.spawn_now(call))
+    }
+
+    /// A `spawn start` with accessibility on `seat`: started now when its bus is ready; else it
+    /// waits for the bus, started first when there is none.
+    fn start_accessible(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        seat: SeatId,
+        call: SpawnCall,
+    ) -> Option<ToolResult> {
+        let SpawnCall::Start {
+            command, env, cwd, ..
+        } = call
+        else {
+            return Some(ToolResult::failed("not a start"));
+        };
+        let Some((programs, _)) = &self.programs else {
+            return Some(ToolResult::failed(
+                "this Yuna starts no program: run `yuna mcp`",
+            ));
+        };
+        let mut start = Start {
+            command,
+            env,
+            cwd: cwd.map(PathBuf::from),
+            accessibility: None,
+        };
+        let state = self.accessibility.bus_state(seat);
+        if let BusState::Ready(address) = state {
+            start.accessibility = Some(address);
+            return Some(self.start_program(seat, start));
+        }
+        if let BusState::Ending(reason) = state {
+            return Some(ToolResult::failed(format!(
+                "seat {}'s accessibility bus is being ended ({reason}): start the program again \
+                 in a moment, and a new bus starts for it",
+                seat.0
+            )));
+        }
+        // Refused before a bus starts for it.
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_WAITING_CALLS} calls wait already"
+            )));
+        }
+        if state == BusState::Absent {
+            let folder = programs.accessibility_folder(seat);
+            let environment = programs::daemon_environment(std::env::vars_os(), seat);
+            let handle = self.compositor.loop_handle();
+            let log = |path: &std::path::Path| programs.bounded_log(&handle, path);
+            if let Err(reason) = self.accessibility.start_bus(seat, folder, environment, log) {
+                return Some(ToolResult::failed(reason));
+            }
+        }
+        self.spawn_waits.push(SpawnWait {
+            id: id.clone(),
+            revision,
+            seat,
+            start,
+        });
+        None
+    }
+
+    /// Starts `start` on `seat` and tells it.
+    fn start_program(&mut self, seat: SeatId, start: Start) -> ToolResult {
+        let Some((programs, _)) = &mut self.programs else {
+            return ToolResult::failed("this Yuna starts no program: run `yuna mcp`");
+        };
+        let handle = self.compositor.loop_handle();
+        let socket = programs.socket_path(seat);
+        let x11 = self.compositor.x11_display(seat);
+        match programs.start(&handle, seat, &socket, x11.as_ref(), start) {
+            Ok(program) => ToolResult::done(json!({ "program": tools::program_json(program) })),
+            Err(reason) => ToolResult::failed(reason),
+        }
+    }
+
+    /// Answers what the accessibility buses and calls did this round: the programs waiting for a
+    /// bus that became ready are started, those of a bus that ended fail.
+    fn take_accessibility(&mut self, outcome: Outcome) {
+        for (id, revision, result) in outcome.answers {
+            self.queue
+                .push(&protocol::response(id, result.into_result(revision)));
+        }
+        for seat in outcome.ready {
+            let BusState::Ready(address) = self.accessibility.bus_state(seat) else {
+                continue;
+            };
+            let mut index = 0;
+            while index < self.spawn_waits.len() {
+                if self.spawn_waits[index].seat != seat {
+                    index += 1;
+                    continue;
+                }
+                let mut wait = self.spawn_waits.remove(index);
+                wait.start.accessibility = Some(address.clone());
+                let result = self.start_program(seat, wait.start);
+                self.queue.push(&protocol::response(
+                    wait.id,
+                    result.into_result(wait.revision),
+                ));
+            }
+        }
+        for (seat, reason) in outcome.ended {
+            self.fail_spawn_waits(seat, &reason);
+        }
+    }
+
+    /// Answers the programs waiting for `seat`'s accessibility bus with `reason`, failed.
+    fn fail_spawn_waits(&mut self, seat: SeatId, reason: &str) {
+        let mut index = 0;
+        while index < self.spawn_waits.len() {
+            if self.spawn_waits[index].seat != seat {
+                index += 1;
+                continue;
+            }
+            let wait = self.spawn_waits.remove(index);
+            let result = ToolResult::failed(reason);
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+        }
+    }
+
+    /// `accessibility`: a failure now, or none while it walks or waits.
+    fn accessibility_call(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call: AccessibilityCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        if let Err(failed) = self.agent_seat(call.seat) {
+            return Some(failed);
+        }
+        if self.programs.is_none() {
+            return Some(ToolResult::failed(
+                "this Yuna starts no program: run `yuna mcp`",
+            ));
+        }
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_WAITING_CALLS} calls wait already"
+            )));
+        }
+        self.accessibility
+            .call(id, revision, call, &self.compositor)
+    }
+
+    /// `spawn`'s list, stop, and start without accessibility: answered now.
+    fn spawn_now(&mut self, call: SpawnCall) -> ToolResult {
         let Some((programs, _)) = &mut self.programs else {
             return ToolResult::failed("this Yuna starts no program: run `yuna mcp`");
         };
@@ -1659,15 +1888,9 @@ impl Server {
                     command,
                     env,
                     cwd: cwd.map(PathBuf::from),
+                    accessibility: None,
                 };
-                let socket = programs.socket_path(seat);
-                let x11 = self.compositor.x11_display(seat);
-                match programs.start(&handle, seat, &socket, x11.as_ref(), start) {
-                    Ok(program) => ToolResult::done(json!({
-                        "program": tools::program_json(program)
-                    })),
-                    Err(reason) => ToolResult::failed(reason),
-                }
+                self.start_program(seat, start)
             }
             SpawnCall::List { .. } => {
                 let list: Vec<Value> = programs
@@ -1795,10 +2018,15 @@ impl Server {
         None
     }
 
-    /// The calls waiting, `windows`', `events`' and `clipboard get`'s together, which
+    /// The calls waiting, `windows`', `events`', `clipboard get`'s, the `spawn` starts waiting
+    /// for their seat's accessibility bus and `accessibility`'s together, which
     /// [`MAX_WAITING_CALLS`] bounds.
     fn waiting_calls(&self) -> usize {
-        self.waits.len() + self.event_waits.len() + self.clipboard_reads.len()
+        self.waits.len()
+            + self.event_waits.len()
+            + self.clipboard_reads.len()
+            + self.spawn_waits.len()
+            + self.accessibility.calls_in_flight()
     }
 
     /// Arms the timer that ends waiting call `key`'s time `after` from now, on real time.
@@ -2508,6 +2736,8 @@ impl Server {
     /// Drops the waiting calls of request `id`, unanswered, as MCP asks. A seat closing goes on,
     /// unanswered.
     fn cancel(&mut self, id: &Value) {
+        self.accessibility.cancel(id);
+        self.spawn_waits.retain(|wait| &wait.id != id);
         for closing in &mut self.closings {
             if closing
                 .reply
