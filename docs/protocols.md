@@ -22,7 +22,7 @@ refuses will say why here. A test, `crates/yuna/tests/headless/protocols.rs`, co
 | Protocol | Global | Yuna | Who needs it | niri | KWin | Hyprland |
 |---|---|---|---|---|---|---|
 | wayland | `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat`, `wl_output`, `wl_data_device_manager` | Offered, every client; a seat's `wl_seat` and `wl_output`s to its own clients ([ADR-0042](adr/0042-main-on-smithays-fork.md)) | Every client | Y | Y | Y |
-| linux-dmabuf-v1 | `zwp_linux_dmabuf_v1` | Offered, every client, when the renderer imports a format: v3 on llvmpipe, v6 with feedback on the GPU | Mesa's Vulkan WSI, Aerith | Y | Y5 | Y5 |
+| linux-dmabuf-v1 | `zwp_linux_dmabuf_v1` | Offered, every client, when the renderer imports a format: v6 with feedback, naming no device on llvmpipe, with its formats of one plane alone, and the render node on the GPU ([ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)) | Mesa's Vulkan WSI, Aerith | Y | Y5 | Y5 |
 | presentation-time | `wp_presentation` | Offered, every client | Mesa's Vulkan WSI, mpv, Aerith, SlimeEngine | Y | Y2 | Y2 |
 | tablet-v2 | — | Planned, 2c ([ADR-0061](adr/0061-yunas-uses.md)) | The owner's tablet | Y | Y2 | Y1 |
 | viewporter | `wp_viewporter` | Offered, every client | Aerith | Y | Y1 | Y1 |

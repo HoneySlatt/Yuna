@@ -788,14 +788,40 @@ multiplies it by S for Xwayland, lands it on the X11 pixel drawn under it, at S 
 ### Buffers
 
 Clients' buffers come through `wl_shm` or `linux-dmabuf`. Yuna offers `linux-dmabuf` only when
-its renderer imports a format: on llvmpipe, version 3 with the formats; with `--gpu`, default
-feedback naming the render node, which Smithay offers as version 6. On llvmpipe, Mesa's own
-clients draw through `wl_shm` all the same: with no GPU named, their EGL and Vulkan fall back on
-shared memory ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)). Each dmabuf is imported when
-its client creates its buffer, so that the client learns at once whether it can be used.
-Smithay refuses broken parameters with a protocol error, which ends that client alone; a buffer
-whose drawing fails is left out of that frame and logged by Smithay's renderer. A destroyed
-dmabuf's texture is freed at the end of the round, like a closed window's.
+its renderer imports a format, with default feedback, which Smithay offers as version 6: one
+tranche of the formats, for the feedback's main device. With `--gpu`, the main device is the
+render node, and the formats are all those the GPU imports. On llvmpipe, the main device is no
+device, `dev_t` 0: llvmpipe reads a buffer with the processor, through a mapping of its file,
+and no GPU's video memory is its own
+([ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)).
+The formats there are those of one plane whose pixels Yuna knows the size of: of the 57 Mesa
+26.2's llvmpipe imports, its 23 of red, red and green, and RGB (`R8`, `AR24`, `AB4H`…), each
+in linear layout or with no modifier given; its YUV formats, packed or of several planes, are
+not offered.
+
+That device works for clients that compare it with their own GPU's number, as Mesa does; the
+protocol tells clients not to rely on such a comparison, and names a device "in general" a DRM
+node. On llvmpipe, then:
+
+- Mesa's EGL and Vulkan on the processor (llvmpipe, lavapipe) draw through `wl_shm`
+  ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
+- Mesa's Vulkan on a GPU sees another device than its own: it draws in its video memory, then
+  copies each frame into a linear buffer outside it, shared as a dmabuf, which llvmpipe maps.
+  Without feedback, it would take Yuna to be on its own GPU, and share buffers in its video
+  memory, which the processor cannot map.
+- Mesa's EGL on a GPU finds no render node for that device. It then tries Zink, OpenGL over the
+  GPU's Vulkan, which shares buffers as Mesa's Vulkan does, and else draws in software, through
+  `wl_shm`; with `LIBGL_ALWAYS_SOFTWARE=1`, it draws in software at once.
+- A GPU client that is not Mesa's may still share a buffer in video memory the processor cannot
+  map: Yuna refuses it, as below, which ends that client alone if it used `create_immed`.
+  Chromium, by its source, binds version 4, logs an error for device 0, and uses
+  `create_immed`. What Chromium, Firefox, VA-API's video decoders and NVIDIA's driver send is
+  not verified.
+
+Each dmabuf is imported when its client creates its buffer, so that the client learns at once
+whether it can be used. Smithay refuses broken parameters with a protocol error, which ends that
+client alone; a buffer whose drawing fails is left out of that frame and logged by Smithay's
+renderer. A destroyed dmabuf's texture is freed at the end of the round, like a closed window's.
 
 Yuna takes a dmabuf only if each of its planes lies in a file it can always read: a real
 dma-buf, whose size is fixed (`fstatfs` gives `DMA_BUF_MAGIC`), or a tmpfs memfd its client
@@ -806,6 +832,24 @@ error. llvmpipe would take a plain memfd, and the renderer reads a plane's file 
 draws, while Smithay checks the plane against the file's size only when the buffer is created: a
 file shrunk in between would kill Yuna with SIGBUS, which Smithay catches only for `wl_shm`
 ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+
+On llvmpipe, a buffer must also lie in its file row by row: one plane, in a format whose bytes
+per pixel Yuna knows (Smithay's `get_bpp`), a stride that holds a row of its pixels, and a last
+row that ends within the file. Smithay and Mesa check only `offset + stride × height` against
+the file: with a shorter stride, llvmpipe reads each row whole, past the plane's end and past the
+file's mapping, where it shows whatever lies there or kills Yuna with SIGSEGV.
+
+And each plane's file must map as llvmpipe maps it: whole, for reading and writing, shared. Yuna
+maps it so, never touches the mapping, and undoes it at once, before the import and again after
+it; a buffer that does not lie in its file, or whose file does not map, is refused as above. Mesa 26.2's llvmpipe
+does not refuse a plane it cannot map: it takes it through a path that ignores the plane's stride
+and maps the file again at each drawing, and when that mapping fails, it draws from address zero,
+which killed Yuna with SIGSEGV. A GPU's buffer in video memory the processor cannot reach fails
+so (`amdgpu` answers `EPERM`), as do a descriptor open for writing alone and a memfd sealed
+against writing. The check after the import catches a seal its client added while Mesa imported
+the file: a seal is never taken off, nor a descriptor's mode changed, so a file that maps after
+the import mapped during it. With `--gpu`, the GPU imports a buffer itself, and no mapping is
+asked.
 
 ### Selections
 

@@ -104,6 +104,8 @@ pub struct Counters {
     /// deadlines, as the timer would have woken it. The timer of the rest audit's log of each
     /// second is left out: it is the auditor's own (`rest.rs`).
     pub wakeups: u64,
+    /// Clients' dmabufs handed to the renderer to import, once Yuna's own checks took them.
+    pub dmabuf_imports: u64,
 }
 
 /// The shell behind a window: what its client speaks.
@@ -891,7 +893,7 @@ impl Compositor {
     /// `linux-dmabuf`: those its renderer imports. 0 when the renderer imports none, and Yuna
     /// offers no `linux-dmabuf` global.
     pub fn dmabuf_format_count(&self) -> usize {
-        self.state.dmabuf_formats
+        self.state.dmabuf_offer.formats
     }
 
     /// What it did so far.
@@ -1085,6 +1087,13 @@ impl Compositor {
     /// take that long.
     pub fn set_draw_hook(&mut self, hook: impl FnMut(&mut Clock) + 'static) {
         self.state.draw_hook = Some(Box::new(hook));
+    }
+
+    /// Sets the hook run just before the renderer imports a client's dmabuf, once Yuna's checks
+    /// before the import took it: a test makes there what a client could do while the renderer
+    /// imports, such as seal the file against writing.
+    pub fn set_dmabuf_import_hook(&mut self, hook: impl FnMut() + 'static) {
+        self.state.dmabuf_import_hook = Some(Box::new(hook));
     }
 
     /// The pixels of `region` of `output`'s last frame, in physical pixels from its top-left

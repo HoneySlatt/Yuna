@@ -30,7 +30,7 @@ Yuna. Read in each repository on 2026-11-17.
 | SlimeEngine | `wp_fifo_v1` and `wp_commit_timing_v1`, so that FIFO works without frame callbacks; a hidden window not waiting a second for each frame | Stage 2, a hidden game paced at its configured rate ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
 | SlimeEngine | `xdg-foreign`; pointer constraints and relative pointer, checked by hand | Stage 2c ([ADR-0061](adr/0061-yunas-uses.md), [ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
 | SlimeEngine | Survive a GPU reset, which ended niri and the session | Recovery without a restart, Stage 2b ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)) |
-| Aerith | `color-management-v1`, `presentation-time`, `fractional-scale-v1`, `viewporter`, `linux-dmabuf-v1` | Offered; `linux-dmabuf-v1` when the renderer imports a format, so with `--gpu` |
+| Aerith | `color-management-v1`, `presentation-time`, `fractional-scale-v1`, `viewporter`, `linux-dmabuf-v1` | Offered; `linux-dmabuf-v1` when the renderer imports a format: with `--gpu`, and on llvmpipe its formats of one plane ([ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)) |
 | Aerith | `fifo-v1`, `content-type-v1` | Stage 2c |
 | Aerith | Its high tier's series measured on Yuna, and Yuna's refusals of colour descriptions in its relay's union | Once Yuna is the owner's desktop (Stage 2); HDR drawn at Stage 5 |
 | Opium | Measures in a headless Weston, which paces transitions badly, at scale 1.5; window events through Umbriel's CLI, gone | Yuna paces each output on its clock; window events with Hollow's interface, Stage 2 |

@@ -63,6 +63,9 @@ pub const OWNER_SEAT: SeatId = SeatId(1);
 /// A hook run when a frame's drawing has ended, before Yuna reads the time it ended at.
 pub(crate) type DrawHook = Box<dyn FnMut(&mut Clock)>;
 
+/// A hook run just before the renderer imports a client's dmabuf, once Yuna's checks took it.
+pub(crate) type DmabufImportHook = Box<dyn FnMut()>;
+
 /// The clients the display ended since the end of the last round, which Yuna frees then
 /// (`Compositor::flush`). Each client's [`ClientState`] holds it and records its own end there.
 pub(crate) type DepartedClients = Arc<Mutex<Vec<Departed>>>;
@@ -117,10 +120,12 @@ pub(crate) struct State {
     /// told they are visible (`frames.rs`).
     pub motion: Motion,
     /// Whether a window closed, a surface or a dmabuf's buffer was destroyed, or a dmabuf was
-    /// imported for a client that left, since the last round: their textures wait to be freed.
+    /// imported for a client that left or then refused, since the last round: their textures
+    /// wait to be freed.
     pub surfaces_gone: bool,
     pub counters: Counters,
     pub draw_hook: Option<DrawHook>,
+    pub dmabuf_import_hook: Option<DmabufImportHook>,
     /// Set by the event loop's sources during a dispatch, read after it.
     pub clients_readable: bool,
     pub timer_fired: bool,
@@ -145,8 +150,8 @@ pub(crate) struct State {
     _cursor_shape_state: CursorShapeManagerState,
     pub selections: Selections,
     pub dmabuf_state: DmabufState,
-    /// How many dmabuf formats clients are offered; 0 when there is no `linux-dmabuf` global.
-    pub dmabuf_formats: usize,
+    /// What the `linux-dmabuf` global offers, and how the renderer reads what it takes.
+    pub dmabuf_offer: crate::dmabuf::Offer,
     _viewporter_state: ViewporterState,
     _fractional_scale_state: FractionalScaleManagerState,
     /// Every window's popups, in trees kept on their toplevels' surfaces.
@@ -201,7 +206,7 @@ impl State {
         let mut seat_state = SeatState::new();
         let owner = SeatData::owner(&mut seat_state, dh, announce_owner_seat)?;
         let mut dmabuf_state = DmabufState::new();
-        let dmabuf_formats = crate::dmabuf::create_global(dh, &mut dmabuf_state, &renderer, device);
+        let dmabuf_offer = crate::dmabuf::create_global(dh, &mut dmabuf_state, &renderer, device);
         let clock = Clock::new(clock_mode);
         let mut rest = crate::rest::RestAudit::new(clock.now());
         rest.add_seat(OWNER_SEAT);
@@ -226,6 +231,7 @@ impl State {
             surfaces_gone: false,
             counters: Counters::default(),
             draw_hook: None,
+            dmabuf_import_hook: None,
             clients_readable: false,
             timer_fired: false,
             stop_requested: false,
@@ -246,7 +252,7 @@ impl State {
             _cursor_shape_state: CursorShapeManagerState::new::<State>(dh),
             selections: Selections::new(dh),
             dmabuf_state,
-            dmabuf_formats,
+            dmabuf_offer,
             _viewporter_state: ViewporterState::new::<State>(dh),
             _fractional_scale_state: FractionalScaleManagerState::new::<State>(dh),
             popups: PopupManager::default(),

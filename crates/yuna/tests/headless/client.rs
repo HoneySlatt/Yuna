@@ -12,7 +12,9 @@ mod dialog;
 mod keyboard;
 mod popups;
 
-pub use buffers::{ProtocolError, memory_file, sealed_memory_file};
+pub use buffers::{
+    ProtocolError, memory_file, memory_file_sealed_with, sealed_memory_file, write_only,
+};
 
 use std::fs::File;
 use std::io::Write;
@@ -154,6 +156,8 @@ pub struct ClientState {
     pub dmabuf_formats: Vec<(u32, u64)>,
     /// What each `zwp_linux_buffer_params_v1.create` came to: `created` (true) or `failed`.
     pub dmabuf_results: Vec<bool>,
+    /// The `zwp_linux_dmabuf_feedback_v1` being read, while one is.
+    dmabuf_feedback: Option<buffers::DmabufFeedback>,
     /// Each `wl_output` bound, by its registry name.
     outputs: Vec<(u32, wl_output::WlOutput)>,
     /// The name each output gave (`wl_output.name`), by its registry name.

@@ -3,8 +3,10 @@
 //! (`linux-dmabuf`); the buffers a misbehaving client attaches (of any size, at an offset, in a
 //! pool it shrinks); and the protocol errors it gets.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
 use std::time::Duration;
 
 use smithay::reexports::rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
@@ -14,7 +16,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
-    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
+    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use yuna::Compositor;
@@ -86,6 +88,37 @@ impl Client {
     /// The version of the `zwp_linux_dmabuf_v1` global the compositor offers; none without one.
     pub fn dmabuf_version(&self) -> Option<u32> {
         self.state.dmabuf.as_ref().map(|(_, version)| *version)
+    }
+
+    /// Binds `zwp_linux_dmabuf_v1` again, at `version`, 4 or later, asks its default feedback,
+    /// and returns what that feedback sent until its `done`.
+    pub fn default_dmabuf_feedback(
+        &mut self,
+        compositor: &mut Compositor,
+        version: u32,
+    ) -> DmabufFeedback {
+        let qh = self.queue.handle();
+        let name = self
+            .state
+            .announced_globals
+            .iter()
+            .find(|(_, interface)| interface == "zwp_linux_dmabuf_v1")
+            .map(|&(name, _)| name)
+            .expect("zwp_linux_dmabuf_v1");
+        let dmabuf: zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1 =
+            self.registry.bind(name, version, &qh, ());
+        let feedback = dmabuf.get_default_feedback(&qh, ());
+        self.state.dmabuf_feedback = Some(DmabufFeedback::default());
+        self.roundtrip(compositor);
+        feedback.destroy();
+        dmabuf.destroy();
+        let received = self
+            .state
+            .dmabuf_feedback
+            .take()
+            .expect("the feedback read");
+        assert!(received.done, "the feedback ends with done");
+        received
     }
 
     /// Creates a `zwp_linux_buffer_params_v1`; what its `create` comes to is recorded in
@@ -196,6 +229,100 @@ impl Client {
     }
 }
 
+/// What a `zwp_linux_dmabuf_feedback_v1` sent.
+#[derive(Debug, Default)]
+pub struct DmabufFeedback {
+    /// Its main device, a `dev_t`.
+    pub main_device: Option<u64>,
+    /// Its format table: each format and modifier, in the table's order.
+    pub table: Vec<(u32, u64)>,
+    /// Its tranches, in their order of preference.
+    pub tranches: Vec<DmabufTranche>,
+    /// The tranche being read.
+    pending: DmabufTranche,
+    /// Whether its `done` came.
+    pub done: bool,
+}
+
+/// One tranche of a `zwp_linux_dmabuf_feedback_v1`.
+#[derive(Debug, Default, Clone)]
+pub struct DmabufTranche {
+    /// Its target device, a `dev_t`.
+    pub target_device: Option<u64>,
+    /// Its flags: 1 scanout, 2 sampling.
+    pub flags: u32,
+    /// The indices of its formats in the format table.
+    pub formats: Vec<u16>,
+}
+
+/// A `dev_t` in an event's array.
+fn device_number(bytes: &[u8]) -> u64 {
+    u64::from_ne_bytes(bytes.try_into().expect("a dev_t of 8 bytes"))
+}
+
+/// Reads a feedback's format table, `size` bytes in `file`: entries of 16 bytes, a format, 4
+/// bytes of padding and a modifier, in the machine's byte order.
+fn read_format_table(file: &File, size: u32) -> Vec<(u32, u64)> {
+    let mut bytes = vec![0; size as usize];
+    file.read_exact_at(&mut bytes, 0)
+        .expect("the format table reads");
+    bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|entry| {
+            let format = u32::from_ne_bytes(entry[..4].try_into().expect("4 bytes"));
+            let modifier = u64::from_ne_bytes(entry[8..].try_into().expect("8 bytes"));
+            (format, modifier)
+        })
+        .collect()
+}
+
+impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let feedback = state
+            .dmabuf_feedback
+            .as_mut()
+            .expect("a feedback being read");
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                feedback.main_device = Some(device_number(&device));
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::FormatTable { fd, size } => {
+                feedback.table = read_format_table(&File::from(fd), size);
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheTargetDevice { device } => {
+                feedback.pending.target_device = Some(device_number(&device));
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheFlags { flags } => {
+                feedback.pending.flags = u32::from(flags);
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheFormats { indices } => {
+                feedback.pending.formats.extend(
+                    indices
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|index| u16::from_ne_bytes(*index)),
+                );
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::TrancheDone => {
+                let tranche = std::mem::take(&mut feedback.pending);
+                feedback.tranches.push(tranche);
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::Done => feedback.done = true,
+            _ => {}
+        }
+    }
+}
+
 /// The bytes of `width` × `height` pixels of four bytes.
 fn byte_count(width: i32, height: i32) -> u64 {
     u64::try_from(super::pixel_count(width, height)).expect("a size in memory") * 4
@@ -214,6 +341,11 @@ pub fn memory_file(size: u64) -> File {
 /// shrink (`F_SEAL_SHRINK`) nor take or lose a seal (`F_SEAL_SEAL`), as a client that shares
 /// memory safely seals it. Its content may still change.
 pub fn sealed_memory_file(pixels: &[u32]) -> File {
+    memory_file_sealed_with(pixels, SealFlags::SHRINK | SealFlags::SEAL)
+}
+
+/// A file in memory that holds `pixels`, `0xAARRGGBB` row by row, then sealed with `seals`.
+pub fn memory_file_sealed_with(pixels: &[u32], seals: SealFlags) -> File {
     let fd = memfd_create(
         "yuna-test-dmabuf",
         MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
@@ -225,8 +357,19 @@ pub fn sealed_memory_file(pixels: &[u32]) -> File {
         .flat_map(|pixel| pixel.to_le_bytes())
         .collect();
     file.write_all(&bytes).expect("the pixels are written");
-    fcntl_add_seals(&file, SealFlags::SHRINK | SealFlags::SEAL).expect("the memfd is sealed");
+    fcntl_add_seals(&file, seals).expect("the memfd is sealed");
     file
+}
+
+/// The same file as `file`, opened again for writing alone, through `/proc/self/fd`: its seals
+/// and its size are `file`'s, but no one can map it through this descriptor, as no one can map a
+/// GPU's buffer that lies in video memory the processor cannot reach.
+pub fn write_only(file: &File) -> File {
+    let path = format!("/proc/self/fd/{}", file.as_raw_fd());
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("a memfd opens again for writing")
 }
 
 impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, usize> for ClientState {

@@ -117,3 +117,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard and layouts, its closing | Accepted; supersedes 0037; supersedes in part 0043 |
 | [0096](0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md) | A rest auditor naming what wakes Yuna or makes it draw | Accepted |
 | [0097](0097-the-budgets-of-yuna-mcp.md) | The budgets of `yuna mcp` | Accepted |
+| [0098](0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md) | On llvmpipe, dmabufs offered for no device and checked as llvmpipe maps them | Accepted |

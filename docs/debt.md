@@ -15,6 +15,12 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   previous state back. Check it at Stage 2, with a `tracing` subscriber.
 - Smithay's connector property patch has debt to pay before main uses it
   ([patches](smithay-patches.md)).
+- Smithay's `create_dmabuf` posts `invalid_dimensions` for a width or a height under 1, then goes
+  on: with a height of 0, a plane's offset and stride added past `u32::MAX` panic in a debug
+  build (`src/wayland/dmabuf/mod.rs`, `plane.offset + plane.stride`), which stops Yuna as any
+  panic of its state, and wrap in a release build, where EGL then refuses the buffer. Seen with
+  a test client, in a test not kept since it panics; its fix is a patch to the fork, not made
+  yet.
 
 ## The layout model
 
@@ -44,10 +50,33 @@ What is known to fall short, why it stays for now, and when it is paid. Each ite
   connected. MCP's `clock` refuses it; in the tests, every client is the test's own.
 - `--gpu`, its dmabuf feedback and a GPU's dmabufs were checked once, by hand, on the owner's
   RX 6900 XT ([measurements](measurements.md)); no test covers them: CI has no GPU, and the
-  tests never use `--gpu` ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). The stories
-  draw a client's dmabuf on llvmpipe alone, from a sealed memfd. No real application in CI uses
-  `linux-dmabuf`: on llvmpipe, Mesa's clients draw through `wl_shm`
+  tests never use `--gpu` ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)). On llvmpipe,
+  a GPU client's dmabufs, Mesa's Vulkan's linear copies outside its video memory
+  ([Buffers](ARCHITECTURE.md#buffers)), were checked once too, by hand: `gtk4-demo` on that GPU,
+  through `yuna mcp`. How fast llvmpipe reads them is not measured: radv puts them in system
+  memory the GPU writes combined, which the processor reads uncached. The stories check the
+  feedback that leads such a client there, draw a client's dmabuf on llvmpipe from a sealed
+  memfd, and refuse files llvmpipe cannot map and strides shorter than a row. No real
+  application in CI uses `linux-dmabuf`:
+  on llvmpipe, Mesa's clients on the processor draw through `wl_shm`
   ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
+- On llvmpipe, a GPU client that is not Mesa's may share a buffer in video memory the processor
+  cannot map: the `dev_t` 0 of the feedback steers only clients that compare it with their GPU,
+  as Mesa does, which the protocol tells them not to rely on
+  ([ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)).
+  Yuna refuses such a buffer, which ends that client, all its windows with it, if it used
+  `create_immed`. Chromium, by its source, binds version 4, logs an error for device 0, and uses
+  `create_immed`; what Chromium, Firefox, VA-API's video decoders and NVIDIA's driver send is not
+  verified.
+- On llvmpipe, `linux-dmabuf` offers no YUV format: a program that shares decoded video as YUV
+  dmabufs must draw another way there. Offering them needs each plane's layout checked, as the
+  one plane of an RGB format's is.
+- On llvmpipe, Yuna's checks of each dmabuf cost, per plane, two maps and unmaps of its file and
+  a few seeks, at its creation; not measured.
+- Mesa 26.2's llvmpipe never frees the buffer of a plane's size it allocates for a file it
+  cannot map (`dri_sw_displaytarget_from_handle`). Yuna refuses such a file before the import;
+  only a client that seals its file against writing while Mesa imports it reaches that path,
+  and Yuna then refuses the buffer, but the size leaks each time.
 - On llvmpipe, Yuna's default output, 3840 × 2160 at 240 Hz, does not hold its rate when the
   whole output changes at each frame: with two `vkcube` covering it, a frame takes about 7 ms,
   and Yuna draws 116 a second, keeping 8.7 to 8.8 of the desktop's 16 threads busy
