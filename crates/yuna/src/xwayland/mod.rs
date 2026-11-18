@@ -13,7 +13,7 @@
 //!   largest of the seat's outputs then, fixed for that Xwayland's life. Yuna stops watching: the
 //!   waiting program stays in the socket's backlog until Xwayland accepts it.
 //! - **Serving**: once `-displayfd` gives the number, the manager's thread connects and takes
-//!   charge (`manager.rs`); once it owns `WM_S0`, Xwayland accepts the waiting program. A start
+//!   charge (`manager/mod.rs`); once it owns `WM_S0`, Xwayland accepts the waiting program. A start
 //!   that has not reached that point within [`START_TIMEOUT`] is ended. Xwayland ends itself
 //!   [`XwaylandConfig::idle_seconds`] after its last X11 client leaves; it may also crash, be
 //!   killed, or be ended by Yuna when its manager fails. Its pidfd reaps it, or, in `yuna mcp`,

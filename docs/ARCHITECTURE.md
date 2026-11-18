@@ -310,7 +310,7 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   woke Yuna and what made it draw, named and counted ([below](#the-rest-auditor)).
 - `xwayland/`: each seat's X display, its Xwayland and its X11 window manager,
   [below](#xwayland): `display.rs`, the display's number, sockets, lock and cookie; `server.rs`,
-  Xwayland's process; `manager.rs`, the manager's thread; `properties.rs`, the X11 properties it
+  Xwayland's process; `manager/`, the manager's thread; `properties.rs`, the X11 properties it
   reads, decoded and bounded; `shell.rs`, `xwayland-shell-v1`; `windows.rs`, X11 windows on
   Yuna's side ([An X11 window's life](#an-x11-windows-life)); `menus.rs`, override-redirect
   windows, menus and tooltips; `answers.rs`, the sync requests and pings Yuna waits on;
@@ -404,7 +404,7 @@ X11 window `WM_DELETE_WINDOW`, else the end of its X11 client.
 
 An X11 window joins the same record and the same layout (`xwayland/windows.rs`,
 [ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). Its manager's thread
-(`xwayland/manager.rs`) follows each child of the root, reads the properties Yuna needs when it
+(`xwayland/manager/`) follows each child of the root, reads the properties Yuna needs when it
 appears and when one changes, and posts what it learns as events to Yuna's loop; Yuna's decisions
 go back as commands, passed to the manager at the round's end (`Compositor::flush`):
 
@@ -1282,7 +1282,7 @@ waits:
    `XAUTHORITY`; its errors go to Yuna's. Yuna stops watching the sockets, which Xwayland accepts
    on.
 2. **Serving.** Once Xwayland writes its number on `-displayfd`, the manager's thread connects
-   through `-wm` and takes charge, in this order (`xwayland/manager.rs`): XFixes'
+   through `-wm` and takes charge, in this order (`xwayland/manager/mod.rs`): XFixes'
    disconnection mode, without which `-terminate` never fires while the manager is connected;
    `RESOURCE_MANAGER`, `Xft.dpi` at 96 × S; XSETTINGS, `Xft/DPI` with it; the drags' proxy,
    unmapped, and XFixes' selection events for `CLIPBOARD`, `PRIMARY` and `XdndSelection` on its

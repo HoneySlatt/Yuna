@@ -5,11 +5,11 @@
 //! Only a seat's Xwayland sees the global ([`ClientState::xwayland`]). For each window it maps,
 //! Xwayland gives a new surface the role (`get_xwayland_surface`), sets a serial on it
 //! (`set_serial`), applied at the surface's commit, and sends the same serial to the window's
-//! manager in a `WL_SURFACE_SERIAL` client message (`manager.rs`). The two meet in either order
-//! (`windows.rs`). A surface that has a role already is Xwayland's own mistake, and the only one
-//! posted to it as a protocol error: what one X11 client does never ends Xwayland's connection,
-//! and with it every X11 program of the seat (ADR-0067). A serial of 0, which the protocol
-//! calls invalid, or a second serial on one surface is logged and ignored.
+//! manager in a `WL_SURFACE_SERIAL` client message (`manager/x11_events.rs`). The two meet in
+//! either order (`windows.rs`). A surface that has a role already is Xwayland's own mistake, and
+//! the only one posted to it as a protocol error: what one X11 client does never ends Xwayland's
+//! connection, and with it every X11 program of the seat (ADR-0067). A serial of 0, which the
+//! protocol calls invalid, or a second serial on one surface is logged and ignored.
 //!
 //! Smithay's own handler (`src/wayland/xwayland_shell.rs`, MIT) was read: the serial kept in
 //! the surface's cached state until its commit is its way too.

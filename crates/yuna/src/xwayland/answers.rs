@@ -5,11 +5,11 @@
 //!
 //! **Sync requests** (EWMH `_NET_WM_SYNC_REQUEST`). A configure that changes the size of a mapped
 //! window that lists the protocol and has a sync counter goes with a sync request of the next
-//! value, and Xwayland holds the window's commits (`_XWAYLAND_ALLOW_COMMITS` 0, `manager.rs`):
-//! Yuna keeps drawing the window's last complete frame. Once the counter reaches the value, or
-//! after [`X11_SYNC_TIMEOUT`], the commits go on. One request waits at a time, as KWin learnt
-//! clients need: a configure meanwhile goes without one, and the wait keeps its deadline, so
-//! that a window resized again and again is never held past it.
+//! value, and Xwayland holds the window's commits (`_XWAYLAND_ALLOW_COMMITS` 0,
+//! `manager/commands.rs`): Yuna keeps drawing the window's last complete frame. Once the counter
+//! reaches the value, or after [`X11_SYNC_TIMEOUT`], the commits go on. One request waits at a
+//! time, as KWin learnt clients need: a configure meanwhile goes without one, and the wait keeps
+//! its deadline, so that a window resized again and again is never held past it.
 //!
 //! **Pings** (EWMH `_NET_WM_PING`). Asked to close, a window that lists the protocol is pinged.
 //! An answer within [`X11_PING_TIMEOUT`] does nothing more; without one the window is marked

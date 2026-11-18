@@ -1,6 +1,6 @@
 //! What Yuna's X11 window manager reads of a window's properties, decoded from the bytes
 //! `GetProperty` gives (ICCCM 2.0, EWMH 1.5, and Xwayland's and GTK's own). The manager's thread
-//! reads them (`manager.rs`); Yuna's loop acts on the result (`windows.rs`).
+//! reads them (`manager/reading.rs`); Yuna's loop acts on the result (`windows.rs`).
 //!
 //! Every read is bounded, so that one X11 client cannot make the manager copy without end:
 //! [`MAX_TEXT_BYTES`] for text, [`MAX_LIST`] atoms for a list, and for a property of fixed

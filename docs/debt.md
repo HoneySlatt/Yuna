@@ -568,7 +568,7 @@ with games' VRR:
 - A menu drawn with its window is drawn only on the outputs its window overlaps: one overflowing
   onto the next output is cut there, as an xdg popup is. Paid at Stage 2, with xdg popups'
   (Yuna's own scene, ADR-0039).
-- No reparenting (`xwayland/manager.rs`): Yuna draws no frames, so a window stays a child of the
+- No reparenting (`xwayland/manager/mod.rs`): Yuna draws no frames, so a window stays a child of the
   root. Java's AWT waits for a reparenting manager unless it runs with
   `_JAVA_AWT_WM_NONREPARENTING=1`; its windows otherwise stay blank. Decided with the desktop at
   Stage 2: Yuna setting it for its programs, or reparenting.
@@ -645,7 +645,7 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - One `State` of 52 fields, 43 public, implements 22 of Smithay's handler traits: any handler can
   change any state. Smithay's shape; Stage 2's core gives each protocol module its own objects.
 - The X11 manager's commands go through an unbounded channel
-  (`crates/yuna/src/xwayland/manager.rs`, `mpsc::channel()`); its events are bounded. Bounded at
+  (`crates/yuna/src/xwayland/manager/mod.rs`, `mpsc::channel()`); its events are bounded. Bounded at
   Stage 2, or earlier if a client can fill it. The selections' commands are bounded before it:
   a Wayland client's reads of an X11 selection at 8 running (`MAX_X11_TRANSFERS`), each with its
   pipe, and the seat's Wayland selections once a round each.

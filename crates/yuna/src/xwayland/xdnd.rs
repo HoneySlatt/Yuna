@@ -1,5 +1,5 @@
 //! Drag and drop between a seat's X11 programs and its Wayland programs, on X11's side: a part of
-//! the seat's X11 window manager, on its thread (`manager.rs`), which alone speaks XDND, version 5
+//! the seat's X11 window manager, on its thread (`manager/`), which alone speaks XDND, version 5
 //! (<https://www.freedesktop.org/wiki/Specifications/XDND/>), and owns the proxy and
 //! `XdndSelection`. Yuna's loop decides (`drag_session.rs`, carried out by `drags.rs`) and never
 //! waits on X11; the manager answers each X11 peer at once from what Yuna last told it. A drag's

@@ -1,4 +1,4 @@
-//! X11 windows on Yuna's side: what each seat's X11 window manager posts (`manager.rs`) becomes
+//! X11 windows on Yuna's side: what each seat's X11 window manager posts (`manager/`) becomes
 //! windows of the layout, as `xdg_toplevel`s are, and the layout's decisions become the manager's
 //! commands ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md),
 //! [ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md),
@@ -1362,7 +1362,7 @@ impl State {
     }
 
     /// Asks the X11 window `x11` to close: `WM_DELETE_WINDOW` when it takes it, else its client
-    /// is ended (`manager.rs`).
+    /// is ended (`manager/commands.rs`).
     pub(crate) fn close_x11(&mut self, x11: &X11Toplevel) {
         self.x11.send(x11.server, Command::Close(x11.window));
         self.x11_ping(x11.server, x11.window);

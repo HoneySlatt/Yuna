@@ -1,6 +1,6 @@
 //! The clipboard and the primary selection between a seat's X11 programs and its Wayland
 //! programs, on X11's side: a part of the seat's X11 window manager, on its thread
-//! (`manager.rs`), which alone speaks X11 and touches the transfers' pipes. Yuna's loop decides
+//! (`manager/`), which alone speaks X11 and touches the transfers' pipes. Yuna's loop decides
 //! what the seat's Wayland selections are (`selections.rs`); it never reads nor writes a byte of
 //! the data, and never waits.
 //!
