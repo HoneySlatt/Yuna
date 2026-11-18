@@ -92,6 +92,7 @@ use crate::clock::Deadline;
 use crate::output::{RefreshAt, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
+use crate::rest::{DrawCause, Source, Wake};
 use crate::seats::seat_of_surface;
 use crate::shell::Told;
 use crate::state::State;
@@ -125,30 +126,39 @@ impl State {
         self.layout_change = std::mem::take(&mut self.layout_change).and(change);
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
-            self.schedule_refresh_for_content(id);
+            self.schedule_refresh_for_content(id, DrawCause::LayoutChange);
         }
     }
 
-    /// Arms `output`'s next refresh for something new to draw: under VRR, unpaced, and sooner
-    /// than a refresh armed already for nothing new.
-    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId) {
+    /// Arms `output`'s next refresh for something new to draw, `cause`: under VRR, unpaced, and
+    /// sooner than a refresh armed already for nothing new.
+    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId, cause: DrawCause) {
         if let Some(index) = self.output_index(output) {
             self.outputs[index].content_pending = true;
         }
-        self.schedule_refresh(output);
+        self.schedule_refresh(output, cause);
     }
 
-    /// Arms `output`'s next refresh, unless it is armed already: at once when the output is
-    /// idle, else at the boundary it aims at minus its lead. See the module's documentation.
-    /// Under VRR, a refresh armed for nothing new is paced; something new that comes before it
-    /// arms it again, sooner.
-    pub(crate) fn schedule_refresh(&mut self, output: OutputId) {
+    /// Notes `cause` among the causes of `output`'s next frame (`rest.rs`), whose refresh is
+    /// armed already.
+    pub(crate) fn note_draw_cause(&mut self, output: OutputId, cause: DrawCause) {
+        if let Some(index) = self.output_index(output) {
+            self.outputs[index].draw_causes.note(cause);
+        }
+    }
+
+    /// Arms `output`'s next refresh for `cause`, unless it is armed already: at once when the
+    /// output is idle, else at the boundary it aims at minus its lead. See the module's
+    /// documentation. Under VRR, a refresh armed for nothing new is paced; something new that
+    /// comes before it arms it again, sooner. Either way `cause` is among the next frame's.
+    pub(crate) fn schedule_refresh(&mut self, output: OutputId, cause: DrawCause) {
         let deadline = Deadline::Refresh(output);
         let now = self.clock.now();
         let Some(index) = self.output_index(output) else {
             return;
         };
         let output = &mut self.outputs[index];
+        output.draw_causes.note(cause);
         let paced = !output.content_pending || output.content_misses >= 2;
         // At a fixed rate nothing is paced: a refresh armed stands, as before VRR.
         let variable = output.timing.is_variable();
@@ -219,14 +229,19 @@ impl State {
             // the layout waits: an arrangement that keeps the window there sends no `enter`.
             self.outputs[index].output.enter(surface);
         }
+        let cause = DrawCause::Commit(self.committing_client);
         if mapped && self.layout_dirty {
+            // The arrangement arms every output; the commit is among its own output's causes.
+            if let Some(output) = shown_on {
+                self.note_draw_cause(output, cause);
+            }
             return;
         }
         if let Some(output) = shown_on {
             if std::mem::take(&mut self.committed_content) {
-                self.schedule_refresh_for_content(output);
+                self.schedule_refresh_for_content(output, cause);
             } else {
-                self.schedule_refresh(output);
+                self.schedule_refresh(output, cause);
             }
         } else if unseen {
             let trees = self.window_trees(root);
@@ -244,6 +259,21 @@ impl State {
     pub(crate) fn arm_hidden_frame(&mut self, last_frame_sent: Option<Duration>) {
         let due = hidden_frame_due(last_frame_sent, self.clock.now());
         self.clock.arm(Deadline::HiddenFrames, due);
+    }
+
+    /// What the rest auditor names a wake of the clock's timer for `deadline`: an output's
+    /// refresh and presentation by the output's seat.
+    pub(crate) fn wake_for(&self, deadline: Deadline) -> Wake {
+        let of_output = |source: Source, output: OutputId| match self.output_index(output) {
+            Some(index) => Wake::of_seat(source, self.outputs[index].seat),
+            None => Wake::of(source),
+        };
+        match deadline {
+            Deadline::Refresh(output) => of_output(Source::ClockRefresh, output),
+            Deadline::Presentation(output) => of_output(Source::ClockPresentation, output),
+            Deadline::HiddenFrames => Wake::of(Source::ClockHiddenFrames),
+            Deadline::X11Answers => Wake::of(Source::ClockX11Answers),
+        }
     }
 
     /// Runs a deadline that came due.
@@ -277,7 +307,7 @@ impl State {
             // changed or failed: a motion never stops short of its end, and a failed drawing of
             // its last frame is drawn again.
             self.outputs[index].in_motion = true;
-            self.schedule_refresh_for_content(output);
+            self.schedule_refresh_for_content(output, DrawCause::Motion);
         } else if std::mem::take(&mut self.outputs[index].in_motion) {
             self.tell_motion_ended(output, held);
         }
@@ -298,7 +328,13 @@ impl State {
             .copied()
             .collect();
         let menus = self.x11_shown_menus(&self.outputs[index]);
+        // What this frame shows; a cause noted from here on is the next frame's.
+        let causes = self.outputs[index].draw_causes.take();
         let drawing = self.draw(index, &shown, &menus);
+        if matches!(drawing, Drawing::Drawn { .. }) {
+            self.rest.frame_drawn(self.outputs[index].seat, &causes);
+        }
+        self.outputs[index].draw_causes.recycle(causes);
         // Readers follow what the buffer holds: a failed drawing leaves the frame before.
         if !matches!(drawing, Drawing::Failed) {
             self.outputs[index].drawn = drawn;

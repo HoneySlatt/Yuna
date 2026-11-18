@@ -47,6 +47,7 @@ use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTa
 
 use yuna_layout::SeatId;
 
+use crate::rest::{Source, Wake, insert_source};
 use crate::seats::{seat_id, seat_of_client};
 use crate::state::{OWNER_SEAT, State};
 use crate::xwayland::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
@@ -258,20 +259,22 @@ impl Selections {
                 return;
             }
         };
-        let source = handle.insert_source(
+        let source = insert_source(
+            handle,
+            Wake::of_seat(Source::SelectionWrite, seat),
             Generic::new(watched, Interest::WRITE, Mode::Level),
             move |_, _, state| {
-                state.woke = true;
                 if !state.selections.writable.contains(&key) {
                     state.selections.writable.push(key);
                 }
                 Ok(PostAction::Continue)
             },
         );
-        let timer = handle.insert_source(
+        let timer = insert_source(
+            handle,
+            Wake::of_seat(Source::SelectionWriteTimeout, seat),
             Timer::from_duration(CLIPBOARD_TIMEOUT),
             move |_, _, state| {
-                state.woke = true;
                 let writes = &state.selections.writes;
                 match writes.get(&key).map(|write| write.progress.elapsed()) {
                     // It wrote since: its limit runs from then.

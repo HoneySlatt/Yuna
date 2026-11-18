@@ -67,6 +67,7 @@ use crate::dbus::{
     BUS_INTERFACE, BUS_NAME, BUS_PATH, Body, Connection, Kind, Message, unix_address,
 };
 use crate::process::{End, kill, reap};
+use crate::rest::{Source, Wake, insert_source};
 use crate::state::State;
 use bus::{BusFiles, START_LIMIT};
 use reader::{Filter, Query, Walk};
@@ -303,9 +304,19 @@ impl Accessibility {
             format!("the accessibility bus could not be watched: {error}")
         };
         let pidfd_source = self
-            .watch(&started.pidfd, Interest::READ, number)
+            .watch(
+                &started.pidfd,
+                Interest::READ,
+                number,
+                Wake::of_seat(Source::AccessibilityDaemon, seat),
+            )
             .map_err(fail_start)?;
-        let address_source = match self.watch(&started.address, Interest::READ, number) {
+        let address_source = match self.watch(
+            &started.address,
+            Interest::READ,
+            number,
+            Wake::of_seat(Source::AccessibilityAddress, seat),
+        ) {
             Ok(source) => source,
             Err(error) => {
                 self.handle.remove(pidfd_source);
@@ -314,14 +325,16 @@ impl Accessibility {
         };
         // The limit's own timer says it came, whatever a clock read later would say.
         let notes = self.notes.clone();
-        let start_timer = self
-            .handle
-            .insert_source(Timer::from_duration(START_LIMIT), move |_, _, state| {
-                state.woke = true;
+        let start_timer = insert_source(
+            &self.handle,
+            Wake::of_seat(Source::AccessibilityStart, seat),
+            Timer::from_duration(START_LIMIT),
+            move |_, _, _| {
                 notes.borrow_mut().late_starts.push(number);
                 TimeoutAction::Drop
-            })
-            .ok();
+            },
+        )
+        .ok();
         tracing::info!(
             seat = seat.0,
             pid = started.pid.as_raw_nonzero().get(),
@@ -353,28 +366,29 @@ impl Accessibility {
         Ok(())
     }
 
-    /// A source on a copy of `fd` that notes bus `number`.
+    /// A source on a copy of `fd` that notes bus `number`, named `wake`.
     fn watch(
         &self,
         fd: &impl AsFd,
         interest: Interest,
         number: u64,
+        wake: Wake,
     ) -> Result<RegistrationToken, String> {
         let fd = fd
             .as_fd()
             .try_clone_to_owned()
             .map_err(|error| error.to_string())?;
         let notes = self.notes.clone();
-        self.handle
-            .insert_source(
-                Generic::new(fd, interest, Mode::Level),
-                move |_, _, state| {
-                    state.woke = true;
-                    notes.borrow_mut().buses.push(number);
-                    Ok(PostAction::Continue)
-                },
-            )
-            .map_err(|error| error.error.to_string())
+        insert_source(
+            &self.handle,
+            wake,
+            Generic::new(fd, interest, Mode::Level),
+            move |_, _, _| {
+                notes.borrow_mut().buses.push(number);
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|error| error.error.to_string())
     }
 
     /// Starts a call of `accessibility`: a failure now, or none while it walks or waits.
@@ -692,8 +706,9 @@ impl Accessibility {
             ))
             .map_err(|e| e.to_string())?;
         let number = bus.number;
-        let readable = self.watch(&connection.fd(), Interest::READ, number)?;
-        let writable = self.watch(&connection.fd(), Interest::WRITE, number)?;
+        let wake = Wake::of_seat(Source::AccessibilityBus, seat);
+        let readable = self.watch(&connection.fd(), Interest::READ, number, wake)?;
+        let writable = self.watch(&connection.fd(), Interest::WRITE, number, wake)?;
         let _ = self.handle.disable(&writable);
         let Some(bus) = self.buses.get_mut(&seat) else {
             self.handle.remove(readable);
@@ -1058,17 +1073,20 @@ impl Accessibility {
         if let Some((token, _)) = call.timer {
             self.handle.remove(token);
         }
-        let key = call.key;
+        let (key, seat) = (call.key, call.seat);
         let timer = next.and_then(|at| {
             let notes = self.notes.clone();
-            self.handle
-                .insert_source(Timer::from_deadline(at), move |_, _, state| {
-                    state.woke = true;
+            insert_source(
+                &self.handle,
+                Wake::of_seat(Source::AccessibilityCall, seat),
+                Timer::from_deadline(at),
+                move |_, _, _| {
                     notes.borrow_mut().calls.push(key);
                     TimeoutAction::Drop
-                })
-                .ok()
-                .map(|token| (token, at))
+                },
+            )
+            .ok()
+            .map(|token| (token, at))
         });
         self.calls[index].timer = timer;
     }

@@ -64,6 +64,7 @@ use yuna_layout::SeatId;
 
 use crate::process::{End, find_program, kill, kill_and_reap, reap};
 use crate::render::Device;
+use crate::rest::{Source, Wake, insert_source};
 use crate::state::State;
 pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
 pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
@@ -289,11 +290,15 @@ impl XServer {
         if let Some(token) = self.overdue.take() {
             handle.remove(token);
         }
-        let armed = handle.insert_source(Timer::from_duration(delay), move |_, _, state| {
-            state.woke = true;
-            state.xwayland_notes.push(Note::Overdue { server: id });
-            TimeoutAction::Drop
-        });
+        let armed = insert_source(
+            handle,
+            Wake::of_seat(Source::XwaylandTimeout, self.seat),
+            Timer::from_duration(delay),
+            move |_, _, state| {
+                state.xwayland_notes.push(Note::Overdue { server: id });
+                TimeoutAction::Drop
+            },
+        );
         match armed {
             Ok(token) => self.overdue = Some(token),
             Err(error) => tracing::warn!(error = %error.error, "Xwayland's timer cannot be armed"),
@@ -528,7 +533,7 @@ impl Xwayland {
         };
         let id = self.next_server;
         self.next_server += 1;
-        if let Err(error) = reap_on_exit(&spawned.pidfd, id, handle) {
+        if let Err(error) = reap_on_exit(&spawned.pidfd, id, seat, handle) {
             tracing::warn!(%error, seat = seat.0, "Xwayland cannot be watched: it ends");
             kill_and_reap(&spawned.pidfd);
             self.after_server(seat, true, handle);
@@ -568,7 +573,7 @@ impl Xwayland {
                 spawned.pid.as_raw_nonzero().get(),
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| watch_displayfd(spawned.displayfd, id, handle));
+            .and_then(|()| watch_displayfd(spawned.displayfd, id, seat, handle));
         if let Err(reason) = connected {
             tracing::warn!(%reason, seat = seat.0, "Xwayland cannot start: it ends");
             xserver.end(handle);
@@ -600,7 +605,7 @@ impl Xwayland {
         );
         let (events, channel) = channel::sync_channel(manager::EVENT_QUEUE);
         let reading = self.reading_managers;
-        let started = listen_to_manager(channel, id, handle).and_then(|token| {
+        let started = listen_to_manager(channel, id, xserver.seat, handle).and_then(|token| {
             xserver.sources.push(token);
             xserver.manager_events = Some(token);
             if !reading && let Err(error) = handle.disable(&token) {
@@ -781,11 +786,15 @@ impl Xwayland {
             ?pause,
             "Xwayland failed in a row: its X11 programs wait"
         );
-        let armed = handle.insert_source(Timer::from_duration(pause), move |_, _, state| {
-            state.woke = true;
-            state.xwayland_notes.push(Note::PauseEnded(seat));
-            TimeoutAction::Drop
-        });
+        let armed = insert_source(
+            handle,
+            Wake::of_seat(Source::XwaylandPause, seat),
+            Timer::from_duration(pause),
+            move |_, _, state| {
+                state.xwayland_notes.push(Note::PauseEnded(seat));
+                TimeoutAction::Drop
+            },
+        );
         match armed {
             Ok(timer) => seat_display.phase = Phase::Paused(timer),
             // Without a timer, at once rather than never.
@@ -846,98 +855,106 @@ fn watch(
     handle: &LoopHandle<'static, State>,
 ) -> Result<RegistrationToken, String> {
     let socket = socket.try_clone().map_err(|error| error.to_string())?;
-    handle
-        .insert_source(
-            Generic::new(socket, Interest::READ, Mode::Level),
-            move |_, _, state| {
-                state.woke = true;
-                state.xwayland_notes.push(Note::Connection(seat));
-                Ok(PostAction::Continue)
-            },
-        )
-        .map_err(|error| error.error.to_string())
+    insert_source(
+        handle,
+        Wake::of_seat(Source::X11Connection, seat),
+        Generic::new(socket, Interest::READ, Mode::Level),
+        move |_, _, state| {
+            state.xwayland_notes.push(Note::Connection(seat));
+            Ok(PostAction::Continue)
+        },
+    )
+    .map_err(|error| error.error.to_string())
 }
 
-/// Watches Xwayland `id`'s process, through a copy of `pidfd`, until it ends, then reaps it.
+/// Watches Xwayland `id`'s process, `seat`'s, through a copy of `pidfd`, until it ends, then
+/// reaps it.
 fn reap_on_exit(
     pidfd: &OwnedFd,
     id: u64,
+    seat: SeatId,
     handle: &LoopHandle<'static, State>,
 ) -> Result<RegistrationToken, String> {
     let pidfd = pidfd.try_clone().map_err(|error| error.to_string())?;
-    handle
-        .insert_source(
-            Generic::new(pidfd, Interest::READ, Mode::Level),
-            move |_, pidfd, state| {
-                let Some(end) = reap(pidfd.as_fd()) else {
-                    return Ok(PostAction::Continue);
-                };
-                state.woke = true;
-                state.xwayland_notes.push(Note::Exited { server: id, end });
-                Ok(PostAction::Remove)
-            },
-        )
-        .map_err(|error| error.error.to_string())
+    insert_source(
+        handle,
+        Wake::of_seat(Source::XwaylandExited, seat),
+        Generic::new(pidfd, Interest::READ, Mode::Level),
+        move |_, pidfd, state| {
+            let Some(end) = reap(pidfd.as_fd()) else {
+                return Ok(PostAction::Continue);
+            };
+            state.xwayland_notes.push(Note::Exited { server: id, end });
+            Ok(PostAction::Remove)
+        },
+    )
+    .map_err(|error| error.error.to_string())
 }
 
-/// Reads Xwayland `id`'s `-displayfd` until a whole line, its display number, or its end.
+/// Reads Xwayland `id`'s `-displayfd`, `seat`'s, until a whole line, its display number, or
+/// its end.
 fn watch_displayfd(
     displayfd: OwnedFd,
     id: u64,
+    seat: SeatId,
     handle: &LoopHandle<'static, State>,
 ) -> Result<(), String> {
     let mut line = Vec::new();
-    handle
-        .insert_source(
-            Generic::new(displayfd, Interest::READ, Mode::Level),
-            move |_, displayfd, state| {
-                state.woke = true;
-                let mut bytes = [0; 16];
-                let number = loop {
-                    match rustix::io::read(displayfd.as_fd(), &mut bytes) {
-                        Ok(0) => break None,
-                        Ok(read) => {
-                            line.extend_from_slice(&bytes[..read]);
-                            if let Some(end) = line.iter().position(|&byte| byte == b'\n') {
-                                break std::str::from_utf8(&line[..end])
-                                    .ok()
-                                    .and_then(|text| text.trim().parse().ok());
-                            }
-                            // A number is a few digits: a longer line is no number.
-                            if line.len() > 32 {
-                                break None;
-                            }
+    insert_source(
+        handle,
+        Wake::of_seat(Source::XwaylandDisplay, seat),
+        Generic::new(displayfd, Interest::READ, Mode::Level),
+        move |_, displayfd, state| {
+            let mut bytes = [0; 16];
+            let number = loop {
+                match rustix::io::read(displayfd.as_fd(), &mut bytes) {
+                    Ok(0) => break None,
+                    Ok(read) => {
+                        line.extend_from_slice(&bytes[..read]);
+                        if let Some(end) = line.iter().position(|&byte| byte == b'\n') {
+                            break std::str::from_utf8(&line[..end])
+                                .ok()
+                                .and_then(|text| text.trim().parse().ok());
                         }
-                        Err(Errno::AGAIN) => return Ok(PostAction::Continue),
-                        Err(Errno::INTR) => {}
-                        Err(_) => break None,
+                        // A number is a few digits: a longer line is no number.
+                        if line.len() > 32 {
+                            break None;
+                        }
                     }
-                };
-                state
-                    .xwayland_notes
-                    .push(Note::Displayed { server: id, number });
-                Ok(PostAction::Remove)
-            },
-        )
-        .map(|_| ())
-        .map_err(|error| error.error.to_string())
+                    Err(Errno::AGAIN) => return Ok(PostAction::Continue),
+                    Err(Errno::INTR) => {}
+                    Err(_) => break None,
+                }
+            };
+            state
+                .xwayland_notes
+                .push(Note::Displayed { server: id, number });
+            Ok(PostAction::Remove)
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| error.error.to_string())
 }
 
-/// Passes manager `id`'s events to Yuna's loop.
+/// Passes manager `id`'s events, `seat`'s, to Yuna's loop.
 fn listen_to_manager(
     channel: Channel<ManagerEvent>,
     id: u64,
+    seat: SeatId,
     handle: &LoopHandle<'static, State>,
 ) -> Result<RegistrationToken, String> {
-    handle
-        .insert_source(channel, move |event, _, state| {
-            state.woke = true;
+    insert_source(
+        handle,
+        Wake::of_seat(Source::X11Manager, seat),
+        channel,
+        move |event, _, state| {
             state.xwayland_notes.push(match event {
                 channel::Event::Msg(event) => Note::Manager { server: id, event },
                 channel::Event::Closed => Note::ManagerGone { server: id },
             });
-        })
-        .map_err(|error| error.error.to_string())
+        },
+    )
+    .map_err(|error| error.error.to_string())
 }
 
 #[cfg(test)]

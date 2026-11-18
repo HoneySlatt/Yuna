@@ -533,7 +533,7 @@ impl State {
             }
             destination => {
                 if !new_content && !armed {
-                    self.schedule_refresh(output);
+                    self.schedule_refresh(output, crate::rest::DrawCause::Capture);
                 }
                 self.pending_captures.push(PendingCapture {
                     output: Some(output),

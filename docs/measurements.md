@@ -4,6 +4,45 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.11: the rest auditor (2026-11-18)
+
+What the rest auditor costs Yuna (`rest.rs`), measured by `crates/yuna/examples/rest_cost.rs` in
+a release build of the rest auditor on `36994d8`, uncommitted. One agent seat, one output of
+640 × 480 at 60 Hz and scale 1 that nothing draws on, on a manual clock; the clients connect
+through socket pairs and send `wl_display.sync`, or commit a surface without a role. Each case
+timed 10,000 times. Machine: Ryzen 7 5800X (16 threads), Linux 7.3.1. **Not disturbed**: the
+one-minute load average read 0.30 before and after, no process above 3.2 % of a core; the
+five-minute average, 3.04, still fell from other sessions' builds before
+(`.delegation/m1.11-rest-auditor-2/18`, local).
+
+| Clients | Case | Median | p99 | Longest |
+|---|---|---|---|---|
+| 10 | naming, one ready | 0.43 µs | 0.44 µs | 7.3 µs |
+| 10 | naming, all ready | 0.99 µs | 1.01 µs | 25 µs |
+| 10 | round, one ready | 6.67 µs | 9.55 µs | 26 µs |
+| 10 | round, one commit | 6.51 µs | 6.78 µs | 23 µs |
+| 10 | round, 100 commits | 81.7 µs | 88.3 µs | 215 µs |
+| 100 | naming, one ready | 0.48 µs | 0.50 µs | 7.2 µs |
+| 100 | naming, all ready | 6.60 µs | 6.91 µs | 36 µs |
+| 100 | round, one ready | 7.01 µs | 9.69 µs | 14 µs |
+| 100 | round, one commit | 6.79 µs | 7.09 µs | 26 µs |
+| 100 | round, 100 commits | 82.7 µs | 87.9 µs | 116 µs |
+
+- **Naming**: after a wake of the display, a wait of no time on the auditor's epoll and a count
+  for each client ready. With one client ready, as when one program draws, it costs under half a
+  microsecond at 10 and at 100 clients: the epoll gives the ready clients alone, never a walk of
+  all. Every client ready costs about 65 ns a client.
+- **A round**, one client's request read and answered, every count it feeds included: the naming
+  is 6 to 7 % of it. The round grows by 0.3 µs from 10 to 100 clients.
+- **A commit** costs 0.76 µs at 10 clients and 0.77 µs at 100: the batch of 100 against one,
+  divided by 99, Yuna's whole handling of a commit of a surface without a role, its client named
+  and its commit counted, included. Its client is read once for the seat's commits and the
+  auditor together; the auditor's own share, a map's lookup by the client's number, is not
+  measured apart, nor a round without the auditor, which cannot be turned off.
+- Two earlier runs, on `5200b93` and disturbed at loads of 6.55 and 24.5, gave the naming with one
+  client ready at 0.47 µs and 0.68 µs at 10 clients (`.delegation/m1.11-rest-auditor/02`, `/11`,
+  local).
+
 ## M1.11 — The events' look (2026-11-18)
 
 What `yuna mcp`'s look for events costs a round (`mcp/events.rs`), measured by

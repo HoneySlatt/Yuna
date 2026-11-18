@@ -16,27 +16,28 @@ use serde_json::{Map, Value, json};
 use super::accessibility::MAX_NODES;
 use super::events::{Event, EventData, Kind, Reading};
 use super::image::base64;
-use super::programs::{End, LogRead, Program};
+use super::programs::{End, LogRead, Program, ProgramWakes};
 use super::protocol::{self, Revision};
 use super::stdio::MAX_LINE;
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
-use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
+use crate::compositor::{ClientProcess, ClientProtocolError, OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
+use crate::rest::{Cause, RestCounts, Source};
 use crate::xwayland::Selection;
 use crate::{
     CLIPBOARD_TIMEOUT, CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion,
     MAX_LAYOUT_NAME,
 };
 use yuna_layout::geometry::Rect;
-use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
+use yuna_layout::{OutputId, SeatId, WindowId, WorkspaceInfo};
 
 /// The longest a call may wait: under the 60 s at which Codex gives up on a call by default
 /// ([survey](../../../../docs/survey.md#agents-and-mcp)).
 pub const MAX_WAIT: Duration = Duration::from_secs(50);
 
-/// How many calls may wait at once, `windows`', `events`' and `clipboard get`'s together; past it,
-/// a call that would wait is refused.
+/// How many calls may wait at once, `windows`', `events`', `clipboard get`'s and `rest`'s
+/// together; past it, a call that would wait is refused.
 pub const MAX_WAITING_CALLS: usize = 64;
 
 /// How many bytes of a log `spawn log` gives by default.
@@ -69,13 +70,16 @@ const TEXT_TYPES: [&str; 5] = [
     "TEXT",
 ];
 
-/// What a seat's id means in a schema: every tool but `clock` acts on one seat.
+/// What a seat's id means in a schema: every tool but `clock` and `rest` acts on one seat, and
+/// `rest` on one when it is given.
 const SEAT_PROPERTY: &str = "the seat's handle, from `seat create`";
 
 /// Every tool's definition, for `tools/list`, always in this order.
 pub fn definitions() -> Value {
     let seat = json!({ "type": "integer", "minimum": 2, "description": SEAT_PROPERTY });
     let kind_names: Vec<&str> = Kind::ALL.iter().map(|kind| kind.name()).collect();
+    let source_names: Vec<&str> = Source::ALL.iter().map(|source| source.name()).collect();
+    let cause_names: Vec<&str> = Cause::ALL.iter().map(|cause| cause.name()).collect();
     // `seat create`'s output and `outputs create`'s take the same two (ADR-0049); `outputs
     // configure` takes them too, the output's own by default, and 0 for no VRR range.
     let vrr_min_create = "create: run under VRR, from this many refreshes a second up to rate, \
@@ -98,7 +102,7 @@ pub fn definitions() -> Value {
                 its own pointer, keyboard, focus and clipboard, its own outputs and workspaces, \
                 and its own Wayland socket, which the programs it starts use; no input, focus \
                 or clipboard of one seat reaches another. Create one first: every other tool but clock takes its \
-                handle. Closing it releases what it holds, disconnects its windows, ends its \
+                handle, rest when it is to name only that seat's. Closing it releases what it holds, disconnects its windows, ends its \
                 programs (SIGTERM and SIGCONT, then SIGKILL 2 s later) and removes its outputs; it answers \
                 once they are gone, in 3 s at most. A Yuna on a manual clock holds one seat.",
             "inputSchema": {
@@ -548,6 +552,49 @@ pub fn definitions() -> Value {
                 "required": ["action"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "rest",
+            "title": "Rest audit",
+            "description": format!("Name what woke Yuna and what made it draw: at rest, \
+                nothing does. Without wait_ms, what was counted since Yuna started; with \
+                wait_ms, what is counted in the next wait_ms of real time, whatever the clock, \
+                answered at its end, this call's own timer left out, and the wake it caused \
+                when nothing else woke Yuna with it; this call's request came before that \
+                window and its reply goes after it. The timer of --rest-audit's log is never \
+                counted, in a window or since Yuna started. It counts among the calls that wait, \
+                and fails when its seat closes. since_ns and now_ns are the counts' start and \
+                end on the clock's scale. wakes: the times Yuna woke, every seat's. sources: \
+                each source that woke it, with how many times: {}. clients: each client that \
+                woke Yuna or made it draw, with pid, program (null for none), seat, xwayland \
+                (its seat's Xwayland, the client of every X11 program there), wakes (times it \
+                had something to send when the clients woke Yuna), commits and draws (frames \
+                drawn with one of its commits among their causes); clients_gone: the same \
+                for the clients that left, together, with their count; \
+                unnamed_client_wakes: the clients' wakes in which Yuna named none, out of \
+                descriptors. programs: \
+                each program whose output (output_wakes) or pace (pace_wakes) woke Yuna. \
+                frames: the frames drawn; draw_causes: each cause with its frames, a frame \
+                counted under each of its causes: {}. With seat, only that seat's clients, \
+                programs, sockets, outputs' refreshes, Xwayland, accessibility bus and \
+                clipboard reads and writes, beside Yuna's own parts: \
+                signals, MCP's input and output, encoders, waiting calls, captures' timers, \
+                the programs' throttle, the hidden windows' frames and X11 answers; wakes and \
+                unnamed_client_wakes stay every seat's, an unnamed wake's client, and so its \
+                seat, being unknown.",
+                source_names.join(", "), cause_names.join(", ")),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seat": { "type": "integer", "minimum": 2,
+                        "description": "only this seat's, beside Yuna's own parts; every \
+                            seat's by default" },
+                    "wait_ms": { "type": "integer", "minimum": 1, "maximum": MAX_WAIT.as_millis(),
+                        "description": "count this long from now and answer then; by \
+                            default, what was counted since Yuna started" }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -796,6 +843,14 @@ pub enum SpawnCall {
         program: u64,
         run_percent: u8,
     },
+}
+
+/// `rest`'s arguments.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestCall {
+    pub seat: Option<u64>,
+    pub wait_ms: Option<u64>,
 }
 
 /// `events`' arguments.
@@ -1382,6 +1437,89 @@ pub fn event_json(event: &Event) -> Value {
     described
 }
 
+/// What `counts` holds, as `rest` answers: of `seat` and Yuna's own parts when given, else of
+/// every seat; each program of `programs` that woke Yuna, and each client's program, as
+/// `program_of` names it. Only what woke Yuna or drew is listed.
+pub fn rest_json(
+    counts: &RestCounts,
+    seat: Option<SeatId>,
+    wait_ms: Option<u64>,
+    programs: &[ProgramWakes],
+    program_of: &dyn Fn(SeatId, &ClientProcess) -> Option<u64>,
+) -> Value {
+    let seats_tally = seat.map(|seat| counts.seats.get(&seat).cloned().unwrap_or_default());
+    let scope = seats_tally.as_ref().unwrap_or(&counts.whole);
+    let wakes_by = |source: Source| {
+        if source.serves_a_seat() {
+            scope.wakes_by(source)
+        } else {
+            counts.whole.wakes_by(source)
+        }
+    };
+    let ours = |of: SeatId| seat.is_none_or(|seat| seat == of);
+    let sources: Vec<Value> = Source::ALL
+        .iter()
+        .filter_map(|&source| {
+            let wakes = wakes_by(source);
+            (wakes > 0).then(|| json!({ "source": source.name(), "wakes": wakes }))
+        })
+        .collect();
+    let clients: Vec<Value> = counts
+        .clients
+        .values()
+        .filter(|client| ours(client.seat) && !client.tally.is_empty())
+        .map(|client| {
+            json!({
+                "pid": client.process.pid,
+                "program": program_of(client.seat, &client.process),
+                "seat": client.seat.0,
+                "xwayland": client.xwayland,
+                "wakes": client.tally.wakes,
+                "commits": client.tally.commits,
+                "draws": client.tally.draws,
+            })
+        })
+        .collect();
+    let programs: Vec<Value> = programs
+        .iter()
+        .filter(|program| ours(program.seat) && (program.output > 0 || program.pace > 0))
+        .map(|program| {
+            json!({
+                "program": program.program,
+                "seat": program.seat.0,
+                "output_wakes": program.output,
+                "pace_wakes": program.pace,
+            })
+        })
+        .collect();
+    let draw_causes: Vec<Value> = Cause::ALL
+        .iter()
+        .filter_map(|&cause| {
+            let frames = scope.frames_by(cause);
+            (frames > 0).then(|| json!({ "cause": cause.name(), "frames": frames }))
+        })
+        .collect();
+    json!({
+        "seat": seat.map(|seat| seat.0),
+        "since_ns": counts.since.as_nanos() as u64,
+        "now_ns": counts.at.as_nanos() as u64,
+        "wait_ms": wait_ms,
+        "wakes": counts.woke,
+        "sources": sources,
+        "clients": clients,
+        "clients_gone": {
+            "clients": scope.gone_clients,
+            "wakes": scope.gone.wakes,
+            "commits": scope.gone.commits,
+            "draws": scope.gone.draws,
+        },
+        "unnamed_client_wakes": counts.unnamed_client_wakes,
+        "programs": programs,
+        "frames": scope.frames,
+        "draw_causes": draw_causes,
+    })
+}
+
 /// What `events` answers: the events read, the cursor to give next, the events the log dropped
 /// after the cursor, and, when its wait ran out, `timed_out`.
 pub fn events_json(reading: &Reading<'_>, timed_out: bool) -> Value {
@@ -1446,7 +1584,8 @@ mod tests {
                 "pointer",
                 "keyboard",
                 "clipboard",
-                "clock"
+                "clock",
+                "rest"
             ]
         );
         for tool in tools.as_array().into_iter().flatten() {
@@ -1617,7 +1756,7 @@ mod tests {
         assert!(
             arguments::<OutputsCall>(args(json!({"action": "list", "seat": 2, "x": 1}))).is_err()
         );
-        // Every tool but `clock` names its seat.
+        // Every tool but `clock` and `rest` names its seat; `rest` may.
         assert!(arguments::<OutputsCall>(args(json!({"action": "list"}))).is_err());
         assert!(arguments::<WindowsCall>(args(json!({}))).is_err());
         assert!(
@@ -1984,6 +2123,112 @@ mod tests {
         assert!(advance_length(None, Some(-1.0)).is_err());
         assert!(advance_length(None, Some(f64::NAN)).is_err());
         assert!(advance_length(None, Some(1e300)).is_err());
+    }
+
+    #[test]
+    fn rest_reads_its_arguments_and_lists_a_seats_own_beside_yunas_parts() {
+        let call: RestCall = arguments(args(json!({"seat": 2, "wait_ms": 10}))).expect("read");
+        assert_eq!((call.seat, call.wait_ms), (Some(2), Some(10)));
+        let call: RestCall = arguments(args(json!({}))).expect("read");
+        assert_eq!((call.seat, call.wait_ms), (None, None));
+        assert!(arguments::<RestCall>(args(json!({"wait": 10}))).is_err());
+        assert!(arguments::<RestCall>(args(json!({"seat": "2"}))).is_err());
+
+        let (ours, theirs) = (SeatId(2), SeatId(3));
+        let mut counts = RestCounts::default();
+        let mut whole = crate::rest::Tally::default();
+        let mut our_tally = crate::rest::Tally::default();
+        let mut their_tally = crate::rest::Tally::default();
+        let slot = |source: Source| Source::ALL.iter().position(|s| *s == source).unwrap();
+        whole.wakes[slot(Source::McpInput)] = 4;
+        whole.wakes[slot(Source::ClockRefresh)] = 7;
+        whole.wakes[slot(Source::Clients)] = 9;
+        our_tally.wakes[slot(Source::ClockRefresh)] = 2;
+        our_tally.wakes[slot(Source::Clients)] = 3;
+        their_tally.wakes[slot(Source::ClockRefresh)] = 5;
+        their_tally.wakes[slot(Source::Clients)] = 6;
+        our_tally.frames = 2;
+        our_tally.causes[0] = 2;
+        whole.frames = 7;
+        whole.causes[0] = 7;
+        counts.whole = whole;
+        counts.seats.insert(ours, our_tally);
+        counts.seats.insert(theirs, their_tally);
+        let client = |seat: SeatId, wakes: u64| crate::rest::ClientCount {
+            seat,
+            process: ClientProcess::connecting(Some(40 + seat.0 as i32), false),
+            xwayland: false,
+            tally: crate::rest::ClientTally {
+                wakes,
+                commits: wakes,
+                draws: wakes,
+            },
+        };
+        counts.clients.insert(1, client(ours, 3));
+        counts.clients.insert(2, client(theirs, 6));
+        counts.clients.insert(
+            3,
+            crate::rest::ClientCount {
+                tally: crate::rest::ClientTally::default(),
+                ..client(ours, 0)
+            },
+        );
+        let programs = [
+            ProgramWakes {
+                seat: ours,
+                program: 1,
+                output: 2,
+                pace: 0,
+            },
+            ProgramWakes {
+                seat: theirs,
+                program: 2,
+                output: 0,
+                pace: 0,
+            },
+        ];
+        let no_program = |_: SeatId, _: &ClientProcess| None;
+
+        let every = rest_json(&counts, None, None, &programs, &no_program);
+        assert_eq!(
+            every["sources"],
+            json!([{"source": "clients", "wakes": 9}, {"source": "clock_refresh", "wakes": 7},
+                   {"source": "mcp_input", "wakes": 4}])
+        );
+        assert_eq!(
+            every["clients"].as_array().map(Vec::len),
+            Some(2),
+            "{every}"
+        );
+        assert_eq!(
+            every["programs"].as_array().map(Vec::len),
+            Some(1),
+            "{every}"
+        );
+        assert_eq!(every["frames"], json!(7));
+
+        let our = rest_json(&counts, Some(ours), Some(10), &programs, &no_program);
+        assert_eq!(our["seat"], json!(2));
+        assert_eq!(our["wait_ms"], json!(10));
+        assert_eq!(
+            our["sources"],
+            json!([{"source": "clients", "wakes": 3}, {"source": "clock_refresh", "wakes": 2},
+                   {"source": "mcp_input", "wakes": 4}])
+        );
+        assert_eq!(
+            our["clients"],
+            json!([{"pid": 42, "program": null, "seat": 2, "xwayland": false,
+                    "wakes": 3, "commits": 3, "draws": 3}])
+        );
+        assert_eq!(
+            our["programs"],
+            json!([{"program": 1, "seat": 2, "output_wakes": 2, "pace_wakes": 0}])
+        );
+        assert_eq!(our["frames"], json!(2));
+        assert_eq!(
+            our["draw_causes"],
+            json!([{"cause": "commit", "frames": 2}])
+        );
     }
 
     #[test]

@@ -194,6 +194,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Refused** (bench): said of a case whose sandbox broke its rules, or whose scene was not the
   scenario's (mpv not fullscreen): the bench stops it and measures nothing. A refusal is not a
   failure.
+- **Rest auditor**: the part of Yuna that names what woke it and what made it draw, counted
+  by source, by client and by a frame's cause (`rest.rs`), which MCP's `rest` and the start
+  option `--rest-audit` read ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md), point
+  7). At rest it names nothing.
 - **Retarget**: giving a running motion a new target; a spring goes on from its value and its
   velocity ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
 - **Run file**: the versioned JSON file a run of the rivals' bench writes, every figure with its
@@ -205,7 +209,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
   seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is
-  the number `seat create` gives, which every tool but `clock` takes.
+  the number `seat create` gives, which every tool but `clock` takes, `rest` when it is to
+  name only that seat's.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a

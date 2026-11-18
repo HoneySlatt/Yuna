@@ -25,6 +25,7 @@ mod outputs;
 mod popups;
 mod protocols;
 mod random_requests;
+mod rest;
 mod scale;
 mod screencopy;
 mod seats;

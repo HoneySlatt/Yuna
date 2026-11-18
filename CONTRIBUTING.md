@@ -186,8 +186,11 @@ input and output, with `--gpu`, one `--output` for each seat's first output, `--
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which
 `yuna --headless` takes too: both show each change at once without them
 ([ADR-0055](docs/adr/0055-what-moves-first-and-animations-off-headless.md),
-[ADR-0059](docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). An agent's first call is `seat
-create`; every other tool but `clock` takes the seat's handle
+[ADR-0059](docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). Both take
+`--rest-audit` too: a line at `info` for each second in which something woke Yuna, naming what
+did ([ADR-0062](docs/adr/0062-the-compositors-comfort-and-look.md)). An agent's first call is `seat
+create`; every other tool but `clock` takes the seat's handle, `rest` when it is to name only
+that seat's
 ([ADR-0037](docs/adr/0037-seats-tools-input-and-closing.md)). For Claude Code, for example:
 `claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes,
 and ends the programs it started then.

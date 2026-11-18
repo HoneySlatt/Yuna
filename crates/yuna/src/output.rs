@@ -265,6 +265,9 @@ pub(crate) struct VirtualOutput {
     /// Whether its motion ran at its last arrangement or refresh: the refresh that finds it
     /// ended tells its windows once.
     pub in_motion: bool,
+    /// Why its next refresh draws, noted since its last: what the rest auditor counts a frame
+    /// drawn by (`rest.rs`).
+    pub draw_causes: crate::rest::PendingCauses,
 }
 
 impl VirtualOutput {
@@ -379,6 +382,7 @@ impl State {
             drawn: Vec::new(),
             told: Vec::new(),
             in_motion: false,
+            draw_causes: crate::rest::PendingCauses::default(),
         });
         tracing::info!(
             output = id.0,
@@ -391,6 +395,7 @@ impl State {
         // A new output starts at rest (ADR-0052): nothing else need show at once, and every
         // other output's motion goes on (ADR-0015).
         self.mark_layout_changed(Change::Animated);
+        self.note_draw_cause(id, crate::rest::DrawCause::FirstFrame);
         Ok(id)
     }
 }
@@ -484,8 +489,10 @@ impl State {
             let last = output.last_refresh;
             let next = output.timing.reachable(now, last, false);
             output.timing = Timing::new(&mode, now.max(last.at), next.seq.saturating_sub(1));
-            // Its refresh armed aimed at a refresh of the old timing.
+            // Its refresh armed aimed at a refresh of the old timing; the causes noted for it go
+            // with it, the change arming the next.
             self.clock.disarm(Deadline::Refresh(id));
+            output.draw_causes.clear();
         }
         let output = &mut self.outputs[index];
         if let Some(colour) = colour {
@@ -535,6 +542,7 @@ impl State {
         // Its windows, and those of the outputs that moved, start at rest in their new places
         // (ADR-0052); every other output's motion goes on.
         self.mark_layout_changed(Change::Animated);
+        self.note_draw_cause(id, crate::rest::DrawCause::OutputChange);
         Ok(())
     }
 

@@ -228,6 +228,7 @@ impl State {
             .map_err(|e| Error::Layout(e.to_string()))?;
         self.next_seat_id += 1;
         self.seats.push(data);
+        self.rest.add_seat(id);
         tracing::info!(seat = id.0, "seat added");
         Ok(id)
     }
@@ -327,16 +328,34 @@ impl State {
         self.insert_client_state(stream, data)
     }
 
-    /// Serves the client of `data`'s seat on `stream`, and records it on the seat.
-    fn insert_client_state(&mut self, stream: UnixStream, data: ClientState) -> Result<(), Error> {
+    /// Serves the client of `data`'s seat on `stream`, and records it on the seat and in the
+    /// rest auditor, with a second descriptor of its socket, which names it when it wakes Yuna
+    /// (`rest.rs`). Out of descriptors, it is served without one, unnamed.
+    fn insert_client_state(
+        &mut self,
+        stream: UnixStream,
+        mut data: ClientState,
+    ) -> Result<(), Error> {
         let seat = data.seat;
         if self.seat(seat).is_none() {
             return Err(Error::Refused(format!("no seat {}", seat.0)));
         }
+        let second = stream
+            .try_clone()
+            .inspect_err(|error| {
+                tracing::debug!(%error, "a client is served without a second descriptor");
+            })
+            .ok();
+        let number = self.rest.next_client_number();
+        data.rest_number = number;
+        let process = data.process.clone();
+        let xwayland = data.xwayland.is_some();
         let client = self
             .display_handle
             .insert_client(stream, Arc::new(data))
             .map_err(|e| Error::EventLoop(e.to_string()))?;
+        self.rest
+            .client_connected(number, seat, process, xwayland, second);
         if let Some(seat) = self.seat_mut(seat) {
             seat.clients.push(client.id());
         }

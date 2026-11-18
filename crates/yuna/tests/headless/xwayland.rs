@@ -23,6 +23,7 @@ use x11rb::connection::Connection;
 use x11rb::errors::ConnectError;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 use x11rb::rust_connection::{DefaultStream, RustConnection};
+use yuna::rest::Source;
 use yuna::yuna_layout::SeatId;
 use yuna::{
     ClockMode, Compositor, Config, FIRST_PAUSE, IDLE_SECONDS, MAX_DISPLAYS, OWNER_SEAT, OutputMode,
@@ -478,6 +479,48 @@ fn xwayland_stops_when_idle_and_starts_again() {
     serve(&mut compositor, client).expect("a new connection is answered");
     let second = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs again");
     assert_ne!(first, second);
+}
+
+/// The rest auditor names Xwayland's idle stop: its process's end woke Yuna once, the owner's
+/// seat's, and its Wayland client, the seat's Xwayland, is among the clients gone. The X11
+/// connection that started it was named too, and the Xwayland that served it.
+#[test]
+fn xwaylands_idle_stop_is_named_by_the_rest_auditor() {
+    let folder = Folder::new("rest-audit");
+    let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
+    let display = display_of(&compositor, OWNER_SEAT);
+    let client = answered_client(display.number, cookie_of(&display));
+    let (connection, _) = serve(&mut compositor, client).expect("answered");
+    let before = compositor.rest_counts();
+    let owners = &before.seats[&OWNER_SEAT];
+    assert!(owners.wakes_by(Source::X11Connection) >= 1, "{before:?}");
+    // Once a piece of its display's number came: in one write, or more.
+    assert!(owners.wakes_by(Source::XwaylandDisplay) >= 1, "{before:?}");
+    let xwayland = before
+        .clients
+        .values()
+        .find(|client| client.xwayland)
+        .expect("Xwayland's Wayland client is named");
+    assert_eq!(xwayland.seat, OWNER_SEAT);
+    assert!(xwayland.tally.wakes >= 1, "{before:?}");
+
+    drop(connection);
+    dispatch_until(&mut compositor, "Xwayland stops when idle", |compositor| {
+        server_of(compositor, OWNER_SEAT).is_none()
+    });
+    let window = compositor.rest_counts().since(&before);
+    assert_eq!(
+        window.whole.wakes_by(Source::XwaylandExited),
+        1,
+        "{window:?}"
+    );
+    assert_eq!(
+        window.seats[&OWNER_SEAT].wakes_by(Source::XwaylandExited),
+        1,
+        "{window:?}"
+    );
+    assert_eq!(window.whole.gone_clients, 1, "{window:?}");
+    assert!(window.clients.values().all(|client| !client.xwayland));
 }
 
 /// Xwayland killed leaves Yuna running: its client's connection ends, it is reaped, and a new

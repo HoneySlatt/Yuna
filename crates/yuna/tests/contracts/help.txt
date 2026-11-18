@@ -1,8 +1,9 @@
 Yuna, a Wayland compositor for Linux.
 
 Usage: yuna --headless [--agent-seat] [--gpu] [--animations | --reduced-motion]
-                       [--output MODE]...
+                       [--output MODE]... [--rest-audit]
        yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
+                [--rest-audit]
        yuna -h | --help
        yuna -V | --version
 
@@ -41,6 +42,10 @@ Options:
                      the mode of each new seat's output.
       --manual-clock With mcp: time moves only when the clock tool advances it, never past
                      real time.
+      --rest-audit   Log, for each second in which something woke Yuna, one line at info:
+                     what woke it, by source and by client, its process, seat and, with
+                     mcp, program, and the frames it drew, by cause. At rest, nothing is
+                     logged.
   -h, --help         Print this help
   -V, --version      Print the version
 

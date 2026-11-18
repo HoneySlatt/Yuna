@@ -26,8 +26,9 @@
 //! (`wlr_screencopy.rs`) on them; clients' dmabufs (`dmabuf.rs`);
 //! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
 //! surfaces declare of their colours (`colour/`); each seat's X display, its Xwayland and its
-//! X11 window manager (`xwayland/`); the public face (`compositor.rs`). `docs/ARCHITECTURE.md`
-//! gives the flow across them.
+//! X11 window manager (`xwayland/`); the rest auditor, which names what woke Yuna and what made it
+//! draw, and through which every source of the event loop is inserted (`rest.rs`); the public
+//! face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
 
 mod activation;
 mod capture;
@@ -45,6 +46,7 @@ mod output;
 mod popups;
 mod process;
 mod render;
+pub mod rest;
 mod scale;
 mod screencopy;
 mod seats;

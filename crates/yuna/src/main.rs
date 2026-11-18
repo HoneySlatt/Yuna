@@ -25,8 +25,9 @@ const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
 Usage: yuna --headless [--agent-seat] [--gpu] [--animations | --reduced-motion]
-                       [--output MODE]...
+                       [--output MODE]... [--rest-audit]
        yuna mcp [--gpu] [--animations | --reduced-motion] [--output MODE] [--manual-clock]
+                [--rest-audit]
        yuna -h | --help
        yuna -V | --version
 
@@ -65,6 +66,10 @@ Options:
                      the mode of each new seat's output.
       --manual-clock With mcp: time moves only when the clock tool advances it, never past
                      real time.
+      --rest-audit   Log, for each second in which something woke Yuna, one line at info:
+                     what woke it, by source and by client, its process, seat and, with
+                     mcp, program, and the frames it drew, by cause. At rest, nothing is
+                     logged.
   -h, --help         Print this help
   -V, --version      Print the version
 
@@ -104,87 +109,106 @@ struct Headless {
     agent_seat: bool,
 }
 
-/// Reads the arguments that follow the program's name. They are `OsString`s, so that an argument
-/// that is not UTF-8 is refused like any other unknown one, never a panic.
-fn read_request(arguments: impl IntoIterator<Item = OsString>) -> Request {
+/// What the program logs beside what `YUNA_LOG`'s level shows.
+#[derive(Debug, Default, PartialEq)]
+struct Logging {
+    /// `--rest-audit`: for each second in which something woke Yuna, what woke it and what it
+    /// drew (ADR-0062).
+    rest_audit: bool,
+}
+
+/// Reads the arguments that follow the program's name: what to run, and what to log beside.
+/// They are `OsString`s, so that an argument that is not UTF-8 is refused like any other unknown
+/// one, never a panic.
+fn read_command_line(arguments: impl IntoIterator<Item = OsString>) -> (Request, Logging) {
     let arguments: Vec<OsString> = arguments.into_iter().collect();
+    let alone = |request| (request, Logging::default());
     match arguments.as_slice() {
-        [] => Request::Session,
-        [one] if one == "-h" || one == "--help" => Request::Help,
-        [one] if one == "-V" || one == "--version" => Request::Version,
+        [] => alone(Request::Session),
+        [one] if one == "-h" || one == "--help" => alone(Request::Help),
+        [one] if one == "-V" || one == "--version" => alone(Request::Version),
         [first, rest @ ..] if first == "mcp" => read_headless(rest, true),
         _ => read_headless(&arguments, false),
     }
 }
 
+/// What the command line asks to run, what it logs left aside.
+#[cfg(test)]
+fn read_request(arguments: impl IntoIterator<Item = OsString>) -> Request {
+    read_command_line(arguments).0
+}
+
 /// Reads `--headless`'s options, or, for `mcp`, its own: no `--headless`, which it is already,
 /// and `--manual-clock`.
-fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
+fn read_headless(arguments: &[OsString], mcp: bool) -> (Request, Logging) {
+    let invalid = |reason: String| (Request::Invalid(reason), Logging::default());
     let mut headless = mcp;
     let mut gpu = false;
     let mut manual_clock = false;
     let mut animations = false;
     let mut reduced_motion = false;
     let mut agent_seat = false;
+    let mut rest_audit = false;
     let mut outputs = Vec::new();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
             Some("--headless") if !headless => headless = true,
+            Some("--rest-audit") if !rest_audit => rest_audit = true,
             Some("--gpu") if !gpu => gpu = true,
             Some("--animations") if !animations && !reduced_motion => animations = true,
             Some("--reduced-motion") if !animations && !reduced_motion => reduced_motion = true,
             Some(flag @ "--animations") if animations => {
-                return Request::Invalid(format!("{flag} is given twice"));
+                return invalid(format!("{flag} is given twice"));
             }
             Some(flag @ "--reduced-motion") if reduced_motion => {
-                return Request::Invalid(format!("{flag} is given twice"));
+                return invalid(format!("{flag} is given twice"));
             }
             Some("--animations" | "--reduced-motion") => {
-                return Request::Invalid(
+                return invalid(
                     "--animations and --reduced-motion are one choice: give one".to_owned(),
                 );
             }
             Some("--manual-clock") if mcp && !manual_clock => manual_clock = true,
             Some("--agent-seat") if mcp => {
-                return Request::Invalid(
-                    "mcp's seats are agents' already: drop --agent-seat".to_owned(),
-                );
+                return invalid("mcp's seats are agents' already: drop --agent-seat".to_owned());
             }
             Some("--agent-seat") if !agent_seat => agent_seat = true,
             Some("--headless") if mcp => {
-                return Request::Invalid("mcp is headless already: drop --headless".to_owned());
+                return invalid("mcp is headless already: drop --headless".to_owned());
             }
             Some("--manual-clock") if !mcp => {
-                return Request::Invalid("--manual-clock is mcp's".to_owned());
+                return invalid("--manual-clock is mcp's".to_owned());
             }
-            Some(flag @ ("--headless" | "--gpu" | "--manual-clock" | "--agent-seat")) => {
-                return Request::Invalid(format!("{flag} is given twice"));
+            Some(
+                flag
+                @ ("--headless" | "--gpu" | "--manual-clock" | "--agent-seat" | "--rest-audit"),
+            ) => {
+                return invalid(format!("{flag} is given twice"));
             }
             Some("--output") => match arguments.next().map(|mode| read_output(mode)) {
                 Some(Ok(mode)) => outputs.push(mode),
-                Some(Err(reason)) => return Request::Invalid(reason),
+                Some(Err(reason)) => return invalid(reason),
                 None => {
-                    return Request::Invalid(
-                        "--output needs a mode, such as 1920x1080@60,1".to_owned(),
-                    );
+                    return invalid("--output needs a mode, such as 1920x1080@60,1".to_owned());
                 }
             },
             Some(flag @ ("-h" | "--help" | "-V" | "--version")) => {
-                return Request::Invalid(format!("{flag} takes no other argument"));
+                return invalid(format!("{flag} takes no other argument"));
             }
             // Quoted, so that an empty argument shows, and escaped where it is not UTF-8.
-            _ => return Request::Invalid(format!("unknown argument {argument:?}")),
+            _ => return invalid(format!("unknown argument {argument:?}")),
         }
     }
     if !headless {
-        return Request::Invalid(
-            "--agent-seat, --gpu, --animations, --reduced-motion and --output need --headless"
+        return invalid(
+            "--agent-seat, --gpu, --animations, --reduced-motion, --output and --rest-audit \
+             need --headless"
                 .to_owned(),
         );
     }
     if mcp && outputs.len() > 1 {
-        return Request::Invalid(
+        return invalid(
             "mcp takes one --output, each seat's first output; `outputs create` adds more"
                 .to_owned(),
         );
@@ -200,10 +224,11 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> Request {
         reduced_motion,
         agent_seat,
     };
+    let logging = Logging { rest_audit };
     if mcp {
-        Request::Mcp(headless)
+        (Request::Mcp(headless), logging)
     } else {
-        Request::Headless(headless)
+        (Request::Headless(headless), logging)
     }
 }
 
@@ -262,7 +287,8 @@ fn read_output(text: &OsStr) -> Result<OutputMode, String> {
 }
 
 fn main() -> ExitCode {
-    match read_request(std::env::args_os().skip(1)) {
+    let (request, logging) = read_command_line(std::env::args_os().skip(1));
+    match request {
         Request::Help => print(HELP),
         Request::Version => print(format!("yuna {}\n", env!("CARGO_PKG_VERSION"))),
         Request::Session => {
@@ -271,8 +297,8 @@ fn main() -> ExitCode {
             );
             ExitCode::FAILURE
         }
-        Request::Headless(headless) => run_headless(headless),
-        Request::Mcp(headless) => run_mcp(headless),
+        Request::Headless(headless) => run_headless(headless, &logging),
+        Request::Mcp(headless) => run_mcp(headless, &logging),
         Request::Invalid(reason) => usage_error(&reason),
     }
 }
@@ -283,7 +309,7 @@ fn usage_error(reason: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn run_headless(headless: Headless) -> ExitCode {
+fn run_headless(headless: Headless, logging: &Logging) -> ExitCode {
     // Nothing of its own to end: a panic of this thread, which runs the compositor, stops it.
     fatal::install();
     start_logging();
@@ -300,6 +326,9 @@ fn run_headless(headless: Headless) -> ExitCode {
         Ok(started) => started,
         Err(exit) => return exit,
     };
+    if logging.rest_audit {
+        compositor.log_rest_each_second();
+    }
     {
         let mut lines = format!("WAYLAND_DISPLAY={}\n", socket.to_string_lossy()).into_bytes();
         if let Some(x11) = compositor.x11_display(seat) {
@@ -400,7 +429,7 @@ fn start(config: Config) -> Result<Compositor, ExitCode> {
 /// stops it. Yuna becomes its children's subreaper, so that every process its programs start
 /// stays under it, to be reaped and ended, on purpose or after a panic of this thread, which
 /// runs the server.
-fn run_mcp(headless: Headless) -> ExitCode {
+fn run_mcp(headless: Headless, logging: &Logging) -> ExitCode {
     let on_panic = fatal::install();
     start_logging();
     let signals = stop_signal::install().and_then(|stop| {
@@ -445,10 +474,13 @@ fn run_mcp(headless: Headless) -> ExitCode {
         // Each seat `seat create` makes gets a display with its socket.
         xwayland: Some(XwaylandConfig::default()),
     };
-    let compositor = match start(config) {
+    let mut compositor = match start(config) {
         Ok(compositor) => compositor,
         Err(exit) => return exit,
     };
+    if logging.rest_audit {
+        compositor.log_rest_each_second();
+    }
     let server = match Server::new(compositor, input, output, Some(children)) {
         Ok(mut server) => {
             server.set_seat_output(seat_output);
@@ -843,6 +875,39 @@ mod tests {
                 }
                 other => panic!("{bad:?} was accepted: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn the_rest_audit_is_asked_once_in_either_mode_and_needs_one() {
+        let read = |arguments: &[&str]| read_command_line(arguments.iter().map(OsString::from));
+        for command in [
+            &["--headless", "--rest-audit"][..],
+            &["--rest-audit", "--headless", "--agent-seat"],
+            &["mcp", "--manual-clock", "--rest-audit"],
+        ] {
+            let (request, logging) = read(command);
+            assert!(
+                matches!(request, Request::Headless(_) | Request::Mcp(_)),
+                "{command:?}: {request:?}"
+            );
+            assert_eq!(logging, Logging { rest_audit: true }, "{command:?}");
+        }
+        assert_eq!(read(&["--headless"]).1, Logging::default());
+        assert_eq!(read(&["mcp"]).1, Logging::default());
+        for bad in [
+            &["--rest-audit"][..],
+            &["--headless", "--rest-audit", "--rest-audit"],
+            &["mcp", "--rest-audit", "--rest-audit"],
+            &["--rest-audit", "mcp"],
+            &["--help", "--rest-audit"],
+        ] {
+            let (request, logging) = read(bad);
+            assert!(
+                matches!(request, Request::Invalid(_)),
+                "{bad:?}: {request:?}"
+            );
+            assert_eq!(logging, Logging::default(), "{bad:?}");
         }
     }
 

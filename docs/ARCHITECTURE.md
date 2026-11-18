@@ -261,7 +261,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   popup trees forget the popups destroyed (`PopupManager::cleanup`), and the renderer frees the
   textures of closed windows, destroyed surfaces and destroyed dmabufs. Then it sends the events
   written. Its `Counters` count frames drawn, frame callbacks, configures, commits and wake-ups,
-  for tests.
+  for tests; the rest auditor names what woke it and what made it draw
+  ([below](#the-rest-auditor)).
 - `state.rs`: `State`, everything beside the loop and the display, and the protocol handlers that
   are not the shell's: `wl_compositor` (version 6) and `wl_subcompositor`, `wl_shm`,
   `wp_viewporter`, `wl_output` with `xdg-output`, presentation time, `cursor-shape`.
@@ -305,6 +306,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   display it opens until the process ends, so that compositors started and dropped on several
   threads, as tests run them, never lose the display Smithay shares among them.
 - `clock.rs`: the clock and its deadlines ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+- `rest.rs`: the rest auditor, through which every source of the event loop is inserted: what
+  woke Yuna and what made it draw, named and counted ([below](#the-rest-auditor)).
 - `xwayland/`: each seat's X display, its Xwayland and its X11 window manager,
   [below](#xwayland): `display.rs`, the display's number, sockets, lock and cookie; `server.rs`,
   Xwayland's process; `manager.rs`, the manager's thread; `properties.rs`, the X11 properties it
@@ -329,7 +332,8 @@ X11 windows' sync requests and pings ([An X11 window's life](#an-x11-windows-lif
 the loop runs the deadlines due by its end, so that a refresh armed at once, on an idle output,
 runs in the round that read the commit. In real mode, time is `CLOCK_MONOTONIC`, and the
 compositor keeps one calloop timer armed at the earliest deadline, armed again before each wait;
-with no deadline, no timer. In manual mode, for tests, time starts at the real monotonic time and
+with no deadline, no timer. The rest auditor names that timer's wake by the deadline it was
+armed for, an output's by the output's seat ([The rest auditor](#the-rest-auditor)). In manual mode, for tests, time starts at the real monotonic time and
 moves only through `Compositor::advance`, which runs each deadline it passes at its own time, in
 order. A draw hook can pass manual time while a frame draws, to make drawing late.
 
@@ -731,6 +735,14 @@ A window hidden, on a workspace not shown or scrolled out of view, is told `susp
 content updates are discarded, and its frame callbacks go out at most once a second, through the
 hidden windows' deadline, armed only while one of them waits; its popups' too. A window the
 layout refused is treated the same way.
+
+Arming an output's refresh takes its cause, which the output keeps until its next refresh with
+the others noted since: a commit, with its client, a layout change, a motion, a capture, the
+output's creation or its change of mode, a popup or an X11 menu that came, went or moved
+without a commit of its own. A commit of a shown window while the layout waits to be arranged
+joins its output's causes; a window's first buffer, which maps it, is the layout change's. A
+frame drawn is counted under each of its causes; a refresh that drew nothing counts none
+([The rest auditor](#the-rest-auditor)).
 
 ### Scale
 
@@ -1253,6 +1265,50 @@ the frame its buffer holds. Nothing is drawn for a capture.
    keeps and the 16 of all clients, with the sessions of point 4; an area read for one client's
    frame of a refresh, the whole output or a region, is read once for all.
 
+### The rest auditor
+
+At rest nothing runs, polls or draws; the rest auditor (`rest.rs`) names what broke that rest
+([ADR-0062](adr/0062-the-compositors-comfort-and-look.md), point 7). It counts, and makes no
+text unless asked; it arms a timer only for the log of each second, when that is asked.
+
+- **Every source of the event loop** is inserted through `rest::insert_source`, with what it is:
+  one of a closed list of sources, with the seat it serves when it serves one. Clippy's
+  `disallowed-methods` refuses calloop's own `insert_source` and `register_dispatcher`
+  everywhere else (`clippy.toml`). The auditor numbers the loop's rounds: a source is counted
+  once in each round in which it had something, however many events it gave, and Yuna is noted
+  as woken. With the
+  manual clock, each distinct time at which an advance ran deadlines counts as the clock's timer
+  would have, named by the deadline due first.
+- **The clients** share one source, the display's descriptor. When a client connects, Yuna keeps
+  a second descriptor of its socket in an epoll of the auditor's own; after a wake of the display,
+  before the display reads anything, a wait of no time there gives the clients that had something
+  to send or hung up, each counted. A client's process, its seat and whether it is its seat's
+  Xwayland were read when it connected; `yuna mcp` names its program from them. A display's wake
+  in which no client was found, one whose second descriptor could not be made, out of
+  descriptors, is counted unnamed. The second descriptor goes when the client is freed, at the
+  end of the round that ended it, so that the client sees its connection closed then.
+- **Frames** are counted by their causes, [above](#a-frame); a commit names its client.
+- **Bounds**: an array of counts per source and per cause, Yuna's and each seat's; a map of the
+  clients connected and one of the seats that exist, an entry dropped when its client leaves or
+  its seat is removed; a client gone is folded into its seat's and Yuna's clients gone. A
+  source counted after its seat's removal, an Xwayland's end, counts for Yuna alone. Nothing is
+  allocated at a wake but room for an entry of a list or a map bounded by the clients connected
+  or the seats that exist: the clients', the seats', an output's clients whose commits its next
+  frame shows, and with the log on the second's clients. A refresh disarmed by a change of rate
+  takes its causes with it.
+- **The log of each second**, with `--rest-audit` ([The program](#the-program)): the first wake
+  after a quiet second opens a second and arms a timer of 1 s on real time; at its end one line
+  at `info`, message `rest audit: what woke Yuna in one second`, gives the times Yuna woke in
+  it, a round counted in the second of its first wake, each source with its count, each client
+  by pid, program in `yuna mcp`, seat and `xwayland`, with its wakes, commits and draws, the
+  clients gone, and the frames by cause. The timer is the auditor's own: its wake is never
+  counted, among Yuna's wakes, in `Counters`, in any count or in a `rest` call's window, and
+  opens no second, so that at rest nothing runs and nothing is logged. `Compositor::run_until` logs the seconds of `yuna --headless`, and the MCP server
+  those of `yuna mcp`, at the end of each round.
+- **`Compositor::rest_counts`** gives the counts since Yuna started; `RestCounts::since` what
+  happened between two of them, a client gone meanwhile among the clients gone with what it did
+  after the first. MCP's `rest` reads them ([below](#the-mcp-server)).
+
 ### The MCP server
 
 `yuna mcp` is a headless Yuna of one MCP client's own: it reads JSON-RPC requests from its
@@ -1278,13 +1334,14 @@ standard input, one per line, and writes the replies to its standard output, not
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
 of SIGCHLD, of the waiting calls' timers, of the clipboard reads' pipes and of the encoders'
-channel only note what came; after each round,
+channel, each named by the rest auditor, only note what came; after each round,
 `Server::dispatch` reaps the children that ended, handing the compositor the status of each that
 is not a program ([XWayland](#xwayland)), reads one chunk of input, answers each whole
 line, reads the clipboard reads' pipes and answers those that ended, answers the calls whose
 window came or whose time is up, starts encoding the captures copied and answers those encoded
 whose frame's boundary came, sends the compositor's events, records the round's events in the
-seats' logs and answers the `events` calls waiting for them, and writes the replies. SIGCHLD comes
+seats' logs and answers the `events` calls waiting for them, writes the replies, and logs the
+rest audit's second that ended, if it logs them. SIGCHLD comes
 when a child ends, never when it is stopped or continued (`SA_NOCLDSTOP`), so that a program
 frozen or slowed wakes nothing. While 16 MiB of replies wait, no further line is answered and the
 client's input is not read. A line over 1 MiB, or an input or output that fails, ends the
@@ -1292,8 +1349,8 @@ connection.
 
 `yuna mcp` starts with no output and no socket of the owner's seat, which announces no
 `wl_seat`: everything is on agents' seats ([ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)).
-The tools, each but `clock` naming its seat by its handle, an id of another seat's output,
-window or program unknown there:
+The tools, each but `clock` and `rest` naming its seat by its handle, `rest` when it is to
+name only that seat's, an id of another seat's output, window or program unknown there:
 
 - `seat` creates a seat, with an output of the mode it gives, else `--output`'s, a Wayland
   socket, `seat-<id>` in Yuna's folder, and an X display ([XWayland](#xwayland)); lists the
@@ -1336,8 +1393,8 @@ window or program unknown there:
   real time whatever the clock's, for one that matches. A waiting call is answered once the
   layout has placed the window, which on the manual clock takes a `clock` advance;
   `notifications/cancelled` drops it unanswered; 64 calls wait at most, `events`',
-  `clipboard get`'s, `accessibility`'s and the `spawn` starts waiting for their seat's
-  accessibility bus with them.
+  `clipboard get`'s, `accessibility`'s, `rest`'s and the `spawn` starts waiting for their
+  seat's accessibility bus with them.
 - `capture` gives a PNG of a seat's output, a region of it or a window, at the logical or the
   physical size, with its mapping and an id ([Captures](#captures)); one capture of a seat at a
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
@@ -1355,10 +1412,28 @@ window or program unknown there:
   text until a program copies another or `clear`: 256 KiB at most, so that any text but control
   characters fits the request's line once escaped as JSON.
 - `clock` reads the time, and advances a manual clock, never past real time.
+- `rest` names what woke Yuna and what made it draw ([The rest auditor](#the-rest-auditor)):
+  without `wait_ms`, what was counted since Yuna started; with `wait_ms`, 50 s at most on real
+  time, what is counted from the call until its time is up, answered then. That window leaves
+  out the call's own timer, and the time Yuna woke for it when nothing else woke Yuna in that
+  round; the call's request was read before the window and its reply is written after it. It
+  gives the times Yuna woke, every seat's; each source with its wakes; each client that woke
+  Yuna or drew, by pid, program, seat and `xwayland`, with its wakes, commits and draws; the
+  clients gone, together; the display's unnamed wakes; each program whose output or pace woke
+  Yuna; and the frames drawn, by cause. Only what is not zero is listed. The log's own timer is
+  never counted. With `seat`, only that seat's clients, programs and sources, its sockets, its
+  outputs' refreshes, its Xwayland, its accessibility bus and its clipboard's reads and writes,
+  beside Yuna's own parts: the signals, MCP's input and
+  output, the encoders, the waiting calls and the captures' timers, the programs' throttle, and
+  the hidden windows' and the X11 answers' deadlines. The times Yuna woke and the display's
+  unnamed wakes stay every seat's: an unnamed wake's client, and so its seat, is not known. A
+  waiting `rest` counts among the 64 calls that wait,
+  fails when its seat closes, and is dropped by a cancellation. The server keeps nothing of it
+  but what was counted when it came.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
-fails the `windows`, `events`, `capture`, `clipboard` and `accessibility` calls waiting on it and
-the `spawn` starts waiting for its accessibility bus, drops its events and ends its programs'
+fails the `windows`, `events`, `rest`, `capture`, `clipboard` and `accessibility` calls waiting
+on it and the `spawn` starts waiting for its accessibility bus, drops its events and ends its programs'
 pace, then ends its processes: every process under Yuna that
 is, or descends from, one of the seat's programs still running, is in a process group one of
 them led, is one of its clients or its accessibility bus's daemon, or has `YUNA_SEAT=<id>` in
@@ -1542,7 +1617,9 @@ usage error.
 `--output WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` gives an output's mode, under VRR from MIN to
 RATE Hz with `vrr=MIN`, announcing the HDR colours of the owner's monitor, a PG32UCDM, with
 `hdr` ([ADR-0049](adr/0049-vrr-and-hdr-outputs-through-mcp.md)); the two items come in any
-order, each once. With `mcp`, it is each new seat's output. A mode refused, an item unknown,
+order, each once. With `mcp`, it is each new seat's output. `--rest-audit`, in either mode, logs
+each second in which something woke Yuna, at `info` ([The rest auditor](#the-rest-auditor)):
+the start option that stands for ADR-0062's command until Stage 2's `yuna-ipc`. A mode refused, an item unknown,
 repeated or malformed, is a usage error: the program prints why and its help, and exits with 2.
 The signal handler writes to a pipe the event loop watches, so that the loop returns and the
 socket is removed. A panic of the thread that runs the compositor, its state thread, stops either
@@ -1651,7 +1728,11 @@ own thread, both `took_us`.
   refused; `clear`, an X11 owner's kept in X11; a seat closed and a call cancelled while a read
   waits, and the bound on waiting calls; a seat closed while writes run; readers that never read,
   bounded, open until the limit and closed after it, and one that reads slowly past it; Yuna at
-  rest after.
+  rest after. `rest.rs` in it reads the rest auditor through `rest`: a second at rest naming
+  nothing, its own timer left out, a client that animates named with its commits as the frames'
+  cause, a waiting call's timer named, a refresh disarmed by a change of rate taking its causes
+  with it, and a waiting `rest` failed, cancelled and bounded as the others; `xwayland.rs` names
+  Xwayland's idle stop.
   `motion.rs` in it turns animations on: each boundary of two retargeted scrolls checked
   against a `Motion` of the test's own, fed the same
   layout at the same times, until the last frame is the arrangement and Yuna rests; a frame
@@ -1714,7 +1795,8 @@ own thread, both `took_us`.
   measured again since the two tests with animations on came.
   `PROPTEST_CASES=<n>` runs `n` cases in each test ([`CONTRIBUTING.md`](../CONTRIBUTING.md)).
 - `crates/yuna/tests/command_line.rs`: the program as a user runs it, its socket and its globals
-  included, with `--agent-seat` too.
+  included, with `--agent-seat` too, and `--rest-audit`, which names a client and logs nothing
+  at rest.
 - `crates/yuna/tests/headless/protocols.rs`: the rows `Offered` of [`protocols.md`](protocols.md)
   are the globals a client of the owner's seat and one of an agent's are shown.
 - `crates/yuna/tests/contracts.rs`: `yuna --help` and `tools/list` compared with the files of
@@ -1734,7 +1816,10 @@ own thread, both `took_us`.
   offsets over 3 MiB of output, a program frozen and thawed, one slowed to half its CPU time
   without SIGCHLD waking Yuna, frozen programs ended at SIGTERM, an old Yuna's folder removed,
   a panic of its state, in a debug build, that ends a tree ignoring SIGTERM within 3 s, at once
-  with no program, removes its folder and exits with 101,
+  with no program, removes its folder and exits with 101, `rest` naming nothing in a second at
+  rest, with `--rest-audit` on and off, a program whose client animates, by its program, and one
+  that writes to its output, `--rest-audit`'s line each second while a program animates and none
+  once it is still,
   M1.11's done-when in one `yuna mcp`, through tool calls alone: a program's protocol error told
   by `events`, kept on `spawn list` and its log read; a GTK 4 button found by its name through
   `accessibility` and pressed at its centre; a window moved to a second output, that output
@@ -1815,6 +1900,10 @@ own thread, both `took_us`.
   `examples/common/` holds what it shares with `frame_time`.
 - `crates/yuna/examples/layout_time.rs`: what a change of an agent's keyboard layout costs the
   state thread, with XKB's compiles alone beside it, in the example's own process.
+- `crates/yuna/examples/rest_cost.rs`: what the rest auditor costs at 10 and 100 clients:
+  naming the clients that woke Yuna, alone, a whole round in which one client sent a request,
+  and rounds of one and of 100 commits. `examples/common/timing.rs` holds what it and
+  `events_look.rs`, the events' look, share.
 - `crates/yuna-motion/examples/motion_timing.rs`: what motion costs at an operation and at a frame:
   `Motion::update` after a focus move and after a column opened left of the focus, and
   `Motion::frame` while a motion runs, on strips of 100 and 1,000 windows.

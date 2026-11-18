@@ -235,6 +235,28 @@ with games' VRR:
   larger than the new size is not refused.
 - `png` and `flate2` build two versions of `miniz_oxide`, 0.8 and 0.9, until `png` moves to 0.9.
 
+## The rest auditor
+
+- ADR-0062 asks a command, an MCP tool and a log line: the command is the start option
+  `--rest-audit` until Stage 2's `yuna-ipc`, the owner's choice.
+- X11 programs are named as their seat's Xwayland, the one Wayland client of them all, and by
+  the X11 manager's wakes, by seat: which X11 client woke Yuna is not told.
+- A window's first buffer, which maps it, draws as a layout change, not as its client's commit:
+  a client that opens windows again and again is named by its wakes and commits, its frames by
+  the layout.
+- A commit is among a frame's causes when it armed its output's refresh or joined it: one that
+  brought nothing new is named too when another cause drew the frame. Damage is not followed by
+  client.
+- Each client costs Yuna a second descriptor, so a seat's socket runs out of descriptors at about
+  half the clients it did. A client whose second descriptor cannot be made is served unnamed,
+  counted among the unnamed wakes.
+- A client's program is found as a departure's is ([below](#the-mcp-server)), at each answer:
+  one that left its program's tree and group has none. `rest`'s programs are those remembered:
+  one forgotten in a window, past 128 or with its seat, is not listed, its wakes counted in the
+  sources.
+- The log of each second runs on real time, a manual clock's too. A Yuna that stops within a
+  second does not log it.
+
 ## The MCP server
 
 - Claude Code 2.1.318 ran the done-when's story through `yuna mcp` alone

@@ -1,0 +1,9 @@
+# Every source of Yuna's event loop is inserted through `rest::insert_source`
+# (crates/yuna/src/rest.rs), which names and counts what wakes Yuna (ADR-0062, point 7): calloop's
+# own insertion is refused everywhere else. The crates that do not use calloop cannot resolve the
+# path, which is allowed; `rest::insert_source` expects the lint, so that a path that stopped
+# resolving fails the lints there.
+disallowed-methods = [
+    { path = "calloop::LoopHandle::insert_source", allow-invalid = true, reason = "insert it through `rest::insert_source`, which names and counts what wakes Yuna" },
+    { path = "calloop::LoopHandle::register_dispatcher", allow-invalid = true, reason = "insert it through `rest::insert_source`, which names and counts what wakes Yuna" },
+]

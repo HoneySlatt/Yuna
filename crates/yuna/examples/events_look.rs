@@ -25,9 +25,12 @@
 //! nix develop -c target/release/examples/events_look
 //! ```
 
+#[path = "common/timing.rs"]
+mod timing;
+
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use smithay::reexports::rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use wayland_client::protocol::{
@@ -45,14 +48,14 @@ const COUNTS: [usize; 3] = [100, 1_000, 2_000];
 const SIDE: i32 = 64;
 
 fn main() -> std::process::ExitCode {
-    let rounds = match read_rounds(std::env::args().skip(1)) {
+    let rounds = match timing::read_rounds(std::env::args().skip(1), 1_000, "events_look") {
         Ok(rounds) => rounds,
         Err(reason) => {
             eprintln!("events_look: {reason}");
             return std::process::ExitCode::from(2);
         }
     };
-    println!("load before: {}", load_average());
+    println!("load before: {}", timing::load_average());
     println!("windows  case        median_us  p99_us  longest_us");
     for count in COUNTS {
         if let Err(reason) = measure(count, rounds) {
@@ -60,29 +63,8 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    println!("load after: {}", load_average());
+    println!("load after: {}", timing::load_average());
     std::process::ExitCode::SUCCESS
-}
-
-/// `--rounds <n>`, 1,000 by default.
-fn read_rounds(mut arguments: impl Iterator<Item = String>) -> Result<usize, String> {
-    match (arguments.next().as_deref(), arguments.next()) {
-        (None, _) => Ok(1_000),
-        (Some("--rounds"), Some(value)) => value
-            .parse()
-            .ok()
-            .filter(|&rounds| rounds > 0)
-            .ok_or_else(|| "--rounds takes a whole number above 0".to_owned()),
-        _ => Err("usage: events_look [--rounds <n>]".to_owned()),
-    }
-}
-
-/// The machine's load average over the last minute, as `/proc/loadavg` gives it.
-fn load_average() -> String {
-    std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// Opens `count` windows on a seat of a server of its own, then times its looks.
@@ -132,19 +114,19 @@ fn measure(count: usize, rounds: usize) -> Result<(), String> {
 
     let mut still = Vec::with_capacity(rounds);
     for _ in 0..rounds {
-        still.push(time(|| server.record_events_now()));
+        still.push(timing::time(|| server.record_events_now()));
     }
     let mut framed = Vec::with_capacity(rounds);
     for _ in 0..rounds {
         clients[0].draw(&mut server)?;
         run_deadlines(server.compositor())?;
-        framed.push(time(|| server.record_events_now()));
+        framed.push(timing::time(|| server.record_events_now()));
     }
     let looks = server.event_looks();
     let mut retitled = Vec::with_capacity(rounds);
     for round in 0..rounds {
         clients[0].retitle(&mut server, &format!("renamed {round}"))?;
-        retitled.push(time(|| server.record_events_now()));
+        retitled.push(timing::time(|| server.record_events_now()));
     }
     if server.event_looks() != looks + rounds as u64 {
         return Err(format!(
@@ -162,13 +144,6 @@ fn measure(count: usize, rounds: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// How long `look` takes.
-fn time(look: impl FnOnce()) -> Duration {
-    let began = Instant::now();
-    look();
-    began.elapsed()
-}
-
 /// Runs every deadline the manual clock has armed, its refreshes and their arrangements.
 fn run_deadlines(compositor: &mut Compositor) -> Result<(), String> {
     for _ in 0..8 {
@@ -182,18 +157,9 @@ fn run_deadlines(compositor: &mut Compositor) -> Result<(), String> {
     Ok(())
 }
 
-fn print_times(count: usize, case: &str, mut times: Vec<Duration>) {
-    times.sort();
-    let at = |share: f64| {
-        let index = ((times.len() - 1) as f64 * share).round() as usize;
-        times[index].as_secs_f64() * 1e6
-    };
-    println!(
-        "{count:>7}  {case:<10}  {:>9.1}  {:>6.1}  {:>10.1}",
-        at(0.5),
-        at(0.99),
-        at(1.0)
-    );
+fn print_times(count: usize, case: &str, times: Vec<Duration>) {
+    let [median, p99, longest] = timing::summary(times);
+    println!("{count:>7}  {case:<10}  {median:>9.1}  {p99:>6.1}  {longest:>10.1}");
 }
 
 /// A client of the seat with its windows, all showing one buffer.

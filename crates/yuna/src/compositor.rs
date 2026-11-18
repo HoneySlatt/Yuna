@@ -32,6 +32,7 @@ use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
 use crate::process::lineage_under_yuna;
 use crate::render::Device;
+use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::selection::SelectionRead;
 use crate::state::{OWNER_SEAT, State};
 use crate::xwayland::{DrawnX11Menu, Selection, X11Display, Xwayland, XwaylandConfig};
@@ -100,7 +101,8 @@ pub struct Counters {
     pub commits: u64,
     /// Times the event loop woke: a dispatch in which a client, a new connection or the clock's
     /// timer had something; with the manual clock, each distinct time at which an advance ran
-    /// deadlines, as the timer would have woken it.
+    /// deadlines, as the timer would have woken it. The timer of the rest audit's log of each
+    /// second is left out: it is the auditor's own (`rest.rs`).
     pub wakeups: u64,
 }
 
@@ -263,8 +265,9 @@ pub struct Compositor {
     display: Display<State>,
     state: State,
     socket_name: Option<OsString>,
-    /// The calloop timer armed at the clock's earliest deadline, in real mode, and its time.
-    timer: Option<(RegistrationToken, Duration)>,
+    /// The calloop timer armed at the clock's earliest deadline, in real mode, its time, and
+    /// what the rest auditor names its wake.
+    timer: Option<(RegistrationToken, Duration, Wake)>,
     /// The source of each agent seat's socket.
     seat_sockets: HashMap<SeatId, RegistrationToken>,
     /// The clients the display ended since they were last taken, once someone watches them
@@ -307,27 +310,30 @@ impl Compositor {
             .poll_fd()
             .try_clone_to_owned()
             .map_err(|e| Error::EventLoop(e.to_string()))?;
-        handle
-            .insert_source(
-                Generic::new(display_fd, Interest::READ, Mode::Level),
-                |_, _, state| {
-                    state.clients_readable = true;
-                    state.woke = true;
-                    Ok(PostAction::Continue)
-                },
-            )
-            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        insert_source(
+            &handle,
+            Wake::of(Source::Clients),
+            Generic::new(display_fd, Interest::READ, Mode::Level),
+            |_, _, state| {
+                state.clients_readable = true;
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         let socket_name = match socket {
             Some(socket) => {
                 let name = socket.socket_name().to_os_string();
-                handle
-                    .insert_source(socket, |stream, _, state| {
-                        state.woke = true;
+                insert_source(
+                    &handle,
+                    Wake::of_seat(Source::SeatSocket, OWNER_SEAT),
+                    socket,
+                    |stream, _, state| {
                         if let Err(error) = state.insert_client(OWNER_SEAT, stream, false) {
                             tracing::warn!(%error, "a client could not connect");
                         }
-                    })
-                    .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+                    },
+                )
+                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
                 tracing::info!(socket = ?name, "listening");
                 Some(name)
             }
@@ -449,33 +455,31 @@ impl Compositor {
         socket: ListeningSocket,
         path: &Path,
     ) -> Result<(), Error> {
-        let token = self
-            .event_loop
-            .handle()
-            .insert_source(
-                Generic::new(socket, Interest::READ, Mode::Level),
-                move |_, socket, state| {
-                    state.woke = true;
-                    loop {
-                        match socket.accept() {
-                            Ok(Some(stream)) => {
-                                if let Err(error) = state.insert_client(seat, stream, false) {
-                                    tracing::warn!(%error, "a client could not connect");
-                                }
-                            }
-                            Ok(None) => return Ok(PostAction::Continue),
-                            // Out of descriptors, most often: one seat's programs must not stop
-                            // Yuna (ADR-0080). The socket rests a moment rather than spin.
-                            Err(error) => {
-                                tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
-                                state.paused_sockets.push(seat);
-                                return Ok(PostAction::Disable);
+        let token = insert_source(
+            &self.event_loop.handle(),
+            Wake::of_seat(Source::SeatSocket, seat),
+            Generic::new(socket, Interest::READ, Mode::Level),
+            move |_, socket, state| {
+                loop {
+                    match socket.accept() {
+                        Ok(Some(stream)) => {
+                            if let Err(error) = state.insert_client(seat, stream, false) {
+                                tracing::warn!(%error, "a client could not connect");
                             }
                         }
+                        Ok(None) => return Ok(PostAction::Continue),
+                        // Out of descriptors, most often: one seat's programs must not stop
+                        // Yuna (ADR-0080). The socket rests a moment rather than spin.
+                        Err(error) => {
+                            tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
+                            state.paused_sockets.push(seat);
+                            return Ok(PostAction::Disable);
+                        }
                     }
-                },
-            )
-            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+                }
+            },
+        )
+        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         self.seat_sockets.insert(seat, token);
         if let Some(xwayland) = &mut self.xwayland {
             let folder = crate::xwayland::folder_beside(path);
@@ -524,6 +528,7 @@ impl Compositor {
         let pids = self.state.end_seat_clients(seat);
         self.free_departed_clients();
         self.state.finish_removing_seat(seat)?;
+        self.state.rest.remove_seat(seat);
         self.flush();
         Ok(pids)
     }
@@ -716,6 +721,7 @@ impl Compositor {
         } else {
             timeout
         };
+        self.state.rest.begin_round();
         self.event_loop
             .dispatch(timeout, &mut self.state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -728,6 +734,8 @@ impl Compositor {
             xwayland.handle_notes(&mut self.state, &self.event_loop.handle());
         }
         if std::mem::take(&mut self.state.clients_readable) {
+            // Before the display reads them, while what they sent waits.
+            self.state.rest.clients_readable();
             self.display
                 .dispatch_clients(&mut self.state)
                 .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -741,6 +749,7 @@ impl Compositor {
         if std::mem::take(&mut self.state.woke) {
             self.state.counters.wakeups += 1;
         }
+        self.arm_rest_second();
         self.flush();
         Ok(())
     }
@@ -750,13 +759,16 @@ impl Compositor {
     fn pause_and_resume_sockets(&mut self) -> Result<(), Error> {
         let handle = self.event_loop.handle();
         for seat in std::mem::take(&mut self.state.paused_sockets) {
-            handle
-                .insert_source(Timer::from_duration(SOCKET_PAUSE), move |_, _, state| {
-                    state.woke = true;
+            insert_source(
+                &handle,
+                Wake::of_seat(Source::SocketPause, seat),
+                Timer::from_duration(SOCKET_PAUSE),
+                move |_, _, state| {
                     state.resumed_sockets.push(seat);
                     TimeoutAction::Drop
-                })
-                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+                },
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         }
         for seat in std::mem::take(&mut self.state.resumed_sockets) {
             if let Some(token) = self.seat_sockets.get(&seat) {
@@ -770,23 +782,25 @@ impl Compositor {
 
     /// Runs until `stop` can be read, then returns: the program's loop. `stop` is the read end
     /// of the pipe its signal handler writes to. After each round that woke, it logs its
-    /// [`Counters`] at the `debug` level, in one line whose message is `counters`.
+    /// [`Counters`] at the `debug` level, in one line whose message is `counters`; with
+    /// [`Compositor::log_rest_each_second`], each second that woke it, its clients named by
+    /// process and seat.
     pub fn run_until(&mut self, stop: OwnedFd) -> Result<(), Error> {
-        self.event_loop
-            .handle()
-            .insert_source(
-                Generic::new(stop, Interest::READ, Mode::Level),
-                |_, _, state| {
-                    state.stop_requested = true;
-                    state.woke = true;
-                    Ok(PostAction::Remove)
-                },
-            )
-            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        insert_source(
+            &self.event_loop.handle(),
+            Wake::of(Source::StopSignal),
+            Generic::new(stop, Interest::READ, Mode::Level),
+            |_, _, state| {
+                state.stop_requested = true;
+                Ok(PostAction::Remove)
+            },
+        )
+        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         while !self.state.stop_requested {
             let wakeups = self.state.counters.wakeups;
             self.dispatch(None)?;
             self.log_counters_after(wakeups);
+            self.log_ended_rest_second(&|_, _| None);
         }
         tracing::info!("stopping");
         Ok(())
@@ -822,11 +836,14 @@ impl Compositor {
             self.state.clock.move_to(at);
             if last_wakeup != Some(at) {
                 self.state.counters.wakeups += 1;
+                let wake = self.state.wake_for(deadline);
+                self.state.rest.clock_woke(wake);
                 last_wakeup = Some(at);
             }
             self.state.fire(deadline);
         }
         self.state.clock.move_to(target);
+        self.arm_rest_second();
         self.flush();
         Ok(())
     }
@@ -880,6 +897,69 @@ impl Compositor {
     /// What it did so far.
     pub fn counters(&self) -> Counters {
         self.state.counters
+    }
+
+    /// What woke it and what it drew, since it started, named by source, seat, client and
+    /// cause (`rest.rs`); [`RestCounts::since`] gives what happened between two of them.
+    pub fn rest_counts(&self) -> RestCounts {
+        let mut counts = self.state.rest.counts().clone();
+        counts.woke = self.state.counters.wakeups;
+        counts.at = self.state.clock.now();
+        counts
+    }
+
+    /// Names and counts the clients that have something to send now, as a wake of the display
+    /// does before the display reads them. For measures.
+    #[doc(hidden)]
+    pub fn count_readable_clients_now(&mut self) {
+        self.state.rest.clients_readable();
+    }
+
+    /// How many sources had something in the last round of its loop: a round a source woke
+    /// alone was that source's.
+    pub(crate) fn rest_round_sources(&self) -> u32 {
+        self.state.rest.round_sources()
+    }
+
+    /// From now on, logs each second in which something woke it, in one line at `info`, on real
+    /// time whatever the clock: what woke it, by source, by client, and what it drew, by cause.
+    /// A second's timer is armed by the first wake after a quiet second, never by itself: at
+    /// rest nothing runs and nothing is logged. [`Compositor::run_until`] logs them, and the MCP
+    /// server ([`Server::dispatch`](crate::mcp::Server::dispatch)) at the end of each round.
+    pub fn log_rest_each_second(&mut self) {
+        self.state.rest.log_each_second();
+    }
+
+    /// Logs the second that ended, if one did since the last call, each client's program named
+    /// by `program_of`.
+    pub(crate) fn log_ended_rest_second(
+        &mut self,
+        program_of: &dyn Fn(SeatId, &ClientProcess) -> Option<u64>,
+    ) {
+        if let Some(second) = self.state.rest.take_ended_second() {
+            crate::rest::log_second(&second, self.state.rest.counts(), program_of);
+        }
+    }
+
+    /// Arms the timer that ends the log's second, once one has begun. A log never stops Yuna:
+    /// without a timer, the second ends at once, said.
+    fn arm_rest_second(&mut self) {
+        if !self.state.rest.take_second_needing_timer() {
+            return;
+        }
+        let armed = insert_source(
+            &self.event_loop.handle(),
+            Wake::of_the_auditor(),
+            Timer::from_duration(crate::rest::SECOND),
+            |_, _, state| {
+                state.rest.end_second();
+                TimeoutAction::Drop
+            },
+        );
+        if let Err(error) = armed {
+            tracing::warn!(error = %error.error, "the rest audit's second cannot be timed");
+            self.state.rest.end_second();
+        }
     }
 
     /// Its outputs' ids, in the order they were created.
@@ -1073,25 +1153,32 @@ impl Compositor {
         if self.state.clock.mode() != ClockMode::Real {
             return Ok(());
         }
-        let next = self.state.clock.next_deadline();
-        if next == self.timer.map(|(_, at)| at) {
+        let next = self
+            .state
+            .clock
+            .next_due()
+            .map(|(at, deadline)| (at, self.state.wake_for(deadline)));
+        if next == self.timer.map(|(_, at, wake)| (at, wake)) {
             return Ok(());
         }
         let handle = self.event_loop.handle();
-        if let Some((token, _)) = self.timer.take() {
+        if let Some((token, _, _)) = self.timer.take() {
             handle.remove(token);
         }
-        if let Some(at) = next {
+        if let Some((at, wake)) = next {
             // calloop's timers take an `Instant`, which reads the same CLOCK_MONOTONIC.
             let deadline = Instant::now() + at.saturating_sub(self.state.clock.now());
-            let token = handle
-                .insert_source(Timer::from_deadline(deadline), |_, _, state| {
+            let token = insert_source(
+                &handle,
+                wake,
+                Timer::from_deadline(deadline),
+                |_, _, state| {
                     state.timer_fired = true;
-                    state.woke = true;
                     TimeoutAction::Drop
-                })
-                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
-            self.timer = Some((token, at));
+                },
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+            self.timer = Some((token, at, wake));
         }
         Ok(())
     }
@@ -1142,6 +1229,7 @@ impl Compositor {
             }
             for departed in departed {
                 self.state.forget_client(&departed.client);
+                self.state.rest.client_left(departed.number);
                 // An ended client is not read: the call fails, and frees it on its way out. A
                 // client a dispatch freed already is not found, and nothing happens.
                 let _ = self

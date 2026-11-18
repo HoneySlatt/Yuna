@@ -72,6 +72,8 @@ pub(crate) type DepartedClients = Arc<Mutex<Vec<Departed>>>;
 #[derive(Debug)]
 pub(crate) struct Departed {
     pub client: ClientId,
+    /// Its number in the rest auditor.
+    pub number: u64,
     pub seat: SeatId,
     pub process: ClientProcess,
     pub reason: DisconnectReason,
@@ -165,6 +167,11 @@ pub(crate) struct State {
     pub next_capture_ticket: u64,
     /// Whether the commit being handled attached or removed a buffer: something new to draw.
     pub committed_content: bool,
+    /// The number of the client whose commit is being handled, while it is: a frame it arms
+    /// names it (`rest.rs`).
+    pub committing_client: Option<u64>,
+    /// What woke Yuna and what made it draw (`rest.rs`).
+    pub rest: crate::rest::RestAudit,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
     /// What XWayland's sources noted in this round, for the compositor to act on after it
@@ -195,9 +202,13 @@ impl State {
         let owner = SeatData::owner(&mut seat_state, dh, announce_owner_seat)?;
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_formats = crate::dmabuf::create_global(dh, &mut dmabuf_state, &renderer, device);
+        let clock = Clock::new(clock_mode);
+        let mut rest = crate::rest::RestAudit::new(clock.now());
+        rest.add_seat(OWNER_SEAT);
         Ok(State {
             display_handle: display_handle.clone(),
-            clock: Clock::new(clock_mode),
+            rest,
+            clock,
             layout,
             renderer,
             max_output_side,
@@ -251,6 +262,7 @@ impl State {
             captured: Vec::new(),
             next_capture_ticket: 1,
             committed_content: false,
+            committing_client: None,
             colour: {
                 crate::colour::protocol::manager_global(dh);
                 ColourState::new()
@@ -310,6 +322,8 @@ pub(crate) struct ClientState {
     pub window_cap_logged: AtomicBool,
     /// Who it is, read when it connected: what its departure tells.
     pub process: ClientProcess,
+    /// Its number in the rest auditor, given when it is inserted (`seats.rs`).
+    pub rest_number: u64,
     /// Where the client records that the display ended it: the compositor's list.
     departed: DepartedClients,
 }
@@ -328,6 +342,7 @@ impl ClientState {
             xwayland: None,
             window_cap_logged: AtomicBool::new(false),
             process,
+            rest_number: 0,
             departed,
         }
     }
@@ -344,6 +359,7 @@ impl ClientData for ClientState {
         tracing::debug!(?reason, xwayland = self.xwayland.is_some(), "a client left");
         let departed = Departed {
             client,
+            number: self.rest_number,
             seat: self.seat,
             process: self.process.clone(),
             reason,
@@ -372,12 +388,22 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
-        let seat = surface
-            .client()
-            .and_then(|client| client.get_data::<ClientState>().map(|state| state.seat));
+        // One lookup of its client: its seat counts the commit, and the rest auditor too.
+        let client = surface.client();
+        let data = client
+            .as_ref()
+            .and_then(|client| client.get_data::<ClientState>());
+        let (seat, number) = (
+            data.map(|data| data.seat),
+            data.map(|data| data.rest_number),
+        );
         if let Some(seat) = seat.and_then(|seat| self.seat_mut(seat)) {
             seat.commits += 1;
         }
+        if let Some(number) = number {
+            self.rest.client_committed(number);
+        }
+        self.committing_client = number;
         // Read before the buffer handler takes them: a buffer attached or removed anywhere in the
         // tree this commit applies is something new to draw. Damage alone is not: Smithay keeps
         // it until a buffer comes, and draws nothing new for it.
@@ -413,6 +439,7 @@ impl CompositorHandler for State {
             // An override-redirect window's: a menu or a tooltip.
             self.x11_menu_committed(&root);
         }
+        self.committing_client = None;
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {

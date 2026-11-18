@@ -12,12 +12,15 @@
 //! for the program that copied to write into a pipe, which each round reads as far as it goes,
 //! never waiting, and is answered once the program closes it, past its `max_bytes`, or at
 //! [`CLIPBOARD_TIMEOUT`] with what came.
+//! A `rest` call with `wait_ms` counts what wakes Yuna until its time is up, its own timer
+//! left out (`rest.rs`).
 //! `notifications/cancelled` drops a waiting call unanswered.
 //!
 //! Everything an agent does is on a seat of its own, which `seat create` makes
 //! ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
 //! [ADR-0095](../../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)): every tool but
-//! `clock` names it, and an id of another seat's output, window or program is unknown there.
+//! `clock` names it, `rest` when it is to name only that seat's, and an id of another seat's
+//! output, window or program is unknown there.
 //! `seat close` releases what the seat holds, removes its socket, ends its clients, its outputs
 //! and its place in the layout at once, then ends its processes: SIGTERM and SIGCONT, then
 //! SIGKILL [`END_GRACE`] later; it is answered once they are gone, [`KILL_WAIT`] after SIGKILL at
@@ -42,6 +45,9 @@
 //! ended for, which the program keeps for `spawn list`; the programs reaped. An `events` call
 //! reads it from the agent's cursor, or waits, as `windows` does, for a first event that
 //! matches, answered at the end of the round that recorded it.
+//!
+//! With `--rest-audit`, each round's end logs the rest audit's second that ended, each client's
+//! program named.
 //!
 //! A panic of the server's thread is fatal: the program's panic hook ends the programs and
 //! removes their folder ([`Server::programs_folder`], [`end_after_panic`]), then stops Yuna. In a
@@ -76,6 +82,7 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 use crate::colour::description::PG32UCDM;
 use crate::compositor::{Compositor, WindowDescription};
 use crate::output::{InvalidOutput, OutputMode};
+use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::selection::SelectionRead;
 use crate::state::OWNER_SEAT;
 use crate::xwayland::Selection;
@@ -86,13 +93,13 @@ use crate::{
 use accessibility::{Accessibility, BusState, Outcome};
 use events::{EventData, EventLog, Kind, Observer};
 use image::Encoded;
-use programs::{End, Programs, Start, THROTTLE};
+use programs::{End, ProgramWakes, Programs, Start, THROTTLE};
 use protocol::{Call, Message, Revision, RpcError, Session};
 use stdio::{LineReader, LineTooLong, OutputQueue};
 use tools::{
     AccessibilityCall, ButtonCall, CaptureCall, ClipboardCall, ClipboardData, ClockCall,
-    CopiedCapture, EventsCall, KeyboardCall, OutputsCall, PointerCall, SeatCall, SpawnCall,
-    ToolResult, WindowsCall, WorkspacesCall,
+    CopiedCapture, EventsCall, KeyboardCall, OutputsCall, PointerCall, RestCall, SeatCall,
+    SpawnCall, ToolResult, WindowsCall, WorkspacesCall,
 };
 
 pub use accessibility::{
@@ -185,6 +192,20 @@ struct SpawnWait {
     revision: Revision,
     seat: SeatId,
     start: Start,
+}
+
+/// A `rest` call counting what wakes Yuna until its time is up: what was counted when it came,
+/// its seat's or every seat's.
+#[derive(Debug)]
+struct RestWait {
+    key: u64,
+    id: Value,
+    revision: Revision,
+    seat: Option<SeatId>,
+    wait_ms: u64,
+    since: RestCounts,
+    programs: Vec<ProgramWakes>,
+    timer: RegistrationToken,
 }
 
 /// A `capture` call, until it is answered.
@@ -288,6 +309,7 @@ pub struct Server {
     events: Rc<RefCell<Events>>,
     waits: Vec<WindowWait>,
     event_waits: Vec<EventWait>,
+    rest_waits: Vec<RestWait>,
     /// The agents' seats' events, and what the compositor described at the last look.
     event_log: EventLog,
     observer: Observer,
@@ -370,13 +392,14 @@ impl Server {
         let events = Rc::new(RefCell::new(Events::default()));
         let handle = compositor.loop_handle();
         // A descriptor that cannot be watched, a regular file or `/dev/null`, is `None`.
-        let watch = |fd: &OwnedFd, interest: Interest, note: fn(&mut Events)| {
+        let watch = |fd: &OwnedFd, interest: Interest, source: Source, note: fn(&mut Events)| {
             let fd = fd.try_clone().map_err(|e| failed("descriptors", &e))?;
             let events = events.clone();
-            let inserted = handle.insert_source(
+            let inserted = insert_source(
+                &handle,
+                Wake::of(source),
                 Generic::new(fd, interest, Mode::Level),
-                move |_, _, state| {
-                    state.woke = true;
+                move |_, _, _| {
                     note(&mut events.borrow_mut());
                     Ok(PostAction::Continue)
                 },
@@ -387,7 +410,7 @@ impl Server {
                 Err(error) => Err(failed("event loop", &error.error)),
             }
         };
-        let input_source = watch(&input, Interest::READ, |events| {
+        let input_source = watch(&input, Interest::READ, Source::McpInput, |events| {
             events.input_readable = true
         })?
         .ok_or_else(|| {
@@ -397,7 +420,7 @@ impl Server {
         })?;
         // Writable only wakes the loop: each round writes what waits. A file is never watched:
         // a write to it does not wait.
-        let output_source = watch(&output, Interest::WRITE, |_| {})?;
+        let output_source = watch(&output, Interest::WRITE, Source::McpOutput, |_| {})?;
         if let Some(source) = &output_source {
             handle
                 .disable(source)
@@ -407,7 +430,7 @@ impl Server {
             None => None,
             Some(children) => {
                 rustix::io::ioctl_fionbio(&children, true).map_err(|e| failed("SIGCHLD", &e))?;
-                watch(&children, Interest::READ, |events| {
+                watch(&children, Interest::READ, Source::ChildEnded, |events| {
                     events.children_ended = true
                 })?
                 .ok_or_else(|| Error::EventLoop("SIGCHLD's pipe cannot be watched".to_owned()))?;
@@ -428,14 +451,17 @@ impl Server {
         };
         let (encoder_results, encoded) = channel::channel();
         let noted = events.clone();
-        handle
-            .insert_source(encoded, move |event, _, state| {
-                state.woke = true;
+        insert_source(
+            &handle,
+            Wake::of(Source::Encoders),
+            encoded,
+            move |event, _, _| {
                 if let channel::Event::Msg(message) = event {
                     noted.borrow_mut().encoded.push(message);
                 }
-            })
-            .map_err(|e| failed("event loop", &e.error))?;
+            },
+        )
+        .map_err(|e| failed("event loop", &e.error))?;
         // Last, so that a server that fails to start leaves its caller's output as it was.
         rustix::fs::fcntl_setfl(&output, output_flags | OFlags::NONBLOCK)
             .map_err(|e| failed("output", &e))?;
@@ -456,6 +482,7 @@ impl Server {
             events,
             waits: Vec::new(),
             event_waits: Vec::new(),
+            rest_waits: Vec::new(),
             event_log: EventLog::default(),
             observer: Observer::default(),
             looked_at: None,
@@ -538,10 +565,13 @@ impl Server {
     /// Runs one round of the compositor's loop, waiting up to `timeout` (`None`: as long as it
     /// takes), then answers what came: requests, cancellations, ended programs, clipboard reads
     /// whose data came, calls whose time is up or whose window opened; records the round's events
-    /// and answers the calls waiting for them; then writes the replies.
+    /// and answers the calls waiting for them; then writes the replies, and logs the rest audit's
+    /// second that ended, if it logs them.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         let wakeups = self.compositor.counters().wakeups;
         self.compositor.dispatch(timeout)?;
+        // Read now: a call answered below may run the clock's deadlines.
+        let round_sources = self.compositor.rest_round_sources();
         let events = std::mem::take(&mut *self.events.borrow_mut());
         if events.stop {
             self.stop(Stop::Signal);
@@ -570,7 +600,7 @@ impl Server {
         // Before the times up, so that a read whose data came is answered with it.
         self.read_clipboards(events.clipboards_readable);
         for key in events.timed_out {
-            self.answer_timed_out(key);
+            self.answer_timed_out(key, round_sources);
         }
         // The encoders that ended first, so that the captures copied take their places.
         self.note_encoded(events.encoded);
@@ -591,6 +621,12 @@ impl Server {
         self.answer_event_waits();
         self.write_output();
         self.compositor.log_counters_after(wakeups);
+        let programs = &self.programs;
+        self.compositor.log_ended_rest_second(&|seat, process| {
+            programs
+                .as_ref()
+                .and_then(|(programs, _)| programs.program_of(seat, process))
+        });
         Ok(())
     }
 
@@ -609,11 +645,15 @@ impl Server {
             return;
         }
         let events = self.events.clone();
-        let armed = handle.insert_source(Timer::from_duration(THROTTLE), move |_, _, state| {
-            state.woke = true;
-            events.borrow_mut().throttle_ended = true;
-            TimeoutAction::Drop
-        });
+        let armed = insert_source(
+            &handle,
+            Wake::of(Source::ProgramsThrottle),
+            Timer::from_duration(THROTTLE),
+            move |_, _, _| {
+                events.borrow_mut().throttle_ended = true;
+                TimeoutAction::Drop
+            },
+        );
         match armed {
             Ok(_) => self.throttle_armed = true,
             // Without a timer, the output is read again at once rather than never.
@@ -625,17 +665,16 @@ impl Server {
     /// write to) can be read, or the connection breaks; then ends the programs and returns why.
     pub fn run(mut self, stop: OwnedFd) -> Result<Stop, Error> {
         let events = self.events.clone();
-        self.compositor
-            .loop_handle()
-            .insert_source(
-                Generic::new(stop, Interest::READ, Mode::Level),
-                move |_, _, state| {
-                    state.woke = true;
-                    events.borrow_mut().stop = true;
-                    Ok(PostAction::Remove)
-                },
-            )
-            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        insert_source(
+            &self.compositor.loop_handle(),
+            Wake::of(Source::StopSignal),
+            Generic::new(stop, Interest::READ, Mode::Level),
+            move |_, _, _| {
+                events.borrow_mut().stop = true;
+                Ok(PostAction::Remove)
+            },
+        )
+        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         let result = loop {
             if self.stopping.is_some() {
                 break Ok(());
@@ -836,6 +875,11 @@ impl Server {
                     "events" => match self.events(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits, and is answered later.
+                        None => return,
+                    },
+                    "rest" => match self.rest(&id, revision, arguments) {
+                        Some(result) => result,
+                        // It counts until its time is up, and is answered then.
                         None => return,
                     },
                     "capture" => match self.capture(&id, revision, arguments) {
@@ -1110,7 +1154,7 @@ impl Server {
             "ending a seat's processes"
         );
         let key = self.next_wait;
-        let timer = match self.arm_closing_stage(key, END_GRACE) {
+        let timer = match self.arm_closing_stage(key, seat, END_GRACE) {
             Ok(timer) => timer,
             Err(error) => {
                 // Without a timer, nothing would send SIGKILL: send it now.
@@ -1134,14 +1178,27 @@ impl Server {
         None
     }
 
-    /// Answers the `windows`, `events`, `capture`, `clipboard`, `accessibility` calls and the
-    /// `spawn` starts waiting for its bus that wait on `seat`, which closed, and forgets its
+    /// Answers the `windows`, `events`, `rest`, `capture`, `clipboard`, `accessibility` calls and
+    /// the `spawn` starts waiting for its bus that wait on `seat`, which closed, and forgets its
     /// captures, its events and its accessibility bus: a stale handle fails plainly
     /// ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
     fn fail_waits_of(&mut self, seat: SeatId) {
         self.recent_captures.remove(&seat);
         self.event_log.remove_seat(seat);
         let handle = self.compositor.loop_handle();
+        let (closed, counting): (Vec<RestWait>, Vec<RestWait>) =
+            std::mem::take(&mut self.rest_waits)
+                .into_iter()
+                .partition(|wait| wait.seat == Some(seat));
+        self.rest_waits = counting;
+        for wait in closed {
+            handle.remove(wait.timer);
+            let result = ToolResult::failed(format!("seat {} was closed", seat.0));
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+        }
         let (closed, waiting): (Vec<EventWait>, Vec<EventWait>) =
             std::mem::take(&mut self.event_waits)
                 .into_iter()
@@ -1200,21 +1257,24 @@ impl Server {
         }
     }
 
-    /// Arms the timer that ends a closing's stage `after` from now.
+    /// Arms the timer that ends `seat`'s closing's stage `after` from now.
     fn arm_closing_stage(
         &self,
         key: u64,
+        seat: SeatId,
         after: Duration,
     ) -> Result<RegistrationToken, smithay::reexports::calloop::Error> {
         let events = self.events.clone();
-        self.compositor
-            .loop_handle()
-            .insert_source(Timer::from_duration(after), move |_, _, state| {
-                state.woke = true;
+        insert_source(
+            &self.compositor.loop_handle(),
+            Wake::of_seat(Source::SeatClosing, seat),
+            Timer::from_duration(after),
+            move |_, _, _| {
                 events.borrow_mut().closings_due.push(key);
                 TimeoutAction::Drop
-            })
-            .map_err(|e| e.error)
+            },
+        )
+        .map_err(|e| e.error)
     }
 
     /// A closing's stage is up: after SIGTERM, SIGKILL goes to every process of the seat still
@@ -1254,7 +1314,8 @@ impl Server {
         for &pid in &targets {
             let _ = rustix::process::kill_process(pid, Signal::KILL);
         }
-        let timer = self.arm_closing_stage(key, KILL_WAIT);
+        let seat = self.closings[index].seat;
+        let timer = self.arm_closing_stage(key, seat, KILL_WAIT);
         let closing = &mut self.closings[index];
         for pid in targets {
             if !closing.signalled.contains(&pid) {
@@ -1749,7 +1810,7 @@ impl Server {
             let folder = programs.accessibility_folder(seat);
             let environment = programs::daemon_environment(std::env::vars_os(), seat);
             let handle = self.compositor.loop_handle();
-            let log = |path: &std::path::Path| programs.bounded_log(&handle, path);
+            let log = |path: &std::path::Path| programs.bounded_log(&handle, seat, path);
             if let Err(reason) = self.accessibility.start_bus(seat, folder, environment, log) {
                 return Some(ToolResult::failed(reason));
             }
@@ -2001,7 +2062,7 @@ impl Server {
             )));
         }
         let key = self.next_wait;
-        let timer = match self.arm_wait_timer(key, wait) {
+        let timer = match self.arm_wait_timer(key, wait, Source::WaitingCall) {
             Ok(timer) => timer,
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
@@ -2019,7 +2080,7 @@ impl Server {
     }
 
     /// The calls waiting, `windows`', `events`', `clipboard get`'s, the `spawn` starts waiting
-    /// for their seat's accessibility bus and `accessibility`'s together, which
+    /// for their seat's accessibility bus, `accessibility`'s and `rest`'s together, which
     /// [`MAX_WAITING_CALLS`] bounds.
     fn waiting_calls(&self) -> usize {
         self.waits.len()
@@ -2027,23 +2088,107 @@ impl Server {
             + self.clipboard_reads.len()
             + self.spawn_waits.len()
             + self.accessibility.calls_in_flight()
+            + self.rest_waits.len()
     }
 
-    /// Arms the timer that ends waiting call `key`'s time `after` from now, on real time.
+    /// `rest`: what woke Yuna and what it drew, since it started, or, with `wait_ms`, none now:
+    /// the call counts until its time is up.
+    fn rest(
+        &mut self,
+        id: &Value,
+        revision: Revision,
+        arguments: Map<String, Value>,
+    ) -> Option<ToolResult> {
+        let call: RestCall = match tools::arguments(arguments) {
+            Ok(call) => call,
+            Err(reason) => return Some(ToolResult::failed(reason)),
+        };
+        let seat = match call.seat.map(|seat| self.agent_seat(seat)).transpose() {
+            Ok(seat) => seat,
+            Err(failed) => return Some(failed),
+        };
+        let counts = self.compositor.rest_counts();
+        let programs = self.program_wakes();
+        let Some(wait_ms) = call.wait_ms else {
+            return Some(ToolResult::done(
+                self.rest_json(&counts, seat, None, &programs),
+            ));
+        };
+        let wait = Duration::from_millis(wait_ms);
+        if wait.is_zero() || wait > MAX_WAIT {
+            return Some(ToolResult::failed(format!(
+                "wait_ms is from 1 to {}: leave it out for what was counted since Yuna started",
+                MAX_WAIT.as_millis()
+            )));
+        }
+        if self.waiting_calls() >= MAX_WAITING_CALLS {
+            return Some(ToolResult::failed(format!(
+                "{MAX_WAITING_CALLS} calls wait already"
+            )));
+        }
+        let key = self.next_wait;
+        let timer = match self.arm_wait_timer(key, wait, Source::WaitingCall) {
+            Ok(timer) => timer,
+            Err(error) => return Some(ToolResult::failed(error.to_string())),
+        };
+        self.next_wait += 1;
+        self.rest_waits.push(RestWait {
+            key,
+            id: id.clone(),
+            revision,
+            seat,
+            wait_ms,
+            since: counts,
+            programs,
+            timer,
+        });
+        None
+    }
+
+    /// What woke Yuna for each program remembered; none without programs.
+    fn program_wakes(&self) -> Vec<ProgramWakes> {
+        self.programs
+            .as_ref()
+            .map(|(programs, _)| programs.wakes())
+            .unwrap_or_default()
+    }
+
+    /// `counts` as `rest` answers, with `programs` and each client's program named.
+    fn rest_json(
+        &self,
+        counts: &RestCounts,
+        seat: Option<SeatId>,
+        wait_ms: Option<u64>,
+        programs: &[ProgramWakes],
+    ) -> Value {
+        let program_of = |seat: SeatId, process: &crate::ClientProcess| {
+            self.programs
+                .as_ref()
+                .and_then(|(programs, _)| programs.program_of(seat, process))
+        };
+        tools::rest_json(counts, seat, wait_ms, programs, &program_of)
+    }
+
+    /// Arms the timer that ends waiting call `key`'s time `after` from now, on real time:
+    /// `source`, [`Source::WaitingCall`] or a capture's [`Source::CaptureTimeout`], names its
+    /// wake.
     fn arm_wait_timer(
         &self,
         key: u64,
         after: Duration,
+        source: Source,
     ) -> Result<RegistrationToken, smithay::reexports::calloop::Error> {
         let events = self.events.clone();
-        self.compositor
-            .loop_handle()
-            .insert_source(Timer::from_duration(after), move |_, _, state| {
-                state.woke = true;
+        insert_source(
+            &self.compositor.loop_handle(),
+            Wake::of(source),
+            Timer::from_duration(after),
+            move |_, _, _| {
                 events.borrow_mut().timed_out.push(key);
                 TimeoutAction::Drop
-            })
-            .map_err(|e| e.error)
+            },
+        )
+        .map_err(|e| e.error)
     }
 
     /// Records in the seats' logs what happened since the last time: outputs and windows as the
@@ -2152,7 +2297,7 @@ impl Server {
             )));
         }
         let key = self.next_wait;
-        let timer = match self.arm_wait_timer(key, wait) {
+        let timer = match self.arm_wait_timer(key, wait, Source::WaitingCall) {
             Ok(timer) => timer,
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
@@ -2268,7 +2413,7 @@ impl Server {
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
         let key = self.next_wait;
-        let (source, timer) = match self.watch_clipboard_read(key, &pipe) {
+        let (source, timer) = match self.watch_clipboard_read(key, seat, &pipe) {
             Ok(tokens) => tokens,
             Err(error) => return Some(ToolResult::failed(error)),
         };
@@ -2289,34 +2434,36 @@ impl Server {
         None
     }
 
-    /// The sources of clipboard read `key`: one noting when `pipe` may be read, and the timer of
-    /// [`CLIPBOARD_TIMEOUT`]. Neither is left when one cannot be made.
+    /// The sources of clipboard read `key`, of `seat`: one noting when `pipe` may be read, and
+    /// the timer of [`CLIPBOARD_TIMEOUT`]. Neither is left when one cannot be made.
     fn watch_clipboard_read(
         &self,
         key: u64,
+        seat: SeatId,
         pipe: &OwnedFd,
     ) -> Result<(RegistrationToken, RegistrationToken), String> {
         let handle = self.compositor.loop_handle();
         let watched = pipe.try_clone().map_err(|error| error.to_string())?;
         let events = self.events.clone();
-        let source = handle
-            .insert_source(
-                Generic::new(watched, Interest::READ, Mode::Level),
-                move |_, _, state| {
-                    state.woke = true;
-                    let readable = &mut events.borrow_mut().clipboards_readable;
-                    if !readable.contains(&key) {
-                        readable.push(key);
-                    }
-                    Ok(PostAction::Continue)
-                },
-            )
-            .map_err(|error| error.error.to_string())?;
+        let source = insert_source(
+            &handle,
+            Wake::of_seat(Source::ClipboardRead, seat),
+            Generic::new(watched, Interest::READ, Mode::Level),
+            move |_, _, _| {
+                let readable = &mut events.borrow_mut().clipboards_readable;
+                if !readable.contains(&key) {
+                    readable.push(key);
+                }
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|error| error.error.to_string())?;
         let events = self.events.clone();
-        let timer = handle.insert_source(
+        let timer = insert_source(
+            &handle,
+            Wake::of_seat(Source::ClipboardReadTimeout, seat),
             Timer::from_duration(CLIPBOARD_TIMEOUT),
-            move |_, _, state| {
-                state.woke = true;
+            move |_, _, _| {
                 events.borrow_mut().timed_out.push(key);
                 TimeoutAction::Drop
             },
@@ -2438,7 +2585,7 @@ impl Server {
             Err(error) => return Some(ToolResult::failed(error.to_string())),
         };
         let key = self.next_wait;
-        let timer = match self.arm_wait_timer(key, MAX_WAIT) {
+        let timer = match self.arm_wait_timer(key, MAX_WAIT, Source::CaptureTimeout) {
             Ok(timer) => timer,
             Err(error) => {
                 self.compositor.cancel_capture(ticket);
@@ -2570,14 +2717,13 @@ impl Server {
             if copied.presented_at > now {
                 if real && !*woken {
                     let wait = copied.presented_at.saturating_sub(now);
-                    *woken = self
-                        .compositor
-                        .loop_handle()
-                        .insert_source(Timer::from_duration(wait), |_, _, state| {
-                            state.woke = true;
-                            TimeoutAction::Drop
-                        })
-                        .is_ok();
+                    *woken = insert_source(
+                        &self.compositor.loop_handle(),
+                        Wake::of(Source::CaptureBoundary),
+                        Timer::from_duration(wait),
+                        |_, _, _| TimeoutAction::Drop,
+                    )
+                    .is_ok();
                 }
                 index += 1;
                 continue;
@@ -2678,8 +2824,24 @@ impl Server {
     }
 
     /// Answers the call `key` whose time is up, if it still waits: no window matched, no event
-    /// came, no frame came for a capture, or a clipboard read's program did not close its pipe.
-    fn answer_timed_out(&mut self, key: u64) {
+    /// came, no frame came for a capture, a clipboard read's program did not close its pipe, or
+    /// a `rest` call's time to count is over. Its timer woke Yuna alone when the round had
+    /// `round_sources` 1.
+    fn answer_timed_out(&mut self, key: u64, round_sources: u32) {
+        if let Some(index) = self.rest_waits.iter().position(|wait| wait.key == key) {
+            // Its timer removed itself.
+            let wait = self.rest_waits.remove(index);
+            let mut window = self.compositor.rest_counts().since(&wait.since);
+            window.leave_out_wake(Source::WaitingCall, round_sources == 1);
+            let programs = programs_since(&self.program_wakes(), &wait.programs);
+            let result =
+                ToolResult::done(self.rest_json(&window, wait.seat, Some(wait.wait_ms), &programs));
+            self.queue.push(&protocol::response(
+                wait.id,
+                result.into_result(wait.revision),
+            ));
+            return;
+        }
         if let Some(index) = self.event_waits.iter().position(|wait| wait.key == key) {
             // Its timer removed itself.
             let wait = self.event_waits.remove(index);
@@ -2772,6 +2934,14 @@ impl Server {
             }
             !cancelled
         });
+        self.rest_waits.retain(|wait| {
+            let cancelled = &wait.id == id;
+            if cancelled {
+                handle.remove(wait.timer);
+                tracing::debug!(request = %id, "a counting `rest` call is cancelled");
+            }
+            !cancelled
+        });
     }
 
     fn clock(&mut self, arguments: Map<String, Value>) -> ToolResult {
@@ -2852,6 +3022,26 @@ impl Server {
             }
         }
     }
+}
+
+/// What woke Yuna for each program of `now` since `earlier`: a program started since counts
+/// whole.
+fn programs_since(now: &[ProgramWakes], earlier: &[ProgramWakes]) -> Vec<ProgramWakes> {
+    now.iter()
+        .map(|program| {
+            let before = earlier
+                .iter()
+                .find(|before| before.seat == program.seat && before.program == program.program);
+            match before {
+                Some(before) => ProgramWakes {
+                    output: program.output.saturating_sub(before.output),
+                    pace: program.pace.saturating_sub(before.pace),
+                    ..*program
+                },
+                None => *program,
+            }
+        })
+        .collect()
 }
 
 /// `mode`, a mode just made, under VRR from `vrr_min` and announcing what `hdr` says: `true`

@@ -76,6 +76,16 @@ impl Yuna {
     /// Starts `yuna mcp` with no seat, at most `descriptors` open files when given, and
     /// `variables` added to its environment.
     fn launch(name: &str, descriptors: Option<u32>, variables: &[(&str, &str)]) -> Yuna {
+        Yuna::launch_with_options(name, descriptors, variables, &[])
+    }
+
+    /// Starts `yuna mcp` as [`Yuna::launch`] does, with `options` after its own.
+    fn launch_with_options(
+        name: &str,
+        descriptors: Option<u32>,
+        variables: &[(&str, &str)],
+        options: &[&str],
+    ) -> Yuna {
         let folder = short_temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
         fs::DirBuilder::new()
             .recursive(true)
@@ -98,6 +108,7 @@ impl Yuna {
         };
         let mut child = command
             .args(["mcp", "--output", "1920x1080@60,1"])
+            .args(options)
             .env("XDG_RUNTIME_DIR", folder.join("runtime"))
             .env("YUNA_LOG", "info")
             .env("DISPLAY", ":99")
@@ -2349,6 +2360,377 @@ fn an_agent_lives_m1_11s_done_when_through_mcp_alone() {
         json!(SEAT),
         "{closed}"
     );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A Wayland client written by hand, in Python's standard library alone: a window of 64 × 64
+/// pixels, application id `yuna.test.animated`, drawn from two `wl_shm` buffers in turn, each
+/// frame committed when the last one's callback comes, for as many seconds as its argument says;
+/// then, its last frame called back, it prints `still` and reads until its connection closes,
+/// drawing nothing more.
+const ANIMATED: &str = r#"
+import os, socket, struct, sys, time
+
+def message(target, opcode, payload=b""):
+    return struct.pack("=II", target, (8 + len(payload)) << 16 | opcode) + payload
+
+def string(text):
+    data = text.encode() + b"\0"
+    return struct.pack("=I", len(data)) + data + b"\0" * (-len(data) % 4)
+
+wayland = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+wayland.connect(os.environ["WAYLAND_DISPLAY"])
+data = b""
+
+def events():
+    """The events that came, each (object, opcode, body); a protocol error ends the client."""
+    global data
+    chunk = wayland.recv(65536)
+    if not chunk:
+        sys.exit("the connection closed")
+    data += chunk
+    found = []
+    while len(data) >= 8:
+        target, word = struct.unpack("=II", data[:8])
+        size = word >> 16
+        if len(data) < size:
+            break
+        found.append((target, word & 0xFFFF, data[8:size]))
+        data = data[size:]
+    for target, opcode, body in found:
+        if target == 1 and opcode == 0:
+            sys.exit("a protocol error: %r" % body)
+    return found
+
+# wl_display.get_registry, object 2, then wl_display.sync, object 3.
+wayland.sendall(message(1, 1, struct.pack("=I", 2)) + message(1, 0, struct.pack("=I", 3)))
+names, synced = {}, False
+while not synced:
+    for target, opcode, body in events():
+        if target == 2 and opcode == 0:
+            name, length = struct.unpack("=II", body[:8])
+            names[body[8:8 + length - 1].decode()] = name
+        synced = synced or target == 3
+
+def bind(interface, version, new_id):
+    return message(2, 0, struct.pack("=I", names[interface]) + string(interface)
+                   + struct.pack("=II", version, new_id))
+
+COMPOSITOR, SHM, WM_BASE, SURFACE, XDG_SURFACE, TOPLEVEL, POOL = 4, 5, 6, 7, 8, 9, 10
+BUFFERS = (11, 12)
+SIDE = 64
+SIZE = SIDE * SIDE * 4
+requests = bind("wl_compositor", 4, COMPOSITOR) + bind("wl_shm", 1, SHM)
+requests += bind("xdg_wm_base", 1, WM_BASE)
+requests += message(COMPOSITOR, 0, struct.pack("=I", SURFACE))
+requests += message(WM_BASE, 2, struct.pack("=II", XDG_SURFACE, SURFACE))
+requests += message(XDG_SURFACE, 1, struct.pack("=I", TOPLEVEL))
+requests += message(TOPLEVEL, 3, string("yuna.test.animated"))
+requests += message(SURFACE, 6)
+wayland.sendall(requests)
+memory = os.memfd_create("buffers")
+os.ftruncate(memory, 2 * SIZE)
+os.pwrite(memory, b"\x40\x80\xc0\xff" * (SIDE * SIDE) + b"\xc0\x80\x40\xff" * (SIDE * SIDE), 0)
+# wl_shm.create_pool's descriptor travels beside its message.
+socket.send_fds(wayland, [message(SHM, 0, struct.pack("=Ii", POOL, 2 * SIZE))], [memory])
+for index, buffer in enumerate(BUFFERS):
+    wayland.sendall(message(POOL, 0, struct.pack("=IiiiiI", buffer, index * SIZE, SIDE, SIDE,
+                                                   SIDE * 4, 1)))
+
+def acknowledge(found):
+    """Acknowledges each xdg_surface.configure among the events found."""
+    configured = False
+    for target, opcode, body in found:
+        if target == XDG_SURFACE and opcode == 0:
+            wayland.sendall(message(XDG_SURFACE, 4, body[:4]))
+            configured = True
+    return configured
+
+while not acknowledge(events()):
+    pass
+next_id = 13
+
+def draw(frame):
+    """Attaches the frame's buffer, damaged whole, asks its callback, commits; the callback's id."""
+    global next_id
+    callback, next_id = next_id, next_id + 1
+    request = message(SURFACE, 1, struct.pack("=Iii", BUFFERS[frame % 2], 0, 0))
+    request += message(SURFACE, 9, struct.pack("=iiii", 0, 0, SIDE, SIDE))
+    request += message(SURFACE, 3, struct.pack("=I", callback))
+    request += message(SURFACE, 6)
+    wayland.sendall(request)
+    return callback
+
+until = time.monotonic() + float(sys.argv[1])
+waiting, drawn = draw(0), 1
+while time.monotonic() < until:
+    found = events()
+    acknowledge(found)
+    if any(target == waiting and opcode == 0 for target, opcode, _ in found):
+        waiting, drawn = draw(drawn), drawn + 1
+while not any(target == waiting and opcode == 0 for target, opcode, _ in events()):
+    pass
+print("still", flush=True)
+while True:
+    acknowledge(events())
+"#;
+
+/// The `rest` result of a call with `arguments`.
+fn rest(yuna: &mut Yuna, arguments: Value) -> Value {
+    let result = yuna.call("rest", arguments);
+    assert_eq!(result["isError"], json!(false), "{result}");
+    result["structuredContent"].clone()
+}
+
+/// Runs a call that wakes Yuna until nothing is armed: the seat's first frame drawn, and what
+/// follows it.
+fn settle(yuna: &mut Yuna) {
+    wait_for("Yuna's rest", || {
+        let clock = yuna.call("clock", json!({"action": "now"}));
+        clock["structuredContent"]["next_deadline_ns"]
+            .is_null()
+            .then_some(())
+    });
+}
+
+/// Starts [`ANIMATED`] on [`SEAT`] for `seconds`, and waits for its window.
+fn start_animated(yuna: &mut Yuna, seconds: u32) -> Value {
+    let script = yuna.folder.join("animated.py");
+    fs::write(&script, ANIMATED).expect("the client's script");
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "python3", "-I", script, seconds.to_string()
+        ]}),
+    );
+    assert_eq!(started["isError"], json!(false), "{started}");
+    let found = yuna.call(
+        "windows",
+        json!({"seat": SEAT, "app_id": "yuna.test.animated", "wait_ms": 20_000}),
+    );
+    let log = started["structuredContent"]["program"]["log"]
+        .as_str()
+        .map(|log| fs::read_to_string(log).unwrap_or_default())
+        .unwrap_or_default();
+    assert_eq!(
+        found["structuredContent"]["windows"][0]["app_id"],
+        json!("yuna.test.animated"),
+        "{found}\n{log}\n{}",
+        yuna.log()
+    );
+    started
+}
+
+/// The entry of `list` whose `key` is `value`.
+fn entry<'a>(list: &'a Value, key: &str, value: &Value) -> Option<&'a Value> {
+    list.as_array()?.iter().find(|entry| &entry[key] == value)
+}
+
+/// `yuna mcp` at rest, its seat's first frame drawn: a second of `rest` names nothing that woke
+/// it and nothing drawn, its seat's or any; its own timer, and the wake that timer caused alone,
+/// are left out.
+#[test]
+fn at_rest_a_second_of_yuna_mcp_names_nothing() {
+    let mut yuna = Yuna::start("rest-quiet");
+    settle(&mut yuna);
+    let nothing = json!({
+        "wakes": 0, "sources": [], "clients": [], "unnamed_client_wakes": 0, "programs": [],
+        "clients_gone": {"clients": 0, "wakes": 0, "commits": 0, "draws": 0},
+        "frames": 0, "draw_causes": [],
+    });
+    for arguments in [
+        json!({"seat": SEAT, "wait_ms": 1000}),
+        json!({"wait_ms": 1000}),
+    ] {
+        let mut rested = rest(&mut yuna, arguments.clone());
+        for key in ["seat", "since_ns", "now_ns", "wait_ms"] {
+            rested.as_object_mut().expect("an object").remove(key);
+        }
+        assert_eq!(rested, nothing, "{arguments}\n{}", yuna.log());
+    }
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// With `--rest-audit` on, a second of `rest` at rest still names nothing: the log's own timer,
+/// which the call's request armed, is never counted, in the window nor among Yuna's wakes.
+#[test]
+fn at_rest_with_the_rest_audit_on_a_second_names_nothing() {
+    let mut yuna = Yuna::launch_with_options("rest-quiet-audit", None, &[], &["--rest-audit"]);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(created["structuredContent"]["seat"], json!(SEAT));
+    settle(&mut yuna);
+    // Past the second the settling calls opened, so that this call's request opens the next.
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut rested = rest(&mut yuna, json!({"wait_ms": 1500}));
+    for key in ["seat", "since_ns", "now_ns", "wait_ms"] {
+        rested.as_object_mut().expect("an object").remove(key);
+    }
+    let nothing = json!({
+        "wakes": 0, "sources": [], "clients": [], "unnamed_client_wakes": 0, "programs": [],
+        "clients_gone": {"clients": 0, "wakes": 0, "commits": 0, "draws": 0},
+        "frames": 0, "draw_causes": [],
+    });
+    assert_eq!(rested, nothing, "{}", yuna.log());
+    assert!(
+        !rest_audit_lines(&yuna.log()).is_empty(),
+        "the requests' seconds were not logged\n{}",
+        yuna.log()
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A program whose Wayland client draws as fast as its frames are called back is named by its
+/// program, with its commits as the cause of the frames drawn; the clients' source counts its
+/// wakes.
+#[test]
+fn a_program_that_animates_is_named_with_its_commits_as_the_frames_cause() {
+    let mut yuna = Yuna::start("rest-animated");
+    let started = start_animated(&mut yuna, 600);
+    let id = json!(program_id(&started));
+    let window = rest(&mut yuna, json!({"seat": SEAT, "wait_ms": 2000}));
+    // The program ends before any assertion, which would leave it running.
+    yuna.call(
+        "spawn",
+        json!({"action": "stop", "seat": SEAT, "program": id, "force": true}),
+    );
+    let client = entry(&window["clients"], "program", &id)
+        .unwrap_or_else(|| panic!("the program is not named: {window}\n{}", yuna.log()))
+        .clone();
+    eprintln!("in 2 s: {client}");
+    assert_eq!(client["seat"], json!(SEAT));
+    assert_eq!(client["xwayland"], json!(false));
+    assert_eq!(
+        client["pid"],
+        started["structuredContent"]["program"]["pid"]
+    );
+    let draws = client["draws"].as_u64().expect("draws");
+    let commits = client["commits"].as_u64().expect("commits");
+    // Its rate follows the machine's load; each commit is a new buffer, drawn once.
+    assert!(commits >= 2 && draws >= 1, "{window}");
+    assert!(commits <= draws + 1 && draws <= commits + 1, "{window}");
+    let commit_frames = entry(&window["draw_causes"], "cause", &json!("commit"))
+        .and_then(|cause| cause["frames"].as_u64());
+    assert_eq!(commit_frames, Some(draws), "{window}");
+    let clients = entry(&window["sources"], "source", &json!("clients"));
+    assert_eq!(
+        clients.and_then(|source| source["wakes"].as_u64()),
+        client["wakes"].as_u64(),
+        "{window}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A program that writes to its output is named as such: the programs' output among the
+/// sources, and the program by its id, with its output's wakes.
+#[test]
+fn a_program_writing_to_its_output_is_named() {
+    let mut yuna = Yuna::start("rest-output");
+    // The seat's first frame drawn first, so that the window draws nothing.
+    settle(&mut yuna);
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c", "while :; do echo tick; sleep 0.05; done"
+        ]}),
+    );
+    let id = json!(program_id(&started));
+    let window = rest(&mut yuna, json!({"seat": SEAT, "wait_ms": 1000}));
+    yuna.call(
+        "spawn",
+        json!({"action": "stop", "seat": SEAT, "program": id, "force": true}),
+    );
+    let output = entry(&window["sources"], "source", &json!("program_output"))
+        .and_then(|source| source["wakes"].as_u64())
+        .unwrap_or(0);
+    assert!(output >= 5, "{window}");
+    let program = entry(&window["programs"], "program", &id)
+        .unwrap_or_else(|| panic!("the program is not named: {window}"));
+    assert_eq!(program["seat"], json!(SEAT));
+    assert_eq!(program["output_wakes"].as_u64(), Some(output), "{window}");
+    assert_eq!(program["pace_wakes"], json!(0));
+    assert_eq!(window["frames"], json!(0), "{window}");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The lines of the rest audit in Yuna's log.
+fn rest_audit_lines(log: &str) -> Vec<String> {
+    log.lines()
+        .filter(|line| line.contains("rest audit: what woke Yuna in one second"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// When a rest audit's line was logged, in seconds, from its timestamp,
+/// `2026-11-18T04:21:25.983280Z`: within one month, which a test does not cross.
+fn logged_at(line: &str) -> f64 {
+    let stamp = line.split_whitespace().next().unwrap_or_default();
+    let field = |range: std::ops::Range<usize>| -> f64 {
+        stamp
+            .get(range)
+            .and_then(|text| text.parse().ok())
+            .unwrap_or_else(|| panic!("no timestamp in {line:?}"))
+    };
+    let seconds = stamp
+        .get(17..)
+        .and_then(|text| text.trim_end_matches('Z').parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("no timestamp in {line:?}"));
+    field(8..10) * 86_400.0 + field(11..13) * 3_600.0 + field(14..16) * 60.0 + seconds
+}
+
+/// With `--rest-audit`, Yuna logs one line for each second something woke it, a second apart
+/// at least: while a program animates, its seconds name it, by program, with its commits and the
+/// frames they caused; its last line names its output, `still` written once its last frame was
+/// called back; then nothing, its window still open.
+#[test]
+fn the_rest_audit_logs_each_second_that_woke_yuna_and_nothing_at_rest() {
+    let mut yuna = Yuna::launch_with_options("rest-audit", None, &[], &["--rest-audit"]);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(created["structuredContent"]["seat"], json!(SEAT));
+    // 2 s, then still.
+    let started = start_animated(&mut yuna, 2);
+    let id = program_id(&started);
+    // From here no call is made, which would wake Yuna. Its last wake is its output's, `still`;
+    // the line of that second comes a second later, later still on a loaded machine.
+    let lines = wait_for("the line naming the program's output", || {
+        let lines = rest_audit_lines(&yuna.log());
+        lines
+            .iter()
+            .any(|line| line.contains("program_output"))
+            .then_some(lines)
+    });
+    std::thread::sleep(Duration::from_secs(3));
+    let later = rest_audit_lines(&yuna.log());
+    let named = format!("program {id} seat {SEAT}: ");
+    let naming: Vec<&String> = lines.iter().filter(|line| line.contains(&named)).collect();
+    yuna.call(
+        "spawn",
+        json!({"action": "stop", "seat": SEAT, "program": id, "force": true}),
+    );
+    eprintln!("{}", lines.join("\n"));
+    // One line a second at most: a second begins at a wake after the last one ended, and ends
+    // a second after it began.
+    for pair in lines.windows(2) {
+        let apart = logged_at(&pair[1]) - logged_at(&pair[0]);
+        assert!(
+            apart >= 0.95,
+            "lines {apart:.3} s apart\n{}",
+            lines.join("\n")
+        );
+    }
+    assert!(naming.len() >= 2, "{}", lines.join("\n"));
+    assert!(
+        naming
+            .iter()
+            .any(|line| line.contains("commit ") && line.contains("clients ")),
+        "{}",
+        lines.join("\n")
+    );
+    assert_eq!(later, lines, "Yuna logged at rest\n{}", yuna.log());
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
 }

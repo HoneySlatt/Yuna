@@ -112,7 +112,13 @@ impl Clock {
 
     /// The earliest armed deadline's time; none at rest.
     pub fn next_deadline(&self) -> Option<Duration> {
-        self.deadlines.iter().map(|(at, _)| *at).min()
+        self.next_due().map(|(at, _)| at)
+    }
+
+    /// The earliest armed deadline, with its time: of two due at the same time, the one armed
+    /// first, as [`Clock::take_due`] takes them; none at rest.
+    pub(crate) fn next_due(&self) -> Option<(Duration, Deadline)> {
+        self.deadlines.iter().copied().min_by_key(|(at, _)| *at)
     }
 
     /// Disarms and returns the earliest deadline due at `until` or before; of two due at the same

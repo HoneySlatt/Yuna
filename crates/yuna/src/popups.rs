@@ -566,7 +566,7 @@ impl State {
             .and_then(|toplevel| toplevel.shown_on)
         {
             // A popup gone is something new to draw.
-            self.schedule_refresh_for_content(output);
+            self.schedule_refresh_for_content(output, crate::rest::DrawCause::Popups);
         }
     }
 }

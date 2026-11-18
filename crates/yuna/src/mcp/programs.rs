@@ -70,6 +70,7 @@ use yuna_layout::SeatId;
 
 use crate::compositor::{ClientProcess, ClientProtocolError};
 use crate::process::{ProcessStat, keep_descriptors_from_the_program, read_stat};
+use crate::rest::{Source, Wake, insert_source};
 use crate::state::State;
 use crate::xwayland::X11Display;
 
@@ -196,9 +197,32 @@ pub struct Program {
     pace: Rc<Cell<Pace>>,
     /// The timer that stops and continues it while it is slowed.
     pace_timer: Option<RegistrationToken>,
+    /// Times its pace's timer woke Yuna.
+    pace_wakes: Rc<Cell<u64>>,
+}
+
+/// What woke Yuna for one program: what the `rest` tool names it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramWakes {
+    pub seat: SeatId,
+    pub program: u64,
+    /// Rounds in which it wrote to its output, or closed it.
+    pub output: u64,
+    /// Times its pace stopped or continued it.
+    pub pace: u64,
 }
 
 impl Program {
+    /// What woke Yuna for it.
+    pub fn wakes(&self) -> ProgramWakes {
+        ProgramWakes {
+            seat: self.seat,
+            program: self.id,
+            output: self.log_state.borrow().wakes,
+            pace: self.pace_wakes.get(),
+        }
+    }
+
     /// Bytes of output its log holds.
     pub fn log_kept(&self) -> u64 {
         self.log_state.borrow().kept()
@@ -289,6 +313,8 @@ struct ProgramLog {
     written: u64,
     failed: bool,
     ended: bool,
+    /// Rounds in which its output woke Yuna.
+    wakes: u64,
 }
 
 impl ProgramLog {
@@ -299,6 +325,7 @@ impl ProgramLog {
             written: 0,
             failed: false,
             ended: false,
+            wakes: 0,
         }
     }
 
@@ -476,11 +503,12 @@ impl Programs {
 
     /// A log at `path`, made anew, kept as a program's is: the write end of a pipe whose output
     /// a source of `handle`'s loop reads into it, its first [`LOG_HEAD`] bytes and its newest
-    /// [`LOG_TAIL`], throttled past them with the programs' own. What a seat's dbus-daemon
+    /// [`LOG_TAIL`], throttled past them with the programs' own. What `seat`'s dbus-daemon
     /// writes goes there.
     pub fn bounded_log(
         &self,
         handle: &LoopHandle<'static, State>,
+        seat: SeatId,
         path: &Path,
     ) -> io::Result<OwnedFd> {
         let log = OpenOptions::new()
@@ -491,7 +519,8 @@ impl Programs {
             .open(path)?;
         let (output_read, output_write) = pipe_with(PipeFlags::CLOEXEC)?;
         let log_state = Rc::new(RefCell::new(ProgramLog::new(log)));
-        watch_output(handle, output_read, log_state, self.throttled.clone())?;
+        let wake = Wake::of_seat(Source::AccessibilityLog, seat);
+        watch_output(handle, wake, output_read, log_state, self.throttled.clone())?;
         Ok(output_write)
     }
 
@@ -503,6 +532,11 @@ impl Programs {
     /// The programs of `seat` remembered, in the order they started.
     pub fn list(&self, seat: SeatId) -> Vec<&Program> {
         self.list.iter().filter(|p| p.seat == seat).collect()
+    }
+
+    /// What woke Yuna for each program remembered, every seat's, in the order they started.
+    pub fn wakes(&self) -> Vec<ProgramWakes> {
+        self.list.iter().map(Program::wakes).collect()
     }
 
     /// Program `id` of `seat`, while it is remembered; none for another seat's.
@@ -560,7 +594,8 @@ impl Programs {
         let mut environment =
             program_environment(std::env::vars_os(), &runtime, socket, x11, seat, &start.env);
         add_accessibility_variables(&mut environment, start.accessibility.as_deref(), &start.env);
-        let (pid, log_state) = match self.launch(handle, environment, &start, &runtime, &log) {
+        let (pid, log_state) = match self.launch(handle, seat, environment, &start, &runtime, &log)
+        {
             Ok(launched) => launched,
             Err(reason) => {
                 let _ = fs::remove_file(&log);
@@ -583,6 +618,7 @@ impl Programs {
             log_state,
             pace: Rc::new(Cell::new(Pace::Free)),
             pace_timer: None,
+            pace_wakes: Rc::default(),
         });
         self.forget_oldest_ended(handle);
         // Only programs that ended are forgotten: this one is still last.
@@ -591,11 +627,12 @@ impl Programs {
             .ok_or_else(|| "the program was forgotten".to_owned())
     }
 
-    /// Makes a program's runtime folder and log, starts it with `environment`, and reads its
-    /// output into the log.
+    /// Makes a program's runtime folder and log, starts it on `seat` with `environment`, and
+    /// reads its output into the log.
     fn launch(
         &self,
         handle: &LoopHandle<'static, State>,
+        seat: SeatId,
         environment: BTreeMap<OsString, OsString>,
         start: &Start,
         runtime: &Path,
@@ -643,6 +680,7 @@ impl Programs {
         let log_state = Rc::new(RefCell::new(ProgramLog::new(log)));
         if let Err(error) = watch_output(
             handle,
+            Wake::of_seat(Source::ProgramOutput, seat),
             output_read,
             log_state.clone(),
             self.throttled.clone(),
@@ -723,10 +761,14 @@ impl Programs {
         let stopped_for = PACE_PERIOD - running_for;
         let group = program.pid;
         let pace = program.pace.clone();
+        let pace_wakes = program.pace_wakes.clone();
         let mut running = true;
-        let timer = handle
-            .insert_source(Timer::from_duration(running_for), move |_, _, state| {
-                state.woke = true;
+        let timer = insert_source(
+            handle,
+            Wake::of_seat(Source::ProgramPace, seat),
+            Timer::from_duration(running_for),
+            move |_, _, _| {
+                pace_wakes.set(pace_wakes.get() + 1);
                 running = !running;
                 let signal = if running { Signal::CONT } else { Signal::STOP };
                 match rustix::process::kill_process_group(group, signal) {
@@ -738,8 +780,9 @@ impl Programs {
                     _ if running => TimeoutAction::ToDuration(running_for),
                     _ => TimeoutAction::ToDuration(stopped_for),
                 }
-            })
-            .map_err(|error| format!("program {id} cannot be paced: {}", error.error))?;
+            },
+        )
+        .map_err(|error| format!("program {id} cannot be paced: {}", error.error))?;
         program.pace_timer = Some(timer);
         program.pace.set(Pace::Slow(run_percent));
         Ok(())
@@ -1306,13 +1349,15 @@ fn seat_in_environment(pid: i32) -> Option<SeatId> {
         .map(SeatId)
 }
 
-/// Reads a program's output as it comes, into `log`; the source goes when the output ends.
+/// Reads a program's output as it comes, into `log`, the source named `wake`; the source goes
+/// when the output ends.
 /// Once the program has written more than its log keeps, [`LOG_HEAD`] and [`LOG_TAIL`], it is
 /// read at most [`READ_SIZE`] every [`THROTTLE`]: the source stops reading and joins
 /// `throttled`, which the server lets read again at the end of the throttle. A program that
 /// writes faster waits on its pipe, rather than keep Yuna reading for what it drops.
 fn watch_output(
     handle: &LoopHandle<'static, State>,
+    wake: Wake,
     output: OwnedFd,
     log: Rc<RefCell<ProgramLog>>,
     throttled: Throttled,
@@ -1321,37 +1366,36 @@ fn watch_output(
     let mut buffer = vec![0; READ_SIZE];
     let source: Rc<Cell<Option<RegistrationToken>>> = Rc::default();
     let own_source = source.clone();
-    let token = handle
-        .insert_source(
-            Generic::new(output, Interest::READ, Mode::Level),
-            move |_, output, state| {
-                state.woke = true;
-                match rustix::io::read(output.as_fd(), &mut buffer) {
-                    Ok(0) => {
-                        log.borrow_mut().ended = true;
-                        Ok(PostAction::Remove)
-                    }
-                    Ok(read) => {
-                        let mut log = log.borrow_mut();
-                        log.append(&buffer[..read]);
-                        if log.size < LOG_HEAD + LOG_TAIL {
-                            return Ok(PostAction::Continue);
-                        }
-                        throttled.borrow_mut().push(own_source.clone());
-                        Ok(PostAction::Disable)
-                    }
-                    Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                        Ok(PostAction::Continue)
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "a program's output cannot be read");
-                        log.borrow_mut().ended = true;
-                        Ok(PostAction::Remove)
-                    }
+    let token = insert_source(
+        handle,
+        wake,
+        Generic::new(output, Interest::READ, Mode::Level),
+        move |_, output, _| {
+            log.borrow_mut().wakes += 1;
+            match rustix::io::read(output.as_fd(), &mut buffer) {
+                Ok(0) => {
+                    log.borrow_mut().ended = true;
+                    Ok(PostAction::Remove)
                 }
-            },
-        )
-        .map_err(|e| io::Error::other(e.error.to_string()))?;
+                Ok(read) => {
+                    let mut log = log.borrow_mut();
+                    log.append(&buffer[..read]);
+                    if log.size < LOG_HEAD + LOG_TAIL {
+                        return Ok(PostAction::Continue);
+                    }
+                    throttled.borrow_mut().push(own_source.clone());
+                    Ok(PostAction::Disable)
+                }
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(PostAction::Continue),
+                Err(error) => {
+                    tracing::warn!(%error, "a program's output cannot be read");
+                    log.borrow_mut().ended = true;
+                    Ok(PostAction::Remove)
+                }
+            }
+        },
+    )
+    .map_err(|e| io::Error::other(e.error.to_string()))?;
     source.set(Some(token));
     Ok(())
 }

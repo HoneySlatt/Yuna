@@ -37,6 +37,7 @@ fn help_succeeds_and_names_the_options() {
         "--headless",
         "--gpu",
         "--output",
+        "--rest-audit",
         "YUNA_LOG",
     ] {
         assert!(help.contains(option), "the help does not name {option}");
@@ -301,6 +302,39 @@ fn headless_with_an_agent_seat_offers_virtual_input() {
     }
     assert_eq!(globals.output_mode, Some((1920, 1080, 60_000)));
     stop_cleanly(&mut running, &socket_path);
+}
+
+/// `yuna --headless --rest-audit` logs the seconds that woke it, a client named by its process
+/// and its seat, the test's own process here, and nothing while it rests: over 4.5 s with a
+/// client connected and silent, at most the second of its start and the client's, when they are
+/// apart, are logged.
+#[test]
+fn headless_with_the_rest_audit_names_a_client_then_rests() {
+    let (mut running, log_reader, socket_path) =
+        start_headless("rest-audit", &["--output", "640x480@60,1", "--rest-audit"]);
+    let stream = UnixStream::connect(&socket_path).expect("the socket accepts a client");
+    let connection = Connection::from_socket(stream).expect("a Wayland connection");
+    let mut queue = connection.new_event_queue();
+    connection.display().get_registry(&queue.handle(), ());
+    let mut globals = Globals::default();
+    queue.roundtrip(&mut globals).expect("the globals come");
+    std::thread::sleep(Duration::from_millis(4500));
+    stop_cleanly(&mut running, &socket_path);
+    drop(connection);
+    let log = log_reader
+        .join()
+        .expect("the log's reader does not panic")
+        .expect("its log reads");
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("rest audit: what woke Yuna in one second"))
+        .collect();
+    let named = format!("pid {} seat 1: ", std::process::id());
+    assert!(
+        lines.iter().any(|line| line.contains(&named)),
+        "the client is not named\n{log}"
+    );
+    assert!((1..=2).contains(&lines.len()), "Yuna logged at rest\n{log}");
 }
 
 #[test]
