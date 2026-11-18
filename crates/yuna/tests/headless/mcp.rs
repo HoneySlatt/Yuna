@@ -1048,7 +1048,6 @@ fn a_waiting_windows_call_on_a_mapped_window_gets_its_place_in_the_new_mode() {
     );
 }
 
-
 /// Maps a window of `client`, `app_id` and `title`, on its seat's focused output, and runs the
 /// frames armed, so that the layout has placed it; returns its index in `client`.
 fn open_placed_window(mcp: &mut Mcp, client: &mut Client, app_id: &str, title: &str) -> usize {
