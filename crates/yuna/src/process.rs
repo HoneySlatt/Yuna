@@ -1,10 +1,10 @@
 //! What every program Yuna starts shares: the descriptors it does not inherit and those it is
 //! given, how its program is found, and how a process Yuna watches through a pidfd is ended and
-//! reaped. MCP's programs (`mcp/programs.rs`), Xwayland (`xwayland/server.rs`) and the
+//! reaped. MCP's programs (`mcp/programs/`), Xwayland (`xwayland/server.rs`) and the
 //! accessibility buses' dbus-daemon (`mcp/accessibility/bus.rs`) start through it. And what Yuna
 //! reads of a process in `/proc`: its parent, its group, and the processes above it up to Yuna,
 //! which a client's connection records (`state.rs`) and a seat's closing follows
-//! (`mcp/programs.rs`).
+//! (`mcp/programs/mod.rs`).
 //!
 //! A pidfd names one process: a signal sent through it never reaches a process that took its
 //! pid. `yuna mcp`'s reaping of every child, on SIGCHLD, may reap a process before its own

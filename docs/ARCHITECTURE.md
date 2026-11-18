@@ -1460,16 +1460,19 @@ standard input, one per line, and writes the replies to its standard output, not
   and its requests without `_meta`'s revision are served under it, `ping` included: the one
   state kept across requests.
 - `stdio.rs`: the lines, at most 1 MiB, and the queue of replies.
-- `tools.rs`: the tools' schemas, their arguments, read with serde, and their results, given
-  both as `structuredContent` and as text. A tool that does several things takes an `action`.
-- `programs.rs`: the programs `spawn` starts, their logs and their pace, and which processes and
-  clients belong to a seat's program.
+- `tools/`: the tools' schemas (`schemas.rs`), their arguments, read with serde (`arguments.rs`),
+  and their results, given both as `structuredContent` and as text (`results.rs`). A tool that
+  does several things takes an `action`.
+- `programs/`: the programs `spawn` starts, their environment, logs, pace and folder, the
+  processes under Yuna, and which processes and clients belong to a seat's program.
 - `events.rs`: each agent seat's log of events, and how window and output events are told from
   what the compositor describes.
 - `image.rs`: a capture's PNG and its base64, made on a thread of its own.
 - `accessibility/`: each seat's accessibility bus and the `accessibility` tool's walks
   ([Accessibility](#accessibility)).
-- `mod.rs`: `Server`, which holds the compositor and runs the tools.
+- `mod.rs`: `Server`, which holds the compositor, reads the requests and routes each to its
+  tool's module: `seats.rs`, `outputs.rs`, `input.rs`, `spawn.rs`, `waits.rs` (`windows`,
+  `events`, `rest`, and what ends any waiting call), `clipboard.rs`, `captures.rs`, `clock.rs`.
 
 Everything runs in the compositor's event loop. The sources of the client's input and output,
 of SIGCHLD, of the waiting calls' timers, of the clipboard reads' pipes and of the encoders'
@@ -2031,7 +2034,7 @@ own thread, both `took_us`.
 - `flake.nix`: the development shell, and Yuna's package, `bin/yuna` wrapped to draw with the
   package's own Mesa and find Xwayland, for Yuna alone: the wrapper keeps the caller's own
   `PATH`, `LD_LIBRARY_PATH` and `__EGL_VENDOR_LIBRARY_FILENAMES` in `YUNA_CALLER_*`, which the
-  programs `yuna mcp` starts get back (`mcp/programs.rs`). CI builds it and starts it from an
+  programs `yuna mcp` starts get back (`mcp/programs/environment.rs`). CI builds it and starts it from an
   empty environment
   ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)); `rust-toolchain.toml`: the
   toolchain ([ADR-0016](adr/0016-the-rust-toolchain.md)).

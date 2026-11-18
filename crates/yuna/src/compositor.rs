@@ -176,7 +176,7 @@ pub struct WindowDescription {
 
 /// Who a client is, read once, when Yuna accepts its connection: its process, and, for a client
 /// of an agent's seat, the processes above it up to Yuna, which name the program it belongs to
-/// (`mcp/programs.rs`) even once it has exited and been reaped.
+/// (`mcp/programs/mod.rs`) even once it has exited and been reaped.
 ///
 /// The peer may have exited between its `connect` and Yuna's accept: its lineage is then empty,
 /// or, if it has been reaped and its pid taken by another process meanwhile, that other

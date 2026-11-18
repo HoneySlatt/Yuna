@@ -174,7 +174,7 @@
         nativeBuildInputs = [ pkgs.makeWrapper ];
         buildInputs = [ pkgs.libxkbcommon ];
         # The variables set here are Yuna's alone: the programs `yuna mcp` starts get the caller's
-        # own values back, kept in YUNA_CALLER_<name> (crates/yuna/src/mcp/programs.rs).
+        # own values back, kept in YUNA_CALLER_<name> (crates/yuna/src/mcp/programs/environment.rs).
         postInstall = ''
           wrapProgram $out/bin/yuna \
             --run 'if [ -n "''${PATH+x}" ]; then export YUNA_CALLER_PATH="$PATH"; fi' \
