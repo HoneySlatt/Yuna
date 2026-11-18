@@ -464,7 +464,7 @@
     "title": "Pointer"
   },
   {
-    "description": "Press, release or tap keys on a seat's keyboard, type text, or show text being composed, to the window its keyboard is on, or read where it is. Keys are named as XKB names them: Return, a, F5, BackSpace, Left. tap takes keys joined by +, the last pressed while the others are held: ctrl+shift+t; ctrl, shift, alt, super and altgr name modifiers. type types text through the seat's us layout, any character included: one outside it is committed to the text field there when it speaks text-input-v3. preedit shows text being composed in that text field, as an input method does, until the next type replaces it; empty text clears it. The result tells the window the keyboard is on and whether a text field is enabled there. A click focuses a window; the keyboard follows it at the output's next refresh.",
+    "description": "Press, release or tap keys on a seat's keyboard, type text, show text being composed, or change its layout, to the window its keyboard is on, or read where it is. Keys are named as XKB names them: Return, a, F5, BackSpace, Left; a name presses a key that types that keysym, alone where one does, and adds no modifier. tap takes keys joined by +, the last pressed while the others are held: ctrl+shift+t; ctrl, shift, alt, super and altgr name modifiers. type types text through the seat's layout, us unless changed, with Shift, AltGr and the layout's own switch between its layouts, any character included: one its keys do not type is committed to the text field there when it speaks text-input-v3. preedit shows text being composed in that text field, as an input method does, until the next type replaces it; empty text clears it. layout sets the seat's XKB layout, variant and options, on the evdev rules and a pc105 keyboard: fr, or us,ru with the option grp:alt_shift_toggle; every program of the seat gets the new keymap; it is refused while a key is held, and for a layout, variant or option XKB's rules do not know. The result tells the window the keyboard is on and whether a text field is enabled there; get's and layout's tell the seat's layout, variant and options too. A click focuses a window; the keyboard follows it at the output's next refresh.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -475,7 +475,8 @@
             "release",
             "tap",
             "type",
-            "preedit"
+            "preedit",
+            "layout"
           ],
           "type": "string"
         },
@@ -489,6 +490,17 @@
           "minLength": 1,
           "type": "string"
         },
+        "layout": {
+          "description": "layout: XKB's layouts, joined by commas, four at most: fr, us,ru",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "options": {
+          "description": "layout: XKB's options, joined by commas, such as grp:alt_shift_toggle; none when left out",
+          "maxLength": 256,
+          "type": "string"
+        },
         "seat": {
           "description": "the seat's handle, from `seat create`",
           "minimum": 2,
@@ -496,6 +508,11 @@
         },
         "text": {
           "description": "type: the text; preedit: the text being composed",
+          "type": "string"
+        },
+        "variant": {
+          "description": "layout: their variants, one for each layout, joined by commas; each layout's default when left out",
+          "maxLength": 256,
           "type": "string"
         }
       },

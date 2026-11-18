@@ -56,13 +56,13 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0034](0034-captures.md) | Captures: PNG at the logical size | Accepted |
 | [0035](0035-agents-seats.md) | Agents' seats in one Yuna | Superseded by 0078; amended by 0042 |
 | [0036](0036-yuna-is-public.md) | Yuna is public | Accepted; amends 0009 and 0021 |
-| [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Accepted; amended by 0043 |
+| [0037](0037-seats-tools-input-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard, its closing | Superseded by 0095; amended by 0043 |
 | [0038](0038-captures-coordinates-windows-and-wayland.md) | Captures: from a pixel to a click, a window's capture, and who captures through Wayland | Accepted; amended by 0054 |
 | [0039](0039-leaving-smithay-step-by-step.md) | Leaving Smithay step by step | Accepted; superseded in part by 0081; amends 0011 and 0013 |
 | [0040](0040-the-wire-protocol-stays-wayland-rs.md) | The wire protocol stays wayland-rs's | Accepted |
 | [0041](0041-vulkan-decided-on-a-measure.md) | Vulkan decided on a measure | Superseded by 0063; amends 0012 |
 | [0042](0042-main-on-smithays-fork.md) | Main on Smithay's fork: seats and outputs filtered per client | Accepted; supersedes 0027; amends 0021 and 0035; amended by 0045 |
-| [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; amends 0029 and 0037 |
+| [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) | Text input on an agent's seat, and the rest of SlimeEngine's examples | Accepted; superseded in part by 0095; amends 0029 and 0037 |
 | [0044](0044-xwayland-across-outputs-of-different-scales.md) | XWayland across outputs of different scales | Accepted |
 | [0045](0045-the-fork-over-https-a-branch-per-base.md) | The fork over HTTPS, a branch per base | Accepted; amends 0021 and 0042 |
 | [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md) | Emulated VRR: amdgpu's rule, checked against the owner's monitor | Accepted; amends 0023 and 0031; amended by 0051 and 0058 |
@@ -113,3 +113,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0091](0091-the-clipboard-between-x11-and-wayland-who-reads-and-its-bounds.md) | The clipboard between X11 and Wayland: who reads it, and its bounds | Accepted |
 | [0092](0092-a-programs-protocol-trace-its-errors-and-its-log-through-mcp.md) | A program's protocol trace, its errors and its log through MCP | Accepted |
 | [0093](0093-a-call-that-waits-for-the-seats-events.md) | A call that waits for the seat's events, and programs made stuck or slow | Accepted |
+| [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard and layouts, its closing | Accepted; supersedes 0037; supersedes in part 0043 |

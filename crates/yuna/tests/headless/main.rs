@@ -16,6 +16,7 @@ mod colour_client;
 mod dialogs;
 mod dmabuf;
 mod input_client;
+mod keyboard_layouts;
 mod mcp;
 mod misbehaving;
 mod motion;

@@ -1,6 +1,6 @@
 //! Seats ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md),
 //! [ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
-//! [ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)): the owner's, and one for
+//! [ADR-0095](../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)): the owner's, and one for
 //! each agent.
 //!
 //! Each seat is a Smithay [`Seat`] with a keyboard, and, for an agent's, a pointer. Each has its own
@@ -13,10 +13,12 @@
 //! those globals only to the clients [`belongs_to`] accepts. Every focus of a seat is on its own
 //! clients' surfaces as well, so that a client that held another seat's global would get nothing.
 //!
-//! An agent's seat has the `us` layout, whatever the machine's settings
-//! ([`AGENT_KEYBOARD_LAYOUT`]). When it is removed, the keys and buttons it holds are released,
-//! its focus leaves, and only then are its clients ended; its outputs, its `wl_seat` global and its
-//! place in the layout go once they are freed (`Compositor::remove_seat`).
+//! An agent's seat starts with the `us` layout, whatever the machine's settings
+//! ([`AGENT_KEYBOARD_LAYOUT`]), and its agent may change it while the seat holds no key
+//! ([`State::set_keyboard_layout`], `keymap.rs`). When it is removed, the keys and buttons it
+//! holds are released, its focus leaves, and only then are its clients ended; its outputs, its
+//! `wl_seat` global and its place in the layout go once they are freed
+//! (`Compositor::remove_seat`).
 
 use std::collections::BTreeSet;
 use std::os::unix::net::UnixStream;
@@ -34,12 +36,13 @@ use smithay::utils::{Logical, Point, Serial};
 use yuna_layout::SeatId;
 use yuna_motion::Change;
 
+use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
 use crate::{ClientProcess, Error};
 
-/// The layout of every agent's keyboard: the same on every machine and in CI, whatever the
-/// `XKB_DEFAULT_*` variables say (ADR-0037).
+/// The layout every agent's keyboard starts with: the same on every machine and in CI, whatever
+/// the `XKB_DEFAULT_*` variables say (ADR-0037).
 pub const AGENT_KEYBOARD_LAYOUT: &str = "us";
 
 /// How long a key waits before it repeats, and how many times a second it then repeats, as most
@@ -74,10 +77,12 @@ pub(crate) struct SeatData {
     pub pointer_moved: bool,
     /// The origin, in logical coordinates, of the surface under its pointer, as last sent.
     pub pointer_origin: Option<Point<f64, Logical>>,
-    /// An agent seat's keymap, compiled as its keyboard's, to find which key types a character.
-    pub keymap: Option<xkb::Keymap>,
-    /// The keymap its keyboard was made with: a virtual keyboard's keys switch the keyboard to
-    /// that keyboard's own keymap, and Yuna's own keys switch it back (`virtual_input.rs`).
+    /// An agent seat's keymap, the one its keyboard has, to find which keys type a keysym. It
+    /// changes with `own_keymap`, together.
+    pub keymap: Option<SeatKeymap>,
+    /// The keymap its keyboard was made with, or last given by a change of layout: a virtual
+    /// keyboard's keys switch the keyboard to that keyboard's own keymap, and Yuna's own keys
+    /// switch it back (`virtual_input.rs`).
     pub own_keymap: KeymapFile,
     /// The clients connected through its socket, or for it through `connect_client_to`, while
     /// they are served.
@@ -112,21 +117,16 @@ impl SeatData {
         seat_state: &mut SeatState<State>,
         display: &DisplayHandle,
     ) -> Result<SeatData, Error> {
+        let keymap = SeatKeymap::compile(KeyboardLayout::agents_default())
+            .map_err(|e| Error::Keyboard(format!("the agents' keymap: {e}")))?;
         let mut seat =
             seat_state.new_wl_seat_with_filter(display, format!("agent-{}", id.0), move |client| {
                 belongs_to(client, id)
             });
-        let config = XkbConfig {
-            rules: "evdev",
-            model: "pc105",
-            layout: AGENT_KEYBOARD_LAYOUT,
-            variant: "",
-            // Some, and no environment names: an empty field would take XKB_DEFAULT_OPTIONS.
-            options: Some(String::new()),
-        };
+        // No environment names: the XKB_DEFAULT_* variables never reach an agent's keyboard.
         let keyboard = seat
             .add_keyboard_with_context_flags(
-                config,
+                keymap.layout().xkb_config(),
                 REPEAT_DELAY_MS,
                 REPEAT_RATE,
                 xkb::CONTEXT_NO_ENVIRONMENT_NAMES,
@@ -134,17 +134,6 @@ impl SeatData {
             .map_err(|e| Error::Keyboard(e.to_string()))?;
         let pointer = seat.add_pointer();
         crate::text_input::act_as_input_method(&seat);
-        let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
-        let keymap = xkb::Keymap::new_from_names(
-            &context,
-            "evdev",
-            "pc105",
-            AGENT_KEYBOARD_LAYOUT,
-            "",
-            Some(String::new()),
-            xkb::KEYMAP_COMPILE_NO_FLAGS,
-        )
-        .ok_or_else(|| Error::Keyboard("the agents' keymap does not compile".to_owned()))?;
         let mut data = SeatData::new(id, seat, keyboard, Some(pointer));
         data.keymap = Some(keymap);
         Ok(data)
@@ -239,6 +228,56 @@ impl State {
         Ok(id)
     }
 
+    /// Changes agent seat `seat`'s keyboard layout: its keyboard's keymap, which every client of
+    /// the seat is sent, Xwayland's included, and the keymap Yuna types through, together. The
+    /// keyboard's locked modifiers and group start again from none, as with a new keyboard.
+    /// Refused, nothing changed, for the owner's seat, a seat that does not exist, a layout
+    /// [`SeatKeymap::compile`] refuses, and while the seat holds a key, its own or a virtual
+    /// keyboard's.
+    pub(crate) fn set_keyboard_layout(
+        &mut self,
+        seat: SeatId,
+        layout: KeyboardLayout,
+    ) -> Result<(), Error> {
+        let keyboard = self.agent_keyboard(seat)?;
+        if !keyboard.pressed_keys().is_empty() {
+            return Err(Error::Refused(
+                "the seat holds a key: release it before changing the layout".to_owned(),
+            ));
+        }
+        let keymap = SeatKeymap::compile(layout)?;
+        // From the text of Yuna's own: half the time of compiling the names again (`layout_time`).
+        keyboard
+            .set_keymap_from_string(self, keymap.text())
+            .map_err(|e| Error::Keyboard(e.to_string()))?;
+        let own_keymap = keyboard.keymap_file();
+        let layout = keymap.layout().clone();
+        if let Some(data) = self.seat_mut(seat) {
+            data.keymap = Some(keymap);
+            data.own_keymap = own_keymap;
+        }
+        tracing::info!(
+            seat = seat.0,
+            layout = %layout.layout,
+            variant = %layout.variant,
+            options = %layout.options,
+            "keyboard layout changed"
+        );
+        Ok(())
+    }
+
+    /// Agent seat `seat`'s keyboard layout; none for the owner's seat and a seat that does not
+    /// exist.
+    pub(crate) fn keyboard_layout(&self, seat: SeatId) -> Option<KeyboardLayout> {
+        self.seat(seat)?
+            .keymap
+            .as_ref()
+            .map(|keymap| keymap.layout().clone())
+    }
+
+    /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal.
+    /// Refused for a seat that does not exist.
+    /// With `sees_every_seat`, it is shown every seat's globals, for tests alone.
     /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal, with
     /// who it is: its peer's process, from the socket's credentials, and, for an agent's seat,
     /// the processes above it, read in `/proc` now. The peer may have exited since it connected

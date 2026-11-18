@@ -37,6 +37,63 @@ worktree's Yuna tests (`.delegation/m1.11-events-2/13`, local).
   each window seen before, gave 2.41 ms at 2,000 windows, disturbed too
   (`.delegation/m1.11-events-check/01`, local).
 
+## M1.11 — A keyboard layout's change (2026-11-18)
+
+`crates/yuna/examples/layout_time.rs`, on M1.11's keyboard layouts before their commit (base
+`6e271a3`): Yuna in the example's own process, on the manual clock, with one agent's seat and no
+client. It times `Compositor::set_keyboard_layout` from the call to its return, on the state
+thread: XKB's compile from the names, Yuna's reading of the keys, Smithay's compile from the
+keymap's text and its keymap file. 20 changes to each layout in turn, after one change of each
+to warm the file cache. Then `Compositor::type_text`, 20 calls of a line: plain, and with Num
+Lock on, a state whose keys `type` reads again at each call. Machine: Ryzen 7 5800X, Linux
+7.3.1. Other programs used 0.05 cores in the debug run and 0.07 in the release run: not
+disturbed.
+
+```sh
+nix develop -c cargo run -p yuna --example layout_time
+nix develop -c cargo run --release -p yuna --example layout_time
+```
+
+A change, median and longest:
+
+| Layout | Release | Debug |
+|---|---|---|
+| `fr` | 2.72, 2.75 ms | 4.26, 4.31 ms |
+| `de` | 2.78, 2.81 ms | 4.31, 4.35 ms |
+| `us,ru`, `grp:alt_shift_toggle` | 3.15, 3.17 ms | 6.45, 6.54 ms |
+| `us` | 2.57, 2.62 ms | 4.08, 4.11 ms |
+| The limit: `us,fr,de,ru`, 14 `grp:` options in 247 bytes | 5.04, 5.09 ms | 11.04, 11.13 ms |
+| All 100 changes | 2.78, 5.09 ms | 4.31, 11.13 ms |
+
+- The first change to each layout, from a cold file cache: 2.5 to 5.1 ms in release, 4.0 to
+  11.1 ms in debug.
+- XKB's compile alone, the same in both builds: 1.4 to 2.8 ms from the names, 0.7 to 0.9 ms from
+  the keymap's text.
+- **Over 10 ms**: only the limit, in a debug build. Its key tables, four groups of them, are most
+  of the difference from release.
+
+`type`, one call, median and longest:
+
+| Line | Release, plain | Release, Num Lock | Debug, plain | Debug, Num Lock |
+|---|---|---|---|---|
+| 63 characters on `us` | 0.05, 0.06 ms | 0.17, 0.19 ms | 0.40, 0.43 ms | 1.46, 1.47 ms |
+| The same and `é ж`, 67 characters on the limit | 0.06, 0.07 ms | 0.46, 0.48 ms | 0.46, 0.49 ms | 3.69, 3.75 ms |
+
+Earlier runs, on code since changed, before one compile took the place of two and the scans
+shared their xkb states:
+
+| Build | Median, longest | Other programs | Disturbed |
+|---|---|---|---|
+| Debug | 9.46, 23.99 ms | 10.5 cores | yes |
+| Debug | 10.07, 17.95 ms | 13.3 cores | yes |
+| Debug | 4.51, 10.11 ms | 2.9 cores | yes |
+| Release | 5.54, 12.70 ms | 11.3 cores | yes |
+| Debug | 4.01, 6.40 ms | 0.02 cores | no |
+| Release | 2.76, 3.66 ms | 0.08 cores | no |
+
+Not measured: a change with clients connected, each of which is sent the keymap's file; a
+change while a program types.
+
 ## M1.10 — A program's presentation in Yuna against a headless sway (2026-11-17)
 
 uwui's own `scripts/measure.py`, at the revision `flake.nix` pins (`fb77f0d`), measures `vkcube`

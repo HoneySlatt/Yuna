@@ -28,6 +28,7 @@ use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
 use crate::colour::SurfaceColourDescription;
 use crate::input::PointerDescription;
+use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
 use crate::process::lineage_under_yuna;
 use crate::render::Device;
@@ -500,7 +501,7 @@ impl Compositor {
         }
     }
 
-    /// Removes agent seat `seat` ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)):
+    /// Removes agent seat `seat` ([ADR-0095](../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)):
     /// releases the keys and buttons it holds and moves its focus off every surface; removes its
     /// socket and its X display, ending its Xwayland; ends its clients and frees them now, their
     /// windows closed; then removes its outputs and its place in the layout, and disables its
@@ -595,10 +596,17 @@ impl Compositor {
     }
 
     /// Presses or releases the key XKB names `name` ("Return", "a", "F5") on agent seat
-    /// `seat`'s keyboard, to the surface it is on; no modifier is added. Refused for a name the
-    /// seat's keymap has no key for, a press of a key held and a release of one not held.
+    /// `seat`'s keyboard, to the surface it is on; no modifier is added. A press takes a key that
+    /// types that keysym alone, else the key that types it with the fewest keys held, in the
+    /// keyboard's group first; a release lets go of the held key that types it in any group.
+    /// Refused for a name the seat's keymap has no key for, a press of a key held and a release
+    /// of one not held.
     pub fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
-        let key = self.state.keycode_of(seat, name)?;
+        let key = if pressed {
+            self.state.keycode_of(seat, name)?
+        } else {
+            self.state.held_keycode_of(seat, name)?
+        };
         self.state.key(seat, key, pressed)
     }
 
@@ -609,12 +617,38 @@ impl Compositor {
         self.state.tap_keys(seat, combination)
     }
 
-    /// Types `text` on agent seat `seat`'s keyboard, to the surface it is on, through its `us`
-    /// keymap, Shift held where a character needs it. A character the keymap lacks is committed
-    /// to the text field enabled there, through `text-input-v3`, or, with none, typed through a
-    /// keymap given to the client for it. At most [`MAX_TYPED`](crate::MAX_TYPED) characters.
+    /// Types `text` on agent seat `seat`'s keyboard, to the surface it is on, through its
+    /// keymap: each character by its key, Shift, AltGr or level 5's key held where it needs it,
+    /// in its group, which the keymap's own switch locks, and locks back at the end. A character
+    /// the keymap's keys do not type is committed to the text field enabled there, through
+    /// `text-input-v3`, or, with none, typed through a keymap given to the client for it. At most
+    /// [`MAX_TYPED`](crate::MAX_TYPED) characters.
     pub fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.state.type_text(seat, text)
+    }
+
+    /// Changes agent seat `seat`'s keyboard layout to `layout`, under XKB's evdev rules and the
+    /// pc105 model: every client of the seat is sent the new keymap, Xwayland included, and
+    /// [`key`](Compositor::key), [`tap_keys`](Compositor::tap_keys) and
+    /// [`type_text`](Compositor::type_text) go through it. The keyboard's locked modifiers and
+    /// group start again from none. Refused, nothing changed, for the owner's seat, a seat that
+    /// does not exist, no layout named, an empty layout between commas, a layout or variant XKB
+    /// does not know, an option its rules file does not name (where Yuna finds that file; else
+    /// XKB ignores it), a character XKB's names never hold, a field past
+    /// [`MAX_LAYOUT_NAME`](crate::MAX_LAYOUT_NAME) bytes, more than four layouts, and while the
+    /// seat holds a key.
+    pub fn set_keyboard_layout(
+        &mut self,
+        seat: SeatId,
+        layout: KeyboardLayout,
+    ) -> Result<(), Error> {
+        self.state.set_keyboard_layout(seat, layout)
+    }
+
+    /// Agent seat `seat`'s keyboard layout; none for the owner's seat and a seat that does not
+    /// exist.
+    pub fn keyboard_layout(&self, seat: SeatId) -> Option<KeyboardLayout> {
+        self.state.keyboard_layout(seat)
     }
 
     /// Whether a text field is enabled where agent seat `seat`'s keyboard is: its client asked

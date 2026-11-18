@@ -13,7 +13,7 @@
 //!
 //! Everything an agent does is on a seat of its own, which `seat create` makes
 //! ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
-//! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): every tool but
+//! [ADR-0095](../../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)): every tool but
 //! `clock` names it, and an id of another seat's output, window or program is unknown there.
 //! `seat close` releases what the seat holds, removes its socket, ends its clients, its outputs
 //! and its place in the layout at once, then ends its processes: SIGTERM and SIGCONT, then
@@ -66,7 +66,7 @@ use crate::colour::description::PG32UCDM;
 use crate::compositor::{Compositor, WindowDescription};
 use crate::output::{InvalidOutput, OutputMode};
 use crate::state::OWNER_SEAT;
-use crate::{CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error};
+use crate::{CaptureMapping, CaptureTicket, CapturedFrame, ClockMode, Error, KeyboardLayout};
 use events::{EventData, EventLog, Kind, Observer};
 use image::Encoded;
 use programs::{End, Programs, Start, THROTTLE};
@@ -1505,8 +1505,10 @@ impl Server {
             | KeyboardCall::Release { seat, .. }
             | KeyboardCall::Tap { seat, .. }
             | KeyboardCall::Type { seat, .. }
-            | KeyboardCall::Preedit { seat, .. } => *seat,
+            | KeyboardCall::Preedit { seat, .. }
+            | KeyboardCall::Layout { seat, .. } => *seat,
         };
+        let tells_layout = matches!(call, KeyboardCall::Get { .. } | KeyboardCall::Layout { .. });
         let seat = match self.agent_seat(seat) {
             Ok(seat) => seat,
             Err(failed) => return failed,
@@ -1518,14 +1520,33 @@ impl Server {
             KeyboardCall::Tap { keys, .. } => self.compositor.tap_keys(seat, &keys),
             KeyboardCall::Type { text, .. } => self.compositor.type_text(seat, &text),
             KeyboardCall::Preedit { text, .. } => self.compositor.compose_text(seat, &text),
+            KeyboardCall::Layout {
+                layout,
+                variant,
+                options,
+                ..
+            } => {
+                let layout = KeyboardLayout {
+                    layout,
+                    variant: variant.unwrap_or_default(),
+                    options: options.unwrap_or_default(),
+                };
+                self.compositor.set_keyboard_layout(seat, layout)
+            }
         };
-        match result {
-            Ok(()) => ToolResult::done(json!({
-                "keyboard_window": self.compositor.keyboard_window(seat).map(|window| window.0),
-                "text_field": self.compositor.text_field_enabled(seat),
-            })),
-            Err(error) => ToolResult::failed(error.to_string()),
+        if let Err(error) = result {
+            return ToolResult::failed(error.to_string());
         }
+        let mut told = json!({
+            "keyboard_window": self.compositor.keyboard_window(seat).map(|window| window.0),
+            "text_field": self.compositor.text_field_enabled(seat),
+        });
+        if tells_layout && let Some(layout) = self.compositor.keyboard_layout(seat) {
+            told["layout"] = json!(layout.layout);
+            told["variant"] = json!(layout.variant);
+            told["options"] = json!(layout.options);
+        }
+        ToolResult::done(told)
     }
 
     fn spawn(&mut self, arguments: Map<String, Value>) -> ToolResult {

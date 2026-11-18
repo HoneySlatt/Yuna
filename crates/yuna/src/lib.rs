@@ -38,6 +38,7 @@ mod dialog;
 mod dmabuf;
 mod frames;
 mod input;
+mod keymap;
 pub mod mcp;
 mod output;
 mod popups;
@@ -73,6 +74,7 @@ pub use input::{
     BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_SCROLL_STEPS,
     MAX_TYPED, PointerDescription,
 };
+pub use keymap::{KeyboardLayout, MAX_LAYOUT_NAME};
 pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use render::Device;

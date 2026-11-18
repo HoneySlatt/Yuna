@@ -2,7 +2,9 @@
 
 - Status: Accepted; amends [0037](0037-seats-tools-input-and-closing.md) (how `type` types a
   character outside `us`) and [0029](0029-the-rest-of-animated-applications.md) (which
-  SlimeEngine client's rest M1.5 checks)
+  SlimeEngine client's rest M1.5 checks); superseded in part by
+  [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) (how
+  `type` types a character)
 - Date: 2026-11-13
 
 ## Context

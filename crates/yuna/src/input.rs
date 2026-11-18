@@ -1,5 +1,5 @@
 //! Pointer and keyboard input on an agent's seat
-//! ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)), and drag and drop.
+//! ([ADR-0095](../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)), and drag and drop.
 //!
 //! Input reaches a seat only through these calls, which the MCP server makes for the seat an
 //! agent names; the owner's seat takes none. A pointer moves in logical units of one of its
@@ -14,13 +14,17 @@
 //! focus of a seat is on its own clients' surfaces: no event of one seat reaches another's
 //! client.
 //!
-//! Keys are pressed by their XKB keycode. Text is typed through the seat's `us` keymap, Shift
-//! held where a character needs it. A character the keymap lacks is committed to the text field
-//! enabled where the keyboard is, through `text-input-v3` (`text_input.rs`); with none, it is
-//! typed through Smithay's `inject_text_keysyms`, which gives the focused client a keymap of its
-//! own for it, then the seat's back. Events carry Yuna's clock's time.
+//! Keys are pressed by their XKB keycode, a key named by a keysym it types. Text is typed through
+//! the seat's keymap, `us` unless its agent changed it (`keymap.rs`): each character by its key,
+//! Shift, AltGr or level 5's key held where its level needs it, in its group, which the keymap's
+//! own switch locks first and locks back at the end. A character the keymap's keys do not type
+//! is committed to the text field enabled where the keyboard is, through `text-input-v3`
+//! (`text_input.rs`); with none, it is typed through Smithay's `inject_text_keysyms`, which gives
+//! the focused client a keymap of its own for it, then the seat's back. Events carry Yuna's
+//! clock's time.
 
 use std::any::Any;
+use std::collections::HashSet;
 
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::desktop::PopupManager;
@@ -45,6 +49,7 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 use yuna_motion::Change;
 
 use crate::Error;
+use crate::keymap::{Chord, KeyPlanner, KeyboardState};
 use crate::output::VirtualOutput;
 use crate::popups::popup_toplevel;
 use crate::render;
@@ -104,34 +109,6 @@ pub(crate) fn window_of_surface(surface: &WlSurface) -> Option<WlSurface> {
     }
 }
 
-/// A key's keycode and whether it needs Shift, for a keysym of `keymap`'s first layout: its
-/// first key that gives it with no modifier, else with Shift alone.
-fn key_for_keysym(keymap: &xkb::Keymap, keysym: Keysym) -> Option<(Keycode, bool)> {
-    let shift = 1 << keymap.mod_get_index(xkb::MOD_NAME_SHIFT);
-    let mut found_with_shift = None;
-    for raw in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
-        let key = Keycode::new(raw);
-        for level in 0..keymap.num_levels_for_key(key, 0) {
-            if !keymap
-                .key_get_syms_by_level(key, 0, level)
-                .contains(&keysym)
-            {
-                continue;
-            }
-            let mut masks = [0; 8];
-            let count = keymap.key_get_mods_for_level(key, 0, level, &mut masks);
-            let masks = &masks[..count.min(masks.len())];
-            if masks.contains(&0) {
-                return Some((key, false));
-            }
-            if found_with_shift.is_none() && masks.contains(&shift) {
-                found_with_shift = Some((key, true));
-            }
-        }
-    }
-    found_with_shift
-}
-
 /// The keysym a character types: Return, Tab and BackSpace for their control characters.
 fn keysym_of_char(character: char) -> Keysym {
     match character {
@@ -154,11 +131,11 @@ fn keysym_of_name(name: &str) -> Option<Keysym> {
         .find(|keysym| keysym.raw() != 0)
 }
 
-/// What a step of typed text does: press a key, Shift with it or not; commit characters the
-/// keymap lacks to the text field enabled where the keyboard is; or, with none, type them
-/// through an injected keymap.
+/// What a step of typed text does: tap a chord, the keys that pick a character's level or lock
+/// its group held before its key; commit characters the keymap's keys do not type to the text
+/// field enabled where the keyboard is; or, with none, type them through an injected keymap.
 enum Typed {
-    Key(Keycode, bool),
+    Keys(Chord),
     Committed(String),
     Injected(Vec<Keysym>),
 }
@@ -654,21 +631,61 @@ impl State {
             .and_then(|toplevel| toplevel.window)
     }
 
-    /// The keycode of the key XKB names `name` ("Return", "a", "F5") on `seat`'s keymap.
+    /// The keycode of the key XKB names `name` ("Return", "a", "F5") on `seat`'s keymap
+    /// (`SeatKeymap::key_named`): in the keyboard's group first, a key that types that keysym
+    /// alone, else the key of the chord that types it with the fewest keys held. It is pressed
+    /// alone: a tap names the modifiers it holds.
     pub(crate) fn keycode_of(&self, seat: SeatId, name: &str) -> Result<Keycode, Error> {
-        let keymap = self
+        let (keymap, start) = self
             .seat(seat)
             .and_then(|data| data.keymap.as_ref())
+            .zip(self.typing_start(seat))
             .ok_or_else(|| Error::Refused(format!("no agent seat {}", seat.0)))?;
         let keysym = keysym_of_name(name)
             .ok_or_else(|| Error::Refused(format!("no key is named {name:?}")))?;
-        key_for_keysym(keymap, keysym)
-            .map(|(key, _)| key)
-            .ok_or_else(|| {
-                Error::Refused(format!(
-                    "the seat's keymap has no key {name:?}; type text with `type`"
-                ))
-            })
+        keymap.key_named(keysym, start.group).ok_or_else(|| {
+            Error::Refused(format!(
+                "the seat's keymap has no key {name:?}; type text with `type`"
+            ))
+        })
+    }
+
+    /// The key a release of `name` lets go: the held key, lowest first, that types that keysym
+    /// in any group, so that a key pressed in one group is released after another is locked;
+    /// else the key [`State::keycode_of`] names, which the release then finds not held.
+    pub(crate) fn held_keycode_of(&self, seat: SeatId, name: &str) -> Result<Keycode, Error> {
+        let keymap = self.seat(seat).and_then(|data| data.keymap.as_ref());
+        let keysym = keysym_of_name(name);
+        if let (Some(keymap), Some(keysym)) = (keymap, keysym) {
+            let mut held: Vec<Keycode> = self
+                .seat(seat)
+                .map(|data| data.keyboard.pressed_keys().into_iter().collect())
+                .unwrap_or_default();
+            held.sort_by_key(|key| key.raw());
+            if let Some(key) = held.into_iter().find(|&key| keymap.carries(key, keysym)) {
+                return Ok(key);
+            }
+        }
+        self.keycode_of(seat, name)
+    }
+
+    /// The state `seat`'s keyboard is in when Yuna's next key reaches it, as its clients read
+    /// it: its own, or, while a virtual keyboard's keymap is in use, the state the seat's own
+    /// keymap starts with when Yuna's key switches back to it. None for a seat with no keymap of
+    /// its own.
+    fn typing_start(&self, seat: SeatId) -> Option<KeyboardState> {
+        let data = self.seat(seat)?;
+        let keymap = data.keymap.as_ref()?;
+        if data.keyboard.keymap_file().id() != data.own_keymap.id() {
+            return Some(keymap.state_with(&data.keyboard.pressed_keys()));
+        }
+        let modifiers = data.keyboard.modifier_state().serialized;
+        Some(KeyboardState {
+            depressed: modifiers.depressed,
+            latched: modifiers.latched,
+            locked: modifiers.locked,
+            group: modifiers.layout_effective,
+        })
     }
 
     /// Presses or releases `key` on `seat`'s keyboard, to the surface it is on, read with the
@@ -775,12 +792,14 @@ impl State {
         tap_in_order(&keys, |key, pressed| self.key(seat, key, pressed))
     }
 
-    /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its key in
-    /// the seat's keymap, Shift held where it needs it; lacking one, committed to the text field
-    /// enabled there, or, with none, through an injected keymap. Text being composed in that
-    /// field is cleared first, as an input method's commit replaces it. Refused, with nothing
-    /// typed, past [`MAX_TYPED`] characters, for a character that is no keysym, and when a key
-    /// the text needs is held.
+    /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its keys in
+    /// the seat's keymap, the keys that pick its level or lock its group first, the group the
+    /// keyboard had locked again at the end; lacking keys, committed to the text field enabled
+    /// there, or, with none, through an injected keymap. Text being composed in that field is
+    /// cleared first, as an input method's commit replaces it. Refused, with nothing typed, past
+    /// [`MAX_TYPED`] characters, for a character that is no keysym, and when a key the text
+    /// needs is held. A key that fails midway stops the typing; the group it started in is
+    /// locked again, if the keymap leads back there, before the error is returned.
     pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         if text.chars().count() > MAX_TYPED {
@@ -788,18 +807,15 @@ impl State {
                 "a call types {MAX_TYPED} characters at most"
             )));
         }
-        let steps = self.typing_steps(seat, text)?;
-        let shift = self.keycode_of(seat, "Shift_L")?;
-        // Checked before anything is pressed, so that a refusal types nothing and leaves no
-        // Shift held.
         let held = self
             .seat(seat)
             .map(|data| data.keyboard.pressed_keys())
             .unwrap_or_default();
+        let (steps, start_group) = self.typing_steps(seat, text, &held)?;
+        // Checked before anything is pressed, so that a refusal types nothing and leaves no key
+        // held.
         let needs_held = steps.iter().any(|step| match step {
-            Typed::Key(key, with_shift) => {
-                held.contains(key) || (*with_shift && held.contains(&shift))
-            }
+            Typed::Keys(chord) => chord.iter().any(|key| held.contains(key)),
             Typed::Committed(_) | Typed::Injected(_) => false,
         });
         if needs_held {
@@ -811,41 +827,78 @@ impl State {
             self.compose_text(seat, "")?;
         }
         for step in steps {
-            match step {
-                Typed::Key(key, with_shift) => {
-                    if with_shift {
-                        self.key(seat, shift, true)?;
-                    }
-                    self.key(seat, key, true)?;
-                    self.key(seat, key, false)?;
-                    if with_shift {
-                        self.key(seat, shift, false)?;
-                    }
+            let done = match step {
+                Typed::Keys(chord) => {
+                    tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed))
                 }
-                Typed::Committed(text) => self.commit_text(seat, &text)?,
+                Typed::Committed(text) => self.commit_text(seat, &text),
                 Typed::Injected(keysyms) => {
-                    let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
-                        continue;
-                    };
-                    let time = self.input_time();
-                    // Its keymap has room for 247 keys, from keycode 9 to 255.
-                    for chunk in keysyms.chunks(247) {
-                        keyboard.inject_text_keysyms(self, chunk, time);
-                    }
+                    self.inject_keysyms(seat, &keysyms);
+                    Ok(())
                 }
+            };
+            if let Err(error) = done {
+                self.lock_group_again(seat, start_group);
+                return Err(error);
             }
         }
         Ok(())
     }
 
-    /// What typing `text` on `seat` does, step by step, its committed or injected characters
-    /// grouped.
-    fn typing_steps(&self, seat: SeatId, text: &str) -> Result<Vec<Typed>, Error> {
-        let text_field = self.text_field_enabled(seat);
-        let keymap = self
+    /// Types `keysyms` through an injected keymap, to the surface `seat`'s keyboard is on.
+    fn inject_keysyms(&mut self, seat: SeatId, keysyms: &[Keysym]) {
+        let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
+            return;
+        };
+        let time = self.input_time();
+        // Its keymap has room for 247 keys, from keycode 9 to 255.
+        for chunk in keysyms.chunks(247) {
+            keyboard.inject_text_keysyms(self, chunk, time);
+        }
+    }
+
+    /// After a key failed midway through typing, locks `group` again on `seat`'s keyboard, from
+    /// the state it is in now, if the keymap leads there; a key that fails here leaves it as it
+    /// is, logged.
+    fn lock_group_again(&mut self, seat: SeatId, group: u32) {
+        let back = self
             .seat(seat)
             .and_then(|data| data.keymap.as_ref())
+            .zip(self.typing_start(seat))
+            .and_then(|(keymap, now)| keymap.chords_to_group(now, group));
+        let Some(chords) = back else {
+            tracing::warn!(
+                seat = seat.0,
+                group,
+                "typing failed, and no way back to its group"
+            );
+            return;
+        };
+        for chord in chords {
+            if let Err(error) = tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed)) {
+                tracing::warn!(%error, seat = seat.0, group, "typing failed, its group stays");
+                return;
+            }
+        }
+    }
+
+    /// What typing `text` on `seat` does, step by step, from the keyboard's state with `held`
+    /// pressed, its committed or injected characters grouped, and the group typing starts in.
+    /// When the keymap's switches lead back to that group from nowhere typing ends, typing ends
+    /// in another, logged.
+    fn typing_steps(
+        &self,
+        seat: SeatId,
+        text: &str,
+        held: &HashSet<Keycode>,
+    ) -> Result<(Vec<Typed>, u32), Error> {
+        let text_field = self.text_field_enabled(seat);
+        let (keymap, start) = self
+            .seat(seat)
+            .and_then(|data| data.keymap.as_ref())
+            .zip(self.typing_start(seat))
             .ok_or_else(|| Error::Refused(format!("no agent seat {}", seat.0)))?;
+        let mut planner = KeyPlanner::new(keymap, start, held);
         let mut steps: Vec<Typed> = Vec::new();
         for character in text.chars() {
             let keysym = keysym_of_char(character);
@@ -854,8 +907,8 @@ impl State {
                     "{character:?} cannot be typed: it has no keysym"
                 )));
             }
-            match key_for_keysym(keymap, keysym) {
-                Some((key, shift)) => steps.push(Typed::Key(key, shift)),
+            match planner.chords_for(keysym) {
+                Some(chords) => steps.extend(chords.into_iter().map(Typed::Keys)),
                 None if text_field => match steps.last_mut() {
                     Some(Typed::Committed(committed)) => committed.push(character),
                     _ => steps.push(Typed::Committed(character.to_string())),
@@ -866,7 +919,16 @@ impl State {
                 },
             }
         }
-        Ok(steps)
+        let start_group = planner.start_group();
+        match planner.finish() {
+            Some(back) => steps.extend(back.into_iter().map(Typed::Keys)),
+            None => tracing::warn!(
+                seat = seat.0,
+                group = start_group,
+                "typing ends with another group locked: no way back"
+            ),
+        }
+        Ok((steps, start_group))
     }
 
     /// Releases every key and button `seat` holds, as when its agent lets go: before its seat

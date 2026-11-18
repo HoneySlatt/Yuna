@@ -598,7 +598,7 @@ fn printed(log: &std::path::Path, name: &str) -> i32 {
     })
 }
 
-/// Closing a seat ([ADR-0037](../../../docs/adr/0037-seats-tools-input-and-closing.md)) ends its
+/// Closing a seat ([ADR-0095](../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)) ends its
 /// processes and those alone, and answers once they are gone: its program, which ignores
 /// SIGTERM and gets SIGKILL 2 s later, and a daemon that left its parents and its group, found
 /// by `YUNA_SEAT`. Another seat's programs run on, one that joined the closed seat's process

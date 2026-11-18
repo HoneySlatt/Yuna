@@ -181,6 +181,21 @@ with games' VRR:
   matters when agents' seats are in the owner's Yuna (Stage 3), and ADR-0028 bounds the like.
 - The owner's seat has no input method: a real one, `input-method-v2`, comes with the desktop.
 
+## Keyboard layouts
+
+- A change of an agent's layout compiles XKB's files and reads the keymap's keys on the state
+  thread, which answers no client meanwhile: 2.8 ms in the middle in release, 5.1 ms at most
+  for four layouts with 14 group options, and 11.1 ms in a debug build
+  ([measurements](measurements.md#m111--a-keyboard-layouts-change-2026-11-18)). A thread of its
+  own would take the compile off, the change then answered once it is done.
+- `type` reads the keys again at each call from a state other than the plain one, such as Num
+  Lock or Caps Lock on: 0.2 to 0.5 ms more a call in release (measurements). A cache by state
+  would keep them.
+- `type` never holds a key that reaches a group only while held, such as `grp:switch`'s Right
+  Alt: it locks groups alone. Every keymap of the evdev rules has the layout key `<I592>`,
+  which locks the next group (`inet(evdev)` in xkeyboard-config 2.49), but X11 never gets that
+  key: an X11 program then reads the group from the modifiers alone, which no test checks.
+
 ## Captures
 
 - `wlr-screencopy` frames are `wl_shm` alone, their damage the whole frame: a tool that asks a
@@ -245,7 +260,7 @@ with games' VRR:
   25,000 tokens of tool output.
 - A process that empties its environment and leaves its process group and its parents, a
   double fork with `setsid` and `env -i`, escapes its seat's closing
-  ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)); Yuna's stopping ends it. A test pins
+  ([ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)); Yuna's stopping ends it. A test pins
   the gap. A cgroup per seat would close it, where systemd delegates one.
 - A seat whose agent forgets it keeps its programs until Yuna stops: there is no lease.
 - A closed seat's programs are forgotten with their logs: an agent reads a log, through

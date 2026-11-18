@@ -1,9 +1,10 @@
 //! A client with a seat's input, for tests: it binds every `wl_seat`, takes the pointer and the
 //! keyboard of the one a test names, and records each event in order. It decodes the keys it
 //! gets through the keymaps it is sent, as an application does, so that a test reads the text
-//! typed. It sets cursor shapes (`cursor-shape-v1`) and drags (`wl_data_device`). It holds a
-//! text field (`text-input-v3`) of that seat from the start, as an application binds one before
-//! its window has the keyboard, and applies what each `done` gives it.
+//! typed, the keysym of each key, the groups it was told and the layouts of its keymap. It sets
+//! cursor shapes (`cursor-shape-v1`) and drags (`wl_data_device`). It holds a text field
+//! (`text-input-v3`) of that seat from the start, as an application binds one before its window
+//! has the keyboard, and applies what each `done` gives it.
 //!
 //! An [`InputClient`] is a test [`Client`] with these objects on an event queue of their own,
 //! over the same connection, as `selection_client.rs` does: the windows and the input are one
@@ -150,6 +151,10 @@ pub struct InputState {
     xkb: Option<(xkb::Keymap, xkb::State)>,
     /// What the keys pressed type, through the keymap they came with.
     pub typed: String,
+    /// The keysym of each key pressed, read as `typed` is.
+    pub keysyms: Vec<xkb::Keysym>,
+    /// The group each `modifiers` event told, in order.
+    pub groups: Vec<u32>,
     /// The text the client took, in order: what its keys typed, and what its text field was
     /// given as committed.
     pub received: String,
@@ -246,6 +251,14 @@ impl InputClient {
             }
         }
         let _ = self.queue.dispatch_pending(&mut self.state);
+    }
+
+    /// The names of the layouts of the keymap it was sent last, as XKB names them: "French".
+    pub fn keymap_layouts(&self) -> Vec<String> {
+        let (keymap, _) = self.state.xkb.as_ref().expect("a keymap");
+        (0..keymap.num_layouts())
+            .map(|layout| keymap.layout_get_name(layout).to_owned())
+            .collect()
     }
 
     /// The names of the `wl_seat`s the client sees.
@@ -509,9 +522,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for InputState {
             } => {
                 let pressed = key_state == WEnum::Value(wl_keyboard::KeyState::Pressed);
                 if pressed && let Some((_, xkb_state)) = &state.xkb {
-                    let text = xkb_state.key_get_utf8(xkb::Keycode::new(key + 8));
+                    let keycode = xkb::Keycode::new(key + 8);
+                    let text = xkb_state.key_get_utf8(keycode);
                     state.typed.push_str(&text);
                     state.received.push_str(&text);
+                    state.keysyms.push(xkb_state.key_get_one_sym(keycode));
                 }
                 InputEvent::Key {
                     key,
@@ -529,6 +544,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for InputState {
                 if let Some((_, xkb_state)) = &mut state.xkb {
                     xkb_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                 }
+                state.groups.push(group);
                 InputEvent::Modifiers {
                     depressed: mods_depressed,
                 }

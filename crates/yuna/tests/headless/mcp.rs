@@ -745,7 +745,7 @@ fn seats_through_mcp_keep_to_their_own() {
     let read = mcp.call("keyboard", json!({"action": "get", "seat": a}));
     assert_eq!(
         read["structuredContent"],
-        json!({"keyboard_window": id, "text_field": true})
+        json!({"keyboard_window": id, "text_field": true, "layout": "us", "variant": "", "options": ""})
     );
     let composed = mcp.call(
         "keyboard",

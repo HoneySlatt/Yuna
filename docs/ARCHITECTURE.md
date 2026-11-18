@@ -261,6 +261,8 @@ output rests on its arrangement. `examples/motion_timing.rs` times `update` and 
   grabs and clients, their creation and their removal ([below](#seats-and-input)).
 - `input.rs`: pointer and keyboard input on an agent's seat, what is under the pointer, text
   typed through a keymap, and drag and drop.
+- `keymap.rs`: an agent's seat's keymap: the XKB layout it is compiled from, and which keys type
+  each keysym through it, with the keys that pick its level and lock its group.
 - `shell.rs`: `xdg-shell` and `xdg-decoration` in front of the layout, and the record of windows
   both shells share, `Toplevel`: an `xdg_toplevel`, or an X11 window paired with its Wayland
   surface. It maps each to a `WindowId`, passes on what its client asks, tells it what each
@@ -884,13 +886,13 @@ its clients start no drag. The drag's icon is not drawn ([debt](debt.md)).
 
 A seat (`seats.rs`) is a Smithay seat with a keyboard, and for an agent a pointer, its own
 keyboard focus, popup grab, selections, cursor and clients, and its branch of the layout
-([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md), [ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md), [ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)).
 Seats isolate focus and input, not processes: a program may reach another seat's socket of the
 same Yuna. Nothing new depends on several seats in one Yuna until Stage 2's core decides.
 The owner's seat, 1, exists from the start; in `yuna mcp` it has no `wl_seat` global, no output
 and no socket. An agent's seat gets the next id, never reused, a `wl_seat` named `agent-<id>`,
-and a keyboard of the `us` layout whatever the machine's settings. A client belongs to the seat
-whose socket it came through, recorded in its `ClientState` with who it is, read once as Yuna
+and a keyboard that starts with the `us` layout whatever the machine's settings, which its agent
+may change (point 3). A client belongs to the seat whose socket it came through, recorded in its `ClientState` with who it is, read once as Yuna
 accepts it (`ClientProcess`): its process id, from the socket's credentials, Yuna's own for a
 socket pair a test made, Xwayland's own for its socket pair; and, for a client of an agent's seat
 but its Xwayland, the processes above it up to Yuna, from `/proc`. A client may have exited
@@ -922,11 +924,41 @@ pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's
 2. A button press focuses the window under it: its keyboard follows at the next refresh. The
    press's serial, recorded with that window, may start a popup grab, a drag or an activation
    token there. A wheel step scrolls 15 units, and 120 in `axis_value120`.
-3. A key is pressed by its XKB keycode, the name an agent gives looked up in the seat's keymap.
-   Text is typed key by key through that keymap, Shift held where a character needs it. A run
-   of characters the keymap lacks is committed to the text field enabled where the keyboard is,
-   through `text-input-v3`; with none, it goes through Smithay's `inject_text_keysyms`, which
-   gives the focused client a keymap of its own for them, then the seat's back.
+3. An agent's seat's keyboard layout (`keymap.rs`) is XKB's layouts, variants and options, on
+   the evdev rules and the pc105 model, never the machine's `XKB_DEFAULT_*` variables: `us` at
+   first. A change is refused, nothing changed, for a layout or variant XKB does not know, an
+   empty layout between commas, more than four layouts, or while the seat holds a key. XKB
+   ignores an option its rules do not know, so Yuna reads the options the rules file `rules/evdev`
+   names, where XKB reads it, and refuses any other; where it finds no such file, every option
+   goes to XKB. Yuna compiles the names; Smithay's keyboard compiles the result's text, so that
+   both are one keymap, and sends it to every client of the seat, Xwayland included. It becomes
+   the seat's own keymap, which point 7's switches return to. The locked modifiers and the group
+   start again from none.
+
+   When a keymap is set, Yuna reads, for each group, which keysym each key types, alone or with
+   the keys that pick a level held: Shift, AltGr for level 3, and level 5's key where there is
+   one. AltGr is Right Alt where the layout puts level 3 on it, as `fr` and `de` do, which a
+   program that reads physical keys knows (Chromium, SDL, Wine); else XKB's fake key `<LVL3>`,
+   which every evdev keymap has and no keyboard. It also reads which chords lock another group:
+   the keymap's own, such as `grp:alt_shift_toggle`'s Alt and Shift, else evdev's layout key,
+   `<I592>`. All of it comes from running the keys through xkbcommon's own state, as clients
+   read them.
+
+   A key is pressed by its XKB keycode. The name an agent gives is a keysym: a press takes a
+   key that types it alone where one does, whatever its tier, else the key of the chord that
+   types it with the fewest keys held, its other keys for the agent to name, in the keyboard's
+   group first; `parenleft` presses the keypad's `(`. A release lets go of the held
+   key that types it in any group, so that a key pressed in one group is released after another
+   is locked. Text is typed from the keyboard's state as its clients read it. Each character
+   takes the chord of the fewest keys, its level's keys held then its key, among a PC keyboard's
+   keys first, then the others up to keycode 255, which X11 carries: never a key past it. It is
+   typed in the group in effect if that group has it, else after the chords that lock the
+   nearest group that does. The group typing started in is locked again at the end, and also
+   when a key fails midway; where the keymap leads nowhere back, typing ends in another group,
+   logged. A run of characters the keys do not type is committed to the text field enabled where
+   the keyboard is, through `text-input-v3`; with none, it goes through Smithay's
+   `inject_text_keysyms`, which gives the focused client a keymap of its own for them, then the
+   seat's back, the keyboard's own state, its group among it, unchanged.
 4. Yuna is the input method of each agent's seat (`text_input.rs`,
    [ADR-0043](adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)): a client's text
    field (`text-input-v3`) is entered with its surface's keyboard focus and left with it. Once
@@ -949,11 +981,12 @@ pointers (point 7); the owner's seat takes none. Its events carry Yuna's clock's
    that act (`MAX_VIRTUAL_DEVICES_PER_CLIENT`). Its events take the paths of points 1 to 3. A
    virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it,
    its clients told, and back to the seat's own before Yuna's keys; one that sent `no_keymap`
-   uses the seat's own. The modifiers a keyboard set through its `modifiers` request are
-   released when it goes; the seat's keyboard keeps one state for all its devices. An absolute motion is a
-   fraction of the seat's outputs together, or of the output the device names; a relative one
-   moves from where the pointer is, or from the seat's first output's corner before it ever
-   moved, and stops at the closest point of the seat's outputs, as wlroots' cursor does.
+   uses the seat's own, of the layout last set. The modifiers a keyboard set through its
+   `modifiers` request are released when it goes; the seat's keyboard keeps one state for all
+   its devices. An absolute motion is a fraction of the seat's outputs together, or of the
+   output the device names; a relative one moves from where the pointer is, or from the seat's
+   first output's corner before it ever moved, and stops at the closest point of the seat's
+   outputs, as wlroots' cursor does.
 
 A seat's socket that fails to `accept`, out of descriptors most often, rests 100 ms
 (`SOCKET_PAUSE`) rather than stop Yuna ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
@@ -1209,7 +1242,7 @@ wait, no further line is answered and the client's input is not read. A line ove
 or output that fails, ends the connection.
 
 `yuna mcp` starts with no output and no socket of the owner's seat, which announces no
-`wl_seat`: everything is on agents' seats ([ADR-0037](adr/0037-seats-tools-input-and-closing.md)).
+`wl_seat`: everything is on agents' seats ([ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)).
 The tools, each but `clock` naming its seat by its handle, an id of another seat's output,
 window or program unknown there:
 
@@ -1254,8 +1287,9 @@ window or program unknown there:
   time, waiting up to 50 s, on real time, for its frame; `notifications/cancelled` drops it.
 - `pointer` moves, presses, releases, clicks and scrolls, moving first when given a place, on an
   output or in a capture's image, and tells where the pointer is and what is under it; `keyboard` presses, releases and taps keys,
-  types text and shows text being composed, and tells the window the keyboard is on and whether
-  a text field is enabled there ([Seats and input](#seats-and-input)).
+  types text, shows text being composed and changes the seat's layout, and tells the window the
+  keyboard is on and whether a text field is enabled there; `get` and a change also tell the
+  seat's layout, variant and options ([Seats and input](#seats-and-input)).
 - `clock` reads the time, and advances a manual clock, never past real time.
 
 `seat close` removes the seat from the compositor at once ([Seats and input](#seats-and-input)),
@@ -1415,6 +1449,11 @@ own thread, both `took_us`.
   clients are `input_client.rs`'s, which bind a seat by name and hold a text field.
   `text_input.rs` in it tells text fields: entered and left with the keyboard, text outside
   `us` committed, text composed, long text in pieces, and no seat's text in another's field.
+  `keyboard_layouts.rs` in it tells a seat's layout changed: French and German typed with their
+  own keys and AltGr, a Cyrillic letter through its group, injected characters between two of
+  them, Caps Lock on and Shift held, every client, an unfocused one and an X11 one sent the new
+  keymap, the refusals with nothing changed, a tap of `(`, a key released after a group change,
+  a virtual keyboard's keymap giving way to the new one, and the change through MCP.
   `captures.rs` in it captures through MCP: an output's logical image, its edges on whole units, a frame on its way answered
   at its boundary, a window, a region and the physical size with `pointer` aimed through them,
   the refusals, a closed seat, the last 16 ids, images too large, and five seats' captures
@@ -1630,6 +1669,8 @@ own thread, both `took_us`.
   baseline then a scripted round of scrolls, moves, switches and the special workspace's fade;
   frames missed in each, where they fall, the heaviest frame, and the verdict.
   `examples/common/` holds what it shares with `frame_time`.
+- `crates/yuna/examples/layout_time.rs`: what a change of an agent's keyboard layout costs the
+  state thread, with XKB's compiles alone beside it, in the example's own process.
 - `crates/yuna-motion/examples/motion_timing.rs`: what motion costs at an operation and at a frame:
   `Motion::update` after a focus move and after a column opened left of the focus, and
   `Motion::frame` while a motion runs, on strips of 100 and 1,000 windows.

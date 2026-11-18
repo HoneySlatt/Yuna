@@ -114,6 +114,14 @@ nix develop -c target/release/examples/xwayland_time
 nix develop -c target/release/examples/xwayland_time --area-filter
 ```
 
+A keyboard layout's change on the state thread, its compile and key tables, is measured with
+`crates/yuna/examples/layout_time.rs`, which changes an agent's seat's layout many times and
+gives the median and the longest:
+
+```sh
+nix develop -c cargo run --release -p yuna --example layout_time
+```
+
 The rivals are measured with `crates/yuna-bench`
 ([ADR-0075](docs/adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench), where a table gives how each

@@ -1,6 +1,6 @@
 //! Agents' seats
 //! ([ADR-0078](../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
-//! [ADR-0037](../../../../docs/adr/0037-seats-tools-input-and-closing.md)): each seat's windows
+//! [ADR-0095](../../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)): each seat's windows
 //! open on its own outputs, a client sees its own seat's globals alone, its pointer and keyboard reach its own clients alone, a click
 //! focuses, text types through the keymap its client reads, a popup grab and a drag take a
 //! press's serial of the seat's own, and a seat that closes lets go of everything first.

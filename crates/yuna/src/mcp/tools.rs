@@ -20,7 +20,9 @@ use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
 use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
-use crate::{CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion};
+use crate::{
+    CaptureMapping, CaptureSize, CaptureTarget, CapturedFrame, LogicalRegion, MAX_LAYOUT_NAME,
+};
 use yuna_layout::geometry::Rect;
 use yuna_layout::{OutputId, WindowId, WorkspaceInfo};
 
@@ -368,29 +370,45 @@ pub fn definitions() -> Value {
         {
             "name": "keyboard",
             "title": "Keyboard",
-            "description": "Press, release or tap keys on a seat's keyboard, type text, or show \
-                text being composed, to the window its keyboard is on, or read where it is. Keys \
-                are named as XKB names them: Return, a, F5, BackSpace, Left. tap takes keys \
-                joined by +, the last pressed while the others are held: ctrl+shift+t; ctrl, \
-                shift, alt, super and altgr name modifiers. type types text through the seat's \
-                us layout, any character included: one outside it is committed to the text \
-                field there when it speaks text-input-v3. preedit shows text being composed in \
-                that text field, as an input method does, until the next type replaces it; \
-                empty text clears it. The result tells the window the keyboard is on and \
-                whether a text field is enabled there. A click focuses a window; the keyboard \
-                follows it at the output's next refresh.",
+            "description": "Press, release or tap keys on a seat's keyboard, type text, show \
+                text being composed, or change its layout, to the window its keyboard is on, or \
+                read where it is. Keys are named as XKB names them: Return, a, F5, BackSpace, \
+                Left; a name presses a key that types that keysym, alone where one does, and \
+                adds no modifier. tap takes keys joined by +, the last pressed while the others \
+                are held: ctrl+shift+t; ctrl, shift, alt, super and altgr name modifiers. type \
+                types text through the seat's layout, us unless changed, with Shift, AltGr and \
+                the layout's own switch between its layouts, any character included: one its \
+                keys do not type is committed to the text field there when it speaks \
+                text-input-v3. preedit shows text being composed in that text field, as an input \
+                method does, until the next type replaces it; empty text clears it. layout sets \
+                the seat's XKB layout, variant and options, on the evdev rules and a pc105 \
+                keyboard: fr, or us,ru with the option grp:alt_shift_toggle; every program of \
+                the seat gets the new keymap; it is refused while a key is held, and for a \
+                layout, variant or option XKB's rules do not know. The result tells the window \
+                the keyboard is on and whether a text field is enabled there; get's and \
+                layout's tell the seat's layout, variant and options too. A click focuses a \
+                window; the keyboard follows it at the output's next refresh.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": { "type": "string",
-                        "enum": ["get", "press", "release", "tap", "type", "preedit"] },
+                        "enum": ["get", "press", "release", "tap", "type", "preedit", "layout"] },
                     "seat": seat,
                     "key": { "type": "string", "minLength": 1,
                         "description": "press, release: the key's name" },
                     "keys": { "type": "string", "minLength": 1,
                         "description": "tap: keys joined by +" },
                     "text": { "type": "string",
-                        "description": "type: the text; preedit: the text being composed" }
+                        "description": "type: the text; preedit: the text being composed" },
+                    "layout": { "type": "string", "minLength": 1, "maxLength": MAX_LAYOUT_NAME,
+                        "description": "layout: XKB's layouts, joined by commas, four at most: \
+                            fr, us,ru" },
+                    "variant": { "type": "string", "maxLength": MAX_LAYOUT_NAME,
+                        "description": "layout: their variants, one for each layout, joined by \
+                            commas; each layout's default when left out" },
+                    "options": { "type": "string", "maxLength": MAX_LAYOUT_NAME,
+                        "description": "layout: XKB's options, joined by commas, such as \
+                            grp:alt_shift_toggle; none when left out" }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false
@@ -589,12 +607,35 @@ impl Button {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KeyboardCall {
-    Get { seat: u64 },
-    Press { seat: u64, key: String },
-    Release { seat: u64, key: String },
-    Tap { seat: u64, keys: String },
-    Type { seat: u64, text: String },
-    Preedit { seat: u64, text: String },
+    Get {
+        seat: u64,
+    },
+    Press {
+        seat: u64,
+        key: String,
+    },
+    Release {
+        seat: u64,
+        key: String,
+    },
+    Tap {
+        seat: u64,
+        keys: String,
+    },
+    Type {
+        seat: u64,
+        text: String,
+    },
+    Preedit {
+        seat: u64,
+        text: String,
+    },
+    Layout {
+        seat: u64,
+        layout: String,
+        variant: Option<String>,
+        options: Option<String>,
+    },
 }
 
 /// `spawn`'s arguments.
@@ -1252,6 +1293,17 @@ mod tests {
             Ok(KeyboardCall::Preedit { .. })
         ));
         assert!(matches!(
+            arguments(args(json!({
+                "action": "layout", "seat": 2, "layout": "us,ru", "variant": ",phonetic",
+                "options": "grp:alt_shift_toggle"
+            }))),
+            Ok(KeyboardCall::Layout {
+                variant: Some(_),
+                options: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
             arguments(args(json!({"action": "advance", "by_ms": 4.5}))),
             Ok(ClockCall::Advance {
                 by_ms: Some(_),
@@ -1313,6 +1365,13 @@ mod tests {
         );
         assert!(arguments::<KeyboardCall>(args(json!({"action": "tap", "seat": 2}))).is_err());
         assert!(arguments::<KeyboardCall>(args(json!({"action": "preedit", "seat": 2}))).is_err());
+        assert!(arguments::<KeyboardCall>(args(json!({"action": "layout", "seat": 2}))).is_err());
+        assert!(
+            arguments::<KeyboardCall>(args(
+                json!({"action": "layout", "seat": 2, "layout": "fr", "model": "pc104"})
+            ))
+            .is_err()
+        );
         assert!(arguments::<OutputsCall>(args(json!({"action": "rotate"}))).is_err());
         assert!(arguments::<OutputsCall>(args(json!({}))).is_err());
         assert!(arguments::<OutputsCall>(args(json!({"action": "create", "width": -1}))).is_err());
