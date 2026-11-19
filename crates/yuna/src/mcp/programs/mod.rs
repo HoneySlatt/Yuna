@@ -52,10 +52,9 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Instant;
 
+use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::process::{Pid, Signal, WaitStatus};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::process::{Pid, Signal, WaitStatus};
 
 use yuna_layout::SeatId;
 

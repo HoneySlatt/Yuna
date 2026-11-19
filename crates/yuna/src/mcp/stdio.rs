@@ -7,7 +7,6 @@ use std::io;
 use std::os::fd::AsFd;
 
 use serde_json::Value;
-use smithay::reexports::rustix;
 
 /// The longest line accepted, newline excluded: 1 MiB. A request is a few hundred bytes; a line
 /// past this is a client gone wrong, and ends the connection.

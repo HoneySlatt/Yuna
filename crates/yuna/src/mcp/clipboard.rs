@@ -14,7 +14,6 @@ use serde_json::{Map, Value, json};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
-use smithay::reexports::rustix;
 use yuna_layout::SeatId;
 
 use super::Server;

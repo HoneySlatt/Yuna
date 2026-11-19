@@ -16,8 +16,6 @@ use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use smithay::reexports::rustix;
-
 use super::processes::any_alive;
 
 /// The file in a `yuna mcp`'s folder whose lock it holds while it lives (`flock`, through

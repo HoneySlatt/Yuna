@@ -14,8 +14,10 @@ smithay = { workspace = true, features = ["wayland_frontend", "desktop", "render
 png.workspace = true
 # The epoll the rest auditor wraps and poll (`event`), the D-Bus socket and the peers' credentials
 # (`net`), the processes Yuna starts, watches, reaps and ends, and its limit of open files
-# (`process`), and poll's timeouts (`time`).
-rustix = { workspace = true, features = ["event", "net", "process", "time"] }
+# (`process`), memfds and descriptors' flags (`fs`), mappings (`mm`), pipes (`pipe`), and the
+# clocks the tests read (`time`). The same crate and version Smithay uses: declared, so that Yuna
+# reaches it directly rather than through Smithay's re-exports (the owner, 2026-11-18).
+rustix = { workspace = true, features = ["event", "fs", "mm", "net", "pipe", "process", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

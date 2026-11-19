@@ -31,8 +31,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::fs::{Mode, OFlags};
+use rustix::fs::{Mode, OFlags};
 use yuna_layout::SeatId;
 
 use super::folder::{HOMES_FOLDER, remove_quietly};

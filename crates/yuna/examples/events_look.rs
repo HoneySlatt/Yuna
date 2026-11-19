@@ -32,7 +32,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{MemfdFlags, ftruncate, memfd_create};
+use rustix::fs::{MemfdFlags, ftruncate, memfd_create};
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };

@@ -19,8 +19,7 @@ use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions, WaitStatus};
+use rustix::process::{Pid, Signal, WaitOptions, WaitStatus};
 
 use super::folder::remove_folder;
 use super::homes::remove_linked_homes;

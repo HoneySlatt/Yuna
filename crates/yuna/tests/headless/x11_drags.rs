@@ -27,7 +27,7 @@ use std::io::Write;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process};
 use wayland_client::protocol::wl_data_device_manager::DndAction;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};

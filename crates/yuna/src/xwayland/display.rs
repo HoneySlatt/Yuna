@@ -23,13 +23,12 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::event::{PollFd, PollFlags, Timespec};
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::net::{
+use rustix::event::{PollFd, PollFlags, Timespec};
+use rustix::io::Errno;
+use rustix::net::{
     AddressFamily, SocketAddrUnix, SocketFlags, SocketType, bind, listen, socket_with,
 };
-use smithay::reexports::rustix::process::Pid;
+use rustix::process::Pid;
 
 /// How many display numbers Yuna tries, from 0: a thousand. Each test of Yuna's, and each seat
 /// of each `yuna mcp`, holds one while it lives, so that tests running many compositors at once

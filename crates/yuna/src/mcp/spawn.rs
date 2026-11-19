@@ -13,9 +13,9 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::rustix::process::Signal;
 use yuna_layout::SeatId;
 
 use super::Server;

@@ -68,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use common::{PATIENCE, Run, field, percentile, shell_variable};
 use load::{Load, LoadWatch};
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process};
 use usage::{Usage, WARM_UP, print_usage};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{

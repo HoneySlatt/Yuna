@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::pipe::{PipeFlags, pipe_with};
 use rustix::process::Signal;
-use smithay::reexports::rustix;
 
 /// The pipes' write ends, for the handlers: each set once, before its handler is installed, and
 /// never closed while the process runs.

@@ -70,13 +70,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use rustix::fs::OFlags;
+use rustix::process::Pid;
 use serde_json::{Value, json};
 use smithay::reexports::calloop::channel::{self, Sender};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::fs::OFlags;
-use smithay::reexports::rustix::process::Pid;
 use yuna_layout::SeatId;
 
 use crate::compositor::Compositor;
@@ -603,7 +602,7 @@ impl Server {
                 &self.output,
                 rustix::event::PollFlags::OUT,
             )];
-            let timeout = rustix::time::Timespec {
+            let timeout = rustix::event::Timespec {
                 tv_sec: left.as_secs() as i64,
                 tv_nsec: i64::from(left.subsec_nanos()),
             };

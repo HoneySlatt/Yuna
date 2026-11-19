@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::errors::ConnectError;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};

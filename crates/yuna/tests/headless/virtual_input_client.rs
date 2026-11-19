@@ -9,8 +9,8 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
 
+use rustix::fs::{MemfdFlags, memfd_create};
 use smithay::input::keyboard::xkb;
-use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{

@@ -9,10 +9,9 @@
 
 use std::time::Duration;
 
+use rustix::process::Signal;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::process::Signal;
 use yuna_layout::SeatId;
 
 use super::{Program, Programs, signal_group};

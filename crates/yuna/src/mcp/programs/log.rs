@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
-use smithay::reexports::rustix;
 
 use crate::rest::{Wake, insert_source};
 use crate::state::State;

@@ -12,10 +12,9 @@ use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::event::{PollFd, PollFlags, Timespec};
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::net::RecvFlags;
+use rustix::event::{PollFd, PollFlags, Timespec};
+use rustix::io::Errno;
+use rustix::net::RecvFlags;
 use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::Event;

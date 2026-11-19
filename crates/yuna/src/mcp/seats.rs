@@ -13,11 +13,10 @@
 
 use std::time::Duration;
 
+use rustix::process::{Pid, Signal};
 use serde_json::{Map, Value, json};
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::process::{Pid, Signal};
 use yuna_layout::SeatId;
 
 use super::Server;

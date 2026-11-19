@@ -34,13 +34,13 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::fs::MetadataExt;
 use std::ptr;
 
+use rustix::fs::{FsWord, SealFlags, SeekFrom, fcntl_get_seals, fstatfs, seek};
+use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::get_bpp;
 use smithay::backend::allocator::{Buffer, Format, Fourcc};
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::reexports::rustix::fs::{FsWord, SealFlags, SeekFrom, fcntl_get_seals, fstatfs, seek};
-use smithay::reexports::rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::dmabuf::{
     DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
@@ -373,8 +373,8 @@ mod tests {
     use std::fs::{File, OpenOptions};
     use std::os::fd::{AsFd, AsRawFd};
 
-    use smithay::reexports::rustix::fs::{MemfdFlags, fcntl_add_seals, memfd_create};
-    use smithay::reexports::rustix::io::Errno;
+    use rustix::fs::{MemfdFlags, fcntl_add_seals, memfd_create};
+    use rustix::io::Errno;
 
     use super::*;
 

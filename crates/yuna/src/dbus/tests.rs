@@ -665,7 +665,7 @@ fn exchange<T>(
                 PollFd::new(connection, flags)
             })
             .collect();
-        let timeout = rustix::time::Timespec {
+        let timeout = rustix::event::Timespec {
             tv_sec: 0,
             tv_nsec: 50_000_000,
         };

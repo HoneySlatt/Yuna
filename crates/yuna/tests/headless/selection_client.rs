@@ -15,10 +15,10 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
 
-use smithay::reexports::rustix::event::{PollFd, PollFlags, poll};
-use smithay::reexports::rustix::fs::{OFlags, fcntl_setfl};
-use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::time::Timespec;
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::fs::{OFlags, fcntl_setfl};
+use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::time::Timespec;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{
     wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_keyboard, wl_pointer,

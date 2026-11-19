@@ -4,8 +4,8 @@
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::process::{Pid, Signal, getppid, set_parent_process_death_signal};
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, getppid, set_parent_process_death_signal};
 
 /// Makes `command`'s process end with SIGKILL when the thread that starts it ends, so that a test
 /// killed, or stopped at CI's time limit, leaves no Yuna or application running. Every run drops

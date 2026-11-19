@@ -20,8 +20,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
+use rustix::process::{Pid, Signal, kill_process};
 use serde_json::{Value, json};
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 
 /// A folder for the tests' runtime folders short enough that the sockets Yuna makes under it,
 /// an accessibility bus's the longest, fit a Unix socket's 107 bytes: CI's `TMPDIR` is too long.

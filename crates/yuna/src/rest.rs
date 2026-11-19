@@ -844,7 +844,7 @@ impl RestAudit {
         if let Some(epoll) = epoll
             && !sockets.is_empty()
         {
-            let no_time = rustix::time::Timespec {
+            let no_time = rustix::event::Timespec {
                 tv_sec: 0,
                 tv_nsec: 0,
             };

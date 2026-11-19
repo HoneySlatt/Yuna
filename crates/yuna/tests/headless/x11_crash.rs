@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions, kill_process, waitpid};
+use rustix::process::{Pid, Signal, WaitOptions, kill_process, waitpid};
 use yuna::{CaptureSize, CaptureTarget, FIRST_PAUSE};
 
 use crate::x11_client::{Image, WindowSpec, step};

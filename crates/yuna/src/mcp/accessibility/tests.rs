@@ -10,7 +10,6 @@ use std::fs;
 use std::os::fd::OwnedFd;
 
 use serde_json::json;
-use smithay::reexports::rustix;
 use zbus::wire::{OwnedObjectPath, Variant};
 
 use super::*;

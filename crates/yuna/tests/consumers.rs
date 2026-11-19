@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
 use dies_with_test::dies_with_test;
+use rustix::fs::{MemfdFlags, memfd_create};
 use serde_json::Value;
-use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,

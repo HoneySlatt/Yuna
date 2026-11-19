@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process};
 
 /// How often a test reads Yuna's log, captures or lists programs; reading the log never wakes
 /// Yuna.

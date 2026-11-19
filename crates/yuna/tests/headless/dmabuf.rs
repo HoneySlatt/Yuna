@@ -13,7 +13,7 @@ use std::os::fd::AsFd;
 use std::rc::Rc;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{SealFlags, fcntl_add_seals};
+use rustix::fs::{SealFlags, fcntl_add_seals};
 use smithay::utils::{Physical, Rectangle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{self, Flags};
 use yuna::Compositor;

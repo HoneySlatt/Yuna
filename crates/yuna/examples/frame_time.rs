@@ -54,7 +54,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use common::{PATIENCE, Run, field, percentile, shell_variable};
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Pid, Signal, kill_process};
 use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
 

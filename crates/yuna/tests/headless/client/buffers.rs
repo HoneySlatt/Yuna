@@ -9,7 +9,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use wayland_client::protocol::{wl_buffer, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop, event_created_child};
 use wayland_protocols::wp::fractional_scale::v1::client::{

@@ -33,9 +33,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
+use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
 
 use super::display::Display;
 use crate::process::{give_descriptors, keep_descriptors_from_the_program};

@@ -25,7 +25,7 @@ serde_json.workspace = true
 # SIGTERM and SIGINT, and reads the user's id, which names their runtime folder; `fs` makes the
 # still windows' memfds; `net` asks the kernel which socket each socket is connected to
 # (sock_diag), to refuse a compositor connected to the owner's.
-rustix = { version = "1.1.6", features = ["fs", "net", "process", "time"] }
+rustix = { workspace = true, features = ["fs", "net", "process", "time"] }
 
 [lints]
 workspace = true

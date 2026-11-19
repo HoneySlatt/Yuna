@@ -87,7 +87,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use common::{PATIENCE, Run, field, percentile, text_field};
-use smithay::reexports::rustix::io::{FdFlags, fcntl_setfd};
+use rustix::io::{FdFlags, fcntl_setfd};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::MakeWriter;
 use usage::{Usage, WARM_UP, print_usage};

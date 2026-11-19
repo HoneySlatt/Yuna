@@ -34,9 +34,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
-use smithay::reexports::rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
+use rustix::pipe::{PipeFlags, pipe_with};
+use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
 
 use crate::dbus::MAX_MESSAGE;
 use crate::process::{give_descriptors, keep_descriptors_from_the_program};

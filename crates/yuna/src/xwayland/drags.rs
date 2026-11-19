@@ -1205,7 +1205,7 @@ mod tests {
         source.end();
         let mut byte = [0; 1];
         assert_eq!(
-            smithay::reexports::rustix::io::read(&read, &mut byte),
+            rustix::io::read(&read, &mut byte),
             Ok(0),
             "the reader sees its pipe end"
         );
@@ -1214,7 +1214,7 @@ mod tests {
         };
         source.send("text/plain", late_write);
         assert_eq!(
-            smithay::reexports::rustix::io::read(&late_read, &mut byte),
+            rustix::io::read(&late_read, &mut byte),
             Ok(0),
             "a read after the end is closed at once"
         );

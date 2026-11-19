@@ -21,7 +21,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
+use rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm,

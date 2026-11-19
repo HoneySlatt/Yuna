@@ -55,12 +55,11 @@ use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::time::{Duration, Instant};
 
+use rustix::buffer::spare_capacity;
+use rustix::event::PollFlags;
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::Errno;
 use smithay::reexports::calloop::channel::SyncSender;
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::buffer::spare_capacity;
-use smithay::reexports::rustix::event::PollFlags;
-use smithay::reexports::rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-use smithay::reexports::rustix::io::Errno;
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectionError, ReplyError};
 use x11rb::protocol::xfixes::{self, SelectionEvent};

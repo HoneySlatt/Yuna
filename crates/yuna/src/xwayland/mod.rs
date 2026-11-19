@@ -64,14 +64,13 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use rustix::io::Errno;
+use rustix::process::{Pid, WaitStatus};
 use smithay::reexports::calloop::channel::{self, Channel};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::ping::{self, Ping};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::process::{Pid, WaitStatus};
 use yuna_layout::SeatId;
 
 use crate::process::{End, find_program, kill, kill_and_reap, reap};

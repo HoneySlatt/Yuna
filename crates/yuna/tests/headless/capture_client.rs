@@ -10,7 +10,7 @@ use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
 use std::time::Duration;
 
-use smithay::reexports::rustix::fs::{MemfdFlags, memfd_create};
+use rustix::fs::{MemfdFlags, memfd_create};
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop};
 use wayland_protocols::ext::image_capture_source::v1::client::{

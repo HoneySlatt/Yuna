@@ -22,14 +22,13 @@ use std::os::fd::OwnedFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::Errno;
+use rustix::pipe::{PipeFlags, pipe_with};
 use smithay::input::Seat;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::pipe::{PipeFlags, pipe_with};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::selection::data_device::{

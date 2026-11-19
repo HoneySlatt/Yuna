@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, TestRunner, contextualize_config};
-use smithay::reexports::rustix::time::{ClockId, clock_gettime};
+use rustix::time::{ClockId, clock_gettime};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
