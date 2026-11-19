@@ -38,9 +38,8 @@ use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 
 // The command line's contract (ADR-0079), held in `tests/contracts/help.txt`. The environment
-// lists every variable a user sets that Yuna's own code reads but `TMPDIR`, which `yuna mcp`
-// reads where any program would, for its agents' throwaway homes (`mcp/programs/homes.rs`). It
-// leaves out the switches that exist in debug builds alone, for the tests of failures:
+// lists every variable a user sets that Yuna's own code reads, `TMPDIR` for `yuna mcp`'s agents'
+// throwaway homes among them (`mcp/programs/homes.rs`). It leaves out the switches that exist in debug builds alone, for the tests of failures:
 // `YUNA_PANIC_ON_TOOL`, `YUNA_PANIC_IN_ENCODERS` (`mcp/`), `YUNA_PANIC_ON_X11_CLOSE` and
 // `YUNA_X11_OWED_BOUND` (`xwayland/manager/`); and the
 // variables Yuna's package sets for itself (`flake.nix`): `YUNA_WRAPPED_VARIABLES` and
@@ -109,6 +108,7 @@ Environment:
   YUNA_DBUS_DAEMON   With mcp: the absolute path of the dbus-daemon that runs each seat's
                      accessibility bus, rather than the first on PATH.
   YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.
+  TMPDIR             With mcp: the folder of its agents' throwaway homes, /tmp if unset.
 
 Exit status:
   0                  Success: the help or the version printed, or a stop asked for: SIGTERM

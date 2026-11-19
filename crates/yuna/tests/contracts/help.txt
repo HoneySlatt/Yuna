@@ -59,6 +59,7 @@ Environment:
   YUNA_DBUS_DAEMON   With mcp: the absolute path of the dbus-daemon that runs each seat's
                      accessibility bus, rather than the first on PATH.
   YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.
+  TMPDIR             With mcp: the folder of its agents' throwaway homes, /tmp if unset.
 
 Exit status:
   0                  Success: the help or the version printed, or a stop asked for: SIGTERM
