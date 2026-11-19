@@ -46,8 +46,10 @@ pub enum Device {
     Gpu,
 }
 
-/// What an output shows where no window is.
-const BACKGROUND: Color32F = Color32F::new(0.08, 0.08, 0.1, 1.0);
+/// What an output shows where no window is: (20, 20, 26) in 8 bits, each channel a whole 8-bit
+/// level, so that no driver rounds it otherwise (a blue of 0.1, 25.5 levels, gave llvmpipe 26
+/// and radeonsi 25).
+const BACKGROUND: Color32F = Color32F::new(20.0 / 255.0, 20.0 / 255.0, 26.0 / 255.0, 1.0);
 
 render_elements! {
     /// An element of a frame: part of a Wayland client's surface, cut to its window's rectangle,
