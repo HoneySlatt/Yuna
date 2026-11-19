@@ -3,13 +3,16 @@
 //! logs and runtime folders; and its seats' homes' folder, `yuna-mcp-homes-<pid>` in `TMPDIR` or
 //! `/tmp` (`homes.rs`). Each is made under a name of its own, its [`LOCK_FILE`] locked while Yuna
 //! lives, then given its name; removed when Yuna stops. One that a Yuna killed by SIGKILL left
-//! is swept when the next `yuna mcp` starts, its lock free.
+//! is swept when the next `yuna mcp` starts, its lock free. In a `/tmp` every user shares,
+//! another user may take a name Yuna would take, which Yuna cannot remove: a name that holds
+//! Yuna's pid alone can be foreseen, so that the name a folder is made under holds a random
+//! number before its `-starting`, and the one it takes when its own is taken ends with one.
 //!
 //! Its neighbours: `mod.rs` makes the programs' folder (`Programs::new`) and removes it;
 //! `homes.rs` makes the homes' folder; `processes.rs` removes both on the fatal path.
 
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -49,12 +52,18 @@ pub(super) const HOMES_FOLDER: FolderKind = FolderKind {
 impl FolderKind {
     /// Makes this kind's folder in `parent`, its inner folders and its locked [`LOCK_FILE`];
     /// returns its path and the lock, which this Yuna holds for as long as it lives. It is made
-    /// and locked under a name of its own, `.<prefix><pid>-starting`, which no sweep takes, then
-    /// given its name ([`FolderKind::name_folder`]): another Yuna's sweep never finds it unlocked.
-    /// Nothing is left of it when a step fails.
+    /// and locked under a name of its own, `.<prefix><pid>-<random>-starting`, which no sweep
+    /// takes, then given its name ([`FolderKind::name_folder`]): another Yuna's sweep never finds
+    /// it unlocked. A folder of that name already there is another's and fails it, untouched;
+    /// nothing is left of Yuna's own when a later step fails.
     pub(super) fn make(&self, parent: &Path) -> io::Result<(PathBuf, File)> {
         let pid = std::process::id();
-        let staging = parent.join(format!(".{}{pid}-starting", self.prefix));
+        let staging = parent.join(format!(
+            ".{}{pid}-{}-starting",
+            self.prefix,
+            random_number()?
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&staging)?;
         let made = self
             .prepare_folder(&staging)
             .and_then(|lock| Ok((self.name_folder(parent, pid, &staging)?, lock)));
@@ -64,17 +73,8 @@ impl FolderKind {
         made
     }
 
-    /// Makes the folder `staging`, its lock file locked, and its inner folders; returns the
-    /// lock. A folder of that name is a gone Yuna's that had this pid, and goes first; one
-    /// another user holds, in a shared `/tmp`, cannot go, and fails it.
+    /// Makes `staging`'s lock file locked, and its inner folders; returns the lock.
     fn prepare_folder(&self, staging: &Path) -> io::Result<File> {
-        match fs::DirBuilder::new().mode(0o700).create(staging) {
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                fs::remove_dir_all(staging)?;
-                fs::DirBuilder::new().mode(0o700).create(staging)?;
-            }
-            made => made?,
-        }
         let lock = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -89,36 +89,23 @@ impl FolderKind {
         Ok(lock)
     }
 
-    /// Gives `staging` its name in `parent`, `<prefix><pid>`, or `<prefix><pid>-<n>` when a
-    /// folder of that name is there, a gone Yuna's whose lock is not free yet; never in place of
-    /// another.
+    /// Gives `staging` its name in `parent`, `<prefix><pid>`, never in place of another. When a
+    /// folder of that name is there, a gone Yuna's whose lock is not free yet, or another user's
+    /// in a shared `/tmp`, it takes `<prefix><pid>-<random>`, which no one can take before it.
     fn name_folder(&self, parent: &Path, pid: u32, staging: &Path) -> io::Result<PathBuf> {
         let prefix = self.prefix;
-        for attempt in 0..100 {
-            let folder = parent.join(match attempt {
-                0 => format!("{prefix}{pid}"),
-                n => format!("{prefix}{pid}-{n}"),
-            });
-            let renamed = rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                staging,
-                rustix::fs::CWD,
-                &folder,
-                rustix::fs::RenameFlags::NOREPLACE,
-            );
-            match renamed {
-                Ok(()) => return Ok(folder),
-                Err(rustix::io::Errno::EXIST) => continue,
-                Err(error) => return Err(error.into()),
-            }
+        let own = parent.join(format!("{prefix}{pid}"));
+        match rename_without_replacing(staging, &own) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            renamed => return renamed.map(|()| own),
         }
-        Err(io::Error::other(format!(
-            "every name of {prefix}{pid}'s is taken"
-        )))
+        let other = parent.join(format!("{prefix}{pid}-{}", random_number()?));
+        rename_without_replacing(staging, &other)?;
+        Ok(other)
     }
 
     /// Whether `name` is this kind's folder's: `<prefix><pid>` or `<prefix><pid>-<n>`. A
-    /// folder still being made, `.<prefix><pid>-starting`, is not.
+    /// folder still being made, `.<prefix><pid>-<n>-starting`, is not.
     pub(super) fn names(&self, name: &str) -> bool {
         let Some(rest) = name.strip_prefix(self.prefix) else {
             return false;
@@ -181,6 +168,25 @@ impl FolderKind {
             }
         }
     }
+}
+
+/// Renames `from` to `to`, refused when `to` is there.
+fn rename_without_replacing(from: &Path, to: &Path) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        from,
+        rustix::fs::CWD,
+        to,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)
+}
+
+/// A number no other process can foresee, from the kernel's random source.
+fn random_number() -> io::Result<u64> {
+    let mut bytes = [0; 8];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(u64::from_ne_bytes(bytes))
 }
 
 /// Removes `folder`, the programs' folder, warning when a process under Yuna outlives it. A

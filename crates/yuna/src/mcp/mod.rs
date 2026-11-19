@@ -105,9 +105,9 @@ pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use outputs::{MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE};
 pub use programs::{
-    ACCESSIBILITY_VARIABLES, BUS_VARIABLE, END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT,
-    LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT, MAX_RUNNING, NO_ACCESSIBILITY_VARIABLES, PACE_PERIOD,
-    SEAT_VARIABLE, end_after_panic,
+    ACCESSIBILITY_VARIABLES, BUS_VARIABLE, END_GRACE, HOMES_LINK, KEPT_PREFIXES, KEPT_VARIABLES,
+    KILL_WAIT, LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT, MAX_RUNNING, NO_ACCESSIBILITY_VARIABLES,
+    PACE_PERIOD, SEAT_VARIABLE, end_after_panic,
 };
 pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
@@ -185,9 +185,17 @@ pub struct Server {
     lines: VecDeque<Vec<u8>>,
     read_buffer: Vec<u8>,
     queue: OutputQueue,
-    /// The answers of calls that waited, held, oldest first, while too many replies wait: no
-    /// more than the calls that wait and the seats that close, since no request is answered
-    /// while one is held.
+    /// The answers of calls that waited, held, oldest first, while too many replies wait. No
+    /// request is answered while one is held, so that no call starts meanwhile: they are those
+    /// of the [`MAX_WAITING_CALLS`] calls that wait, of the captures, one a seat, 16 at most
+    /// since a seat keeps one of Yuna's [`MAX_OUTPUTS`](crate::MAX_OUTPUTS) outputs, and of the
+    /// seats that close, a few bytes a process each. They are bounded in number, not in bytes:
+    /// each holds its tool's result. A capture's image takes up to [`MAX_IMAGE_BYTES`], and a
+    /// `clipboard get`'s data with its JSON about 3 MiB, so that 64 clipboard reads and 16
+    /// captures hold about 280 MB. An `accessibility` call's 256 nodes and 128 applications, their
+    /// texts cut, an application's failure among them, take up to about 10 MB; a `windows`
+    /// wait's takes every window it matches, up to
+    /// [`MAX_WINDOWS`](crate::MAX_WINDOWS).
     held: VecDeque<HeldAnswer>,
     events: Rc<RefCell<Events>>,
     waits: Vec<WindowWait>,

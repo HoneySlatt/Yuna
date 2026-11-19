@@ -377,3 +377,22 @@ fn a_walk_keeps_a_state_sets_words_alone() {
     assert_eq!(states.len(), STATE_WORDS);
     assert_eq!(states, [1 << 8; STATE_WORDS]);
 }
+
+/// An application whose root answers with an error keeps no more of the error's text than a walk
+/// may give of any text: the application chooses it, up to a D-Bus message.
+#[test]
+fn a_failing_applications_error_text_is_kept_cut() {
+    let long = "e".repeat(3 << 20);
+    let mut walk = Walk::new(vec![app()], Filter::default(), 100);
+    while let Some((node, query, message)) = walk.next_call(0) {
+        let reply = Message::error(&message, "org.example.Error.Failed", &long);
+        walk.take_reply(0, node, query, &reply);
+    }
+    let failed = walk.apps[0].failed.as_deref().expect("the walk failed");
+    let given = super::super::MAX_TEXT * 4 + "…".len();
+    assert!(
+        failed.len() <= given,
+        "the failure keeps {} bytes of text, past the {given} a walk may give",
+        failed.len()
+    );
+}

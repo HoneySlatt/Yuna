@@ -556,13 +556,13 @@
           "type": "string"
         },
         "layout": {
-          "description": "layout: XKB's layouts, joined by commas, four at most: fr, us,ru",
+          "description": "layout: XKB's layouts, joined by commas, four at most: fr, us,ru; 256 bytes at most in UTF-8",
           "maxLength": 256,
           "minLength": 1,
           "type": "string"
         },
         "options": {
-          "description": "layout: XKB's options, joined by commas, such as grp:alt_shift_toggle; none when left out",
+          "description": "layout: XKB's options, joined by commas, such as grp:alt_shift_toggle; none when left out; 256 bytes at most in UTF-8",
           "maxLength": 256,
           "type": "string"
         },
@@ -576,7 +576,7 @@
           "type": "string"
         },
         "variant": {
-          "description": "layout: their variants, one for each layout, joined by commas; each layout's default when left out",
+          "description": "layout: their variants, one for each layout, joined by commas; each layout's default when left out; 256 bytes at most in UTF-8",
           "maxLength": 256,
           "type": "string"
         }

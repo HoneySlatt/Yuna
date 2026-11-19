@@ -437,14 +437,16 @@ pub fn definitions() -> Value {
                     "text": { "type": "string",
                         "description": "type: the text; preedit: the text being composed" },
                     "layout": { "type": "string", "minLength": 1, "maxLength": MAX_LAYOUT_NAME,
-                        "description": "layout: XKB's layouts, joined by commas, four at most: \
-                            fr, us,ru" },
+                        "description": format!("layout: XKB's layouts, joined by commas, four \
+                            at most: fr, us,ru; {MAX_LAYOUT_NAME} bytes at most in UTF-8") },
                     "variant": { "type": "string", "maxLength": MAX_LAYOUT_NAME,
-                        "description": "layout: their variants, one for each layout, joined by \
-                            commas; each layout's default when left out" },
+                        "description": format!("layout: their variants, one for each layout, \
+                            joined by commas; each layout's default when left out; \
+                            {MAX_LAYOUT_NAME} bytes at most in UTF-8") },
                     "options": { "type": "string", "maxLength": MAX_LAYOUT_NAME,
-                        "description": "layout: XKB's options, joined by commas, such as \
-                            grp:alt_shift_toggle; none when left out" }
+                        "description": format!("layout: XKB's options, joined by commas, such \
+                            as grp:alt_shift_toggle; none when left out; {MAX_LAYOUT_NAME} bytes \
+                            at most in UTF-8") }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false

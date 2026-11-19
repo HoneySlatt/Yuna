@@ -160,10 +160,18 @@ impl Yuna {
     }
 
     /// The folder of its seats' throwaway homes, in its `TMPDIR`
-    /// ([ADR-0105](../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)).
+    /// ([ADR-0105](../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), under
+    /// the name it takes when that name is free.
     fn homes_folder(&self) -> PathBuf {
         self.temp_dir()
             .join(format!("yuna-mcp-homes-{}", self.child.id()))
+    }
+
+    /// The folder of its seats' sockets and its programs' logs and runtime folders, in its
+    /// runtime folder.
+    fn programs_folder(&self) -> PathBuf {
+        self.runtime_dir()
+            .join(format!("yuna-mcp-{}", self.child.id()))
     }
 
     /// Sends a call of a tool in 2026-07-28, without waiting for its reply; returns its id.
@@ -1643,6 +1651,16 @@ fn a_frozen_program_ends_at_sigterm() {
     assert!(took < END_GRACE, "{took:?}");
 }
 
+/// The names of the folders in `parent` that a Yuna makes before it gives them their names,
+/// `.<prefix><pid>-<n>-starting`: none is left once its folder has its name.
+fn staging_folders(parent: &std::path::Path, prefix: &str) -> Vec<String> {
+    fs::read_dir(parent)
+        .expect("the parent folder")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&format!(".{prefix}")))
+        .collect()
+}
+
 /// A `yuna mcp` killed by SIGKILL leaves its folder in `XDG_RUNTIME_DIR`: the next one removes
 /// it when it starts, when its lock file's lock is free, whatever pid its name holds, a retry's
 /// `yuna-mcp-<pid>-<n>` too. It keeps a folder whose lock is held, though its pid is gone; one
@@ -1707,11 +1725,7 @@ fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
         matches!(own_lock.try_lock(), Err(fs::TryLockError::WouldBlock)),
         "a live Yuna's lock is free"
     );
-    assert!(
-        !runtime
-            .join(format!(".yuna-mcp-{}-starting", yuna.child.id()))
-            .exists()
-    );
+    assert_eq!(staging_folders(&runtime, "yuna-mcp-"), Vec::<String>::new());
     drop(held);
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
@@ -2847,6 +2861,71 @@ fn closing_a_seat_ends_an_orphan_whose_environment_names_a_seat_that_never_was()
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
+/// Whether process `pid`'s environment names seat `seat` in `YUNA_SEAT`.
+fn names_seat(pid: i32, seat: u64) -> bool {
+    let wanted = format!("YUNA_SEAT={seat}");
+    fs::read(format!("/proc/{pid}/environ")).is_ok_and(|environ| {
+        environ
+            .split(|&byte| byte == 0)
+            .any(|entry| entry == wanted.as_bytes())
+    })
+}
+
+/// A seat's own program, still running, and a child of it, whose environments name another seat
+/// that exists, are still the seat's: lineage through the seat's running program decides first,
+/// whatever the environment says, so that a program of seat 2 that sets `YUNA_SEAT=3` while seat
+/// 3 exists cannot outlive seat 2's closing. Seat 3's own program runs on.
+#[test]
+fn closing_a_seat_ends_its_program_and_its_child_whose_environments_name_another_seat() {
+    let mut yuna = Yuna::start("close-other");
+    let other = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(other["structuredContent"]["seat"], json!(3), "{other}");
+    let neighbour = yuna.start_program(3, &["sleep", "600"], &BTreeMap::new(), false);
+    let neighbour = neighbour["pid"].as_i64().expect("a pid") as i32;
+    let program = yuna.start_program(
+        SEAT,
+        &[
+            "sh",
+            "-c",
+            "(export YUNA_SEAT=3; exec sleep 600) & echo child=$!; \
+             export YUNA_SEAT=3; exec sleep 600",
+        ],
+        &BTreeMap::new(),
+        false,
+    );
+    let pid = program["pid"].as_i64().expect("a pid") as i32;
+    let log = PathBuf::from(program["log"].as_str().expect("a log"));
+    let child = printed(&log, "child");
+    wait_for(
+        "the program's and its child's exec of sleep, their environments naming seat 3",
+        || (names_seat(pid, 3) && names_seat(child, 3)).then_some(()),
+    );
+    assert_eq!(parent_of(child), Some(pid));
+
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    // What happened is read before the processes are ended by hand, so that a failure leaves
+    // nothing running.
+    let outlived: Vec<i32> = [pid, child].into_iter().filter(|&p| alive(p)).collect();
+    for process in [pid, child] {
+        let _ = kill_process(Pid::from_raw(process).expect("a pid"), Signal::KILL);
+    }
+    assert!(
+        outlived.is_empty(),
+        "seat {SEAT}'s program {pid} and its child {child}: {outlived:?} outlived the seat's \
+         closing: {closed}"
+    );
+    let ended = &closed["structuredContent"]["ended"];
+    assert!(
+        ended
+            .as_array()
+            .is_some_and(|ended| ended.contains(&json!(pid)) && ended.contains(&json!(child))),
+        "{closed}"
+    );
+    assert!(alive(neighbour), "seat 3's program ended with seat {SEAT}");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
 /// The variables of the user's home and folders that a test gives Yuna, which its programs must
 /// not see (ADR-0105), and the system's folders, which they keep.
 const USERS_FOLDERS: &[(&str, &str)] = &[
@@ -3070,10 +3149,9 @@ fn an_old_yunas_homes_are_removed_at_start_and_a_living_ones_kept() {
         matches!(own_lock.try_lock(), Err(fs::TryLockError::WouldBlock)),
         "a live Yuna's lock is free"
     );
-    assert!(
-        !temp
-            .join(format!(".yuna-mcp-homes-{}-starting", yuna.child.id()))
-            .exists()
+    assert_eq!(
+        staging_folders(&temp, "yuna-mcp-homes-"),
+        Vec::<String>::new()
     );
     drop(held);
     let status = yuna.close_and_wait();
@@ -3114,6 +3192,287 @@ fn a_panic_of_the_state_removes_the_seats_homes() {
         "{} outlived the panic",
         yuna.homes_folder().display()
     );
+}
+
+/// A panic follows the link to the seats' homes only into the temporary folder Yuna chose. A
+/// seat's program can reach that link, in the programs' folder, which holds its runtime folder:
+/// one points it at a folder of the user's elsewhere that bears the homes' folder's own name,
+/// and the panic keeps that folder.
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_never_follows_the_homes_link_out_of_yunas_temporary_folder() {
+    use yuna::mcp::HOMES_LINK;
+    let mut yuna = Yuna::launch("panic-link", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let elsewhere = yuna
+        .folder
+        .join("elsewhere")
+        .join(format!("yuna-mcp-homes-{}", yuna.child.id()));
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&elsewhere)
+        .expect("a folder of the user's");
+    fs::write(elsewhere.join("kept"), "the user's\n").expect("a file of the user's");
+    let env = BTreeMap::from([
+        ("ELSEWHERE".to_owned(), elsewhere.display().to_string()),
+        ("LINK".to_owned(), HOMES_LINK.to_owned()),
+    ]);
+    let program = yuna.start_program(
+        SEAT,
+        &[
+            "sh",
+            "-c",
+            "ln -sfn \"$ELSEWHERE\" \"$XDG_RUNTIME_DIR/../../$LINK\" && echo linked=$$; \
+             exec sleep 600",
+        ],
+        &env,
+        false,
+    );
+    let log = PathBuf::from(program["log"].as_str().expect("a log"));
+    printed(&log, "linked");
+    assert_eq!(
+        fs::read_link(yuna.programs_folder().join(HOMES_LINK)).expect("the link"),
+        elsewhere
+    );
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    assert!(
+        elsewhere.join("kept").exists(),
+        "{} was removed through the link",
+        elsewhere.display()
+    );
+}
+
+/// Nor does a panic follow a link put at the homes' folder's own name: a seat's program may
+/// remove the folder, put there a link to a folder of the user's, and point the programs'
+/// folder's link at it with a final slash, which makes the system follow a link; the panic keeps
+/// the user's folder.
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_never_follows_a_link_put_at_the_homes_folders_name() {
+    use yuna::mcp::HOMES_LINK;
+    let mut yuna = Yuna::launch("panic-slash", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let elsewhere = yuna.folder.join("elsewhere");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&elsewhere)
+        .expect("a folder of the user's");
+    fs::write(elsewhere.join("kept"), "the user's\n").expect("a file of the user's");
+    let homes = yuna.homes_folder();
+    let env = BTreeMap::from([
+        ("ELSEWHERE".to_owned(), elsewhere.display().to_string()),
+        ("HOMES".to_owned(), homes.display().to_string()),
+        ("LINK".to_owned(), HOMES_LINK.to_owned()),
+    ]);
+    let program = yuna.start_program(
+        SEAT,
+        &[
+            "sh",
+            "-c",
+            "rm -r \"$HOMES\" && ln -s \"$ELSEWHERE\" \"$HOMES\" && \
+             ln -sfn \"$HOMES/\" \"$XDG_RUNTIME_DIR/../../$LINK\" && echo linked=$$; \
+             exec sleep 600",
+        ],
+        &env,
+        false,
+    );
+    let log = PathBuf::from(program["log"].as_str().expect("a log"));
+    printed(&log, "linked");
+    assert_eq!(
+        fs::read_link(yuna.programs_folder().join(HOMES_LINK))
+            .expect("the link")
+            .into_os_string(),
+        format!("{}/", homes.display()).as_str()
+    );
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    assert!(
+        elsewhere.join("kept").exists(),
+        "{} was emptied through the link",
+        elsewhere.display()
+    );
+}
+
+/// The home program `log` printed, with `env`.
+fn printed_home(log: &std::path::Path) -> PathBuf {
+    PathBuf::from(printed_variable(log, "HOME").expect("HOME"))
+}
+
+/// Starts a program on [`SEAT`] that prints its environment; gives its home.
+fn start_in_home(yuna: &mut Yuna) -> PathBuf {
+    let program = yuna.start_program(
+        SEAT,
+        &["sh", "-c", "env; sleep 600"],
+        &BTreeMap::new(),
+        false,
+    );
+    printed_home(&PathBuf::from(program["log"].as_str().expect("a log")))
+}
+
+/// The folder of the seats' homes, removed while Yuna runs, as a cleaner of the temporary folder
+/// such as systemd-tmpfiles' age rule may, is made again at the next program, under the same
+/// rules: readable by the user alone, locked, and named by the programs' folder's link. A folder
+/// another process put at its name is not Yuna's: the new one takes another name, no home is
+/// made in the other, and Yuna removes its own alone.
+#[test]
+fn a_homes_folder_removed_while_yuna_runs_is_made_again() {
+    use yuna::mcp::{HOMES_LINK, LOCK_FILE};
+    let mut yuna = Yuna::start("homes-again");
+    let first = start_in_home(&mut yuna);
+    assert!(
+        first.starts_with(yuna.homes_folder()),
+        "{}",
+        first.display()
+    );
+    fs::remove_dir_all(yuna.homes_folder()).expect("the homes' folder removed, as a cleaner does");
+
+    let again = start_in_home(&mut yuna);
+    assert_eq!(
+        again, first,
+        "the folder takes its name again, which is free"
+    );
+    for folder in [yuna.homes_folder(), again.clone()] {
+        assert_eq!(mode_of(&folder), 0o700, "{}", folder.display());
+    }
+    let lock = fs::File::open(yuna.homes_folder().join(LOCK_FILE)).expect("its lock file");
+    assert!(
+        matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "the folder made again is not locked"
+    );
+    let link = yuna.programs_folder().join(HOMES_LINK);
+    assert_eq!(fs::read_link(&link).expect("the link"), yuna.homes_folder());
+
+    // Removed again, and another's folder put at its name.
+    fs::remove_dir_all(yuna.homes_folder()).expect("the homes' folder removed");
+    let theirs = yuna.homes_folder();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&theirs)
+        .expect("another's folder");
+    fs::write(theirs.join("theirs"), "").expect("another's file");
+    let moved = start_in_home(&mut yuna);
+    let folder = moved.parent().expect("the homes' folder").to_owned();
+    let own_name = format!("yuna-mcp-homes-{}-", yuna.child.id());
+    assert!(
+        folder.parent() == Some(yuna.temp_dir().as_path())
+            && folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&own_name)),
+        "{}",
+        moved.display()
+    );
+    assert!(
+        !theirs.join(format!("seat-{SEAT}")).exists(),
+        "a home was made in another's folder"
+    );
+    assert_eq!(fs::read_link(&link).expect("the link"), folder);
+
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    assert_eq!(closed["isError"], json!(false), "{closed}");
+    assert!(!moved.exists(), "{} outlived its seat", moved.display());
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    assert!(!folder.exists(), "{} outlived Yuna", folder.display());
+    assert!(
+        theirs.join("theirs").exists(),
+        "another's folder was removed"
+    );
+}
+
+/// In a temporary folder every user shares, another user may take, before Yuna's first program,
+/// each name its homes' folder would have taken in turn: `yuna-mcp-homes-<pid>`, which holds
+/// Yuna's pid, and the numbered ones after it. The folder then takes a name no one could
+/// foresee, and the others are left as they were.
+#[test]
+fn a_homes_folder_whose_names_are_taken_takes_another() {
+    let mut yuna = Yuna::start("homes-taken");
+    let temp = yuna.temp_dir();
+    let pid = yuna.child.id();
+    let taken: Vec<PathBuf> = std::iter::once(format!("yuna-mcp-homes-{pid}"))
+        .chain((1..100).map(|n| format!("yuna-mcp-homes-{pid}-{n}")))
+        .map(|name| temp.join(name))
+        .collect();
+    for folder in &taken {
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(folder)
+            .expect("a name taken");
+    }
+    let home = start_in_home(&mut yuna);
+    let folder = home.parent().expect("the homes' folder").to_owned();
+    assert!(
+        folder.parent() == Some(temp.as_path()) && !taken.contains(&folder),
+        "{}",
+        home.display()
+    );
+    for other in &taken {
+        assert!(
+            fs::read_dir(other).is_ok_and(|mut entries| entries.next().is_none()),
+            "{} was changed",
+            other.display()
+        );
+    }
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    assert!(!folder.exists(), "{} outlived Yuna", folder.display());
+    assert!(taken.iter().all(|other| other.is_dir()));
+}
+
+/// In a temporary folder every user shares, another user may take the name under which a Yuna's
+/// homes' folder was made before it got its own, which held Yuna's pid: a folder Yuna cannot
+/// remove. The homes' folder is still made, and the other left as it was.
+#[test]
+fn a_homes_folder_is_made_whatever_folder_another_user_put_in_its_way() {
+    let mut yuna = Yuna::start("homes-staging");
+    let taken = yuna
+        .temp_dir()
+        .join(format!(".yuna-mcp-homes-{}-starting", yuna.child.id()));
+    // Another user's folder in a sticky `/tmp` cannot be removed: here, its file is in a folder
+    // the test may not write.
+    let shut = taken.join("theirs");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&shut)
+        .expect("another's folder");
+    fs::write(shut.join("file"), "").expect("another's file");
+    fs::set_permissions(&shut, fs::Permissions::from_mode(0o500)).expect("shut");
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": ["sh", "-c", "env; sleep 600"]}),
+    );
+    // Opened again before anything is asserted, so that the test's folder can be removed.
+    fs::set_permissions(&shut, fs::Permissions::from_mode(0o700)).expect("opened");
+    assert_eq!(
+        started["isError"],
+        json!(false),
+        "{started}\n{}",
+        yuna.log()
+    );
+    let home = printed_home(&PathBuf::from(
+        started["structuredContent"]["program"]["log"]
+            .as_str()
+            .expect("a log"),
+    ));
+    assert!(home.starts_with(yuna.homes_folder()), "{}", home.display());
+    assert!(shut.join("file").exists(), "another's folder was changed");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
 /// A capture's encoder that panics fails its capture alone
@@ -3166,4 +3525,55 @@ fn an_encoders_panic_fails_its_capture_alone() {
     );
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A folder another put at the homes' folder's name, once Yuna's was removed, is not Yuna's: a
+/// panic of Yuna's state leaves it, as a stop does.
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_leaves_a_folder_put_at_the_homes_folders_name() {
+    let mut yuna = Yuna::launch("panic-replaced", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let home = start_in_home(&mut yuna);
+    assert!(home.starts_with(yuna.homes_folder()));
+    fs::remove_dir_all(yuna.homes_folder()).expect("removed, as a cleaner does");
+    let theirs = yuna.homes_folder();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&theirs)
+        .expect("another's folder");
+    fs::write(theirs.join("theirs"), "").expect("another's file");
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    assert!(
+        theirs.join("theirs").exists(),
+        "the panic removed another's folder at the homes' name"
+    );
+}
+
+/// The same, stopped on purpose.
+#[test]
+fn a_stop_leaves_a_folder_put_at_the_homes_folders_name() {
+    let mut yuna = Yuna::start("stop-replaced");
+    let home = start_in_home(&mut yuna);
+    assert!(home.starts_with(yuna.homes_folder()));
+    fs::remove_dir_all(yuna.homes_folder()).expect("removed, as a cleaner does");
+    let theirs = yuna.homes_folder();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&theirs)
+        .expect("another's folder");
+    fs::write(theirs.join("theirs"), "").expect("another's file");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    assert!(
+        theirs.join("theirs").exists(),
+        "the stop removed another's folder"
+    );
 }

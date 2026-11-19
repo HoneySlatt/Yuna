@@ -311,6 +311,8 @@ fn a_short_log_keeps_everything_and_reads_across_head_and_tail() {
 fn only_yuna_mcps_folders_are_swept() {
     assert!(PROGRAMS_FOLDER.names("yuna-mcp-123"));
     assert!(PROGRAMS_FOLDER.names("yuna-mcp-123-4"));
+    // The random name a folder takes when its own is taken.
+    assert!(PROGRAMS_FOLDER.names("yuna-mcp-123-18446744073709551615"));
     for other in [
         "yuna-mcp-",
         "yuna-mcp-12-",
@@ -318,6 +320,7 @@ fn only_yuna_mcps_folders_are_swept() {
         "yuna-mcp-test-tree-12",
         "yuna-mcp-12-a",
         ".yuna-mcp-12-starting",
+        ".yuna-mcp-12-18446744073709551615-starting",
         "wayland-1",
         "yuna-mcp-homes-12",
     ] {
@@ -331,17 +334,20 @@ fn only_yuna_mcps_folders_are_swept() {
 fn only_yuna_mcps_homes_are_swept_and_its_own_named() {
     assert!(HOMES_FOLDER.names("yuna-mcp-homes-123"));
     assert!(HOMES_FOLDER.names("yuna-mcp-homes-123-4"));
+    assert!(HOMES_FOLDER.names("yuna-mcp-homes-123-18446744073709551615"));
     for other in [
         "yuna-mcp-123",
         "yuna-mcp-homes-",
         "yuna-mcp-homes-12-",
         "yuna-mcp-homes-notes",
         ".yuna-mcp-homes-12-starting",
+        ".yuna-mcp-homes-12-18446744073709551615-starting",
     ] {
         assert!(!HOMES_FOLDER.names(other), "{other}");
     }
     assert!(HOMES_FOLDER.names_for("yuna-mcp-homes-123", 123));
     assert!(HOMES_FOLDER.names_for("yuna-mcp-homes-123-2", 123));
+    assert!(HOMES_FOLDER.names_for("yuna-mcp-homes-123-18446744073709551615", 123));
     for other in [
         "yuna-mcp-homes-1234",
         "yuna-mcp-homes-12",

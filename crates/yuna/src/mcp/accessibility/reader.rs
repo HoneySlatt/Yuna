@@ -268,7 +268,8 @@ impl Walk {
             Err(why) if node == 0 && query == Query::Children => {
                 // An application whose root cannot be read has nothing to walk: gone, or no
                 // accessible object at the path it embedded.
-                app_walk.failed = Some(why);
+                // Kept cut, as every text a walk keeps: an application chooses its error's text.
+                app_walk.failed = Some(clipped(&why));
                 return;
             }
             Err(_) => None,

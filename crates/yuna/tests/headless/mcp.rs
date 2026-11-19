@@ -1689,6 +1689,8 @@ fn a_workspaces_name_past_its_bound_is_refused_wherever_it_is_named() {
     let window = listed["structuredContent"]["windows"][0]["id"].clone();
     assert!(window.is_u64(), "{listed}");
     let past = "p".repeat(MAX_WORKSPACE_NAME + 1);
+    // Within the schema's `maxLength`, which counts characters, but past the bound in bytes.
+    let past_in_bytes = "é".repeat(MAX_WORKSPACE_NAME / 2 + 1);
     let at = "a".repeat(MAX_WORKSPACE_NAME);
     let calls = |name: &str| {
         [
@@ -1698,7 +1700,7 @@ fn a_workspaces_name_past_its_bound_is_refused_wherever_it_is_named() {
             json!({"action": "remove", "seat": seat, "name": name}),
         ]
     };
-    for arguments in calls(&past) {
+    for arguments in calls(&past).into_iter().chain(calls(&past_in_bytes)) {
         let refused = mcp.call("workspaces", arguments.clone());
         assert_eq!(refused["isError"], json!(true), "{arguments}: {refused}");
         let text = refused["content"][0]["text"].as_str().unwrap_or_default();

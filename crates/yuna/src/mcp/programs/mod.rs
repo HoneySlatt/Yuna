@@ -76,6 +76,7 @@ pub use environment::{
     NO_ACCESSIBILITY_VARIABLES, SEAT_VARIABLE, daemon_environment,
 };
 pub use folder::LOCK_FILE;
+pub use homes::HOMES_LINK;
 pub use log::{LOG_HEAD, LOG_TAIL, LogRead, THROTTLE};
 pub use pace::{PACE_PERIOD, Pace};
 pub use processes::{
