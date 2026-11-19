@@ -108,6 +108,12 @@ pub(super) struct X11Server {
     pub(super) menu_refusals_said: HashSet<u32>,
     /// Whether an override-redirect window past the bound of all its clients' was said: once.
     pub(super) menu_bound_said: bool,
+    /// Whether a menu was refused by the bound of this Xwayland's menus since a walk last found
+    /// none waiting: a menu that goes then shows those waiting (`menus.rs`).
+    pub(super) menus_waiting: bool,
+    /// Its seat's largest output in X11 pixels, as the last arrangement left them: the bound of
+    /// its windows' minimum sizes, passed to the layout again when it changes.
+    largest_output: Option<(u32, u32)>,
     /// The transfers of its selections to Wayland clients passed to its manager and not ended.
     pub(super) transfers_to_wayland: usize,
 }
@@ -481,6 +487,8 @@ pub(super) fn x11_origin(output: &VirtualOutput, scale: f64) -> (i32, i32) {
 /// is first bounded by `largest`, its seat's largest output on each axis in X11 pixels, as a
 /// window manager bounds windows to its screens: a hint up to X11's 32,767 pixels would
 /// otherwise be configured, a window no output shows whose buffer Xwayland would have to make.
+/// A seat without an output bounds it to nothing: the window shows nowhere, and its limits are
+/// worked out again once its seat's outputs change ([`State::x11_limits_follow_outputs`]).
 fn logical_limits(
     hints: SizeHints,
     extents: FrameExtents,
@@ -493,13 +501,10 @@ fn logical_limits(
             f64::from(h.saturating_sub(extents.top + extents.bottom)) / scale,
         )
     };
-    let bounded = |(w, h): (u32, u32)| match largest {
-        Some((largest_w, largest_h)) => (w.min(largest_w), h.min(largest_h)),
-        None => (w, h),
-    };
     let (min_w, min_h) = hints
         .min
-        .map(bounded)
+        .zip(largest)
+        .map(|((w, h), (largest_w, largest_h))| (w.min(largest_w), h.min(largest_h)))
         .map(inside)
         .map_or((0.0, 0.0), |(w, h)| (w.floor(), h.floor()));
     let (max_w, max_h) = hints
@@ -534,6 +539,7 @@ fn to_i32(value: u32) -> i32 {
 impl State {
     /// Xwayland `server` of `seat` started, at XWayland's scale `scale`.
     pub(crate) fn x11_server_started(&mut self, server: u64, seat: SeatId, scale: f64) {
+        let largest_output = self.largest_x11_output(seat, scale);
         self.x11.servers.insert(
             server,
             X11Server {
@@ -550,6 +556,8 @@ impl State {
                 refusals_said: HashSet::new(),
                 menu_refusals_said: HashSet::new(),
                 menu_bound_said: false,
+                menus_waiting: false,
+                largest_output,
                 transfers_to_wayland: 0,
             },
         );
@@ -716,7 +724,8 @@ impl State {
 
     /// Xwayland `server` says `window`'s surface has `serial`: the window is paired with the
     /// surface that committed it already, or waits for it. A window Yuna does not know takes no
-    /// surface: the one waiting stays for its own window.
+    /// surface: the one waiting stays for its own window. Each pairing is logged with the order
+    /// it took, `commit_first`, which the stories that force an order read.
     fn x11_window_serial(&mut self, server: u64, window: Window, serial: u64) {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
@@ -729,6 +738,12 @@ impl State {
             return;
         }
         if record.pairing.window_serial(window, serial).is_some() {
+            tracing::debug!(
+                server,
+                window,
+                commit_first = true,
+                "an X11 window is paired with its surface"
+            );
             self.x11_paired(server, window);
         }
     }
@@ -740,6 +755,12 @@ impl State {
             return;
         };
         if let Some(window) = record.pairing.surface_serial(surface, serial) {
+            tracing::debug!(
+                server,
+                window,
+                commit_first = false,
+                "an X11 window is paired with its surface"
+            );
             self.x11_paired(server, window);
         }
     }
@@ -886,6 +907,39 @@ impl State {
             .filter(|output| output.seat == seat)
             .map(|output| (x11_side(output.rect.w), x11_side(output.rect.h)))
             .reduce(|(w, h), (other_w, other_h)| (w.max(other_w), h.max(other_h)))
+    }
+
+    /// After an arrangement: each Xwayland whose seat's largest output changed since the last,
+    /// an output added, removed or given another mode, passes the limits of its open windows to
+    /// the layout again, their minimum bounded by the outputs it has now. A window's commit does
+    /// as much, but a window that commits nothing would keep a minimum larger than every output
+    /// left, or none it may ask once its seat has an output again. Nothing is walked when no
+    /// seat's outputs changed.
+    fn x11_limits_follow_outputs(&mut self) {
+        let changed: Vec<(u64, Option<(u32, u32)>)> = self
+            .x11
+            .servers
+            .iter()
+            .filter_map(|(&server, record)| {
+                let largest = self.largest_x11_output(record.seat, record.scale);
+                (largest != record.largest_output).then_some((server, largest))
+            })
+            .collect();
+        for (server, largest) in changed {
+            if let Some(record) = self.x11.servers.get_mut(&server) {
+                record.largest_output = largest;
+            }
+            let roots: Vec<WlSurface> = self
+                .toplevels
+                .values()
+                .filter_map(Toplevel::x11)
+                .filter(|x11| x11.server == server)
+                .map(|x11| x11.surface.clone())
+                .collect();
+            for root in roots {
+                self.x11_update_window(&root);
+            }
+        }
     }
 
     /// Records the size the X11 window of `root` committed, once it opened, as the layout took
@@ -1129,6 +1183,7 @@ impl State {
         }
         if shown {
             self.x11_redraw(server);
+            self.x11_show_waiting_menus(server);
         }
         if waited {
             self.arm_x11_answers();
@@ -1421,11 +1476,13 @@ impl State {
     /// that a column moving restacks nothing; then the others shown, floating or fullscreen,
     /// bottom to top as the layout draws them. Xwayland finds the X11 window under the pointer
     /// through X11's stacking, and a hidden window keeps its X11 place, maybe under a shown one.
-    /// Sent only when it changed.
+    /// Sent only when it changed. First, the windows' limits follow their seat's outputs, if
+    /// those changed: this is the one call an arrangement makes into X11's side.
     pub(crate) fn restack_x11_windows(&mut self) {
         if self.x11.servers.is_empty() {
             return;
         }
+        self.x11_limits_follow_outputs();
         // Each server's shown windows: tiled, then over them.
         let mut shown: HashMap<u64, (Vec<Window>, Vec<Window>)> = HashMap::new();
         for output in &self.outputs {
@@ -1790,6 +1847,9 @@ mod tests {
         assert_eq!(grant_free_axes(told, requested, None), told);
     }
 
+    /// An output larger than any hint: it bounds no minimum.
+    const ANY_OUTPUT: Option<(u32, u32)> = Some((u32::MAX, u32::MAX));
+
     #[test]
     fn size_hints_become_logical_limits_rounded_outward() {
         // At S = 1.5: a minimum of 301 × 151 X11 pixels is 200.67 × 100.67 units, 200 × 100 down;
@@ -1800,7 +1860,7 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, NO_EXTENTS, 1.5, None),
+            logical_limits(hints, NO_EXTENTS, 1.5, ANY_OUTPUT),
             (Size { w: 200.0, h: 100.0 }, Size { w: 600.0, h: 300.0 })
         );
         // The frame extents are no part of the window the layout sizes.
@@ -1815,7 +1875,7 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, extents, 1.0, None).0,
+            logical_limits(hints, extents, 1.0, ANY_OUTPUT).0,
             Size { w: 100.0, h: 100.0 }
         );
         // A maximum below the minimum is dropped; none is 0.
@@ -1825,19 +1885,20 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, NO_EXTENTS, 1.0, None),
+            logical_limits(hints, NO_EXTENTS, 1.0, ANY_OUTPUT),
             (Size { w: 300.0, h: 300.0 }, Size { w: 0.0, h: 600.0 })
         );
         assert_eq!(
-            logical_limits(SizeHints::default(), NO_EXTENTS, 1.5, None),
+            logical_limits(SizeHints::default(), NO_EXTENTS, 1.5, ANY_OUTPUT),
             (Size::default(), Size::default())
         );
     }
 
     /// A minimum beyond the seat's largest output, X11's 32,767 pixels at most, is bounded by that
     /// output's X11 size on each axis, frame extents included: at S = 1.5, an output of 1920 ×
-    /// 1080 units is 2880 × 1620 X11 pixels, 1920 × 1080 units again. A minimum within it, a
-    /// maximum, and a seat without an output keep the hints.
+    /// 1080 units is 2880 × 1620 X11 pixels, 1920 × 1080 units again. A minimum within it and a
+    /// maximum keep the hints. A seat without an output bounds the minimum to nothing, until it
+    /// has one; its maximum stays.
     #[test]
     fn a_minimum_size_is_bounded_by_the_seats_largest_output() {
         let largest = Some((2880, 1620));
@@ -1900,13 +1961,16 @@ mod tests {
             logical_limits(small, NO_EXTENTS, 1.5, largest).0,
             Size { w: 200.0, h: 100.0 }
         );
-        // A seat without an output: the hints as they are, 32,767 / 1.5 down.
+        // A seat without an output: no minimum, the maximum as it is.
         assert_eq!(
-            logical_limits(huge, NO_EXTENTS, 1.5, None).0,
-            Size {
-                w: 21_844.0,
-                h: 21_844.0
-            }
+            logical_limits(huge, NO_EXTENTS, 1.5, None),
+            (
+                Size::default(),
+                Size {
+                    w: 21_845.0,
+                    h: 21_845.0
+                }
+            )
         );
     }
 

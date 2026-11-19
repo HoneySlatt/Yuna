@@ -608,6 +608,13 @@ fn size_hints(values: [i32; 8]) -> Vec<u32> {
     hints
 }
 
+/// Five windows whose `WM_NORMAL_HINTS` make no sense: negative, `i32::MAX` throughout, the
+/// smallest `i32` beside small ones, a minimum of 40,000 with a negative base, a maximum below
+/// the minimum. Malformed hints are ignored and a maximum below the minimum dropped: those
+/// windows open as any other. A minimum beyond the output, up to `i32::MAX`, is bounded by the
+/// output: those windows open too, configured to the output's 2880 × 1620 X11 pixels, the
+/// layout giving each a column as large as the output, which may keep the others out of view.
+/// Every window opens, and Yuna goes on.
 #[test]
 fn size_hints_negative_and_huge_still_open() {
     let mut hostile = Hostile::new("x11-hints", at_1_5());
@@ -628,7 +635,8 @@ fn size_hints_negative_and_huge_still_open() {
         [40_000, 40_000, 10, 10, 0, -1, 0, 0],
         [0, 0, 1, 1, 0, 0, 0, 0],
     ];
-    let (client, ()) = step(&mut hostile.compositor, client, move |client| {
+    let (client, windows) = step(&mut hostile.compositor, client, move |client| {
+        let mut windows = Vec::new();
         for (index, values) in nonsense.into_iter().enumerate() {
             let spec = WindowSpec {
                 background: Some(0x0060_6060),
@@ -649,15 +657,66 @@ fn size_hints_negative_and_huge_still_open() {
                 .connection
                 .map_window(window)
                 .map_err(|e| e.to_string())?;
+            windows.push(window);
         }
-        client.sync()
+        client.sync()?;
+        Ok(windows)
     });
-    // Malformed hints are ignored, a maximum below the minimum dropped: those windows open. A
-    // minimum of 32,767 X11 pixels is honoured, and Xwayland draws no buffer that large: those
-    // never show, and Yuna goes on.
+    let titles: Vec<String> = (0..nonsense.len())
+        .map(|index| format!("hints-{index}"))
+        .collect();
+    wait(
+        &mut hostile.compositor,
+        "every window opens",
+        |compositor| {
+            let open = compositor.windows();
+            titles
+                .iter()
+                .all(|title| open.iter().any(|w| w.title.as_deref() == Some(title)))
+                .then_some(())
+        },
+    );
+    // The windows of sane or negative hints are drawn once shown: the huge ones' columns may keep
+    // them out of view, so each is focused in turn.
     for title in ["hints-0", "hints-2", "hints-4"] {
+        let id = wait(&mut hostile.compositor, title, |compositor| {
+            compositor
+                .windows()
+                .into_iter()
+                .find(|w| w.title.as_deref() == Some(title))
+                .map(|w| w.id)
+        });
+        hostile
+            .compositor
+            .change_layout(|layout| layout.focus_window(id))
+            .expect("the window focused");
         window_titled(&mut hostile.compositor, title);
     }
+    // At S = 1.5, the output's 1920 × 1080 units are 2880 × 1620 X11 pixels.
+    let huge = [windows[1], windows[3]];
+    let deadline = Instant::now() + PATIENCE;
+    let mut client = client;
+    let sizes = loop {
+        let (back, sizes) = step(&mut hostile.compositor, client, move |client| {
+            huge.iter()
+                .map(|&window| {
+                    client
+                        .geometry(window)
+                        .map(|place| (place.width, place.height))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        });
+        client = back;
+        if sizes.iter().all(|&size| size == (2880, 1620)) || Instant::now() > deadline {
+            break sizes;
+        }
+        pump(&mut hostile.compositor);
+    };
+    assert_eq!(
+        sizes,
+        [(2880, 1620), (2880, 1620)],
+        "a huge minimum is bounded by the output"
+    );
     hostile.pump_for(Duration::from_millis(500));
     assert_sound(&hostile.compositor);
     hostile.end(vec![client]);

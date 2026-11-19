@@ -87,7 +87,7 @@ use manager::{Commands, ManagerEvent, OverBound, Stop};
 #[cfg(debug_assertions)]
 pub use manager::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 pub(crate) use menus::ShownMenus;
-pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
+pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT, MAX_MENUS_PER_XWAYLAND};
 pub(crate) use shell::{SURFACE_ROLE, shell_global};
 pub(crate) use windows::{X11Client, X11Toplevel, X11Windows};
 

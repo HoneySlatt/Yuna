@@ -444,7 +444,8 @@ impl State {
     }
 
     /// `seat`'s pointer moves to `location`, over `under`, as Yuna's motion path finds it:
-    /// while a drag is in the hand, what it is over goes to its decisions. Returns the focus the
+    /// while a drag is in the hand, or an X11 drag released keeps the proxy, which this motion
+    /// hides, what it is over goes to its decisions. Returns the focus the
     /// pointer's motion goes to: for a Wayland client's drag, the Wayland surface it is over, or
     /// none, so that Smithay's grab leaves any Wayland target over an X11 window; else `under`.
     pub(crate) fn drag_moved(

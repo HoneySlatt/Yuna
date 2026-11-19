@@ -34,17 +34,22 @@ use crate::state::State;
 /// The most override-redirect windows one X11 client may have shown at once, as a window may
 /// have 64 popups ([ADR-0028](../../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)):
 /// a menu and its submenus, a tooltip and a list are a handful. The frame loop and the pointer
-/// walk the shown ones at each refresh and event. One past it is not shown until another goes,
-/// logged once per X11 client.
+/// walk the shown ones at each refresh and event. One past it is not shown until it is mapped or
+/// commits again, logged once per X11 client: only the client past its cap waits, and a client
+/// that floods with thousands of menus, then leaves, leaves at once, none of them shown in turn.
 pub const MAX_MENUS_PER_CLIENT: usize = 64;
 
 /// The most override-redirect windows one Xwayland may have shown at once, all its X11 clients
 /// together. An X11 client is a connection, and one program may open many, each with its own
 /// [`MAX_MENUS_PER_CLIENT`]: up to Xwayland's limit of clients, thousands of menus that the frame
 /// loop and the pointer would walk at each refresh and event. Four clients at their own cap, far
-/// more than the handful a seat's programs show at once. One past it is not shown until another
-/// goes, as one past a client's cap, logged once per Xwayland.
-pub(crate) const MAX_MENUS_PER_XWAYLAND: usize = 256;
+/// more than the handful a seat's programs show at once. One past it waits, logged once per
+/// Xwayland. When a menu of the same Xwayland goes, those waiting show, in X11's stacking order,
+/// lowest in X11's stacking first, as far as the two bounds let them: a program that floods its
+/// Xwayland with menus over several connections delays another's tooltip until its own go,
+/// never for good. Nothing is kept for them: they are found among the mapped override-redirect
+/// windows, which every menu shown or hidden walks already.
+pub const MAX_MENUS_PER_XWAYLAND: usize = 256;
 
 /// Where an override-redirect window shown is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +115,9 @@ pub struct DrawnX11Menu {
 
 impl X11Server {
     /// Whether a new menu of `client` waits, its client or this Xwayland showing their most
-    /// already: said once per X11 client, and once per Xwayland.
+    /// already: said once per X11 client, and once per Xwayland. One that this Xwayland's bound
+    /// refuses shows once another goes ([`State::x11_show_waiting_menus`]); one past its own
+    /// client's cap, at its next map or commit.
     fn refuses_menu_of(&mut self, client: u32) -> bool {
         let of_client = self.menus_shown_of.get(&client).copied().unwrap_or(0);
         if of_client >= MAX_MENUS_PER_CLIENT {
@@ -129,6 +136,7 @@ impl X11Server {
                     "an X11 menu is not shown: its Xwayland shows its most; said once per Xwayland"
                 );
             }
+            self.menus_waiting = true;
             return true;
         }
         false
@@ -258,8 +266,45 @@ impl State {
             (false, true) => {
                 self.x11_set_menu(server, window, None);
                 self.x11_redraw(server);
+                self.x11_show_waiting_menus(server);
             }
             _ => {}
+        }
+    }
+
+    /// A menu of Xwayland `server` went: those that wait for room, refused by the Xwayland's
+    /// bound since the last walk found none, show, bottom to top in X11's stacking, the oldest
+    /// mapped first, until the Xwayland shows its most again; one whose client shows its own most
+    /// is refused again, and waits for its next map or commit. Without one waiting, nothing is
+    /// walked.
+    pub(super) fn x11_show_waiting_menus(&mut self, server: u64) {
+        let Some(record) = self.x11.servers.get_mut(&server) else {
+            return;
+        };
+        if !std::mem::take(&mut record.menus_waiting) {
+            return;
+        }
+        let windows = &record.windows;
+        let not_shown: Vec<Window> = record
+            .menus
+            .iter()
+            .copied()
+            .filter(|menu| {
+                windows
+                    .get(menu)
+                    .is_some_and(|x11_window| x11_window.menu.is_none())
+            })
+            .collect();
+        for menu in not_shown {
+            let Some(record) = self.x11.servers.get_mut(&server) else {
+                return;
+            };
+            if record.shown_menus.len() >= MAX_MENUS_PER_XWAYLAND {
+                // Those left may wait still: the next menu that goes walks them.
+                record.menus_waiting = true;
+                return;
+            }
+            self.x11_update_menu(server, menu);
         }
     }
 

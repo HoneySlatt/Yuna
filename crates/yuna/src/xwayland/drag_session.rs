@@ -25,7 +25,12 @@
 //! and would leave a proxy gone, or find the X11 window under it, hidden or covered. It hides at
 //! the source's drop or leave, when the drag ends, at [`X11_DROP_TIMEOUT`], and once the pointer
 //! comes over an X11 window, after the release too, so that it never takes an X11 window's
-//! pointer. A Wayland target is entered only once the source's
+//! pointer: an InputOnly window, it takes X11's pointer only while the pointer is over an X11
+//! window. Two races are left, Yuna's loop never waiting for the manager's thread: a source that
+//! looks for its target before the manager has mapped the proxy, the move and the release in one
+//! round, finds the X11 window under the pointer; and a press that reaches Xwayland before the
+//! manager has unmapped the proxy, in the round of the motion over an X11 window that hid it,
+//! goes to the proxy (`docs/debt.md`). A Wayland target is entered only once the source's
 //! `XdndEnter` and first position reached the proxy, its types and action known, and left at its
 //! `XdndLeave`; the manager tells no `XdndEnter` again with the same types. Nothing happens at
 //! the release: the source decides. Its `XdndDrop` drops on the Wayland target if the target

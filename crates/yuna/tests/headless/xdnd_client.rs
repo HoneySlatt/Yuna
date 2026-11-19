@@ -203,6 +203,8 @@ pub(crate) enum Logged {
     Pressed { time: Timestamp },
     /// The pointer's button was released, at `time`.
     Released { time: Timestamp },
+    /// The source took [`SourceOrder::Hold`]: it reads no event until [`SourceOrder::Go`].
+    Held,
     /// A button was pressed on the target's window, which takes clicks as any program's.
     Clicked { window: Window },
     /// A request for `XdndSelection` from `requestor`, for `target`, naming `time`; whether it
@@ -365,6 +367,11 @@ trait Role<Order> {
     fn idle(&mut self, _side: &mut Side) -> Result<(), String> {
         Ok(())
     }
+    /// Whether it reads no event for now, as a program busy elsewhere: what X11 sends it waits
+    /// in its connection, and only its orders are taken.
+    fn holds(&self) -> bool {
+        false
+    }
 }
 
 /// A peer's connection, its atoms and its log.
@@ -454,8 +461,8 @@ impl Side {
     }
 }
 
-/// A peer's loop: its orders, then its next event, or a short sleep when none came, until the
-/// story stops it or it fails.
+/// A peer's loop: its orders, then its next event, or a short sleep when none came or it holds,
+/// until the story stops it or it fails.
 fn run<Order>(
     mut side: Side,
     mut role: impl Role<Order>,
@@ -465,6 +472,10 @@ fn run<Order>(
     let mut turn = || -> Result<(), String> {
         while let Ok(order) = orders.try_recv() {
             role.order(&mut side, order)?;
+        }
+        if role.holds() {
+            thread::sleep(Duration::from_millis(1));
+            return Ok(());
         }
         match side.client.next_event()? {
             Some(Event::Error(error)) => side.record(Logged::XError(format!("{error:?}"))),
@@ -522,6 +533,12 @@ impl SourceSpec {
 pub(crate) enum SourceOrder {
     /// Send `XdndLeave` to the target and end the drag, as a source whose user pressed Escape.
     Leave,
+    /// Read no event until [`SourceOrder::Go`], logged [`Logged::Held`] once taken: the story
+    /// decides when the source sees what X11 sent it meanwhile, as a source whose thread is
+    /// late, and finds the window under the pointer as X11 has it then.
+    Hold,
+    /// Read the events again, those that waited first.
+    Go,
 }
 
 /// A window of `client`'s program that it never maps, 3 × 3 at the root's corner, which
@@ -605,6 +622,7 @@ impl Peer<SourceOrder> {
             drag: None,
             dropped: None,
             sending: Vec::new(),
+            held: false,
         };
         Peer::spawn(client, window, atoms, source)
     }
@@ -663,6 +681,11 @@ impl Peer<SourceOrder> {
             .iter()
             .any(|logged| matches!(logged, Logged::Pressed { .. }))
     }
+
+    /// Whether the source took [`SourceOrder::Hold`]: it reads no event since.
+    pub(crate) fn held(&self) -> bool {
+        self.log().contains(&Logged::Held)
+    }
 }
 
 /// An XDND source's state.
@@ -678,6 +701,8 @@ struct Source {
     dropped: Option<Timestamp>,
     /// The answers it sends in INCR chunks, each until its last.
     sending: Vec<IncrAnswer>,
+    /// Whether it reads no event, from [`SourceOrder::Hold`] to [`SourceOrder::Go`].
+    held: bool,
 }
 
 /// A drag under way.
@@ -767,7 +792,20 @@ impl Role<SourceOrder> for Source {
                 }
                 self.let_go(side, x11rb::CURRENT_TIME)
             }
+            SourceOrder::Hold => {
+                self.held = true;
+                side.record(Logged::Held);
+                Ok(())
+            }
+            SourceOrder::Go => {
+                self.held = false;
+                Ok(())
+            }
         }
+    }
+
+    fn holds(&self) -> bool {
+        self.held
     }
 
     fn idle(&mut self, side: &mut Side) -> Result<(), String> {
