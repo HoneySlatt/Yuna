@@ -14,7 +14,7 @@ consequences. Once accepted, only its status changes.
   into an older ADR's status.
 - ADR-0001 to ADR-0070 were written under an earlier rule, which amended ADRs in part
   (`Accepted; amends NNNN`, `amended by NNNN`); Stage 1's audit consolidated their chains from
-  ADR-0106 on, each new ADR stating one topic whole.
+  ADR-0106 on, each new ADR stating one topic whole; the bounds on what a client may ask are ADR-0131's.
 
 New ADRs copy [`0000-template.md`](0000-template.md) and take the next free number. The index
 below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it.
@@ -48,7 +48,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0025](0025-applications-in-ci.md) | Real applications in CI, and rest checked on the program | Superseded by 0122; amended by 0029, 0050 and 0104 |
 | [0026](0026-real-clients-in-the-layout.md) | Real clients in the layout model | Superseded by 0110, and 0111 |
 | [0027](0027-smithay-without-overflow-checks.md) | Smithay built without overflow checks in debug builds | Superseded by 0042 |
-| [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Accepted |
+| [0028](0028-bounds-on-what-one-client-may-ask.md) | Bounds on what one client may ask | Superseded by 0131 |
 | [0029](0029-the-rest-of-animated-applications.md) | The rest of animated applications, and the buffers CI's applications use | Superseded by 0122, and 0123; amends 0022 and 0025; amended by 0043 |
 | [0030](0030-a-frames-gpu-time-from-the-kernel.md) | A frame's GPU time read from the kernel, the renderer's timers for effects | Accepted |
 | [0031](0031-frames-drawn-ahead-of-their-boundary.md) | Frames drawn ahead of their boundary | Superseded by 0118; amends 0023; amended by 0046 |
@@ -90,7 +90,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0067](0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md) | One XWayland per seat, on demand, behind a cookie | Accepted |
 | [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) | X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life | Superseded by 0124 |
 | [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md) | Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept | Superseded by 0124 |
-| [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Accepted |
+| [0070](0070-bounds-on-what-one-x11-client-may-ask.md) | Bounds on what one X11 client may ask | Superseded by 0131 |
 | [0071](0071-the-rivals-measured-headless-by-agents-and-on-a-real-display-by-the-owner.md) | The rivals measured: costs headless by agents, frames, latency and watts on a real display by the owner | Superseded by 0075 |
 | [0072](0072-budgets-set-against-the-peers-the-same-day.md) | Budgets set against the peers, the same day | Accepted |
 | [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md) | Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures | Superseded by 0106; supersedes 0063; superseded in part by 0080 and 0084 |
@@ -121,7 +121,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0098](0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md) | On llvmpipe, dmabufs offered for no device and checked as llvmpipe maps them | Superseded by 0123 |
 | [0099](0099-a-workspace-switch-keeps-each-workspace-on-its-row.md) | A workspace switch keeps each workspace on its row | Superseded by 0109 |
 | [0100](0100-the-budgets-of-yuna-mcp-at-their-conditions.md) | The budgets of `yuna mcp`, at their conditions | Accepted; supersedes 0097 |
-| [0101](0101-an-agents-clipboard-through-mcp.md) | An agent's clipboard through MCP | Accepted |
+| [0101](0101-an-agents-clipboard-through-mcp.md) | An agent's clipboard through MCP | Accepted; superseded in part by 0132 |
 | [0102](0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md) | Drag and drop between X11 and Wayland: a drag session beside Smithay's grabs | Accepted |
 | [0103](0103-crates-updates-wait-three-days.md) | Crates' updates wait three days | Accepted |
 | [0104](0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md) | Stage 1's exit: Opium in Aerith's place, and its exceptions written | Accepted; superseded in part by 0122; amends 0025 |
@@ -151,3 +151,5 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0128](0128-hdr-virtual-outputs-and-when-colour-is-chosen.md) | HDR virtual outputs, and when Yuna's colour pipeline is chosen | Accepted; supersedes 0048 |
 | [0129](0129-configuration-in-kdl-its-includes-and-variants.md) | Configuration in KDL, its includes and variants | Accepted; supersedes 0008 and 0057; supersedes in part 0064 |
 | [0130](0130-oled-care-chosen-at-stage-5s-design.md) | OLED care chosen at Stage 5's design, from a survey | Accepted; supersedes in part 0062 |
+| [0131](0131-bounds-on-what-a-client-or-an-agent-may-ask.md) | Bounds on what a client or an agent may ask | Accepted; supersedes 0028 and 0070 |
+| [0132](0132-an-agents-clipboard-data-with-control-characters-in-base64.md) | An agent's clipboard: data with control characters in base64 | Accepted; supersedes in part 0101 |

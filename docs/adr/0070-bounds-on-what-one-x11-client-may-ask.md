@@ -1,6 +1,7 @@
 # 0070. Bounds on what one X11 client may ask
 
-- Status: Accepted; extends [0028](0028-bounds-on-what-one-client-may-ask.md) to X11
+- Status: Superseded by [0131](0131-bounds-on-what-a-client-or-an-agent-may-ask.md); extends
+  [0028](0028-bounds-on-what-one-client-may-ask.md) to X11
 - Date: 2026-11-15
 
 ## Context

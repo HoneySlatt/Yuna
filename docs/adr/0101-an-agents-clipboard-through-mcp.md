@@ -1,6 +1,6 @@
 # 0101. An agent's clipboard through MCP
 
-- Status: Accepted
+- Status: Accepted; superseded in part by [0132](0132-an-agents-clipboard-data-with-control-characters-in-base64.md) (how `clipboard get` gives its data)
 - Date: 2026-11-18
 
 ## Context
