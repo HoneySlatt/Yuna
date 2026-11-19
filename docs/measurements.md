@@ -4,6 +4,36 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.13 — Stage 1's budgets measured again (2026-11-19)
+
+The release candidate, at `e132353`, on the high tier (RX 6900 XT, Ryzen 7 5800X), release builds,
+each run with the load of the machine's other programs read before and during it; another
+session's builds and a uwui program of 19 GiB loaded the machine for part of the morning. The
+commands are CONTRIBUTING's; the proofs, `.delegation/m1.13-perf/`.
+
+| Budget | Now | Before | Verdict |
+|---|---|---|---|
+| The layout's "float, then tile", 100 windows, p99 ≤ 25 µs | scrolling 21.28 µs, dwindle 24.13 µs; every other operation ≤ 16.31 µs; at 1,000 windows ≤ 222.30 µs (300) | M1.7: 19.1 and 23.9 µs | met, by 0.9 µs; a run under load missed it, 29.65 µs, not kept |
+| Motion, 4K at 240 Hz on the GPU (ADR-0127) | the still baseline drew 175.3 frames a second, 73 % of the rate | M1.7: 0 missed of 10,000 | not judged: the baseline was not the output redrawn whole, the machine disturbed |
+| Motion, 1080p at 240 Hz on llvmpipe (recorded, no pass mark) | still 42 missed of 10,000, motion 576 | M1.7: 190 and 5,755 | ten times fewer missed than at M1.7 |
+| A frame's cost, the bench's `game` at equal work, against Umbriel the same day | Yuna 173–183 µs CPU, 194–220 µs GPU, 70.5 MiB; Umbriel 202–206, 203–204, 86.4 MiB | M1.9: Yuna 160–166, 191–196 | met: CPU and memory below, GPU equal |
+| At rest, 10 s, an idle Alacritty | 0 frames, 0 wakes, 0 % of a core | 0 | met |
+| `yuna mcp`, first frame: GPU 1080p ≤ 100 ms | 110.3 ms, quiet | M1.11: 58.7 ms | missed, cause not isolated ([debt](debt.md#the-mcp-server)) |
+| `yuna mcp`, `seat create` on llvmpipe 4K ≤ 100 ms | 128.8 ms, quiet | M1.11: 80.6 ms | missed, cause not isolated |
+| `yuna mcp`, memory on llvmpipe 4K ≤ 125 MiB | 142.2 MiB, anonymous 64.2 | M1.11: 93.7, anonymous 64.8 | missed: the file-backed part doubled |
+| `yuna mcp`, every other start and memory phase; ten together for 5 minutes | within their budgets; ten together grew 0.0 MiB | M1.11 | met; the llvmpipe 1080p times disturbed, not judged |
+| XWayland's start (no budget) | 30.79 ms cold, Xwayland's PSS 35.3 MiB | M1.8: 28.63 ms, 35.5 MiB | as before |
+
+- **A profile of "float, then tile"** at 100 windows, by valgrind's callgrind (instructions, so
+  untouched by the load): 22.8 % of the instructions hash `WindowId`s with the standard
+  library's SipHash, 15.4 % in `f64::floor`, 15.4 % in `Area::sizing`, 12.3 % in
+  `Area::place_in_slot`. A faster hasher for the layout's maps is the first lead ([PLAN](PLAN.md)).
+- **Yuna's memory after an Xwayland on llvmpipe**: it grew 37.0 MiB and kept 22.0 MiB, as at M1.8,
+  and the same with glibc told to trim at every free and keep one arena: the memory kept is live,
+  or mappings malloc does not own, not glibc's free lists ([debt](debt.md#xwayland)).
+- **Allocations a frame**, which a decision on Rust 1.100's custom allocators would rest on: not
+  measured; heaptrack's traces came out empty under the measures' drivers.
+
 ## M1.13 — Stage 1's audit fixes (2026-11-18/19)
 
 What the fixes of Stage 1's audit changed, from the runs of the tasks that made them, not measured

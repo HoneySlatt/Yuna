@@ -539,6 +539,19 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 
 ## Tests and examples
 
+- `yuna mcp`'s start missed three budgets on 2026-11-19, the machine quiet but the session's page
+  cache unknown: its first frame on the GPU at 1080p, 110.3 ms against 100 (58.7 at M1.11); its
+  `seat create` on llvmpipe at 4K, 128.8 ms against 100; its memory on llvmpipe at 4K, 142.2 MiB
+  against 125, the file-backed part doubled since M1.11, after `nixpkgs` (Mesa) was raised. Measured
+  again on a fresh boot, then fixed or decided, in 0.1.1 ([measurements](measurements.md)).
+- Motion's budget was not judged at M1.13's release: the machine never gave the still baseline its
+  rate. Judged again on a quiet machine with the measures above.
+- The allocations a frame, for Rust 1.100's custom allocators, are not measured: heaptrack's
+  traces came out empty under the measures' drivers.
+- `tests/consumers.rs` builds Pluto's `pluto-input` once into `target/consumers/`, and Cargo does
+  not build it again when the development shell's libraries change: after a raise of `nixpkgs`, a
+  build kept from before drove no key into Yuna until removed. CI builds afresh. To remove at the
+  next change of the consumers' tests.
 - Mutation testing (Stage 1's audit) leaves motion's mutants that a comparison over random
   sequences of changes tells apart, but that no scenario test pins with an independent oracle:
   `Camera::velocity`, `Camera::follow`'s `focused_column`, `remember_focus`, `follow_cameras`,
@@ -628,8 +641,10 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md), [ROADMAP](ROADMAP.md)).
 - A lead to follow, not known to be a leak: on llvmpipe, Yuna's resident set grows by 37 MiB
   while an Xwayland with one small window runs, and keeps 22 MiB of it once Xwayland has ended
-  ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. Whether that memory
-  is in use or freed and kept by the allocator is not known. Looked at in the stage's audit.
+  ([measurements](measurements.md)); on the GPU it grows by less than 1 MiB. The same with glibc
+  told to trim at every free: the 22 MiB are live, or mappings malloc does not own, not its free
+  lists (2026-11-19). What holds them is named with heaptrack on Yuna itself, at Stage 2's opening
+  design.
 - On llvmpipe, Xwayland runs without GLX: Mesa's GLX for Xwayland loads the machine's own drivers
   and opens a display node (`/dev/dri/card*`), which agents never take. X11 programs drawing
   through GLX (Wine's OpenGL among them) need `--gpu`, where Xwayland opened only the render

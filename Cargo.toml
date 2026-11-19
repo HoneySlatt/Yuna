@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 # The toolchain pinned in rust-toolchain.toml; raised with it (ADR-0016).
 rust-version = "1.100.0"

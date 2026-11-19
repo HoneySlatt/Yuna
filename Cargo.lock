@@ -917,7 +917,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "yuna"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "png",
  "proptest",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "yuna-bench"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rustix",
  "serde",
@@ -952,14 +952,14 @@ dependencies = [
 
 [[package]]
 name = "yuna-layout"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "yuna-motion"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "proptest",
  "yuna-layout",
