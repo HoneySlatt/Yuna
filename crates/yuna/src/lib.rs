@@ -61,7 +61,7 @@ mod xwayland;
 
 use std::fmt;
 
-pub use activation::TOKEN_LIFETIME;
+pub use activation::{MAX_KEPT_TOKENS_OF_CLIENTS_GONE, TOKEN_LIFETIME};
 #[doc(hidden)]
 pub use capture::axis_taps;
 pub use capture::{

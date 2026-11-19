@@ -44,6 +44,12 @@ pub const TOKEN_LIFETIME: Duration = Duration::from_secs(10);
 /// then an expired token is still known, and marks its window urgent.
 const MAX_KEPT_TOKENS_PER_CLIENT: usize = 64;
 
+/// The most tokens kept for clients that have left, all together. A launcher's token outlives
+/// its launcher, as the program it starts reads it after; but a client that connects again and
+/// again, asking its 64 each time, would otherwise grow them without end. Past it the oldest of
+/// clients gone is forgotten: four launchers' worth, far more than programs start at once.
+pub const MAX_KEPT_TOKENS_OF_CLIENTS_GONE: usize = 256;
+
 /// What Yuna noted of a token it gave, kept in the token's data, and on a toplevel whose
 /// activation waits for its mapping.
 #[derive(Debug, Clone, Copy)]
@@ -95,6 +101,7 @@ impl XdgActivationHandler for State {
         // The data is shared with the copy Smithay keeps.
         data.user_data.insert_if_missing_threadsafe(|| origin);
         self.forget_oldest_tokens_of(data.client_id.as_ref());
+        self.forget_oldest_tokens_of_clients_gone();
         true
     }
 
@@ -263,6 +270,41 @@ impl State {
                 }
                 None => break,
             }
+        }
+    }
+
+    /// Forgets the oldest tokens of clients that have left, until they are
+    /// [`MAX_KEPT_TOKENS_OF_CLIENTS_GONE`] at most. Run when a token is asked, so that nothing
+    /// runs at rest.
+    fn forget_oldest_tokens_of_clients_gone(&mut self) {
+        let display = self.display_handle.clone();
+        let gone = |data: &XdgActivationTokenData| {
+            data.client_id.as_ref().is_some_and(|client| {
+                display
+                    .backend_handle()
+                    .get_client_data(client.clone())
+                    .is_err()
+            })
+        };
+        let mut of_gone: Vec<(Duration, XdgActivationToken)> = self
+            .xdg_activation_state
+            .tokens()
+            .filter(|(_, data)| gone(data))
+            .map(|(token, data)| {
+                let asked_at = data
+                    .user_data
+                    .get::<TokenOrigin>()
+                    .map_or(Duration::ZERO, |origin| origin.asked_at);
+                (asked_at, token.clone())
+            })
+            .collect();
+        if of_gone.len() <= MAX_KEPT_TOKENS_OF_CLIENTS_GONE {
+            return;
+        }
+        of_gone.sort_by_key(|(asked_at, _)| *asked_at);
+        let past = of_gone.len() - MAX_KEPT_TOKENS_OF_CLIENTS_GONE;
+        for (_, token) in of_gone.into_iter().take(past) {
+            self.xdg_activation_state.remove_token(&token);
         }
     }
 }

@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use yuna::yuna_layout::WindowId;
-use yuna::{Compositor, OWNER_SEAT, TOKEN_LIFETIME};
+use yuna::{Compositor, MAX_KEPT_TOKENS_OF_CLIENTS_GONE, OWNER_SEAT, TOKEN_LIFETIME};
 
 use crate::client::{Client, Parent, Placement, State};
 use crate::{
@@ -424,5 +424,49 @@ fn the_keyboard_changes_window_only_at_a_boundary() {
     client.roundtrip(&mut compositor);
     // A popup's destruction arms its window's next boundary.
     advance_to(&mut compositor, &mut client, boundary(start, 3));
+    assert_rests(&mut compositor);
+}
+
+/// A launcher's token outlives its launcher, but the tokens of clients gone are bounded: a
+/// client that connects again and again, asking 64 tokens each time, pushes out the oldest of
+/// them, never another living client's. The first launcher's token, asked before the flood and
+/// pushed out by it, no longer marks the window it names urgent; one asked after does.
+#[test]
+fn the_tokens_of_clients_gone_are_bounded_the_oldest_forgotten() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let start = compositor.now();
+    let (a, _b) = two_windows(&mut compositor, &mut client, start);
+
+    let mut launcher = Client::connect(&mut compositor);
+    let early = launcher.request_token(&mut compositor, None, None);
+    drop(launcher);
+    let flooders = MAX_KEPT_TOKENS_OF_CLIENTS_GONE / 64 + 1;
+    for _ in 0..flooders {
+        let mut flood = Client::connect(&mut compositor);
+        for _ in 0..64 {
+            flood.request_token(&mut compositor, None, None);
+        }
+        flood.roundtrip(&mut compositor);
+        drop(flood);
+        client.roundtrip(&mut compositor);
+    }
+    let mut late_launcher = Client::connect(&mut compositor);
+    let late = late_launcher.request_token(&mut compositor, None, None);
+    drop(late_launcher);
+    client.roundtrip(&mut compositor);
+
+    client.activate(&early, a);
+    client.roundtrip(&mut compositor);
+    assert!(
+        !compositor.is_urgent(WindowId(1)),
+        "a token pushed out by the tokens of clients gone still marks its window urgent"
+    );
+    client.activate(&late, a);
+    client.roundtrip(&mut compositor);
+    assert!(
+        compositor.is_urgent(WindowId(1)),
+        "the newest token of a client gone is kept"
+    );
     assert_rests(&mut compositor);
 }
