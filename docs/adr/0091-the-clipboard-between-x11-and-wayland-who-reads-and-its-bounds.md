@@ -58,7 +58,7 @@ Chosen while building M1.11, as implementation within ADR-0066:
 ## Consequences
 
 - X11 and Wayland programs of one seat copy and paste text, images and any type both ways;
-  drag and drop between them comes at [M1.12](../PLAN.md#m112--drag-and-drop-between-x11-and-wayland).
+  drag and drop between them comes at [M1.12](../history.md#stage-1--the-headless-core--01).
 - The cap of transfers is per seat, not per program; a destroyed `ext-data-control` source is not
   reported, the patch covering the data device and the primary selection; `STRING` is served
   from UTF-8 without conversion; `MULTIPLE` is refused. All are in [debt](../debt.md).

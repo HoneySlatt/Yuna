@@ -7,7 +7,7 @@
 
 [ADR-0061](0061-yunas-uses.md) gives M1.11 each program's Wayland protocol trace and its log
 through MCP, and the milestone is done when an agent finds a protocol error through MCP alone
-([PLAN](../PLAN.md#m111--the-agents-toolbox)). An agent without a shell could not read a
+([PLAN](../history.md#stage-1--the-headless-core--01)). An agent without a shell could not read a
 program's log: `spawn` gave only its path. Facts read on 2026-11-17
 ([survey](../survey.md#the-agents-toolbox)):
 

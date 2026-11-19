@@ -13,7 +13,7 @@
 ## Context
 
 M1.5 ends with `text-input-v3` and the rest of `vkcube` and SlimeEngine's `window` example with
-their windows open ([PLAN](../PLAN.md#m15--agents-control)). Facts, read and run on 2026-11-13:
+their windows open ([PLAN](../history.md#stage-1--the-headless-core--01)). Facts, read and run on 2026-11-13:
 
 - `text-input-v3` connects a client's text field to an input method. Smithay `8fd9fe0` passes
   a text field's requests to an input method client (`input-method-v2`) and drops them when

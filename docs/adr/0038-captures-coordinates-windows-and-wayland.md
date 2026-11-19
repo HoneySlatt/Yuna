@@ -11,7 +11,7 @@
 that a pixel of a whole output's image is a logical unit where `pointer` clicks
 ([ADR-0037](0037-seats-tools-input-and-closing.md)). It also lets an agent capture a region,
 or the physical size; the milestone captures windows, with `ext-image-copy-capture-v1` inside
-([PLAN](../PLAN.md#m15--agents-control)). The design's challenge left three questions:
+([PLAN](../history.md#stage-1--the-headless-core--01)). The design's challenge left three questions:
 
 - A region's or a window's image starts elsewhere than the output's corner, and a pixel of a
   physical image is 1 / scale of a unit: a pixel no longer names a click.

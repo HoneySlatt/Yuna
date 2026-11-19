@@ -6,7 +6,7 @@
 ## Context
 
 M1.11 lets an agent make the situations it tests, among them a scale or a mode changed on a
-monitor ([ADR-0061](0061-yunas-uses.md), [PLAN](../PLAN.md#m111--the-agents-toolbox)). Until
+monitor ([ADR-0061](0061-yunas-uses.md), [PLAN](../history.md#stage-1--the-headless-core--01)). Until
 then a virtual output kept the mode it was created with: the layout model had no way to change
 an output's rectangle or scale, and the output's buffer, damage tracker and refresh timing were
 made once ([ADR-0023](0023-frames-presentation-and-the-clock.md)).

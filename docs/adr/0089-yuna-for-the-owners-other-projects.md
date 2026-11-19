@@ -11,7 +11,7 @@
 [ADR-0058](0058-what-yuna-takes-from-the-owners-other-projects.md) makes Yuna 0.1 the test
 compositor of the owner's other projects, and M1.10 delivers it: uwui's `scripts/measure.py`
 and Pluto's bench drive a program in Yuna as in a headless sway, without changing their
-repositories ([PLAN](../PLAN.md#m110--yuna-for-the-owners-other-projects)). Read on 2026-11-17,
+repositories ([PLAN](../history.md#stage-1--the-headless-core--01)). Read on 2026-11-17,
 at uwui `fb77f0d` and Pluto `4624243`:
 
 - `measure.py --display` measures on a compositor it does not start, through

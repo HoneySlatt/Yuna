@@ -34,6 +34,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 ## Ideas
 
+- The layout's maps hashed by a faster hasher than the standard library's SipHash: 22.8 % of a
+  "float, then tile" at 100 windows hashes `WindowId`s (measured at M1.13).
 - Scripts inside Yuna, on events only, bounded in time; an effect governor that lightens the
   costliest effect near a frame's deadline; a replay capsule for agents, after M1.11
   ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).

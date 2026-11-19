@@ -10,7 +10,7 @@ Wayland socket, an output, its programs ended when it closes. It leaves open whi
 handle, what pointer and keyboard input look like, which keyboard layout a seat has, and how a
 seat closes. The design's challenge asked that ids be checked against the seat that owns them,
 that a manual-clock Yuna have one seat, and that input held be released
-([PLAN](../PLAN.md#m15--agents-control)).
+([PLAN](../history.md#stage-1--the-headless-core--01)).
 
 Facts it rests on, read in Smithay `8fd9fe0` and wayland-server 0.31.14 on 2026-11-13:
 
