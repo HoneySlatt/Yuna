@@ -441,6 +441,10 @@ fn the_tokens_of_clients_gone_are_bounded_the_oldest_forgotten() {
     let mut launcher = Client::connect(&mut compositor);
     let early = launcher.request_token(&mut compositor, None, None);
     drop(launcher);
+    // The flood's tokens asked later, on the manual clock, so that the launcher's is the oldest:
+    // tokens asked at one instant are forgotten in no set order.
+    let later = compositor.now() + Duration::from_millis(1);
+    advance_to(&mut compositor, &mut client, later);
     let flooders = MAX_KEPT_TOKENS_OF_CLIENTS_GONE / 64 + 1;
     for _ in 0..flooders {
         let mut flood = Client::connect(&mut compositor);
