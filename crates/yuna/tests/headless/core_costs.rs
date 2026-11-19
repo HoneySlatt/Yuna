@@ -8,12 +8,9 @@
 //! A test [`Client`] makes one subsurface at a time; [`Trees`] makes thousands, on an event
 //! queue of its own on the client's connection.
 
-use std::io;
 use std::os::fd::AsFd;
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use tracing_subscriber::fmt::MakeWriter;
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor,
     wl_subsurface, wl_surface,
@@ -428,69 +425,11 @@ fn a_child_applied_after_the_surface_committed_still_gets_its_frame_callback() {
     assert_eq!(trees.globals.frames_done, 1);
 }
 
-/// A writer of log lines into memory, for a story to read what Yuna logs on its thread.
-#[derive(Clone, Default)]
-struct Log(Arc<Mutex<Vec<u8>>>);
-
-impl io::Write for Log {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Log {
-    type Writer = Log;
-
-    fn make_writer(&'a self) -> Log {
-        self.clone()
-    }
-}
-
-/// What Yuna logged, at every level, while `story` ran on this thread.
-fn logged_while(story: impl FnOnce()) -> String {
-    let log = Log::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .with_writer(log.clone())
-        .finish();
-    // `tracing` decides whether a log line is wanted when a thread first reaches it. While a
-    // single subscriber exists, it asks that thread's own: another test's thread, which has none,
-    // would turn the line off for this one too. A second subscriber, which takes nothing, has it
-    // ask every subscriber instead, and each line its own thread's
-    // (`tracing_core::callsite::Dispatchers::rebuilder`).
-    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-    tracing::subscriber::with_default(subscriber, story);
-    let bytes = log.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    String::from_utf8(bytes).expect("the log is text")
-}
-
-/// The windows each walk for the hidden windows' frame callbacks looked at, as Yuna logs it
-/// (`frames.rs`).
-fn hidden_frame_walks(log: &str) -> Vec<usize> {
-    log.lines()
-        .filter(|line| line.contains("hidden windows' frame callbacks armed"))
-        .map(|line| {
-            line.split_whitespace()
-                .find_map(|field| field.strip_prefix("windows="))
-                .and_then(|count| count.parse().ok())
-                .unwrap_or_else(|| panic!("no count of windows in {line:?}"))
-        })
-        .collect()
-}
-
 /// One client opens 1,000 windows, its cap, then `refused` more, which the cap refuses: they
 /// get their frame callbacks at the hidden windows' rate. An arrangement then looks at the
-/// windows in the layout alone, never at the refused ones: its cost follows the windows the
-/// layout holds, however many windows the cap refuses (m1.13-audit-core-5).
+/// windows in the layout alone, never at the refused ones, as Yuna counts them
+/// (`Counters::windows_looked_at_for_hidden_frames`): its cost follows the windows the layout
+/// holds, however many windows the cap refuses (m1.13-audit-core-5).
 #[test]
 fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
     let refused = size(200);
@@ -537,22 +476,17 @@ fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
         "{total} windows asked, {refused} refused: an arrangement and its frame took {times:?}"
     );
 
-    let log = logged_while(|| {
-        compositor.change_layout(|layout| {
-            let _ = layout.focus(OWNER_SEAT, yuna::yuna_layout::Direction::Left);
-        });
-        compositor
-            .advance(Duration::from_millis(20))
-            .expect("the manual clock moves");
+    // Every window had its frame callbacks: one arrangement alone looks at windows now.
+    assert_eq!(compositor.next_deadline(), None);
+    let before = compositor.counters().windows_looked_at_for_hidden_frames;
+    compositor.change_layout(|layout| {
+        let _ = layout.focus(OWNER_SEAT, yuna::yuna_layout::Direction::Left);
     });
-    let walks = hidden_frame_walks(&log);
-    assert!(!walks.is_empty(), "no arrangement");
-    assert!(
-        walks
-            .iter()
-            .all(|&looked_at| looked_at == MAX_WINDOWS_PER_CLIENT),
-        "the walks looked at {walks:?} windows"
-    );
+    compositor
+        .advance(Duration::from_millis(20))
+        .expect("the manual clock moves");
+    let looked_at = compositor.counters().windows_looked_at_for_hidden_frames - before;
+    assert_eq!(looked_at, MAX_WINDOWS_PER_CLIENT as u64);
 }
 
 /// `seated` windows of 1 × 1 pixel on the owner's seat, 1,000 a client, then one more client

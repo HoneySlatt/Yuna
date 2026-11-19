@@ -169,7 +169,7 @@ pub(crate) struct State {
     pub(crate) virtual_input: crate::virtual_input::VirtualInputState,
     /// The captures waiting for their output's refresh (`capture.rs`).
     pub pending_captures: Vec<PendingCapture>,
-    /// The outputs whose clients' captures cannot be read, for what is logged of them.
+    /// The outputs whose clients' captures fail to be read, for what is logged of them.
     pub failed_client_copies: FailedCopies,
     /// The agents' captures copied or failed, until the compositor's user takes them.
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
@@ -310,8 +310,9 @@ impl State {
     }
 
     /// Whether the commit handler's call for `surface` comes before the call for the surface its
-    /// client is committing, in the same commit ([`Committing`]): `surface` is a synchronised
-    /// subsurface under it, and that later call reads the whole tree.
+    /// client is committing, in the same commit ([`Committing`]): `surface`'s state waited for
+    /// that commit, having been committed while `surface` was synchronised, and that later call
+    /// reads the whole tree.
     pub(crate) fn ahead_of_committed_surface(&self, surface: &WlSurface) -> bool {
         self.committing
             .as_ref()
@@ -332,14 +333,16 @@ impl State {
 
 /// The surface whose `wl_surface.commit` request is being handled, and the root of its tree.
 ///
-/// Smithay applies a commit as one transaction: the surface committed and the synchronised
-/// subsurfaces under it whose state waited for that commit. It calls the commit handler once for
-/// each of them, in the transaction's order, which puts the surface committed last
-/// (`Transaction::apply`; `PrivateSurfaceData::commit` inserts it after the subsurfaces it takes).
-/// The calls before it are for synchronised subsurfaces under it: each does only what is its own
-/// surface's, such as entering its window's output, and the call for the surface committed reads
-/// the whole tree once: its buffers, its window's geometry, what its commit arms. One commit of a
-/// window costs Yuna one walk of its tree, not one a surface.
+/// Smithay applies a commit as one transaction: the surface committed and the subsurfaces under
+/// it whose state waited for that commit, each committed while it was synchronised, though it may
+/// be desynchronised since. It calls the commit handler once for each of them, in the
+/// transaction's order, which puts the surface committed last (`Transaction::apply`;
+/// `PrivateSurfaceData::commit` inserts it after the subsurfaces it takes). The calls before it
+/// each do only what is their own surface's, such as entering its window's output, and the call
+/// for the surface committed reads the whole tree once: its buffers, its window's geometry, what
+/// its commit arms. One commit of a window costs Yuna one walk of its tree, not one a surface. A
+/// subsurface detached after its state went into its parent's transaction is applied with it all
+/// the same, and enters the output of the window it left.
 ///
 /// A surface that committed while it was synchronised keeps its first place in its next
 /// transaction: made desynchronised, it may then come before subsurfaces its commit applies too.

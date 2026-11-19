@@ -44,6 +44,7 @@ use yuna_motion::Change;
 
 use crate::activation::TokenOrigin;
 use crate::compositor::{WindowDescription, WindowShell};
+use crate::frames::waits_for_frame;
 use crate::seats::seat_of_surface;
 use crate::state::{ClientState, State};
 use crate::xwayland::{X11Client, X11Toplevel};
@@ -385,10 +386,13 @@ impl State {
 
     /// The toplevel's first buffer: it opens in the layout, its size known, unless it would pass
     /// a cap on windows. An X11 window opens here once it is mapped, paired and has a buffer
-    /// (`xwayland/windows.rs`).
+    /// (`xwayland/windows.rs`), which may be outside any commit. A window refused, by a cap or
+    /// by the layout, gets its frame callbacks at the hidden windows' rate
+    /// ([`State::window_refused`]).
     pub(crate) fn map(&mut self, root: &WlSurface) {
         if let Some(cap) = self.window_cap_passed(root) {
             self.refuse_over_cap(root, cap);
+            self.window_refused(root);
             return;
         }
         let x11 = self
@@ -418,6 +422,7 @@ impl State {
             {
                 tracing::warn!(%error, "the layout refuses a window; it is not shown");
             }
+            self.window_refused(root);
             return;
         }
         self.next_window_id += 1;
@@ -858,8 +863,9 @@ impl State {
     /// still serves; a toplevel with a window has a buffer the layout did not refuse, and a
     /// configured toplevel, or an X11 window X11 maps, with such a buffer has a window; the windows
     /// counted per client for the caps are those mapped; the refused windows counted waiting for
-    /// frame callbacks are refused toplevels, at the times they hold; what is kept of X11 menus
-    /// agrees with them (`xwayland/menus.rs`). Says which rule is broken.
+    /// frame callbacks are refused toplevels, at the times they hold, and every refused toplevel
+    /// that waits for one is counted; what is kept of X11 menus agrees with them
+    /// (`xwayland/menus.rs`). Says which rule is broken.
     pub(crate) fn check_windows(&self) -> Result<(), String> {
         let mut served = HashSet::new();
         self.display_handle
@@ -952,6 +958,18 @@ impl State {
                 "the refused windows counted waiting are not the toplevels that hold a time"
                     .to_owned(),
             );
+        }
+        // Nothing else sends a refused window's frame callbacks: one not counted waits for ever.
+        if let Some(toplevel) = self.toplevels.values().find(|toplevel| {
+            toplevel.window.is_none()
+                && toplevel.refused
+                && toplevel.refused_frames_due.is_none()
+                && waits_for_frame(&self.window_trees(toplevel.wl_surface()))
+        }) {
+            return Err(format!(
+                "{} is refused and waits for frame callbacks, but is not counted waiting",
+                toplevel.wl_surface().id()
+            ));
         }
         self.x11.check_menus()?;
         let given = (1..self.next_window_id).map(WindowId);

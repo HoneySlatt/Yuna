@@ -660,58 +660,48 @@ impl State {
                 Destination::Client(frame) => {
                     let read = self.client_read(index, whole, &mut client_reads);
                     match &client_reads[read].1 {
-                        Ok(pixels) => {
-                            self.client_copy_read(id);
-                            self.finish_client_frame(
-                                frame,
-                                pixels,
-                                (mode.width(), mode.height()),
-                                presented_at,
-                                drawn_frames,
-                            );
-                        }
-                        Err(error) => {
-                            self.client_copy_failed(id, error);
-                            frame.fail(Failure::ForNow);
-                        }
+                        Ok(pixels) => self.finish_client_frame(
+                            frame,
+                            pixels,
+                            (mode.width(), mode.height()),
+                            presented_at,
+                            drawn_frames,
+                        ),
+                        Err(_) => frame.fail(Failure::ForNow),
                     }
                 }
                 Destination::Wlr(frame) => {
                     let read = self.client_read(index, frame.read(), &mut client_reads);
                     match &client_reads[read].1 {
                         Ok(pixels) => {
-                            self.client_copy_read(id);
                             self.finish_wlr_frame(frame, pixels, presented_at, drawn_frames);
                         }
-                        Err(error) => {
-                            self.client_copy_failed(id, error);
-                            frame.fail();
-                        }
+                        Err(_) => frame.fail(),
                     }
                 }
             }
         }
+        self.log_client_reads(id, &client_reads);
     }
 
-    /// A client's capture of output `id` could not be read, for `error`: a warning for the first
-    /// failure of a run on that output, the run's others at debug level ([`FailedCopies`]).
-    fn client_copy_failed(&mut self, id: OutputId, error: &str) {
-        let outputs: Vec<OutputId> = self.outputs.iter().map(|output| output.id).collect();
-        if self.failed_client_copies.failed(id, &outputs) {
-            tracing::warn!(
+    /// Logs what the clients' reads of output `id` at one refresh, `reads`, say of its run of
+    /// failures ([`FailedCopies`]): a warning at the run's first refresh, the debug level after.
+    fn log_client_reads(&mut self, id: OutputId, reads: &[ClientRead]) {
+        let outputs = &self.outputs;
+        let exists = |output: OutputId| outputs.iter().any(|kept| kept.id == output);
+        match self.failed_client_copies.refreshed(id, reads, exists) {
+            CopiesLog::RunBegins(error) => tracing::warn!(
                 %error,
                 output = id.0,
                 "a client's capture failed; its output's next failures are logged at debug level"
-            );
-        } else {
-            tracing::debug!(%error, output = id.0, "a client's capture failed");
-        }
-    }
-
-    /// A client's capture of output `id` was read: a run of failures on it, if any, ends.
-    fn client_copy_read(&mut self, id: OutputId) {
-        if let Some(failed) = self.failed_client_copies.read(id) {
-            tracing::debug!(output = id.0, failed, "clients' captures are read again");
+            ),
+            CopiesLog::RunGoesOn(error) => {
+                tracing::debug!(%error, output = id.0, "a client's capture failed");
+            }
+            CopiesLog::RunEnds(refreshes) => {
+                tracing::debug!(output = id.0, refreshes, "clients' captures are read again");
+            }
+            CopiesLog::Nothing => {}
         }
     }
 
@@ -785,33 +775,59 @@ impl State {
 /// An area of an output read for clients' frames, and its pixels or why they could not be read.
 type ClientRead = (Rectangle<i32, Physical>, Result<Vec<u8>, String>);
 
-/// The outputs whose clients' captures cannot be read, each with how many failed since the
-/// first. A read fails for every capture of its output at that refresh, and a renderer that keeps
-/// failing to read an output would otherwise log a warning a refresh for each of its 16 capture
-/// sessions at most: only the first failure of a run on an output is a warning, the others are
-/// logged at debug level, until a capture of that output is read again.
+/// The outputs whose clients' captures fail to be read, each with how many refreshes its run of
+/// failures has lasted. Clients' captures read an output once a refresh for each area they show:
+/// the whole output for every `ext-image-copy-capture-v1` frame, and each `wlr-screencopy` region
+/// (`State::copy`). One area may fail while another succeeds. A refresh at which a read of an
+/// output fails begins that output's run, or continues it; one at which every read of it
+/// succeeds ends it. Only a run's first refresh logs a warning, the others the debug level: a
+/// renderer that keeps failing to read an output, or an area of it, would otherwise log one a
+/// refresh. Runs are kept by output, not by area: clients choose their areas, as many as they
+/// like, and a run for each would warn as often.
 #[derive(Debug, Default)]
 pub(crate) struct FailedCopies {
     failed: HashMap<OutputId, u64>,
 }
 
-impl FailedCopies {
-    /// A client's capture of `output` failed, `outputs` being those that exist: whether it is the
-    /// first of a run, logged as a warning. A run begun on an output removed since is forgotten
-    /// then, so that this holds no more runs than there are outputs.
-    fn failed(&mut self, output: OutputId, outputs: &[OutputId]) -> bool {
-        if let Some(failed) = self.failed.get_mut(&output) {
-            *failed = failed.saturating_add(1);
-            return false;
-        }
-        self.failed.retain(|id, _| outputs.contains(id));
-        self.failed.insert(output, 1);
-        true
-    }
+/// What one refresh's clients' reads of an output log ([`FailedCopies::refreshed`]).
+#[derive(Debug, PartialEq, Eq)]
+enum CopiesLog<'a> {
+    /// A read failed, for this reason, and its output's run of failures begins: a warning.
+    RunBegins(&'a str),
+    /// A read failed, for this reason, in a run begun at an earlier refresh: the debug level.
+    RunGoesOn(&'a str),
+    /// Every read succeeded, and ends a run of this many refreshes: the debug level.
+    RunEnds(u64),
+    /// Every read succeeded, and no run goes on; or clients read nothing.
+    Nothing,
+}
 
-    /// A client's capture of `output` was read: how many failed in the run it ends, if one does.
-    fn read(&mut self, output: OutputId) -> Option<u64> {
-        self.failed.remove(&output)
+impl FailedCopies {
+    /// The clients' reads of `output` at one refresh, `reads`, `exists` telling which outputs
+    /// exist: what they log. A run begun on an output removed since is forgotten when a run
+    /// begins, so that this holds no more runs than there are outputs.
+    fn refreshed<'a>(
+        &mut self,
+        output: OutputId,
+        reads: &'a [ClientRead],
+        exists: impl Fn(OutputId) -> bool,
+    ) -> CopiesLog<'a> {
+        let Some(error) = reads.iter().find_map(|(_, read)| read.as_ref().err()) else {
+            if reads.is_empty() {
+                return CopiesLog::Nothing;
+            }
+            return self
+                .failed
+                .remove(&output)
+                .map_or(CopiesLog::Nothing, CopiesLog::RunEnds);
+        };
+        if let Some(refreshes) = self.failed.get_mut(&output) {
+            *refreshes = refreshes.saturating_add(1);
+            return CopiesLog::RunGoesOn(error);
+        }
+        self.failed.retain(|&id, _| exists(id));
+        self.failed.insert(output, 1);
+        CopiesLog::RunBegins(error)
     }
 }
 
@@ -848,29 +864,57 @@ mod tests {
 
     const OUTPUT: OutputId = OutputId(1);
 
-    /// The 16 capture sessions of two outputs, 12 on the first and 4 on the second, fail at each
-    /// of 1,000 refreshes: one warning for each output, not one a session and a refresh. Once a
-    /// capture of the first is read again, its next failure warns again, while the second's run
-    /// goes on; a run on an output removed since is forgotten.
+    /// Clients read the whole of each of two outputs, for `ext-image-copy-capture-v1`, and a
+    /// region of it, for `wlr-screencopy`, at each of 1,000 refreshes: the region's read fails
+    /// while the whole's succeeds, and each output warns once. A refresh at which every read of
+    /// the first output succeeds ends its run, and its next failure warns again, while the
+    /// second's run goes on; a refresh without a client's read changes nothing; a run on an
+    /// output removed since is forgotten.
     #[test]
-    fn a_run_of_failed_captures_warns_once_for_its_output() {
-        let (first, second) = (OutputId(1), OutputId(2));
-        let both = [first, second];
+    fn a_run_of_failed_reads_warns_once_for_its_output() {
+        let (first, second, third) = (OutputId(1), OutputId(2), OutputId(3));
+        let exists = |output: OutputId| output == first || output == second;
+        let whole = Rectangle::from_size((3840, 2160).into());
+        let region = Rectangle::new((10, 10).into(), (100, 100).into());
+        let failing: Vec<ClientRead> = vec![
+            (whole, Ok(Vec::new())),
+            (region, Err("unreadable".to_owned())),
+        ];
+        let read: Vec<ClientRead> = vec![(whole, Ok(Vec::new()))];
         let mut copies = FailedCopies::default();
         let mut warnings = 0;
         for _refresh in 0..1_000 {
-            for output in [[first; 12].as_slice(), [second; 4].as_slice()].concat() {
-                warnings += usize::from(copies.failed(output, &both));
+            for output in [first, second] {
+                if let CopiesLog::RunBegins(_) = copies.refreshed(output, &failing, exists) {
+                    warnings += 1;
+                }
             }
         }
         assert_eq!(warnings, 2);
-        assert_eq!(copies.read(first), Some(12_000));
-        assert_eq!(copies.read(first), None);
-        assert!(copies.failed(first, &both));
-        assert!(!copies.failed(second, &both));
-        assert!(copies.failed(OutputId(3), &[first, OutputId(3)]));
-        assert_eq!(copies.read(second), None);
-        assert_eq!(copies.read(first), Some(1));
+        assert_eq!(copies.refreshed(first, &[], exists), CopiesLog::Nothing);
+        assert_eq!(
+            copies.refreshed(first, &read, exists),
+            CopiesLog::RunEnds(1_000)
+        );
+        assert_eq!(copies.refreshed(first, &read, exists), CopiesLog::Nothing);
+        assert_eq!(
+            copies.refreshed(first, &failing, exists),
+            CopiesLog::RunBegins("unreadable")
+        );
+        assert_eq!(
+            copies.refreshed(second, &failing, exists),
+            CopiesLog::RunGoesOn("unreadable")
+        );
+        let second_removed = |output: OutputId| output == first || output == third;
+        assert_eq!(
+            copies.refreshed(third, &failing, second_removed),
+            CopiesLog::RunBegins("unreadable")
+        );
+        assert_eq!(copies.refreshed(second, &read, exists), CopiesLog::Nothing);
+        assert_eq!(
+            copies.refreshed(first, &read, exists),
+            CopiesLog::RunEnds(1)
+        );
     }
 
     fn default_mode() -> OutputMode {

@@ -4,5 +4,5 @@
 - Windows refused by the caps on windows no longer lengthen every arrangement, and a new window's
   first configure no longer copies its seat's layout: on a seat of 4,000 windows, it takes
   microseconds rather than milliseconds.
-- A client's capture that cannot be read logs a warning once, then at debug level until a capture
-  of the same output is read again, rather than a warning at each refresh.
+- A client's capture that cannot be read logs a warning once, then at debug level until a refresh
+  reads every client's capture of the same output again, rather than a warning at each refresh.

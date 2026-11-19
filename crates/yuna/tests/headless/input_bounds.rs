@@ -10,20 +10,19 @@
 //! The compositor is `seats.rs`'s: the owner's seat with its 4K output, and two agents' seats,
 //! `agent-2` and `agent-3`, each with an output of 1920 × 1080 at scale 1.
 
+use smithay::input::keyboard::xkb;
 use yuna::yuna_layout::SeatId;
-use yuna::{BUTTON_LEFT, Compositor};
+use yuna::{BUTTON_LEFT, Compositor, MAX_HELD_BUTTONS, MAX_HELD_KEYS};
 
 use crate::input_client::{InputClient, InputEvent};
 use crate::seats::{open, settle, two_seats, windows_of};
 use crate::virtual_input_client::VirtualDriver;
 
-/// The keys a seat holds at once at most: `input.rs`'s `MAX_HELD_KEYS`, which the library does
-/// not export.
-const MAX_HELD_KEYS: u32 = 64;
+/// [`MAX_HELD_KEYS`] as evdev's codes count: the stories press the codes from 1 to it.
+const HELD_KEYS: u32 = MAX_HELD_KEYS as u32;
 
-/// The buttons a seat's pointer holds at once at most: `input.rs`'s `MAX_HELD_BUTTONS`, which
-/// the library does not export.
-const MAX_HELD_BUTTONS: u32 = 16;
+/// [`MAX_HELD_BUTTONS`] as Linux's codes of buttons count.
+const HELD_BUTTONS: u32 = MAX_HELD_BUTTONS as u32;
 
 /// An evdev key code no keymap of XKB's rules has: past `KEY_MAX`, 0x2ff.
 const KEY_PAST_ANY_KEYMAP: u32 = 0xffff;
@@ -155,7 +154,7 @@ fn a_virtual_keyboard_holding_many_keys() {
         "the keyboard never entered the second window"
     );
     assert!(
-        enters.iter().all(|&held| held <= MAX_HELD_KEYS as usize),
+        enters.iter().all(|&held| held <= MAX_HELD_KEYS),
         "the enters carried {enters:?} keys"
     );
     assert_eq!(windows_of(&compositor, a).len(), 2);
@@ -171,18 +170,16 @@ fn a_seat_holds_a_bounded_number_of_keys() {
     let keyboard = driver.add_keyboard("agent-2", "us");
     exchange(&mut compositor, &mut driver, &mut client);
 
-    for key in 1..=MAX_HELD_KEYS {
+    for key in 1..=HELD_KEYS {
         driver.key(keyboard, key, true);
     }
     let pressed = keys(&exchange(&mut compositor, &mut driver, &mut client));
     assert_eq!(
         pressed,
-        (1..=MAX_HELD_KEYS)
-            .map(|key| (key, true))
-            .collect::<Vec<_>>()
+        (1..=HELD_KEYS).map(|key| (key, true)).collect::<Vec<_>>()
     );
 
-    let past = MAX_HELD_KEYS + 1;
+    let past = HELD_KEYS + 1;
     driver.key(keyboard, past, true);
     assert_eq!(
         keys(&exchange(&mut compositor, &mut driver, &mut client)),
@@ -218,6 +215,54 @@ fn a_seat_holds_a_bounded_number_of_keys() {
     );
 }
 
+/// Evdev's code of the A key, `KEY_A`.
+const KEY_A: u32 = 30;
+
+/// The first evdev code inside the range of XKB's `us` keymap, as a virtual keyboard sends it,
+/// that names no key of that keymap: XKB numbers a key by its evdev code plus 8. The keymap is
+/// compiled as the driver compiles the one it sends (`virtual_input_client.rs`).
+fn a_code_inside_the_us_keymap_that_names_no_key() -> u32 {
+    let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
+    let keymap = xkb::Keymap::new_from_names(
+        &context,
+        "evdev",
+        "pc105",
+        "us",
+        "",
+        None,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .expect("the layout compiles");
+    let (first, last) = (keymap.min_keycode().raw(), keymap.max_keycode().raw());
+    (first..=last)
+        .find(|&code| keymap.key_get_name(xkb::Keycode::new(code)).is_none())
+        .map(|code| code - 8)
+        .expect("a code the keymap's range holds names no key")
+}
+
+/// A virtual keyboard's press of a key its keymap does not have is dropped, far below the bound:
+/// a code past the keymap's range, and one inside it that names no key. Their releases are
+/// nothing either, and a key the keymap has goes through.
+#[test]
+fn a_key_the_keymap_does_not_have_is_dropped() {
+    let (mut compositor, _, mut client, mut driver) = a_window_and_a_driver();
+    let keyboard = driver.add_keyboard("agent-2", "us");
+    exchange(&mut compositor, &mut driver, &mut client);
+
+    for key in [
+        KEY_PAST_ANY_KEYMAP,
+        a_code_inside_the_us_keymap_that_names_no_key(),
+    ] {
+        driver.key(keyboard, key, true);
+        driver.key(keyboard, key, false);
+    }
+    driver.key(keyboard, KEY_A, true);
+    assert_eq!(
+        keys(&exchange(&mut compositor, &mut driver, &mut client)),
+        [(KEY_A, true)]
+    );
+}
+
 /// At [`MAX_HELD_BUTTONS`] buttons held, a virtual pointer's press of another button is
 /// dropped, however many it sends; once a button is let go, a new press goes through. MCP's own
 /// press past the bound is refused.
@@ -247,7 +292,7 @@ fn a_seat_holds_a_bounded_number_of_buttons() {
     driver.move_to(pointer, inside, (1920, 1080));
     exchange(&mut compositor, &mut driver, &mut client);
 
-    let held: Vec<u32> = (FIRST_BUTTON..FIRST_BUTTON + MAX_HELD_BUTTONS).collect();
+    let held: Vec<u32> = (FIRST_BUTTON..FIRST_BUTTON + HELD_BUTTONS).collect();
     for &button in &held {
         driver.button(pointer, button, true);
     }
@@ -260,7 +305,7 @@ fn a_seat_holds_a_bounded_number_of_buttons() {
     assert_eq!(compositor.pointer(a).buttons, held);
 
     // The audit's related story: a flood of distinct buttons, each dropped.
-    let past = FIRST_BUTTON + MAX_HELD_BUTTONS;
+    let past = FIRST_BUTTON + HELD_BUTTONS;
     for button in past..past + 1_000 {
         driver.button(pointer, button, true);
     }
@@ -281,8 +326,5 @@ fn a_seat_holds_a_bounded_number_of_buttons() {
         buttons(&exchange(&mut compositor, &mut driver, &mut client)),
         [(FIRST_BUTTON, false), (past, true)]
     );
-    assert_eq!(
-        compositor.pointer(a).buttons.len(),
-        MAX_HELD_BUTTONS as usize
-    );
+    assert_eq!(compositor.pointer(a).buttons.len(), MAX_HELD_BUTTONS);
 }

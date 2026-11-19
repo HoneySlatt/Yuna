@@ -21,8 +21,12 @@ use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 
 // The command line's contract (ADR-0079), held in `tests/contracts/help.txt`. The environment
-// lists every variable Yuna itself reads but `YUNA_PANIC_ON_TOOL`, which exists in debug builds
-// alone, for the tests of the fatal path (`mcp/mod.rs`): no user has it to set.
+// lists every variable a user sets that Yuna's own code reads. It leaves out `YUNA_PANIC_ON_TOOL`,
+// which exists in debug builds alone, for the tests of the fatal path (`mcp/mod.rs`), and the
+// variables Yuna's package sets for itself (`flake.nix`): `YUNA_WRAPPED_VARIABLES` and
+// `YUNA_CALLER_<name>`, which give mcp's programs the caller's own values back
+// (`mcp/programs/environment.rs`). The libraries read their own, xkbcommon's `XKB_*` and Mesa's
+// among them, and mcp's programs are given a few of Yuna's (`KEPT_VARIABLES` there).
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
@@ -528,10 +532,10 @@ fn run_mcp(headless: Headless, logging: &Logging) -> ExitCode {
 }
 
 /// Raises the limit of open files before anything starts, so that one client cannot fill Yuna's
-/// table at the usual 1,024 ([`Compositor::raise_open_files_limit`]). A failure leaves the limit
-/// as it was, and is logged: it never stops Yuna.
+/// table at the usual 1,024 ([`yuna::raise_open_files_limit`]). A failure leaves the limit as it
+/// was, and is logged: it never stops Yuna.
 fn raise_open_files_limit() {
-    match Compositor::raise_open_files_limit() {
+    match yuna::raise_open_files_limit() {
         Ok(limit) => tracing::debug!(?limit, "the soft limit of open files"),
         Err(error) => tracing::warn!(%error, "the limit of open files could not be raised"),
     }

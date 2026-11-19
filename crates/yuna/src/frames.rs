@@ -261,6 +261,26 @@ impl State {
         }
     }
 
+    /// The layout or a cap on windows has just refused the toplevel of `root` (`State::map`): if
+    /// it waits for frame callbacks, it counts among the refused windows waiting, and the hidden
+    /// windows' deadline is armed for it. A refusal may come outside any commit: an X11 window
+    /// whose surface committed before Yuna read its serial opens when the serial pairs them
+    /// (`xwayland/windows.rs`). Nothing else would then send its callbacks, and Xwayland, which
+    /// waits for them, would never draw it again.
+    pub(crate) fn window_refused(&mut self, root: &WlSurface) {
+        let Some(last_frame_sent) = self
+            .toplevels
+            .get(&root.id())
+            .map(|toplevel| toplevel.last_frame_sent)
+        else {
+            return;
+        };
+        if waits_for_frame(&self.window_trees(root)) {
+            self.refused_window_waits(root);
+            self.arm_hidden_frame(last_frame_sent);
+        }
+    }
+
     /// The refused toplevel of `root` waits for frame callbacks: it counts among the refused
     /// windows waiting ([`RefusedFrames`]), at the time they are due, unless it counts already,
     /// at a time no later.
@@ -854,15 +874,18 @@ impl State {
 
     /// Arms the hidden windows' deadline at the earliest time one of them may next get its frame
     /// callbacks; disarms it when none waits. A window the layout refused counts as hidden, so
-    /// that its client does not wait for ever. Only the windows in the layout are looked at: a
-    /// refused window counts by the time its callbacks are due ([`RefusedFrames`]), which nothing
-    /// here changes, so that thousands of refused windows cost an arrangement nothing.
+    /// that its client does not wait for ever. Only the windows in the layout are looked at,
+    /// counted in [`Counters`](crate::Counters): a refused window counts by the time its callbacks
+    /// are due ([`RefusedFrames`]), which nothing here changes, so that thousands of refused
+    /// windows cost an arrangement nothing.
     pub(crate) fn arm_hidden_frames(&mut self) {
         let now = self.clock.now();
+        let mut looked_at = 0;
         let windows = self
             .windows
             .values()
             .filter_map(|surface| self.toplevels.get(surface))
+            .inspect(|_| looked_at += 1)
             .filter(|t| t.is_unseen())
             .filter(|t| waits_for_frame(&self.window_trees(t.wl_surface())))
             .map(|t| hidden_frame_due(t.last_frame_sent, now));
@@ -875,11 +898,7 @@ impl State {
             .chain(menus)
             .chain(self.refused_frames.earliest())
             .min();
-        // The windows looked at, which an arrangement's cost follows: the stories count them.
-        tracing::trace!(
-            windows = self.windows.len(),
-            "hidden windows' frame callbacks armed"
-        );
+        self.counters.windows_looked_at_for_hidden_frames += looked_at;
         self.clock.disarm(Deadline::HiddenFrames);
         if let Some(at) = due {
             self.clock.arm(Deadline::HiddenFrames, at);

@@ -1,11 +1,10 @@
 //! What every program Yuna starts shares: the descriptors it does not inherit and those it is
-//! given, the limit of open files it is given back, how its program is found, and how a process
-//! Yuna watches through a pidfd is ended and reaped. MCP's programs (`mcp/programs/`), Xwayland
-//! (`xwayland/server.rs`) and the accessibility buses' dbus-daemon (`mcp/accessibility/bus.rs`)
-//! start through it. And what Yuna
-//! reads of a process in `/proc`: its parent, its group, and the processes above it up to Yuna,
-//! which a client's connection records (`state.rs`) and a seat's closing follows
-//! (`mcp/programs/mod.rs`).
+//! given, the limit of open files it is given back once Yuna raised its own, how its program is
+//! found, and how a process Yuna watches through a pidfd is ended and reaped. MCP's programs
+//! (`mcp/programs/`), Xwayland (`xwayland/server.rs`) and the accessibility buses' dbus-daemon
+//! (`mcp/accessibility/bus.rs`) start through it. And what Yuna reads of a process in `/proc`:
+//! its parent, its group, and the processes above it up to Yuna, which a client's connection
+//! records (`state.rs`) and a seat's closing follows (`mcp/programs/mod.rs`).
 //!
 //! A pidfd names one process: a signal sent through it never reaches a process that took its
 //! pid. `yuna mcp`'s reaping of every child, on SIGCHLD, may reap a process before its own
@@ -34,15 +33,16 @@ const MAX_LINEAGE: usize = 64;
 /// raised it: what each program Yuna starts is given back. Set once.
 static STARTING_OPEN_FILES_LIMIT: OnceLock<Rlimit> = OnceLock::new();
 
-/// Raises the process's soft limit of open files to its hard limit, as KWin and Mutter do: each
-/// client may make Yuna hold descriptors, a `wl_shm` pool's or a dmabuf's, and at the usual soft
-/// limit, 1,024, one client fills the table cheaply. The limit it started with is kept for the
-/// programs Yuna starts ([`keep_descriptors_from_the_program`]). Returns the limit now; a second
-/// call finds it raised and keeps the first one's.
-pub(crate) fn raise_open_files_limit() -> io::Result<Rlimit> {
+/// Raises the whole process's soft limit of open files to its hard limit, as KWin and Mutter do:
+/// each client may make Yuna hold descriptors, a `wl_shm` pool's or a dmabuf's, and at the usual
+/// soft limit, 1,024, one client fills the table cheaply. The limit it started with is kept for
+/// the programs Yuna starts, which get it back (`keep_descriptors_from_the_program`). The `yuna`
+/// program calls it once, at its start, before any program is started. Returns the soft limit
+/// now, none for no limit; a second call finds it raised and keeps the first one's.
+pub fn raise_open_files_limit() -> io::Result<Option<u64>> {
     let started = getrlimit(Resource::Nofile);
     if started.current == started.maximum {
-        return Ok(started);
+        return Ok(started.current);
     }
     let raised = Rlimit {
         current: started.maximum,
@@ -50,7 +50,7 @@ pub(crate) fn raise_open_files_limit() -> io::Result<Rlimit> {
     };
     setrlimit(Resource::Nofile, raised)?;
     let _ = STARTING_OPEN_FILES_LIMIT.set(started);
-    Ok(raised)
+    Ok(raised.current)
 }
 
 /// Marks every descriptor of the program above 2 close-on-exec, in the child just before it runs

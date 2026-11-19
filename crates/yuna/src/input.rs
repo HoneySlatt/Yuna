@@ -26,7 +26,7 @@
 //! clock's time.
 //!
 //! A seat holds [`MAX_HELD_KEYS`] keys and [`MAX_HELD_BUTTONS`] buttons at most, from every
-//! source together: a press past them, or of a keycode the keyboard's keymap does not have, is
+//! source together: a press past them, or of a keycode the keyboard's keymap names no key for, is
 //! refused, and a virtual device's is dropped
 //! ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)).
 
@@ -803,9 +803,9 @@ impl State {
     /// Sends `key` from `source` to the surface `seat`'s keyboard is on, with the keymap it has,
     /// and records a press with that surface, for an activation token or a popup grab. Smithay
     /// counts each key's presses by source, so that a key two sources hold is released by the
-    /// last of them. A press is refused, nothing sent, when the keymap has no such keycode, and
-    /// when it would make the seat hold more than [`MAX_HELD_KEYS`]; a release always goes, and
-    /// Smithay drops one of a key its source does not hold.
+    /// last of them. A press is refused, nothing sent, when the keymap names no key for its
+    /// keycode, and when it would make the seat hold more than [`MAX_HELD_KEYS`]; a release always
+    /// goes, and Smithay drops one of a key its source does not hold.
     pub(crate) fn send_key(
         &mut self,
         seat: SeatId,
@@ -832,8 +832,9 @@ impl State {
     }
 
     /// Refuses a press of `key` on `keyboard` that would make it hold more than
-    /// [`MAX_HELD_KEYS`], a key it holds already adding none, or that names a keycode outside
-    /// the keymap it has: such a key types nothing, and would only fill what the seat holds.
+    /// [`MAX_HELD_KEYS`], a key it holds already adding none, or of a keycode the keymap it has
+    /// names no key for, inside its range or past it: such a key types nothing, and would only
+    /// fill what the seat holds.
     fn check_press(&mut self, keyboard: &KeyboardHandle<State>, key: Keycode) -> Result<(), Error> {
         let held = keyboard.pressed_keys();
         if held.len() >= MAX_HELD_KEYS && !held.contains(&key) {
@@ -841,17 +842,18 @@ impl State {
                 "a seat holds {MAX_HELD_KEYS} keys at most"
             )));
         }
-        let (first, last) = keyboard.with_xkb_state(self, |context| {
+        let named = keyboard.with_xkb_state(self, |context| {
             let xkb = context.xkb().lock().unwrap_or_else(PoisonError::into_inner);
             // SAFETY: Smithay asks that no reference count of the keymap outlive its `Xkb`.
-            // None is taken: the borrow reads two integers through xkbcommon, and ends with the
-            // lock's guard, inside this closure, while the keyboard holds the `Xkb`.
+            // None is taken: the borrow asks xkbcommon whether the keymap names the key, and
+            // ends with the lock's guard, inside this closure, while the keyboard holds the
+            // `Xkb`.
             let keymap = unsafe { xkb.keymap() };
-            (keymap.min_keycode().raw(), keymap.max_keycode().raw())
+            keymap.key_get_name(key).is_some()
         });
-        if !(first..=last).contains(&key.raw()) {
+        if !named {
             return Err(Error::Refused(format!(
-                "keycode {} is not in the keymap, whose keys are {first} to {last}",
+                "the keymap has no key of keycode {}",
                 key.raw()
             )));
         }

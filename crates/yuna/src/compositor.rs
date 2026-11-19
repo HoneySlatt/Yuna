@@ -105,6 +105,11 @@ pub struct Counters {
     pub wakeups: u64,
     /// Clients' dmabufs handed to the renderer to import, once Yuna's own checks took them.
     pub dmabuf_imports: u64,
+    /// Windows looked at to arm the hidden windows' deadline again, after each arrangement, each
+    /// end of a motion and each time the deadline fired: the windows in the layout, never those
+    /// the layout or a cap refused, so that an arrangement's cost follows the windows the layout
+    /// holds (`frames.rs`).
+    pub windows_looked_at_for_hidden_frames: u64,
 }
 
 /// The shell behind a window: what its client speaks.
@@ -365,15 +370,6 @@ impl Compositor {
         })
     }
 
-    /// Raises the soft limit of open files of the whole process to its hard limit, as KWin and
-    /// Mutter do: each client may make Yuna hold descriptors, and at the usual soft limit, 1,024,
-    /// one client fills the table cheaply. The programs Yuna starts get back the limit it started
-    /// with. The `yuna` program calls it once, at its start, before any program is started.
-    /// Returns the soft limit now, none for no limit.
-    pub fn raise_open_files_limit() -> std::io::Result<Option<u64>> {
-        crate::process::raise_open_files_limit().map(|limit| limit.current)
-    }
-
     /// The name of its Wayland socket in `XDG_RUNTIME_DIR`, for `WAYLAND_DISPLAY`.
     pub fn socket_name(&self) -> Option<&OsStr> {
         self.socket_name.as_deref()
@@ -557,8 +553,8 @@ impl Compositor {
     /// Presses or releases `button` (Linux's code, such as [`BUTTON_LEFT`](crate::BUTTON_LEFT))
     /// of agent seat `seat`'s pointer where it is. A press focuses the window under it, which
     /// takes the seat's keyboard at the next refresh. Refused for a press of a button held, a
-    /// release of one not held, and a press while the seat holds 16 buttons (`MAX_HELD_BUTTONS`
-    /// in `input.rs`).
+    /// release of one not held, and a press while the seat holds
+    /// [`MAX_HELD_BUTTONS`](crate::MAX_HELD_BUTTONS) buttons.
     pub fn pointer_button(
         &mut self,
         seat: SeatId,
@@ -594,7 +590,8 @@ impl Compositor {
     /// types that keysym alone, else the key that types it with the fewest keys held, in the
     /// keyboard's group first; a release lets go of the held key that types it in any group.
     /// Refused for a name the seat's keymap has no key for, a press of a key held, a release of
-    /// one not held, and a press while the seat holds 64 keys (`MAX_HELD_KEYS` in `input.rs`).
+    /// one not held, and a press while the seat holds [`MAX_HELD_KEYS`](crate::MAX_HELD_KEYS)
+    /// keys.
     pub fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
         let key = if pressed {
             self.state.keycode_of(seat, name)?
