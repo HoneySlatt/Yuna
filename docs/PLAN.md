@@ -14,7 +14,11 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   M2.1.
 - Stage 2's opening design is done (2026-11-19): ADR-0133 to ADR-0141, 2a's milestones below,
   the debt placed ([debt](debt.md)).
-- **Next: M2.1, the baselines**, in a new session.
+- **M2.1, the baselines, in progress** (2026-11-19). Done: parity's rule (ADR-0142),
+  allocations by DHAT (ADR-0143), the debt's missing tests, the held captures, `yuna mcp`'s
+  start fixed (a sweep of `/tmp` read every entry's metadata). Under way: the parity script, the
+  protocol traces, the 4K scene on llvmpipe and lavapipe. Left: motion judged and the timed runs,
+  on a quiet machine.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -112,7 +116,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 under way |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
