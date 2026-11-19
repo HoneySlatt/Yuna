@@ -18,9 +18,8 @@ use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::io::Errno;
-use smithay::reexports::rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
+use rustix::io::Errno;
+use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
 
 use super::message::{Body, Kind, Message, MessageError};
 

@@ -18,6 +18,10 @@ smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "4b54d2f172
 # Property tests of the layout model (M1.2), in tests only. Without its default features: no
 # forking, no timeouts, no temporary files.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+# Linux's system calls in safe Rust: Yuna's processes, sockets, descriptors and limits. Smithay
+# depends on it too, the same crate in Cargo.lock, and re-exports it; Yuna names it directly, so
+# that its modules outside Smithay's types do not reach it through Smithay.
+rustix = "1.1.6"
 # The compositor's logs (M1.4). Smithay logs through `tracing` already.
 tracing = "0.1.44"
 # Writes the logs to standard error. Only its formatter: no filter language, no ANSI colours, no

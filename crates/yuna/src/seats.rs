@@ -27,7 +27,6 @@ use std::sync::Arc;
 use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig, xkb};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
-use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -71,7 +70,8 @@ pub(crate) struct SeatData {
     /// The serial of the last button press and the toplevel surface of the window under the
     /// pointer then.
     pub last_button_press: Option<(Serial, WlSurface)>,
-    /// The buttons its pointer holds.
+    /// The buttons its pointer holds, in the order they were pressed:
+    /// [`MAX_HELD_BUTTONS`](crate::input::MAX_HELD_BUTTONS) at most.
     pub pressed_buttons: Vec<u32>,
     /// Whether its pointer has moved since the seat was made: until then it is nowhere.
     pub pointer_moved: bool,

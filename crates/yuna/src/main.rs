@@ -13,7 +13,6 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
-use smithay::reexports::rustix;
 use tracing::level_filters::LevelFilter;
 use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
@@ -21,6 +20,9 @@ use yuna::yuna_layout::SeatId;
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 
+// The command line's contract (ADR-0079), held in `tests/contracts/help.txt`. The environment
+// lists every variable Yuna itself reads but `YUNA_PANIC_ON_TOOL`, which exists in debug builds
+// alone, for the tests of the fatal path (`mcp/mod.rs`): no user has it to set.
 const HELP: &str = "\
 Yuna, a Wayland compositor for Linux.
 
@@ -74,10 +76,25 @@ Options:
   -V, --version      Print the version
 
 Environment:
-  XDG_RUNTIME_DIR    The folder the Wayland socket is created in; required.
+  XDG_RUNTIME_DIR    The folder the Wayland socket is created in, and with mcp, the folder of
+                     its seats' sockets and its programs' logs; required.
   PATH               Where Xwayland is looked for: the first X11 program to connect to a
-                     seat's display starts it. Without it, X11 programs get no display.
+                     seat's display starts it. Without it, X11 programs get no display. With
+                     mcp, where dbus-daemon is looked for too, unless YUNA_DBUS_DAEMON names
+                     one.
+  YUNA_DBUS_DAEMON   With mcp: the absolute path of the dbus-daemon that runs each seat's
+                     accessibility bus, rather than the first on PATH.
   YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.
+
+Exit status:
+  0                  Success: the help or the version printed, or a stop asked for: SIGTERM
+                     or SIGINT, or, with mcp, its input closed.
+  1                  A failure: the desktop session, which does not exist yet; a start or a
+                     loop that failed; an output that could not be written; with mcp, a
+                     client that broke the connection.
+  2                  A usage error: an argument, or an output's mode, Yuna does not take.
+  101                Yuna's state panicked, a bug: it stopped at once, with mcp after ending
+                     its programs.
 ";
 
 /// What the command line asks for.
@@ -313,6 +330,7 @@ fn run_headless(headless: Headless, logging: &Logging) -> ExitCode {
     // Nothing of its own to end: a panic of this thread, which runs the compositor, stops it.
     fatal::install();
     start_logging();
+    raise_open_files_limit();
     // Before the compositor starts, so that a SIGTERM during its start-up is kept in the pipe and
     // stops it as soon as its loop runs, rather than killing it half started.
     let stop = match stop_signal::install() {
@@ -432,6 +450,7 @@ fn start(config: Config) -> Result<Compositor, ExitCode> {
 fn run_mcp(headless: Headless, logging: &Logging) -> ExitCode {
     let on_panic = fatal::install();
     start_logging();
+    raise_open_files_limit();
     let signals = stop_signal::install().and_then(|stop| {
         let children = stop_signal::install_children()?;
         rustix::process::set_child_subreaper(Some(rustix::process::getpid()))?;
@@ -505,6 +524,16 @@ fn run_mcp(headless: Headless, logging: &Logging) -> ExitCode {
             tracing::error!(%error, "the compositor stopped");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Raises the limit of open files before anything starts, so that one client cannot fill Yuna's
+/// table at the usual 1,024 ([`Compositor::raise_open_files_limit`]). A failure leaves the limit
+/// as it was, and is logged: it never stops Yuna.
+fn raise_open_files_limit() {
+    match Compositor::raise_open_files_limit() {
+        Ok(limit) => tracing::debug!(?limit, "the soft limit of open files"),
+        Err(error) => tracing::warn!(%error, "the limit of open files could not be raised"),
     }
 }
 

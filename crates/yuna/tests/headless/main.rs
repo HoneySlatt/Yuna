@@ -16,6 +16,7 @@ mod colour_client;
 mod core_costs;
 mod dialogs;
 mod dmabuf;
+mod input_bounds;
 mod input_client;
 mod keyboard_layouts;
 mod mcp;

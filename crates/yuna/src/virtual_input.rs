@@ -9,7 +9,11 @@
 //! made for another seat's `wl_seat`, which no real client holds, does nothing. Its seat is read
 //! when it is made, and kept while it lives, so that the keys and buttons Smithay releases when
 //! its client dies still reach that seat. Each client keeps
-//! [`MAX_VIRTUAL_DEVICES_PER_CLIENT`] devices that act; one made past it does nothing.
+//! [`MAX_VIRTUAL_DEVICES_PER_CLIENT`] devices that act; one made past it does nothing. A key
+//! press past the keys a seat may hold, or of a keycode the device's keymap does not have, and a
+//! button press past the buttons it may hold, are dropped the same way, with a debug log
+//! ([`MAX_HELD_KEYS`](crate::input::MAX_HELD_KEYS),
+//! [`MAX_HELD_BUTTONS`](crate::input::MAX_HELD_BUTTONS)).
 //!
 //! A virtual keyboard's keys are read with its own keymap: the seat's keyboard switches to it
 //! before them, its clients told of the new keymap, and switches back to the seat's own before

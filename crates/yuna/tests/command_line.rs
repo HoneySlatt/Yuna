@@ -1,15 +1,20 @@
 //! The program run as a user runs it: its output and its exit status.
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::os::unix::net::UnixStream;
+use std::os::fd::AsFd;
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::net::{SocketAddr, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, ChildStdout, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
-use wayland_client::protocol::{wl_output, wl_registry};
-use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use rustix::process::{Pid, Resource, Rlimit, Signal, getrlimit, kill_process, setrlimit};
+use wayland_client::protocol::{wl_output, wl_registry, wl_shm, wl_shm_pool};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum, delegate_noop};
 
 fn run_yuna(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_yuna"))
@@ -38,9 +43,23 @@ fn help_succeeds_and_names_the_options() {
         "--gpu",
         "--output",
         "--rest-audit",
+        "XDG_RUNTIME_DIR",
+        "PATH",
         "YUNA_LOG",
+        "YUNA_DBUS_DAEMON",
     ] {
         assert!(help.contains(option), "the help does not name {option}");
+    }
+    let (_, statuses) = help
+        .split_once("\nExit status:\n")
+        .expect("the help lists the exit statuses");
+    for status in ["0", "1", "2", "101"] {
+        assert!(
+            statuses
+                .lines()
+                .any(|line| line.trim_start().starts_with(&format!("{status} "))),
+            "the help does not list exit status {status}"
+        );
     }
 }
 
@@ -78,6 +97,8 @@ fn headless_without_a_runtime_folder_is_refused_clearly() {
 struct Running {
     child: Child,
     runtime_dir: PathBuf,
+    /// The lines it printed after `WAYLAND_DISPLAY`, read as they come.
+    printed: Option<BufReader<ChildStdout>>,
 }
 
 impl Drop for Running {
@@ -149,19 +170,42 @@ fn start_headless(
     std::thread::JoinHandle<std::io::Result<String>>,
     PathBuf,
 ) {
-    let runtime_dir = std::env::temp_dir().join(format!("yuna-test-{name}-{}", std::process::id()));
+    start_headless_with(name, arguments, |_| {})
+}
+
+/// The runtime folder of the `yuna --headless` named `name`.
+fn runtime_dir_of(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("yuna-test-{name}-{}", std::process::id()))
+}
+
+/// As [`start_headless`], its command changed by `change` first.
+fn start_headless_with(
+    name: &str,
+    arguments: &[&str],
+    change: impl FnOnce(&mut Command),
+) -> (
+    Running,
+    std::thread::JoinHandle<std::io::Result<String>>,
+    PathBuf,
+) {
+    let runtime_dir = runtime_dir_of(name);
     std::fs::create_dir_all(&runtime_dir).expect("a runtime folder");
-    let child = Command::new(env!("CARGO_BIN_EXE_yuna"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_yuna"));
+    command
         .arg("--headless")
         .args(arguments)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         // Info, for the line that says whether linux-dmabuf is offered: a few lines in all.
         .env("YUNA_LOG", "info")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the yuna binary runs");
-    let mut running = Running { child, runtime_dir };
+        .stderr(Stdio::piped());
+    change(&mut command);
+    let child = command.spawn().expect("the yuna binary runs");
+    let mut running = Running {
+        child,
+        runtime_dir,
+        printed: None,
+    };
 
     // Read on a thread from the start: a pipe may hold as little as one page when the user's
     // pipes are many, and Yuna, blocked writing its log, would never print its socket.
@@ -171,10 +215,12 @@ fn start_headless(
         stderr.read_to_string(&mut log).map(|_| log)
     });
     let stdout = running.child.stdout.take().expect("its standard output");
+    let mut printed = BufReader::new(stdout);
     let mut line = String::new();
-    BufReader::new(stdout)
+    printed
         .read_line(&mut line)
         .expect("a line on standard output");
+    running.printed = Some(printed);
     let socket = line
         .trim_end()
         .strip_prefix("WAYLAND_DISPLAY=")
@@ -182,6 +228,22 @@ fn start_headless(
         .to_owned();
     let socket_path = running.runtime_dir.join(&socket);
     (running, log_reader, socket_path)
+}
+
+/// The number of the X display `running` printed, `DISPLAY=:<number>`, the line after its
+/// socket's: printed when Xwayland is found, which the development shell gives.
+fn x11_display_number(running: &mut Running) -> u32 {
+    let mut line = String::new();
+    running
+        .printed
+        .as_mut()
+        .expect("its standard output")
+        .read_line(&mut line)
+        .expect("a second line on standard output");
+    line.trim_end()
+        .strip_prefix("DISPLAY=:")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or_else(|| panic!("no X display printed: {line:?}"))
 }
 
 /// The globals a client of the socket at `path` sees, with the first output's mode.
@@ -335,6 +397,246 @@ fn headless_with_the_rest_audit_names_a_client_then_rests() {
         "the client is not named\n{log}"
     );
     assert!((1..=2).contains(&lines.len()), "Yuna logged at rest\n{log}");
+}
+
+/// Starts `command`'s process with `limit` as its limit of open files.
+fn limit_open_files(command: &mut Command, limit: Rlimit) {
+    // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
+    // calls are sound: it makes one system call, `prlimit64` through rustix, and allocates
+    // nothing, an `Errno` turning into an `io::Error` without a box.
+    unsafe {
+        command.pre_exec(move || Ok(setrlimit(Resource::Nofile, limit)?));
+    }
+}
+
+/// A client that makes `wl_shm_pool`s and destroys none: each keeps a descriptor in Yuna.
+#[derive(Default)]
+struct Pools {
+    shm: Option<wl_shm::WlShm>,
+}
+
+impl Dispatch<wl_registry::WlRegistry, ()> for Pools {
+    fn event(
+        state: &mut Self,
+        registry: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global {
+            name, interface, ..
+        } = event
+            && interface == "wl_shm"
+        {
+            state.shm = Some(registry.bind(name, 1, qh, ()));
+        }
+    }
+}
+
+delegate_noop!(Pools: ignore wl_shm::WlShm);
+delegate_noop!(Pools: ignore wl_shm_pool::WlShmPool);
+
+/// How many descriptors process `pid` holds.
+fn descriptors_of(pid: u32) -> usize {
+    std::fs::read_dir(format!("/proc/{pid}/fd")).map_or(0, Iterator::count)
+}
+
+/// Connects a client to the socket at `path` on a thread, which asks for its globals: the
+/// receiver gets them once Yuna serves it, or why it was not served.
+fn connect_on_a_thread(path: &std::path::Path) -> mpsc::Receiver<Result<BTreeSet<String>, String>> {
+    let path = path.to_owned();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let served = || -> Result<BTreeSet<String>, String> {
+            let stream = UnixStream::connect(&path).map_err(|e| e.to_string())?;
+            let connection = Connection::from_socket(stream).map_err(|e| e.to_string())?;
+            let mut queue = connection.new_event_queue();
+            connection.display().get_registry(&queue.handle(), ());
+            let mut globals = Globals::default();
+            queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+            Ok(globals.interfaces)
+        };
+        let _ = sender.send(served());
+    });
+    receiver
+}
+
+/// The audit's story (m1.13-audit-core-4): `yuna --headless` under a limit of 256 open files,
+/// soft and hard, so that it cannot raise it; one client of the owner's seat makes
+/// `wl_shm_pool`s from one file, each of which keeps a descriptor in Yuna, until Yuna's table is
+/// full. Another client connecting then made the owner's socket's `accept` fail, and Yuna
+/// stopped with status 1, every client lost. The socket must pause instead, as an agent's seat's
+/// does, Yuna keep running, and the waiting client be served once the flooding client leaves.
+#[test]
+fn a_client_filling_yunas_descriptors_does_not_stop_it() {
+    const LIMIT: u64 = 256;
+    let limit = Rlimit {
+        current: Some(LIMIT),
+        maximum: Some(LIMIT),
+    };
+    let (mut running, log_reader, socket_path) =
+        start_headless_with("fd-flood", &["--output", "640x360@60,1"], |command| {
+            limit_open_files(command, limit)
+        });
+    let pid = running.child.id();
+
+    let stream = UnixStream::connect(&socket_path).expect("the socket accepts the flooding client");
+    let connection = Connection::from_socket(stream).expect("a Wayland connection");
+    let mut queue = connection.new_event_queue();
+    let handle = queue.handle();
+    connection.display().get_registry(&handle, ());
+    let mut flooder = Pools::default();
+    queue.roundtrip(&mut flooder).expect("the globals come");
+    let shm = flooder.shm.clone().expect("wl_shm is offered");
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(running.runtime_dir.join("pool"))
+        .expect("a file for the pools");
+    file.set_len(4096).expect("the pools' size");
+    // More pools than Yuna may hold descriptors: the last ones find its table full.
+    let mut pools = Vec::new();
+    for made in 1..=LIMIT + 64 {
+        pools.push(shm.create_pool(file.as_fd(), 4096, &handle, ()));
+        if made % 16 == 0 {
+            let _ = connection.flush();
+        }
+    }
+    let _ = connection.flush();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while descriptors_of(pid) < LIMIT as usize {
+        assert!(
+            running
+                .child
+                .try_wait()
+                .expect("Yuna is waited for")
+                .is_none(),
+            "Yuna stopped during the flood"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "Yuna holds {} descriptors, never {LIMIT}",
+            descriptors_of(pid)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Its connection waits to be accepted, which fails while Yuna's table is full.
+    let waiting = connect_on_a_thread(&socket_path);
+    let watched_until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < watched_until {
+        if let Some(status) = running.child.try_wait().expect("Yuna is waited for") {
+            panic!("Yuna stopped when another client connected: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    drop((pools, shm, flooder, queue, connection));
+    let globals = waiting
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the waiting client is served once the flooding client left")
+        .expect("the waiting client is served");
+    assert!(globals.contains("wl_compositor"), "{globals:?}");
+    stop_cleanly(&mut running, &socket_path);
+    let log = log_reader
+        .join()
+        .expect("the log's reader does not panic")
+        .expect("its log reads");
+    assert!(
+        log.contains("a seat's socket pauses"),
+        "the socket never paused, so the table was never full: {log}"
+    );
+}
+
+/// Process `pid`'s limit of open files, soft and hard, as `/proc` gives it.
+fn open_files_limit(pid: u32) -> (u64, u64) {
+    let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).expect("its limits");
+    let line = limits
+        .lines()
+        .find_map(|line| line.strip_prefix("Max open files"))
+        .expect("a line of open files");
+    let mut figures = line
+        .split_whitespace()
+        .map(|figure| figure.parse().expect("a figure"));
+    (
+        figures.next().expect("a soft limit"),
+        figures.next().expect("a hard limit"),
+    )
+}
+
+/// The first folder of the test's `PATH` that holds `program`.
+fn on_path(program: &str) -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").expect("a PATH"))
+        .map(|folder| folder.join(program))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("no {program} on PATH"))
+}
+
+/// `yuna --headless` raises its soft limit of open files to its hard limit, as KWin and Mutter
+/// do, since each client may make it hold many; the programs it starts get back the limit it
+/// started with, which a program that still waits with `select` needs. The one `yuna
+/// --headless` starts is Xwayland, at the first connection to its X display. The real one
+/// raises its own limit as it starts (Xwayland 24.1 calls `setrlimit`), so a stand-in named
+/// `Xwayland`, alone on Yuna's `PATH`, writes down the limit it was given, then exits.
+#[test]
+fn headless_raises_its_open_files_limit_but_not_its_programs() {
+    const STARTED: u64 = 256;
+    let hard = getrlimit(Resource::Nofile)
+        .maximum
+        .expect("a finite hard limit of open files");
+    assert!(
+        hard > STARTED,
+        "the test needs a hard limit above {STARTED}: {hard}"
+    );
+    let started = Rlimit {
+        current: Some(STARTED),
+        maximum: Some(hard),
+    };
+    let stand_in = runtime_dir_of("open-files").join("path");
+    std::fs::create_dir_all(&stand_in).expect("a folder for the stand-in");
+    let written = stand_in.join("limits");
+    std::fs::write(
+        stand_in.join("Xwayland"),
+        format!(
+            "#!{}\nulimit -Sn > '{}'\nulimit -Hn >> '{}'\n",
+            on_path("sh").display(),
+            written.display(),
+            written.display()
+        ),
+    )
+    .expect("the stand-in is written");
+    std::fs::set_permissions(
+        stand_in.join("Xwayland"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("the stand-in runs");
+
+    let (mut running, _log, socket_path) =
+        start_headless_with("open-files", &["--output", "640x360@60,1"], |command| {
+            command.env("PATH", &stand_in);
+            limit_open_files(command, started);
+        });
+    let pid = running.child.id();
+    assert_eq!(open_files_limit(pid), (hard, hard));
+
+    let display = x11_display_number(&mut running);
+    let address = SocketAddr::from_abstract_name(format!("/tmp/.X11-unix/X{display}"))
+        .expect("an abstract address");
+    let _x11 = UnixStream::connect_addr(&address).expect("the X display takes a connection");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let given = loop {
+        let text = std::fs::read_to_string(&written).unwrap_or_default();
+        let figures: Vec<u64> = text.lines().filter_map(|line| line.parse().ok()).collect();
+        if figures.len() == 2 {
+            break (figures[0], figures[1]);
+        }
+        assert!(Instant::now() < deadline, "Xwayland's stand-in never ran");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(given, (STARTED, hard));
+    stop_cleanly(&mut running, &socket_path);
 }
 
 #[test]

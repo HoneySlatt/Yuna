@@ -9,16 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
+use rustix::process::{Pid, WaitStatus};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
 };
-use smithay::reexports::rustix::process::{Pid, WaitStatus};
 use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{BindError, Display, ListeningSocket};
 use smithay::utils::{Physical, Rectangle};
-use smithay::wayland::socket::ListeningSocketSource;
 use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Drawn, Settings};
@@ -270,7 +269,8 @@ pub struct Compositor {
     /// The calloop timer armed at the clock's earliest deadline, in real mode, its time, and
     /// what the rest auditor names its wake.
     timer: Option<(RegistrationToken, Duration, Wake)>,
-    /// The source of each agent seat's socket.
+    /// The source of each seat's socket: the owner's, when it listens, and each agent's that
+    /// listens.
     seat_sockets: HashMap<SeatId, RegistrationToken>,
     /// The clients the display ended since they were last taken, once someone watches them
     /// ([`Compositor::watch_client_departures`]): none is kept otherwise. Each client leaves
@@ -286,7 +286,7 @@ impl Compositor {
         // The socket first, so that a missing XDG_RUNTIME_DIR is refused before the renderer
         // starts.
         let socket = if config.listen {
-            Some(ListeningSocketSource::new_auto().map_err(socket_error)?)
+            Some(ListeningSocket::bind_auto("wayland", 1..33).map_err(socket_error)?)
         } else {
             None
         };
@@ -322,20 +322,15 @@ impl Compositor {
             },
         )
         .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        let mut seat_sockets = HashMap::new();
         let socket_name = match socket {
             Some(socket) => {
-                let name = socket.socket_name().to_os_string();
-                insert_source(
-                    &handle,
-                    Wake::of_seat(Source::SeatSocket, OWNER_SEAT),
-                    socket,
-                    |stream, _, state| {
-                        if let Err(error) = state.insert_client(OWNER_SEAT, stream, false) {
-                            tracing::warn!(%error, "a client could not connect");
-                        }
-                    },
-                )
-                .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+                let name = socket
+                    .socket_name()
+                    .map(OsStr::to_os_string)
+                    .ok_or_else(|| Error::Socket("the socket has no name".to_owned()))?;
+                let token = insert_seat_socket(&handle, OWNER_SEAT, socket)?;
+                seat_sockets.insert(OWNER_SEAT, token);
                 tracing::info!(socket = ?name, "listening");
                 Some(name)
             }
@@ -365,9 +360,18 @@ impl Compositor {
             state,
             socket_name,
             timer: None,
-            seat_sockets: HashMap::new(),
+            seat_sockets,
             departures: None,
         })
+    }
+
+    /// Raises the soft limit of open files of the whole process to its hard limit, as KWin and
+    /// Mutter do: each client may make Yuna hold descriptors, and at the usual soft limit, 1,024,
+    /// one client fills the table cheaply. The programs Yuna starts get back the limit it started
+    /// with. The `yuna` program calls it once, at its start, before any program is started.
+    /// Returns the soft limit now, none for no limit.
+    pub fn raise_open_files_limit() -> std::io::Result<Option<u64>> {
+        crate::process::raise_open_files_limit().map(|limit| limit.current)
     }
 
     /// The name of its Wayland socket in `XDG_RUNTIME_DIR`, for `WAYLAND_DISPLAY`.
@@ -457,31 +461,7 @@ impl Compositor {
         socket: ListeningSocket,
         path: &Path,
     ) -> Result<(), Error> {
-        let token = insert_source(
-            &self.event_loop.handle(),
-            Wake::of_seat(Source::SeatSocket, seat),
-            Generic::new(socket, Interest::READ, Mode::Level),
-            move |_, socket, state| {
-                loop {
-                    match socket.accept() {
-                        Ok(Some(stream)) => {
-                            if let Err(error) = state.insert_client(seat, stream, false) {
-                                tracing::warn!(%error, "a client could not connect");
-                            }
-                        }
-                        Ok(None) => return Ok(PostAction::Continue),
-                        // Out of descriptors, most often: one seat's programs must not stop
-                        // Yuna (ADR-0080). The socket rests a moment rather than spin.
-                        Err(error) => {
-                            tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
-                            state.paused_sockets.push(seat);
-                            return Ok(PostAction::Disable);
-                        }
-                    }
-                }
-            },
-        )
-        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        let token = insert_seat_socket(&self.event_loop.handle(), seat, socket)?;
         self.seat_sockets.insert(seat, token);
         if let Some(xwayland) = &mut self.xwayland {
             let folder = crate::xwayland::folder_beside(path);
@@ -576,8 +556,9 @@ impl Compositor {
 
     /// Presses or releases `button` (Linux's code, such as [`BUTTON_LEFT`](crate::BUTTON_LEFT))
     /// of agent seat `seat`'s pointer where it is. A press focuses the window under it, which
-    /// takes the seat's keyboard at the next refresh. Refused for a press of a button held and a
-    /// release of one not held.
+    /// takes the seat's keyboard at the next refresh. Refused for a press of a button held, a
+    /// release of one not held, and a press while the seat holds 16 buttons (`MAX_HELD_BUTTONS`
+    /// in `input.rs`).
     pub fn pointer_button(
         &mut self,
         seat: SeatId,
@@ -612,8 +593,8 @@ impl Compositor {
     /// `seat`'s keyboard, to the surface it is on; no modifier is added. A press takes a key that
     /// types that keysym alone, else the key that types it with the fewest keys held, in the
     /// keyboard's group first; a release lets go of the held key that types it in any group.
-    /// Refused for a name the seat's keymap has no key for, a press of a key held and a release
-    /// of one not held.
+    /// Refused for a name the seat's keymap has no key for, a press of a key held, a release of
+    /// one not held, and a press while the seat holds 64 keys (`MAX_HELD_KEYS` in `input.rs`).
     pub fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
         let key = if pressed {
             self.state.keycode_of(seat, name)?
@@ -1267,6 +1248,43 @@ impl Compositor {
             }
         }
     }
+}
+
+/// Serves `seat` on `socket`: each client that connects through it belongs to that seat. An
+/// `accept` that fails, out of descriptors most often, pauses the socket for [`SOCKET_PAUSE`]
+/// rather than stop Yuna, the owner's socket as an agent's: one client holding many
+/// descriptors must not end the others
+/// ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). The
+/// connection waits meanwhile in the socket's queue.
+fn insert_seat_socket(
+    handle: &LoopHandle<'static, State>,
+    seat: SeatId,
+    socket: ListeningSocket,
+) -> Result<RegistrationToken, Error> {
+    insert_source(
+        handle,
+        Wake::of_seat(Source::SeatSocket, seat),
+        Generic::new(socket, Interest::READ, Mode::Level),
+        move |_, socket, state| {
+            loop {
+                match socket.accept() {
+                    Ok(Some(stream)) => {
+                        if let Err(error) = state.insert_client(seat, stream, false) {
+                            tracing::warn!(%error, "a client could not connect");
+                        }
+                    }
+                    Ok(None) => return Ok(PostAction::Continue),
+                    // Rests a moment rather than spin on a connection it cannot take.
+                    Err(error) => {
+                        tracing::warn!(%error, seat = seat.0, "a seat's socket pauses");
+                        state.paused_sockets.push(seat);
+                        return Ok(PostAction::Disable);
+                    }
+                }
+            }
+        },
+    )
+    .map_err(|e| Error::EventLoop(e.error.to_string()))
 }
 
 /// Why a socket in `XDG_RUNTIME_DIR` could not be made, for its user.

@@ -10,8 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::event::{PollFd, PollFlags, poll};
+use rustix::event::{PollFd, PollFlags, poll};
 use zbus::wire::serialized::Context;
 use zbus::wire::{Endian, OwnedObjectPath, OwnedVariant, Variant};
 

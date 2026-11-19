@@ -12,6 +12,10 @@ publish.workspace = true
 # GLES renderer on EGL (`renderer_gl`); no DRM, no input backend (ADR-0022).
 smithay = { workspace = true, features = ["wayland_frontend", "desktop", "renderer_gl"] }
 png.workspace = true
+# The epoll the rest auditor wraps and poll (`event`), the D-Bus socket and the peers' credentials
+# (`net`), the processes Yuna starts, watches, reaps and ends, and its limit of open files
+# (`process`), and poll's timeouts (`time`).
+rustix = { workspace = true, features = ["event", "net", "process", "time"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

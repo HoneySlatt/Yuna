@@ -1,7 +1,8 @@
 //! What every program Yuna starts shares: the descriptors it does not inherit and those it is
-//! given, how its program is found, and how a process Yuna watches through a pidfd is ended and
-//! reaped. MCP's programs (`mcp/programs/`), Xwayland (`xwayland/server.rs`) and the
-//! accessibility buses' dbus-daemon (`mcp/accessibility/bus.rs`) start through it. And what Yuna
+//! given, the limit of open files it is given back, how its program is found, and how a process
+//! Yuna watches through a pidfd is ended and reaped. MCP's programs (`mcp/programs/`), Xwayland
+//! (`xwayland/server.rs`) and the accessibility buses' dbus-daemon (`mcp/accessibility/bus.rs`)
+//! start through it. And what Yuna
 //! reads of a process in `/proc`: its parent, its group, and the processes above it up to Yuna,
 //! which a client's connection records (`state.rs`) and a seat's closing follows
 //! (`mcp/programs/mod.rs`).
@@ -18,20 +19,50 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
-use smithay::reexports::rustix;
-use smithay::reexports::rustix::io::{Errno, FdFlags};
-use smithay::reexports::rustix::process::{Signal, WaitId, WaitIdOptions, WaitStatus};
+use rustix::io::{Errno, FdFlags};
+use rustix::process::{
+    Resource, Rlimit, Signal, WaitId, WaitIdOptions, WaitStatus, getrlimit, setrlimit,
+};
 
 /// How many processes above a client its lineage follows before giving up: deeper trees are not
 /// under Yuna, or not worth the reads.
 const MAX_LINEAGE: usize = 64;
+
+/// The limit of open files the process started with, kept when [`raise_open_files_limit`]
+/// raised it: what each program Yuna starts is given back. Set once.
+static STARTING_OPEN_FILES_LIMIT: OnceLock<Rlimit> = OnceLock::new();
+
+/// Raises the process's soft limit of open files to its hard limit, as KWin and Mutter do: each
+/// client may make Yuna hold descriptors, a `wl_shm` pool's or a dmabuf's, and at the usual soft
+/// limit, 1,024, one client fills the table cheaply. The limit it started with is kept for the
+/// programs Yuna starts ([`keep_descriptors_from_the_program`]). Returns the limit now; a second
+/// call finds it raised and keeps the first one's.
+pub(crate) fn raise_open_files_limit() -> io::Result<Rlimit> {
+    let started = getrlimit(Resource::Nofile);
+    if started.current == started.maximum {
+        return Ok(started);
+    }
+    let raised = Rlimit {
+        current: started.maximum,
+        maximum: started.maximum,
+    };
+    setrlimit(Resource::Nofile, raised)?;
+    let _ = STARTING_OPEN_FILES_LIMIT.set(started);
+    Ok(raised)
+}
 
 /// Marks every descriptor of the program above 2 close-on-exec, in the child just before it runs
 /// the program, so that it inherits none of Yuna's: llvmpipe opens some without
 /// `O_CLOEXEC`, `/dev/udmabuf` and the memory of its buffers among them. Marked, not closed:
 /// the pipe through which the standard library reports a failed `exec` must stay open.
 /// [`give_descriptors`] then clears the flag of those a program is given.
+///
+/// Gives the program back, too, the limit of open files Yuna started with, when
+/// [`raise_open_files_limit`] raised Yuna's: a program that still waits with `select` cannot
+/// watch a descriptor past 1,023, and needs the limit that keeps it below, as KWin gives each
+/// of its children.
 pub(crate) fn keep_descriptors_from_the_program(command: &mut Command) {
     // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
     // calls are sound: it makes one system call, `close_range`, and allocates nothing, an errno
@@ -44,6 +75,15 @@ pub(crate) fn keep_descriptors_from_the_program(command: &mut Command) {
                 Err(io::Error::last_os_error())
             }
         });
+    }
+    if let Some(&started) = STARTING_OPEN_FILES_LIMIT.get() {
+        // SAFETY: the closure runs in the child between fork and exec, where only
+        // async-signal-safe calls are sound: it makes one system call, `prlimit64` through
+        // rustix, on a limit copied in before the fork, and allocates nothing, an `Errno`
+        // turning into an `io::Error` without a box.
+        unsafe {
+            command.pre_exec(move || Ok(setrlimit(Resource::Nofile, started)?));
+        }
     }
 }
 

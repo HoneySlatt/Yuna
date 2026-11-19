@@ -50,7 +50,22 @@ Options:
   -V, --version      Print the version
 
 Environment:
-  XDG_RUNTIME_DIR    The folder the Wayland socket is created in; required.
+  XDG_RUNTIME_DIR    The folder the Wayland socket is created in, and with mcp, the folder of
+                     its seats' sockets and its programs' logs; required.
   PATH               Where Xwayland is looked for: the first X11 program to connect to a
-                     seat's display starts it. Without it, X11 programs get no display.
+                     seat's display starts it. Without it, X11 programs get no display. With
+                     mcp, where dbus-daemon is looked for too, unless YUNA_DBUS_DAEMON names
+                     one.
+  YUNA_DBUS_DAEMON   With mcp: the absolute path of the dbus-daemon that runs each seat's
+                     accessibility bus, rather than the first on PATH.
   YUNA_LOG           What is logged: error, warn, info (the default), debug or trace.
+
+Exit status:
+  0                  Success: the help or the version printed, or a stop asked for: SIGTERM
+                     or SIGINT, or, with mcp, its input closed.
+  1                  A failure: the desktop session, which does not exist yet; a start or a
+                     loop that failed; an output that could not be written; with mcp, a
+                     client that broke the connection.
+  2                  A usage error: an argument, or an output's mode, Yuna does not take.
+  101                Yuna's state panicked, a bug: it stopped at once, with mcp after ending
+                     its programs.

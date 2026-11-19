@@ -24,9 +24,15 @@
 //! (`text_input.rs`); with none, it is typed through Smithay's `inject_text_keysyms`, which gives
 //! the focused client a keymap of its own for it, then the seat's back. Events carry Yuna's
 //! clock's time.
+//!
+//! A seat holds [`MAX_HELD_KEYS`] keys and [`MAX_HELD_BUTTONS`] buttons at most, from every
+//! source together: a press past them, or of a keycode the keyboard's keymap does not have, is
+//! refused, and a virtual device's is dropped
+//! ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)).
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::sync::PoisonError;
 
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::desktop::PopupManager;
@@ -65,6 +71,17 @@ pub const MAX_TYPED: usize = 4_096;
 
 /// The most wheel steps one scroll takes on each axis.
 pub const MAX_SCROLL_STEPS: f64 = 100.0;
+
+/// The most keys a seat's keyboard holds at once, Yuna's own and its clients' virtual keyboards'
+/// together. Each `wl_keyboard.enter` lists every key held, 4 bytes each, in one Wayland message
+/// of 4,096 bytes at most: past about 1,018 keys it cannot be sent, and the display ends the
+/// client it was for. 64 is far below that, and far above what hands, a chord or a game hold.
+pub const MAX_HELD_KEYS: usize = 64;
+
+/// The most buttons a seat's pointer holds at once: twice the eight of Linux's mouse range,
+/// `BTN_LEFT` to `BTN_TASK`. It bounds the seat's list of buttons held, which each press and
+/// each description of the pointer reads whole.
+pub const MAX_HELD_BUTTONS: usize = 16;
 
 /// How far one wheel step scrolls, in logical units, as libinput reports a mouse wheel's click.
 const SCROLL_STEP: f64 = 15.0;
@@ -483,7 +500,8 @@ impl State {
 
     /// Presses or releases `button` of `seat`'s pointer where it is. A press focuses the window
     /// under it, and is recorded with that window, for a popup grab or an activation token it
-    /// may carry. A press of a button held, or a release of one not held, is refused.
+    /// may carry. A press of a button held, a release of one not held, and a press while the
+    /// seat holds [`MAX_HELD_BUTTONS`] are refused.
     pub(crate) fn pointer_button(
         &mut self,
         seat: SeatId,
@@ -493,10 +511,16 @@ impl State {
         let pointer = self.agent_pointer(seat)?;
         let held = self
             .seat(seat)
-            .is_some_and(|data| data.pressed_buttons.contains(&button));
-        if held == pressed {
+            .map(|data| data.pressed_buttons.as_slice())
+            .unwrap_or_default();
+        if held.contains(&button) == pressed {
             let state = if pressed { "held already" } else { "not held" };
             return Err(Error::Refused(format!("button {button:#x} is {state}")));
+        }
+        if pressed && held.len() >= MAX_HELD_BUTTONS {
+            return Err(Error::Refused(format!(
+                "a seat's pointer holds {MAX_HELD_BUTTONS} buttons at most"
+            )));
         }
         self.focus_what_is_drawn(seat);
         let serial = SERIAL_COUNTER.next_serial();
@@ -779,7 +803,9 @@ impl State {
     /// Sends `key` from `source` to the surface `seat`'s keyboard is on, with the keymap it has,
     /// and records a press with that surface, for an activation token or a popup grab. Smithay
     /// counts each key's presses by source, so that a key two sources hold is released by the
-    /// last of them.
+    /// last of them. A press is refused, nothing sent, when the keymap has no such keycode, and
+    /// when it would make the seat hold more than [`MAX_HELD_KEYS`]; a release always goes, and
+    /// Smithay drops one of a key its source does not hold.
     pub(crate) fn send_key(
         &mut self,
         seat: SeatId,
@@ -788,6 +814,9 @@ impl State {
         state: KeyState,
     ) -> Result<(), Error> {
         let keyboard = self.agent_keyboard(seat)?;
+        if state == KeyState::Pressed {
+            self.check_press(&keyboard, key)?;
+        }
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.input_time();
         keyboard.input_from_source::<(), _>(source, self, key, state, serial, time, |_, _, _| {
@@ -798,6 +827,33 @@ impl State {
             && let Some(data) = self.seat_mut(seat)
         {
             data.last_key_press = Some((serial, focus));
+        }
+        Ok(())
+    }
+
+    /// Refuses a press of `key` on `keyboard` that would make it hold more than
+    /// [`MAX_HELD_KEYS`], a key it holds already adding none, or that names a keycode outside
+    /// the keymap it has: such a key types nothing, and would only fill what the seat holds.
+    fn check_press(&mut self, keyboard: &KeyboardHandle<State>, key: Keycode) -> Result<(), Error> {
+        let held = keyboard.pressed_keys();
+        if held.len() >= MAX_HELD_KEYS && !held.contains(&key) {
+            return Err(Error::Refused(format!(
+                "a seat holds {MAX_HELD_KEYS} keys at most"
+            )));
+        }
+        let (first, last) = keyboard.with_xkb_state(self, |context| {
+            let xkb = context.xkb().lock().unwrap_or_else(PoisonError::into_inner);
+            // SAFETY: Smithay asks that no reference count of the keymap outlive its `Xkb`.
+            // None is taken: the borrow reads two integers through xkbcommon, and ends with the
+            // lock's guard, inside this closure, while the keyboard holds the `Xkb`.
+            let keymap = unsafe { xkb.keymap() };
+            (keymap.min_keycode().raw(), keymap.max_keycode().raw())
+        });
+        if !(first..=last).contains(&key.raw()) {
+            return Err(Error::Refused(format!(
+                "keycode {} is not in the keymap, whose keys are {first} to {last}",
+                key.raw()
+            )));
         }
         Ok(())
     }
