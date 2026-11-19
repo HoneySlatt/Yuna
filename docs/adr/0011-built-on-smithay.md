@@ -1,7 +1,8 @@
 # 0011. Built on Smithay, its patches kept in Yuna
 
-- Status: Accepted; amended by [0022](0022-the-headless-backend-in-yuna.md) (the headless backend is
-  Yuna's code), [0039](0039-leaving-smithay-step-by-step.md) (Smithay is left by the end of Stage 2)
+- Status: Superseded by [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md);
+  amended by [0022](0022-the-headless-backend-in-yuna.md) (the headless backend is Yuna's code),
+  [0039](0039-leaving-smithay-step-by-step.md) (Smithay is left by the end of Stage 2)
 - Date: 2026-11-11
 
 ## Context

@@ -1,7 +1,7 @@
 # 0059. Reduced motion: nothing slides, fades stay
 
-- Status: Accepted; amends [0055](0055-what-moves-first-and-animations-off-headless.md) (reduced
-  motion now)
+- Status: Superseded by [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md);
+  amends [0055](0055-what-moves-first-and-animations-off-headless.md) (reduced motion now)
 - Date: 2026-11-14
 
 ## Context

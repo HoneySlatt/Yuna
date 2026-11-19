@@ -1,6 +1,9 @@
 # 0052. Motion in a pure crate, the layout's jumps turned into offsets
 
-- Status: Accepted; amends [0020](0020-the-layout-models-shape.md) (workspace ids, the camera)
+- Status: Accepted; amends [0020](0020-the-layout-models-shape.md) (workspace ids, the camera);
+  superseded in part by
+  [0111](0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)
+  (workspace ids, the camera the layout gives out)
 - Date: 2026-11-14
 
 ## Context

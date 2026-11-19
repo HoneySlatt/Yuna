@@ -1,6 +1,6 @@
 # 0098. On llvmpipe, dmabufs offered for no device and checked as llvmpipe maps them
 
-- Status: Accepted
+- Status: Superseded by [0123](0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)
 - Date: 2026-11-18
 
 ## Context

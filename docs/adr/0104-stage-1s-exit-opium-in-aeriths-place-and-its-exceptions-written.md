@@ -1,6 +1,7 @@
 # 0104. Stage 1's exit: Opium in Aerith's place, and its exceptions written
 
-- Status: Accepted; amends [0025](0025-applications-in-ci.md)
+- Status: Accepted; amends [0025](0025-applications-in-ci.md); superseded in part by
+  [0122](0122-real-applications-in-ci-and-rest-checked-on-the-program.md) (Opium's weekly run)
 - Date: 2026-11-18
 
 ## Context

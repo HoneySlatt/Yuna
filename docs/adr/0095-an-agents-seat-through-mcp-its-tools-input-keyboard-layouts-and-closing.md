@@ -1,8 +1,9 @@
 # 0095. An agent's seat through MCP: its tools, its input, its keyboard and layouts, its closing
 
-- Status: Accepted; supersedes [0037](0037-seats-tools-input-and-closing.md); supersedes in part
-  [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) (how `type` types a
-  character)
+- Status: Superseded by
+  [0117](0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md); supersedes
+  [0037](0037-seats-tools-input-and-closing.md); supersedes in part
+  [0043](0043-text-input-and-the-rest-of-slimeengines-examples.md) (how `type` types a character)
 - Date: 2026-11-18
 
 ## Context

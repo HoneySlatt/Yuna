@@ -1,6 +1,7 @@
 # 0068. X11 windows drawn by Yuna through an area filter, at a scale fixed for an XWayland's life
 
-- Status: Accepted; carries out [0044](0044-xwayland-across-outputs-of-different-scales.md)
+- Status: Superseded by [0124](0124-x11-windows-across-outputs-of-different-scales.md); carries out
+  [0044](0044-xwayland-across-outputs-of-different-scales.md)
 - Date: 2026-11-14
 
 ## Context

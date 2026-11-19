@@ -1,6 +1,9 @@
 # 0089. Yuna for the owner's other projects: an agent's seat, wlr-screencopy, its own Mesa
 
-- Status: Accepted
+- Status: Superseded by [0116](0116-agents-seats-each-agent-in-its-own-yuna.md) (an agent's seat in
+  `yuna --headless`, virtual input), [0121](0121-captures-what-is-seen-at-the-logical-size.md)
+  (`wlr-screencopy-unstable-v1`), [0126](0126-yuna-and-the-owners-other-projects.md) (the package's
+  Mesa, the consumers)
 - Date: 2026-11-17
 
 ## Context

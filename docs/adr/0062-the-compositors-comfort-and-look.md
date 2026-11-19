@@ -1,7 +1,10 @@
 # 0062. The compositor's comfort and look
 
-- Status: Accepted; amends [0005](0005-the-layouts.md), [0010](0010-animations-and-effects.md); point 8 reopened by the owner on 2026-11-14: the wear map
-  is one candidate, OLED care is chosen at Stage 5's design from a survey
+- Status: Accepted; amends [0005](0005-the-layouts.md), [0010](0010-animations-and-effects.md);
+  superseded in part by [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md)
+  (point 5, shapes that morph), [0110](0110-the-layouts-and-their-behaviours.md) (point 2, tabbed
+  columns), [0121](0121-captures-what-is-seen-at-the-logical-size.md) (point 9, a capture yields to
+  a game), [0130](0130-oled-care-chosen-at-stage-5s-design.md) (point 8, OLED care)
 - Date: 2026-11-14
 
 ## Context

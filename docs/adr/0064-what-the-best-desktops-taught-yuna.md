@@ -1,7 +1,14 @@
 # 0064. What the best desktops taught Yuna
 
-- Status: Accepted; amends [0019](0019-the-layouts-behaviours.md), [0057](0057-what-yuna-does-and-what-the-shell-does.md); amended by
-  [0065](0065-what-hollow-asks-of-yuna.md) (the sharing indicator, the dead locker)
+- Status: Accepted; amends [0019](0019-the-layouts-behaviours.md),
+  [0057](0057-what-yuna-does-and-what-the-shell-does.md); amended by
+  [0065](0065-what-hollow-asks-of-yuna.md) (the sharing indicator, the dead locker); superseded in
+  part by [0107](0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md) (the shell's
+  interface, window previews, brightness, the list of casts),
+  [0108](0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md) (the dead-locker screen),
+  [0110](0110-the-layouts-and-their-behaviours.md) (points 1 and 3, focus marked and several
+  fullscreen windows), [0129](0129-configuration-in-kdl-its-includes-and-variants.md) (configuration
+  includes)
 - Date: 2026-11-14
 
 ## Context

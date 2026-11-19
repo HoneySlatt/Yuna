@@ -1,6 +1,7 @@
 # 0084. uwui hosted on its own task, commands and images
 
-- Status: Accepted; supersedes in part
+- Status: Superseded by [0106](0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md); supersedes
+  in part
   [0073](0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)
   (how Yuna hosts uwui)
 - Date: 2026-11-17

@@ -1,6 +1,6 @@
 # 0099. A workspace switch keeps each workspace on its row
 
-- Status: Accepted
+- Status: Superseded by [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md)
 - Date: 2026-11-18
 
 ## Context

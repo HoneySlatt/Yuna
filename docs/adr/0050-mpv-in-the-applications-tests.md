@@ -1,6 +1,7 @@
 # 0050. mpv in the applications' tests
 
-- Status: Accepted; amends [0025](0025-applications-in-ci.md) (one more application in CI)
+- Status: Superseded by [0122](0122-real-applications-in-ci-and-rest-checked-on-the-program.md);
+  amends [0025](0025-applications-in-ci.md) (one more application in CI)
 - Date: 2026-11-14
 
 ## Context

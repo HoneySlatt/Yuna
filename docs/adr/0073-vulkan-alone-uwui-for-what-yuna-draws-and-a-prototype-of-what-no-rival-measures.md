@@ -1,7 +1,8 @@
 # 0073. Vulkan alone, uwui for what Yuna draws, and a prototype of what no rival measures
 
-- Status: Accepted; supersedes [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md); superseded in part
-  by [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) (uwui's crash boundary) and
+- Status: Superseded by [0106](0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md); supersedes
+  [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md); superseded in part by
+  [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) (uwui's crash boundary) and
   [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) (how Yuna hosts uwui)
 - Date: 2026-11-16
 

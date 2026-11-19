@@ -1,6 +1,8 @@
 # 0020. The layout model's shape
 
-- Status: Accepted; amended by [0052](0052-motion-in-a-pure-crate.md) (workspace ids, the camera)
+- Status: Superseded by
+  [0111](0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md);
+  amended by [0052](0052-motion-in-a-pure-crate.md) (workspace ids, the camera)
 - Date: 2026-11-11
 
 ## Context

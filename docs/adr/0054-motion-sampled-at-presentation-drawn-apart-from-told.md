@@ -1,8 +1,12 @@
 # 0054. Motion sampled at its presentation; what is drawn apart from what a client is told
 
-- Status: Accepted; amends [0023](0023-frames-presentation-and-the-clock.md) (frames during
-  motion, hidden windows), [0038](0038-captures-coordinates-windows-and-wayland.md) (captures
-  and clicks during motion), [0033](0033-the-mcp-server.md) (windows' drawn rectangles),
+- Status: Superseded by [0118](0118-frames-presentation-times-and-the-clock.md) (motion's frames,
+  what a client is told), [0119](0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md) (a VRR
+  refresh during motion), [0120](0120-the-mcp-server-a-private-yuna-on-stdio.md) (windows' drawn
+  rectangles through MCP), [0121](0121-captures-what-is-seen-at-the-logical-size.md) (captures
+  during motion); amends [0023](0023-frames-presentation-and-the-clock.md) (frames during motion,
+  hidden windows), [0038](0038-captures-coordinates-windows-and-wayland.md) (captures and clicks
+  during motion), [0033](0033-the-mcp-server.md) (windows' drawn rectangles),
   [0051](0051-emulated-vrr-as-the-monitors-traces-showed.md) (a VRR refresh with nothing new during
   motion)
 - Date: 2026-11-14

@@ -1,7 +1,8 @@
 # 0077. The budgets of a frame, memory and rest, set from the rivals
 
-- Status: Accepted; superseded in part by [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) (the clients' buffers
-  Yuna holds)
+- Status: Accepted; superseded in part by
+  [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) (the clients' buffers Yuna
+  holds), [0127](0127-motions-budget-no-frame-lost-to-motion.md) (motion's budget)
 - Date: 2026-11-16
 
 ## Context

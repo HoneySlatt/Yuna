@@ -1,6 +1,6 @@
 # 0034. Captures: PNG at the logical size
 
-- Status: Accepted
+- Status: Superseded by [0121](0121-captures-what-is-seen-at-the-logical-size.md)
 - Date: 2026-11-13
 
 ## Context

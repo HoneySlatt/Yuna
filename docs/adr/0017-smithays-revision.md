@@ -1,6 +1,7 @@
 # 0017. Smithay's revision: upstream, pinned, first at master of 2026-11-11
 
-- Status: Accepted; amended by [0021](0021-smithays-fork.md)
+- Status: Superseded by [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md);
+  amended by [0021](0021-smithays-fork.md)
 - Date: 2026-11-11
 
 ## Context

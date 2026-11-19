@@ -1,6 +1,8 @@
 # 0010. Animations and effects
 
-- Status: Accepted; amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md), [0061](0061-yunas-uses.md), [0062](0062-the-compositors-comfort-and-look.md)
+- Status: Superseded by [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md);
+  amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md),
+  [0061](0061-yunas-uses.md), [0062](0062-the-compositors-comfort-and-look.md)
 - Date: 2026-11-11
 
 ## Context

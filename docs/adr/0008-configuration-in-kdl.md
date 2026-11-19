@@ -1,6 +1,6 @@
 # 0008. Configuration in KDL
 
-- Status: Accepted
+- Status: Superseded by [0129](0129-configuration-in-kdl-its-includes-and-variants.md)
 - Date: 2026-11-11
 
 ## Context

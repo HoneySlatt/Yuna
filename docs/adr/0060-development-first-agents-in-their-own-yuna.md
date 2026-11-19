@@ -1,6 +1,10 @@
 # 0060. Development first: agents never hold back for a game, each in its own Yuna
 
-- Status: Accepted; amends [0003](0003-a-parallel-project-uwui-first.md), [0015](0015-agents-workspaces.md)
+- Status: Superseded by
+  [0115](0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md) (the
+  priorities and the measures), [0116](0116-agents-seats-each-agent-in-its-own-yuna.md) (each agent
+  in its own Yuna); amends [0003](0003-a-parallel-project-uwui-first.md),
+  [0015](0015-agents-workspaces.md)
 - Date: 2026-11-14
 
 ## Context

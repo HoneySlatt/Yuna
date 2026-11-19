@@ -1,6 +1,8 @@
 # 0004. The compositor alone, a shell on top
 
-- Status: Accepted; amended by [0057](0057-what-yuna-does-and-what-the-shell-does.md), [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)
+- Status: Superseded by [0107](0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md);
+  amended by [0057](0057-what-yuna-does-and-what-the-shell-does.md),
+  [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md)
 - Date: 2026-11-11
 
 ## Context

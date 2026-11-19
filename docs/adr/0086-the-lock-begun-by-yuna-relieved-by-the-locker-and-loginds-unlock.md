@@ -1,7 +1,7 @@
 # 0086. The lock begun by Yuna, relieved by the locker, and logind's `Unlock`
 
-- Status: Accepted; supersedes in part [0065](0065-what-hollow-asks-of-yuna.md) (a locker's
-  relief)
+- Status: Superseded by [0108](0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md);
+  supersedes in part [0065](0065-what-hollow-asks-of-yuna.md) (a locker's relief)
 - Date: 2026-11-17
 
 ## Context

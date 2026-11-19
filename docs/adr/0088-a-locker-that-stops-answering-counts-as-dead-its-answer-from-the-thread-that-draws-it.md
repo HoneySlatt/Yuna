@@ -1,6 +1,7 @@
 # 0088. A locker that stops answering counts as dead, its answer from the thread that draws it
 
-- Status: Accepted; supersedes [0087](0087-a-locker-that-stops-answering-counts-as-dead.md)
+- Status: Superseded by [0108](0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md);
+  supersedes [0087](0087-a-locker-that-stops-answering-counts-as-dead.md)
 - Date: 2026-11-17
 
 ## Context

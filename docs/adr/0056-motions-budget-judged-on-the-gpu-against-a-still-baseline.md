@@ -1,6 +1,6 @@
 # 0056. Motion's budget judged on the GPU, against a still baseline
 
-- Status: Accepted
+- Status: Superseded by [0127](0127-motions-budget-no-frame-lost-to-motion.md)
 - Date: 2026-11-14
 
 ## Context

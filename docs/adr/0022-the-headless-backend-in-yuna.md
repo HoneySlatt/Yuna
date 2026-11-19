@@ -1,7 +1,8 @@
 # 0022. The headless backend: Yuna's own code, drawn on llvmpipe by default
 
-- Status: Accepted; amends [0011](0011-built-on-smithay.md) (its list of first patches); amended
-  by [0029](0029-the-rest-of-animated-applications.md) (what CI tests of dmabufs)
+- Status: Superseded by [0123](0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md);
+  amends [0011](0011-built-on-smithay.md) (its list of first patches); amended by
+  [0029](0029-the-rest-of-animated-applications.md) (what CI tests of dmabufs)
 - Date: 2026-11-12
 
 ## Context

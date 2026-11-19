@@ -1,6 +1,7 @@
 # 0078. Agents' seats in one Yuna, frozen until Stage 2's core
 
-- Status: Accepted; supersedes [0035](0035-agents-seats.md)
+- Status: Superseded by [0116](0116-agents-seats-each-agent-in-its-own-yuna.md); supersedes
+  [0035](0035-agents-seats.md)
 - Date: 2026-11-17
 
 ## Context

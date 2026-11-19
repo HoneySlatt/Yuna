@@ -1,6 +1,10 @@
 # 0061. Yuna's uses: creation, capture, games, HDR per display, development
 
-- Status: Accepted; amends [0007](0007-surviving-a-crash.md), [0010](0010-animations-and-effects.md), [0058](0058-what-yuna-takes-from-the-owners-other-projects.md)
+- Status: Accepted; amends [0007](0007-surviving-a-crash.md),
+  [0010](0010-animations-and-effects.md),
+  [0058](0058-what-yuna-takes-from-the-owners-other-projects.md); superseded in part by
+  [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md) (point 9, effects in
+  games), [0110](0110-the-layouts-and-their-behaviours.md) (point 3's focus guard)
 - Date: 2026-11-14
 
 ## Context

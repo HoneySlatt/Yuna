@@ -1,6 +1,7 @@
 # 0019. The layouts' behaviours: niri and Hyprland as references
 
-- Status: Accepted; amended by [0064](0064-what-the-best-desktops-taught-yuna.md) (several fullscreen windows on a workspace)
+- Status: Superseded by [0110](0110-the-layouts-and-their-behaviours.md); amended by
+  [0064](0064-what-the-best-desktops-taught-yuna.md) (several fullscreen windows on a workspace)
 - Date: 2026-11-11
 
 ## Context

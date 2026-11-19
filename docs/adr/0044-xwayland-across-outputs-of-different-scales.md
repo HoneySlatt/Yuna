@@ -1,7 +1,8 @@
 # 0044. XWayland across outputs of different scales
 
-- Status: Accepted; carried out by [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)
-  and [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)
+- Status: Superseded by [0124](0124-x11-windows-across-outputs-of-different-scales.md); carried out
+  by [0068](0068-x11-windows-drawn-by-yuna-through-an-area-filter.md) and
+  [0069](0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)
 - Date: 2026-11-14
 
 ## Context

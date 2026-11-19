@@ -1,6 +1,8 @@
 # 0016. The Rust toolchain: an exact stable version, in one file
 
-- Status: Accepted; amended by [0058](0058-what-yuna-takes-from-the-owners-other-projects.md)
+- Status: Superseded by
+  [0125](0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md); amended by
+  [0058](0058-what-yuna-takes-from-the-owners-other-projects.md)
 - Date: 2026-11-11
 
 ## Context

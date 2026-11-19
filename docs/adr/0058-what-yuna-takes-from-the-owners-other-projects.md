@@ -1,6 +1,16 @@
 # 0058. What Yuna takes from the owner's other projects
 
-- Status: Accepted; amends [0007](0007-surviving-a-crash.md), [0010](0010-animations-and-effects.md), [0016](0016-the-rust-toolchain.md), [0023](0023-frames-presentation-and-the-clock.md), [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md); amended by [0061](0061-yunas-uses.md); superseded in part by [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) (the GPU reset)
+- Status: Superseded by [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md)
+  (reduced motion and reduced transparency), [0116](0116-agents-seats-each-agent-in-its-own-yuna.md)
+  (virtual input on agents' seats), [0118](0118-frames-presentation-times-and-the-clock.md) (hidden
+  games, `fifo-v1` and `commit-timing-v1`),
+  [0125](0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md) (fuzzing's
+  nightly toolchain), [0126](0126-yuna-and-the-owners-other-projects.md) (the rest); amends
+  [0007](0007-surviving-a-crash.md), [0010](0010-animations-and-effects.md),
+  [0016](0016-the-rust-toolchain.md), [0023](0023-frames-presentation-and-the-clock.md),
+  [0046](0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md); amended by
+  [0061](0061-yunas-uses.md); superseded in part by
+  [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) (the GPU reset)
 - Date: 2026-11-14
 
 ## Context

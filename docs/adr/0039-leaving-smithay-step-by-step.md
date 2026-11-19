@@ -1,10 +1,12 @@
 # 0039. Leaving Smithay step by step
 
-- Status: Accepted; amends [0011](0011-built-on-smithay.md) (Smithay is left by the end of Stage
-  2), [0013](0013-our-own-code-niri-and-jay-as-references.md) (Smithay becomes a reading
-  reference); settled for X11 by [0066](0066-yunas-own-x11-window-manager-on-x11rb.md); superseded
-  in part by [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) (how the core
-  moves)
+- Status: Superseded by [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)
+  (Smithay as Yuna's base, and leaving it),
+  [0113](0113-our-own-code-niri-jay-and-smithay-as-references.md) (Smithay as a reading reference);
+  amends [0011](0011-built-on-smithay.md) (Smithay is left by the end of Stage 2),
+  [0013](0013-our-own-code-niri-and-jay-as-references.md) (Smithay becomes a reading reference);
+  settled for X11 by [0066](0066-yunas-own-x11-window-manager-on-x11rb.md); superseded in part by
+  [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) (how the core moves)
 - Date: 2026-11-13
 
 ## Context

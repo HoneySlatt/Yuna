@@ -1,9 +1,10 @@
 # 0021. Smithay's fork: a private repository, generic patches
 
-- Status: Accepted; amends [0017](0017-smithays-revision.md) (when main moves to the fork); amended
-  by [0036](0036-yuna-is-public.md) (the fork is public), [0042](0042-main-on-smithays-fork.md)
-  (main moves to the fork at M1.6), [0045](0045-the-fork-over-https-a-branch-per-base.md) (HTTPS, a
-  branch per base)
+- Status: Superseded by [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md);
+  amends [0017](0017-smithays-revision.md) (when main moves to the fork); amended by
+  [0036](0036-yuna-is-public.md) (the fork is public), [0042](0042-main-on-smithays-fork.md) (main
+  moves to the fork at M1.6), [0045](0045-the-fork-over-https-a-branch-per-base.md) (HTTPS, a branch
+  per base)
 - Date: 2026-11-11
 
 ## Context

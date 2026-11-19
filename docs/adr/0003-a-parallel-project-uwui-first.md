@@ -1,6 +1,8 @@
 # 0003. A parallel project, uwui first on any conflict
 
-- Status: Accepted; amended by [0060](0060-development-first-agents-in-their-own-yuna.md)
+- Status: Superseded by
+  [0115](0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md); amended
+  by [0060](0060-development-first-agents-in-their-own-yuna.md)
 - Date: 2026-11-11
 
 ## Context

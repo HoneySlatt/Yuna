@@ -1,7 +1,8 @@
 # 0025. Real applications in CI, and rest checked on the program
 
-- Status: Accepted; amended by [0029](0029-the-rest-of-animated-applications.md) (when an
-  animated application's rest is checked; SlimeEngine's job a workflow of its own),
+- Status: Superseded by [0122](0122-real-applications-in-ci-and-rest-checked-on-the-program.md);
+  amended by [0029](0029-the-rest-of-animated-applications.md) (when an animated application's rest
+  is checked; SlimeEngine's job a workflow of its own),
   [0050](0050-mpv-in-the-applications-tests.md) (mpv),
   [0104](0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md) (Opium in Stage 1's exit)
 - Date: 2026-11-12

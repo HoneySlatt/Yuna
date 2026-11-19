@@ -1,6 +1,11 @@
 # 0057. What Yuna does itself, and what it leaves to the shell
 
-- Status: Accepted; amends [0004](0004-the-compositor-alone-under-a-shell.md); amended by [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md), [0064](0064-what-the-best-desktops-taught-yuna.md) (brightness is Yuna's)
+- Status: Superseded by [0107](0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md),
+  [0108](0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md) (idle's lock before
+  sleep), [0129](0129-configuration-in-kdl-its-includes-and-variants.md) (the theme file and the
+  variants); amends [0004](0004-the-compositor-alone-under-a-shell.md); amended by
+  [0063](0063-vulkan-alone-and-uwui-for-what-yuna-draws.md),
+  [0064](0064-what-the-best-desktops-taught-yuna.md) (brightness is Yuna's)
 - Date: 2026-11-14
 
 ## Context

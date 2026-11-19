@@ -1,7 +1,9 @@
 # 0036. Yuna is public
 
-- Status: Accepted; amends [0009](0009-gpl-private-until-ready.md) (the repository's visibility),
-  [0021](0021-smithays-fork.md) (the fork's visibility)
+- Status: Superseded by [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md) (the
+  fork's visibility), [0114](0114-gpl-3-0-or-later-public-the-logo-apart.md) (the repository's
+  licence and visibility); amends [0009](0009-gpl-private-until-ready.md) (the repository's
+  visibility), [0021](0021-smithays-fork.md) (the fork's visibility)
 - Date: 2026-11-13
 
 ## Context

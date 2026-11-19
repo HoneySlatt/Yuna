@@ -1,7 +1,10 @@
 # 0043. Text input on an agent's seat, and the rest of SlimeEngine's examples
 
-- Status: Accepted; amends [0037](0037-seats-tools-input-and-closing.md) (how `type` types a
-  character outside `us`) and [0029](0029-the-rest-of-animated-applications.md) (which
+- Status: Superseded by
+  [0117](0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md) (text input on an
+  agent's seat), [0122](0122-real-applications-in-ci-and-rest-checked-on-the-program.md)
+  (SlimeEngine's examples at rest); amends [0037](0037-seats-tools-input-and-closing.md) (how `type`
+  types a character outside `us`) and [0029](0029-the-rest-of-animated-applications.md) (which
   SlimeEngine client's rest M1.5 checks); superseded in part by
   [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) (how
   `type` types a character)

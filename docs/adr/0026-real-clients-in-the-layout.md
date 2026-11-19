@@ -1,6 +1,8 @@
 # 0026. Real clients in the layout model
 
-- Status: Accepted
+- Status: Superseded by [0110](0110-the-layouts-and-their-behaviours.md) (its behaviours),
+  [0111](0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)
+  (sizes asked and committed)
 - Date: 2026-11-12
 
 ## Context

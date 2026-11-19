@@ -1,6 +1,6 @@
 # 0048. HDR virtual outputs: PQ announced, drawn at Stage 5
 
-- Status: Accepted
+- Status: Superseded by [0128](0128-hdr-virtual-outputs-and-when-colour-is-chosen.md)
 - Date: 2026-11-14
 
 ## Context

@@ -1,6 +1,8 @@
 # 0005. The layouts: scrolling columns, dwindle, floating, special workspaces
 
-- Status: Accepted; amended by [0062](0062-the-compositors-comfort-and-look.md)
+- Status: Superseded by [0110](0110-the-layouts-and-their-behaviours.md),
+  [0111](0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)
+  (the layout model, pure); amended by [0062](0062-the-compositors-comfort-and-look.md)
 - Date: 2026-11-11
 
 ## Context

@@ -1,6 +1,7 @@
 # 0069. Fullscreen X11 games: gamescope, and Xwayland's emulated modes kept
 
-- Status: Accepted; answers [0044](0044-xwayland-across-outputs-of-different-scales.md)'s question on games
+- Status: Superseded by [0124](0124-x11-windows-across-outputs-of-different-scales.md); answers
+  [0044](0044-xwayland-across-outputs-of-different-scales.md)'s question on games
 - Date: 2026-11-14
 
 ## Context

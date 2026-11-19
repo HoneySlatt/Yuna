@@ -1,6 +1,7 @@
 # 0049. VRR and HDR outputs through MCP, and surfaces' colours read
 
-- Status: Accepted; amends [0033](0033-the-mcp-server.md) (two tools take more)
+- Status: Superseded by [0120](0120-the-mcp-server-a-private-yuna-on-stdio.md); amends
+  [0033](0033-the-mcp-server.md) (two tools take more)
 - Date: 2026-11-14
 
 ## Context
