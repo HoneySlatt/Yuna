@@ -25,6 +25,8 @@ The shell gives:
 - `YUNA_DBUS_DAEMON`, the absolute path of nixpkgs' `dbus-daemon`, which Yuna runs for each
   agent's seat's accessibility bus and the D-Bus code's tests run, never the host's; Yuna's
   package sets the same;
+- `YUNA_UNSHARE`, the absolute path of util-linux's `unshare`, which the Opium test uses to put
+  Opium in a network namespace, never the host's;
 - `YUNA_DEV_SHELL`, which `scripts/check.sh` requires;
 - what Yuna draws with, loaded at run time: `LD_LIBRARY_PATH` names libglvnd's EGL, and
   `__EGL_VENDOR_LIBRARY_FILENAMES` the shell's own Mesa, so that Yuna and its tests draw on that
@@ -230,7 +232,7 @@ tests (`mcp.rs` and `seats.rs` there).
 raised in a commit of its own: the input's URL in `flake.nix`, then `nix flake lock`, then
 these tests ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md)).
 SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on
-`interface`, given a folder that holds them, as the weekly job runs them:
+`interface`, given a folder that holds them, as SlimeEngine's weekly job runs them:
 
 ```sh
 nix develop -c cargo test -p yuna --test applications -- --nocapture
@@ -246,11 +248,12 @@ slime-cook -- cook examples/assets <folder>/cooked`), and `assets/`, a copy of
 `examples/assets`.
 
 Opium's desktop window runs in an ignored test, `crates/yuna/tests/opium.rs`, given Opium's
-`bin/opium`, as the weekly Opium job runs it (ADR-0104): an agent, through `yuna mcp` alone,
+`bin/opium`, as the weekly Opium job runs it ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)): an agent, through `yuna mcp` alone,
 starts Opium on a throwaway profile, in a network namespace of its own, checks its window by
 capture, clicks Songs in it, checks the new page by capture, and Yuna must rest once Opium is
 idle. Opium's Nix package is built at the revision `.github/workflows/opium.yml` pins, from
-Opium's own flake; the namespace needs `unshare` on the `PATH` and unprivileged user namespaces.
+Opium's own flake; the namespace is made by util-linux's `unshare`, which the shell names in
+`YUNA_UNSHARE`, and needs unprivileged user namespaces.
 The test takes about 20 s; Opium's build, about 15 minutes the first time:
 
 ```sh
@@ -302,7 +305,7 @@ only <step>` runs one:
 commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
 warning, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
 without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
-fragment misnamed, SlimeEngine's job leaving out the drawing path), and expects the step that
+fragment misnamed, SlimeEngine's or Opium's job leaving out the drawing path), and expects the step that
 guards against it to fail, for that reason. Run it after changing `check.sh` or a check, and
 before a release; it takes about as long as `check.sh` twice, building in `target/test-check`.
 
@@ -330,9 +333,11 @@ data once per pinned revision and keeps the folder in GitHub's cache
 times are in [`docs/measurements.md`](docs/measurements.md).
 [`.github/workflows/opium.yml`](.github/workflows/opium.yml) runs Opium's desktop window in Yuna
 every Saturday, on demand, and on a push that changes anything its test builds or reads, its
-path filter checked the same way (ADR-0104). It builds Opium's Nix package at the revision it
+path filter checked the same way ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)). It builds Opium's Nix package at the revision it
 pins, uncached, and turns off the AppArmor rule of GitHub's Ubuntu 24.04 that keeps an
-unprivileged user from the network namespace the test runs Opium in.
+unprivileged user from the network namespace the test runs Opium in. Its times go to
+[`docs/measurements.md`](docs/measurements.md) once it has run on GitHub's runners; none is
+recorded yet.
 
 ## Dependencies
 
@@ -347,7 +352,8 @@ Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` an
 of `wayland-protocols`, for tests only; and, in the shell, Mesa, libglvnd, libxkbcommon,
 xkeyboard-config, a font, and the applications the tests run
 ([ADR-0025](docs/adr/0025-applications-in-ci.md)); on 2026-11-12 too, the action
-`actions/cache`, for SlimeEngine's binary. For the MCP server (M1.5), the owner accepted on
+`actions/cache`, for SlimeEngine's binary. For Opium's test ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)), the owner accepted on
+2026-11-19 util-linux in the shell, for its `unshare`. For the MCP server (M1.5), the owner accepted on
 2026-11-13 `serde`, with its `derive` feature, and `serde_json`
 ([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
 ([ADR-0034](docs/adr/0034-captures.md)). Smithay is Yuna's public fork, read over HTTPS and

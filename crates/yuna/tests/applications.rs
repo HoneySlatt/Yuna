@@ -64,40 +64,53 @@
 
 #[path = "common/application_environment.rs"]
 mod application_environment;
+#[path = "common/base64.rs"]
+mod base64;
+#[path = "common/capture_image.rs"]
+mod capture_image;
 #[path = "common/dies_with_test.rs"]
 mod dies_with_test;
+#[path = "common/mcp_client.rs"]
+mod mcp_client;
+#[path = "common/rest.rs"]
+mod rest;
+#[path = "common/xauthority.rs"]
+mod xauthority;
+#[path = "common/yuna_run.rs"]
+mod yuna_run;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, DirBuilder, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
+use base64::decode_base64;
+use capture_image::Image;
 use dies_with_test::dies_with_test;
+use mcp_client::McpClient;
+use rest::{Activity, Counters};
 use serde_json::{Value, json};
-use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder};
 use x11rb::rust_connection::{DefaultStream, RustConnection};
+use xauthority::cookie_of;
+use yuna_run::POLL;
 
-/// How long Yuna must do nothing: the rest window of the bar (ROADMAP's quality bar).
-const REST: Duration = Duration::from_secs(10);
 /// How long Yuna must go without a round before its application counts as quiet.
 const QUIET: Duration = Duration::from_secs(2);
 /// The longest an application may take to show its window, to go quiet or to leave: CI's runners
 /// are slow, and a debug build of Yuna draws on the CPU.
 const PATIENCE: Duration = Duration::from_secs(60);
-/// How often the test reads Yuna's log and an application's state; it never wakes Yuna.
-const POLL: Duration = Duration::from_millis(50);
 /// The frames that `vkcube` and SlimeEngine's example draw before they leave.
 const FRAMES: u32 = 120;
 
@@ -1414,94 +1427,6 @@ fn application(yuna: &Yuna, program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
-/// What Yuna counted, from its last `counters` line (`Compositor::counters`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Counters {
-    frames_drawn: u64,
-    frame_callbacks: u64,
-    configures: u64,
-    commits: u64,
-    wakeups: u64,
-}
-
-impl Counters {
-    /// Reads `frames_drawn=3 frame_callbacks=5 configures=2 commits=6 wakeups=40` after the
-    /// message `counters`: all five, nothing else.
-    fn parse(line: &str) -> Option<Counters> {
-        let fields: Vec<(&str, u64)> = line
-            .split_once(" counters ")?
-            .1
-            .split_whitespace()
-            .map(|field| {
-                let (key, value) = field.split_once('=')?;
-                Some((key, value.parse().ok()?))
-            })
-            .collect::<Option<_>>()?;
-        match fields.as_slice() {
-            [
-                ("frames_drawn", frames_drawn),
-                ("frame_callbacks", frame_callbacks),
-                ("configures", configures),
-                ("commits", commits),
-                ("wakeups", wakeups),
-            ] => Some(Counters {
-                frames_drawn: *frames_drawn,
-                frame_callbacks: *frame_callbacks,
-                configures: *configures,
-                commits: *commits,
-                wakeups: *wakeups,
-            }),
-            _ => None,
-        }
-    }
-
-    /// What was counted since `before`. Yuna's counters only grow: a smaller value is a reading
-    /// gone wrong, never Yuna at rest.
-    fn since(self, before: Counters) -> Counters {
-        let less = |after: u64, before: u64| {
-            after
-                .checked_sub(before)
-                .unwrap_or_else(|| panic!("a counter of Yuna fell from {before} to {after}"))
-        };
-        Counters {
-            frames_drawn: less(self.frames_drawn, before.frames_drawn),
-            frame_callbacks: less(self.frame_callbacks, before.frame_callbacks),
-            configures: less(self.configures, before.configures),
-            commits: less(self.commits, before.commits),
-            wakeups: less(self.wakeups, before.wakeups),
-        }
-    }
-}
-
-/// What Yuna did during a rest window that should have had nothing.
-#[derive(Debug)]
-struct Activity {
-    counters: Counters,
-    context_switches: u64,
-    /// Each thread that switched, or that came or went: its id, and its switches or what
-    /// happened to it.
-    threads: Vec<String>,
-}
-
-impl fmt::Display for Activity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let c = self.counters;
-        write!(
-            f,
-            "in {} s, {} frames drawn, {} frame callbacks, {} configures, {} commits, {} \
-             wake-ups; {} context switches ({})",
-            REST.as_secs(),
-            c.frames_drawn,
-            c.frame_callbacks,
-            c.configures,
-            c.commits,
-            c.wakeups,
-            self.context_switches,
-            self.threads.join(", ")
-        )
-    }
-}
-
 /// A `yuna` process, `yuna --headless` or `yuna mcp`, with one output, in a folder of its own:
 /// its runtime folder, its log, and its application's home. The output is 1920 × 1080 at 60 Hz
 /// and scale 1, or the mode `YUNA_APPLICATIONS_OUTPUT` names, as `--output` takes it, to measure
@@ -1513,17 +1438,10 @@ struct Yuna {
     /// Its Wayland socket's path: the owner's seat's for `yuna --headless`, the agent's seat's
     /// for `yuna mcp` once [`Yuna::create_seat`] made it.
     socket: PathBuf,
-    /// The MCP connection of `yuna mcp`: its input, and its replies, read on a thread.
-    mcp: Option<RefCell<Mcp>>,
+    /// The MCP connection of `yuna mcp`.
+    mcp: Option<McpClient>,
     /// Whether a failure was reported: the folder, with its logs, is then kept.
     failed: Cell<bool>,
-}
-
-/// The test's side of `yuna mcp`'s standard input and output.
-struct Mcp {
-    input: ChildStdin,
-    replies: mpsc::Receiver<Value>,
-    next_id: u64,
 }
 
 /// A program an agent started through `spawn`: its id and its log.
@@ -1556,25 +1474,7 @@ impl Yuna {
     /// replies read from its standard output on a thread.
     fn start_mcp() -> Yuna {
         let mut yuna = Yuna::launch(&["mcp"], Stdio::piped());
-        let stdout = yuna.child.stdout.take().expect("its standard output");
-        let input = yuna.child.stdin.take().expect("its standard input");
-        let (sender, replies) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { return };
-                let Ok(reply) = serde_json::from_str::<Value>(&line) else {
-                    return;
-                };
-                if sender.send(reply).is_err() {
-                    return;
-                }
-            }
-        });
-        yuna.mcp = Some(RefCell::new(Mcp {
-            input,
-            replies,
-            next_id: 1,
-        }));
+        yuna.mcp = Some(McpClient::connect(&mut yuna.child));
         yuna
     }
 
@@ -1631,36 +1531,10 @@ impl Yuna {
 
     /// Calls an MCP tool of `yuna mcp` and gives its result, or what it refused.
     fn call(&self, tool: &str, arguments: Value) -> Result<Value, String> {
-        let mut mcp = self.mcp.as_ref().expect("yuna mcp").borrow_mut();
-        let id = mcp.next_id;
-        mcp.next_id += 1;
-        let request = json!({
-            "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {
-                "_meta": {
-                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientCapabilities": {},
-                },
-                "name": tool,
-                "arguments": arguments,
-            }
-        });
-        writeln!(mcp.input, "{request}").map_err(|error| format!("{tool}: {error}"))?;
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            let reply = mcp
-                .replies
-                .recv_timeout(left)
-                .map_err(|_| format!("no reply to {tool} in {} s", PATIENCE.as_secs()))?;
-            if reply["id"] == json!(id) {
-                let result = reply["result"].clone();
-                if result["isError"] == json!(false) {
-                    return Ok(result);
-                }
-                return Err(format!("{tool} {arguments} failed: {reply}"));
-            }
-        }
+        self.mcp
+            .as_ref()
+            .expect("yuna mcp")
+            .call(tool, arguments, PATIENCE)
     }
 
     /// Creates an agent's seat through MCP, with an output of `--output`'s mode, and gives its
@@ -1993,16 +1867,9 @@ impl Yuna {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Its last `counters` line, or zeros before its first round. A last line without its end
-    /// may be half written, and is left out.
+    /// Its last `counters` line, or zeros before its first round.
     fn counters(&self) -> Counters {
-        let log = self.read_log();
-        let complete = log.rfind('\n').map_or("", |end| &log[..end]);
-        complete
-            .lines()
-            .rev()
-            .find_map(Counters::parse)
-            .unwrap_or_default()
+        rest::counters(&self.log)
     }
 
     /// Waits until a window has mapped and a frame was drawn after it.
@@ -2028,158 +1895,37 @@ impl Yuna {
     /// Waits until Yuna has had no round for `quiet`, at most `patience`, and gives its counters
     /// then.
     fn wait_until_quiet(&self, quiet: Duration, patience: Duration) -> Result<Counters, String> {
-        let deadline = Instant::now() + patience;
-        let mut last = self.counters();
-        let mut since = Instant::now();
-        loop {
-            std::thread::sleep(POLL);
-            let now = self.counters();
-            if now != last {
-                last = now;
-                since = Instant::now();
-            } else if since.elapsed() >= quiet {
-                return Ok(now);
-            }
-            if Instant::now() > deadline {
-                return Err(format!(
-                    "never quiet for {} s in {} s: {last:?}",
-                    quiet.as_secs(),
-                    patience.as_secs()
-                ));
-            }
-        }
+        rest::wait_until_quiet(&self.log, quiet, patience)
     }
 
-    /// Requires [`REST`] with no context switch in any of Yuna's threads and no round: no frame,
-    /// frame callback, configure, commit or wake-up. Says what it measured.
+    /// Requires [`rest::REST`] with no context switch in any of Yuna's threads and no round: no
+    /// frame, frame callback, configure, commit or wake-up. Says what it measured.
     fn measure_rest(&self) -> Result<String, Activity> {
-        let threads_before = self.context_switches();
-        let counters_before = self.counters();
-        std::thread::sleep(REST);
-        let threads_after = self.context_switches();
-        let counters = self.counters().since(counters_before);
-
-        let mut context_switches = 0;
-        let mut threads = Vec::new();
-        for (thread, after) in &threads_after {
-            match threads_before.get(thread) {
-                Some(before) if before == after => {}
-                Some(before) => {
-                    context_switches += after - before;
-                    threads.push(format!("thread {thread}: {}", after - before));
-                }
-                None => {
-                    context_switches += after;
-                    threads.push(format!("thread {thread} started"));
-                }
-            }
-        }
-        for thread in threads_before.keys() {
-            if !threads_after.contains_key(thread) {
-                threads.push(format!("thread {thread} ended"));
-            }
-        }
-        if counters == Counters::default() && threads.is_empty() {
-            Ok(format!(
-                "{} s of rest: 0 context switches in its {} threads, 0 frames, frame \
-                 callbacks, configures, commits and wake-ups",
-                REST.as_secs(),
-                threads_after.len()
-            ))
-        } else {
-            Err(Activity {
-                counters,
-                context_switches,
-                threads,
-            })
-        }
-    }
-
-    /// Each of Yuna's threads, and its context switches so far, voluntary and not.
-    fn context_switches(&self) -> BTreeMap<u32, u64> {
-        let tasks = PathBuf::from(format!("/proc/{}/task", self.child.id()));
-        let mut threads = BTreeMap::new();
-        for task in fs::read_dir(tasks).expect("Yuna's threads").flatten() {
-            let Some(thread) = task.file_name().to_str().and_then(|id| id.parse().ok()) else {
-                continue;
-            };
-            // A thread that ended between the listing and the read is left out.
-            let Ok(status) = fs::read_to_string(task.path().join("status")) else {
-                continue;
-            };
-            let switches = status
-                .lines()
-                .filter(|line| line.contains("ctxt_switches:"))
-                .filter_map(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
-                .sum();
-            threads.insert(thread, switches);
-        }
-        threads
+        rest::measure_rest(self.child.id(), &self.log)
     }
 
     /// Stops Yuna with SIGTERM, as an agent does, and requires that it ends well.
     fn stop(mut self) -> Result<(), String> {
-        let _ = kill_process(Pid::from_child(&self.child), Signal::TERM);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(()),
-                Ok(Some(status)) => {
-                    self.failed.set(true);
-                    return Err(format!("yuna ended with {status}\n{}", self.log_tail()));
-                }
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
-                _ => {
-                    self.failed.set(true);
-                    return Err(format!("yuna did not stop on SIGTERM\n{}", self.log_tail()));
-                }
-            }
-        }
+        yuna_run::stop_on_sigterm(&mut self.child, &self.log).inspect_err(|_| self.failed.set(true))
     }
 
     /// The end of Yuna's log, its warnings and errors first, for a failure's message.
     fn log_tail(&self) -> String {
-        let log = self.read_log();
-        let warnings: Vec<&str> = log
-            .lines()
-            .filter(|line| line.contains(" WARN ") || line.contains(" ERROR "))
-            .take(10)
-            .collect();
-        let lines: Vec<&str> = log.lines().collect();
-        let tail = &lines[lines.len().saturating_sub(10)..];
-        format!(
-            "yuna's warnings:\n{}\nyuna's last lines ({}):\n{}",
-            warnings.join("\n"),
-            self.log.display(),
-            tail.join("\n")
-        )
+        yuna_run::log_tail(&self.log)
     }
 
     /// What a failure shows: the ends of Yuna's log and of its application's, `app_log`. The
     /// folder that holds both is then kept.
     fn diagnosis(&self, app_log: &Path) -> String {
         self.failed.set(true);
-        let log = fs::read_to_string(app_log).unwrap_or_default();
-        let lines: Vec<&str> = log.lines().collect();
-        format!(
-            "{}\nthe application's last lines ({}):\n{}",
-            self.log_tail(),
-            app_log.display(),
-            lines[lines.len().saturating_sub(15)..].join("\n")
-        )
+        yuna_run::diagnosis(&self.log, app_log, "application")
     }
 }
 
 impl Drop for Yuna {
     /// Kills Yuna if it still runs. Its folder is kept when the run failed, for its logs.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if self.failed.get() || std::thread::panicking() {
-            eprintln!("Yuna's folder is kept: {}", self.folder.display());
-        } else {
-            let _ = fs::remove_dir_all(&self.folder);
-        }
+        yuna_run::end_run(&mut self.child, &self.folder, self.failed.get());
     }
 }
 
@@ -2231,38 +1977,7 @@ impl Drop for Application {
     }
 }
 
-/// An image of R, G, B pixels, row by row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Image {
-    width: u32,
-    height: u32,
-    pixels: Vec<[u8; 3]>,
-}
-
 impl Image {
-    /// A capture's PNG, as Yuna encodes it: 8-bit RGB.
-    fn from_png(png: &[u8]) -> Result<Image, String> {
-        let mut reader = png::Decoder::new(std::io::Cursor::new(png))
-            .read_info()
-            .map_err(|error| format!("a capture's PNG: {error}"))?;
-        let mut bytes = vec![0; reader.output_buffer_size().ok_or("a PNG too large")?];
-        let info = reader
-            .next_frame(&mut bytes)
-            .map_err(|error| format!("a capture's pixels: {error}"))?;
-        if info.color_type != png::ColorType::Rgb || info.bit_depth != png::BitDepth::Eight {
-            return Err(format!(
-                "a capture's PNG is {:?} of {:?}, not 8-bit RGB",
-                info.color_type, info.bit_depth
-            ));
-        }
-        bytes.truncate(info.buffer_size());
-        Ok(Image {
-            width: info.width,
-            height: info.height,
-            pixels: bytes.as_chunks::<3>().0.to_vec(),
-        })
-    }
-
     /// Pixel (`x`, `y`).
     fn at(&self, x: u32, y: u32) -> [u8; 3] {
         self.pixels[(y * self.width + x) as usize]
@@ -2393,27 +2108,6 @@ struct SeatDisplay {
     cookie: Vec<u8>,
 }
 
-/// The cookie of the Xauthority file at `path`: its one entry's last field, after the family,
-/// the address, the display's number and the cookie's name, each but the family led by its
-/// length.
-fn cookie_of(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut at = 2;
-    let mut field = Vec::new();
-    for _ in 0..4 {
-        let length = bytes
-            .get(at..at + 2)
-            .map(|length| usize::from(u16::from_be_bytes([length[0], length[1]])))
-            .ok_or("a short Xauthority")?;
-        field = bytes
-            .get(at + 2..at + 2 + length)
-            .ok_or("a short Xauthority")?
-            .to_vec();
-        at += 2 + length;
-    }
-    Ok(field)
-}
-
 /// What X11 holds of a seat's one managed window: `Xft.dpi`, which Yuna sets, and the window's
 /// pixels.
 struct X11Window {
@@ -2520,30 +2214,4 @@ fn read_x11_window(display: &SeatDisplay) -> Result<X11Window, String> {
                 .collect(),
         },
     })
-}
-
-/// The bytes of base64 `text`, as RFC 4648 writes them, padded.
-fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
-    let value = |c: u8| match c {
-        b'A'..=b'Z' => Ok(c - b'A'),
-        b'a'..=b'z' => Ok(c - b'a' + 26),
-        b'0'..=b'9' => Ok(c - b'0' + 52),
-        b'+' => Ok(62),
-        b'/' => Ok(63),
-        _ => Err(format!("not base64: {c}")),
-    };
-    let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
-    for chunk in text.as_bytes().chunks(4) {
-        let digits = chunk
-            .iter()
-            .take_while(|&&c| c != b'=')
-            .map(|&c| value(c))
-            .collect::<Result<Vec<u8>, String>>()?;
-        if digits.len() < 2 {
-            return Err("base64 cut short".to_owned());
-        }
-        let n = digits.iter().fold(0u32, |n, &d| n << 6 | u32::from(d)) << (6 * (4 - digits.len()));
-        bytes.extend_from_slice(&n.to_be_bytes()[1..digits.len()]);
-    }
-    Ok(bytes)
 }

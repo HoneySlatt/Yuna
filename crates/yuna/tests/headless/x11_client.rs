@@ -8,7 +8,6 @@
 //! `XAUTHORITY` they cannot set.
 
 use std::collections::{HashMap, VecDeque};
-use std::fs;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::thread;
@@ -26,6 +25,10 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::{Compositor, X11Display};
+
+/// The cookie of a display's Xauthority file, which `xwayland.rs` reads too.
+#[path = "../common/xauthority.rs"]
+pub(crate) mod xauthority;
 
 /// How long a step waits for X11 or the compositor: a start takes a fraction of a second, longer
 /// while every test runs at once.
@@ -218,31 +221,10 @@ pub(crate) struct X11Client {
     counters: HashMap<Window, Counter>,
 }
 
-/// The cookie of `display`'s Xauthority file: its one entry's last field.
-fn cookie_of(display: &X11Display) -> Result<Vec<u8>, String> {
-    let bytes = fs::read(&display.xauthority).map_err(|e| e.to_string())?;
-    let mut at = 2;
-    let mut fields = Vec::new();
-    for _ in 0..4 {
-        let length = usize::from(u16::from_be_bytes([
-            *bytes.get(at).ok_or("a short Xauthority")?,
-            *bytes.get(at + 1).ok_or("a short Xauthority")?,
-        ]));
-        fields.push(
-            bytes
-                .get(at + 2..at + 2 + length)
-                .ok_or("a short Xauthority")?
-                .to_vec(),
-        );
-        at += 2 + length;
-    }
-    fields.pop().ok_or_else(|| "no cookie".to_owned())
-}
-
 impl X11Client {
     /// Connects to `display` through its abstract socket, with its cookie, and reads `Xft.dpi`.
     pub(crate) fn connect(display: &X11Display) -> Result<X11Client, String> {
-        let cookie = cookie_of(display)?;
+        let cookie = xauthority::cookie_of(&display.xauthority)?;
         let address = SocketAddr::from_abstract_name(format!("/tmp/.X11-unix/X{}", display.number))
             .map_err(|e| e.to_string())?;
         let stream = UnixStream::connect_addr(&address).map_err(|e| e.to_string())?;

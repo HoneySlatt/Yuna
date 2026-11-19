@@ -93,7 +93,7 @@ check_indexes() {
     python3 -I scripts/changelog.py
 }
 
-# The documents' scripts' tests, and the test of SlimeEngine's job's path filter
+# The documents' scripts' tests, and the test of the path filters of SlimeEngine's and Opium's jobs
 # (scripts/test_workflows.py), which needs git alone.
 check_script_tests() {
     step "Tests of the scripts: the documents' and the workflows' path filter"

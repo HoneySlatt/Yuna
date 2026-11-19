@@ -28,20 +28,23 @@
 //! `--calls <n>`, 1,000 by default, the calls of each kind; `--seconds <n>`, 10 by default, each
 //! window. It stops what it started when it ends, and keeps its folder of logs when it fails.
 
-use std::fs::{self, DirBuilder, File};
+mod common;
+#[path = "common/vkcube_environment.rs"]
+mod vkcube_environment;
+
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use common::{PATIENCE, Run, field, percentile, shell_variable};
 use serde_json::{Value, json};
+use vkcube_environment::{vkcube_home, vkcube_variables};
 
 /// How long the clients draw before anything is measured.
 const WARM_UP: Duration = Duration::from_secs(3);
-/// The longest Yuna may take to answer a call, its clients to show their windows.
-const PATIENCE: Duration = Duration::from_secs(60);
 /// The captures at the physical size.
 const PHYSICAL_CAPTURES: usize = 5;
 
@@ -62,7 +65,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let run = match Run::new() {
+    let run = match Run::new("yuna-agent-time") {
         Ok(run) => run,
         Err(reason) => {
             eprintln!("agent_time: {reason}");
@@ -113,7 +116,7 @@ fn read_options(arguments: impl Iterator<Item = String>) -> Result<Options, Stri
 }
 
 fn measure(run: &Run, options: &Options) -> Result<(), String> {
-    let mut yuna = run.start_yuna(options)?;
+    let mut yuna = start_yuna(run, options)?;
     println!(
         "agent_time: yuna mcp, output {}, {}",
         options.output,
@@ -231,109 +234,67 @@ fn measure(run: &Run, options: &Options) -> Result<(), String> {
 /// The environment of `vkcube` number `n`, as the applications' tests give it
 /// (`crates/yuna/tests/applications.rs`), and the Vulkan driver asked.
 fn vkcube_environment(run: &Run, n: u32, options: &Options) -> Result<Value, String> {
-    let home = run.folder.join(format!("vkcube-{n}"));
-    fs::create_dir_all(&home).map_err(|e| format!("cannot create {}: {e}", home.display()))?;
-    let driver = match &options.client_vulkan {
-        Some(icd) => icd.clone(),
-        None => shell_variable("YUNA_LAVAPIPE_ICD")?,
-    };
-    Ok(json!({
-        "PATH": shell_variable("YUNA_APPLICATIONS_PATH")?,
-        "HOME": home,
-        "XDG_CACHE_HOME": home.join("cache"),
-        "LD_LIBRARY_PATH": shell_variable("LD_LIBRARY_PATH")?,
-        "VK_DRIVER_FILES": driver,
-        "VK_LOADER_LAYERS_DISABLE": "~implicit~",
-    }))
+    let home = vkcube_home(run, n)?;
+    let variables = vkcube_variables(&home, options.client_vulkan.as_deref())?;
+    Ok(Value::Object(
+        variables
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), Value::String(value)))
+            .collect(),
+    ))
 }
 
-/// The run's folder: Yuna's runtime folder, its log, and the clients' homes. Removed at the end.
-struct Run {
-    folder: PathBuf,
-}
-
-impl Run {
-    fn new() -> Result<Run, String> {
-        let folder = std::env::temp_dir().join(format!("yuna-agent-time-{}", std::process::id()));
-        // Wayland asks that the runtime folder be the user's alone.
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(folder.join("runtime"))
-            .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
-        Ok(Run { folder })
+/// Starts the `yuna` built beside this program as `yuna mcp`, logging at `debug`, with nothing
+/// of the caller's environment but what it draws with, in `run`'s folder.
+fn start_yuna(run: &Run, options: &Options) -> Result<Yuna, String> {
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|me| Some(me.parent()?.parent()?.join("yuna")))
+        .filter(|path| path.exists())
+        .ok_or("no yuna beside this program: build it with --bin yuna")?;
+    let log = run.folder().join("yuna.log");
+    let mut command = Command::new(program);
+    command.args(["mcp", "--output", &options.output]);
+    if options.gpu {
+        command.arg("--gpu");
     }
-
-    /// Starts the `yuna` built beside this program as `yuna mcp`, logging at `debug`, with
-    /// nothing of the caller's environment but what it draws with.
-    fn start_yuna(&self, options: &Options) -> Result<Yuna, String> {
-        let program = std::env::current_exe()
-            .ok()
-            .and_then(|me| Some(me.parent()?.parent()?.join("yuna")))
-            .filter(|path| path.exists())
-            .ok_or("no yuna beside this program: build it with --bin yuna")?;
-        let log = self.folder.join("yuna.log");
-        let mut command = Command::new(program);
-        command.args(["mcp", "--output", &options.output]);
-        if options.gpu {
-            command.arg("--gpu");
-        }
-        let mut child = command
-            .env_clear()
-            .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH")?)
-            .env(
-                "__EGL_VENDOR_LIBRARY_FILENAMES",
-                shell_variable("__EGL_VENDOR_LIBRARY_FILENAMES")?,
-            )
-            .env("XKB_CONFIG_ROOT", shell_variable("XKB_CONFIG_ROOT")?)
-            .env("HOME", self.folder.join("yuna-home"))
-            .env("XDG_RUNTIME_DIR", self.folder.join("runtime"))
-            .env("YUNA_LOG", "debug")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(File::create(&log).map_err(|e| format!("Yuna's log: {e}"))?)
-            .spawn()
-            .map_err(|e| format!("yuna does not start: {e}"))?;
-        let stdout = child.stdout.take().ok_or("Yuna's standard output")?;
-        let input = child.stdin.take().ok_or("Yuna's standard input")?;
-        let (sender, replies) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { return };
-                let Ok(reply) = serde_json::from_str::<Value>(&line) else {
-                    return;
-                };
-                if sender.send(reply).is_err() {
-                    return;
-                }
+    let mut child = command
+        .env_clear()
+        .env("LD_LIBRARY_PATH", shell_variable("LD_LIBRARY_PATH")?)
+        .env(
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            shell_variable("__EGL_VENDOR_LIBRARY_FILENAMES")?,
+        )
+        .env("XKB_CONFIG_ROOT", shell_variable("XKB_CONFIG_ROOT")?)
+        .env("HOME", run.folder().join("yuna-home"))
+        .env("XDG_RUNTIME_DIR", run.folder().join("runtime"))
+        .env("YUNA_LOG", "debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(File::create(&log).map_err(|e| format!("Yuna's log: {e}"))?)
+        .spawn()
+        .map_err(|e| format!("yuna does not start: {e}"))?;
+    let stdout = child.stdout.take().ok_or("Yuna's standard output")?;
+    let input = child.stdin.take().ok_or("Yuna's standard input")?;
+    let (sender, replies) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            let Ok(reply) = serde_json::from_str::<Value>(&line) else {
+                return;
+            };
+            if sender.send(reply).is_err() {
+                return;
             }
-        });
-        Ok(Yuna {
-            child,
-            input: Some(input),
-            replies,
-            next_id: 1,
-            log,
-        })
-    }
-
-    /// Keeps the folder, for its logs, and names it.
-    fn keep(&self) -> String {
-        let kept = self.folder.with_extension("kept");
-        let _ = fs::rename(&self.folder, &kept);
-        kept.display().to_string()
-    }
-}
-
-impl Drop for Run {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.folder);
-    }
-}
-
-/// A variable the development shell sets.
-fn shell_variable(name: &str) -> Result<String, String> {
-    std::env::var(name).map_err(|_| format!("{name} is not set: run in the shell, `nix develop`"))
+        }
+    });
+    Ok(Yuna {
+        child,
+        input: Some(input),
+        replies,
+        next_id: 1,
+        log,
+    })
 }
 
 /// The `yuna mcp` process: its input, its replies, read on a thread, and its log.
@@ -442,13 +403,6 @@ impl Drop for Yuna {
     }
 }
 
-/// The value of `key=<number>` in a log line.
-fn field(line: &str, key: &str) -> Option<u64> {
-    line.split_whitespace()
-        .find_map(|word| word.strip_prefix(key)?.strip_prefix('='))
-        .and_then(|value| value.parse().ok())
-}
-
 /// The `took_us` of each log line holding `message`.
 fn logged_times(log: &str, message: &str) -> Vec<u64> {
     log.lines()
@@ -506,12 +460,6 @@ fn spread(times: &[u64]) -> String {
         sorted[sorted.len() - 1],
         sorted.len()
     )
-}
-
-/// The value at percentile `p` of `sorted`, by the nearest rank.
-fn percentile(sorted: &[u64], p: f64) -> u64 {
-    let rank = ((p / 100.0) * sorted.len() as f64).ceil() as usize;
-    sorted[rank.clamp(1, sorted.len()) - 1]
 }
 
 #[cfg(test)]

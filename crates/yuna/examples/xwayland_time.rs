@@ -55,12 +55,14 @@ mod common;
 mod load;
 #[path = "common/usage.rs"]
 mod usage;
+#[path = "../tests/common/xauthority.rs"]
+mod xauthority;
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
@@ -75,6 +77,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
+use xauthority::cookie_of;
 use yuna_bench::procfs::{self, Proc};
 
 /// How long Yuna's log must stay the same for Yuna to count as quiet.
@@ -519,27 +522,6 @@ fn refill(
     }
     connection.free_gc(gc).map_err(|e| x11(&e))?;
     Ok(())
-}
-
-/// The cookie of the Xauthority file at `path`: its one entry's last field, after the family,
-/// the address, the display's number and the cookie's name, each but the family led by its
-/// length.
-fn cookie_of(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut at = 2;
-    let mut field = Vec::new();
-    for _ in 0..4 {
-        let length = bytes
-            .get(at..at + 2)
-            .map(|length| usize::from(u16::from_be_bytes([length[0], length[1]])))
-            .ok_or("a short Xauthority")?;
-        field = bytes
-            .get(at + 2..at + 2 + length)
-            .ok_or("a short Xauthority")?
-            .to_vec();
-        at += 2 + length;
-    }
-    Ok(field)
 }
 
 /// A `key:  <n> kB` line of process `pid`'s `status`, in KiB.

@@ -74,6 +74,10 @@
         # wrapper sets the same.
         YUNA_DBUS_DAEMON = "${pkgs.dbus}/bin/dbus-daemon";
 
+        # The `unshare` that puts Opium in a network namespace of its own in the weekly job's test
+        # (crates/yuna/tests/opium.rs): util-linux's, pinned here, never the host's.
+        YUNA_UNSHARE = "${pkgs.util-linux}/bin/unshare";
+
         # Yuna draws with EGL, loaded at run time (ADR-0022): libglvnd's dispatcher, which this
         # file points at the shell's own Mesa only, so that Yuna never loads the host's drivers.
         LD_LIBRARY_PATH = "${pkgs.libglvnd}/lib";

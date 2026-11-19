@@ -18,6 +18,10 @@ use crate::client::Client;
 use crate::mcp::{Mcp, modern};
 use crate::{BLUE, LEAD, RED, run_armed_deadlines};
 
+#[path = "../common/base64.rs"]
+mod base64;
+use base64::decode_base64;
+
 /// The background where no window is, as `read_pixels` gives it: R, G, B.
 fn background(mcp: &mut Mcp, output: u64) -> [u8; 3] {
     let pixel = mcp
@@ -101,7 +105,7 @@ fn image_of(result: &Value) -> (u32, u32, Vec<u8>) {
     let content = &result["content"][1];
     assert_eq!(content["type"], json!("image"));
     assert_eq!(content["mimeType"], json!("image/png"));
-    let png = decode_base64(content["data"].as_str().expect("base64"));
+    let png = decode_base64(content["data"].as_str().expect("base64")).expect("base64");
     assert_eq!(result["structuredContent"]["png_bytes"], json!(png.len()));
     let mut reader = png::Decoder::new(std::io::Cursor::new(png))
         .read_info()
@@ -117,28 +121,6 @@ fn image_of(result: &Value) -> (u32, u32, Vec<u8>) {
 fn at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
     let i = ((y * width + x) * 3) as usize;
     [pixels[i], pixels[i + 1], pixels[i + 2]]
-}
-
-fn decode_base64(text: &str) -> Vec<u8> {
-    let value = |c: u8| match c {
-        b'A'..=b'Z' => c - b'A',
-        b'a'..=b'z' => c - b'a' + 26,
-        b'0'..=b'9' => c - b'0' + 52,
-        b'+' => 62,
-        b'/' => 63,
-        _ => panic!("not base64: {c}"),
-    };
-    let mut bytes = Vec::new();
-    for chunk in text.as_bytes().chunks(4) {
-        let digits: Vec<u8> = chunk
-            .iter()
-            .take_while(|&&c| c != b'=')
-            .map(|&c| value(c))
-            .collect();
-        let n = digits.iter().fold(0u32, |n, &d| n << 6 | u32::from(d)) << (6 * (4 - digits.len()));
-        bytes.extend_from_slice(&n.to_be_bytes()[1..digits.len()]);
-    }
-    bytes
 }
 
 const RED_RGB: [u8; 3] = [255, 0, 0];

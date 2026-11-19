@@ -30,6 +30,7 @@ use yuna::{
     X11Display, XwaylandConfig,
 };
 
+use crate::x11_client::xauthority::entry_fields;
 use crate::{assert_rests, run_armed_deadlines};
 
 /// How long a story waits for Xwayland: a start takes a fraction of a second, longer while every
@@ -86,17 +87,11 @@ fn server_of(compositor: &Compositor, seat: SeatId) -> Option<i32> {
 
 /// The cookie of `display`'s Xauthority file, which must hold one entry: `FamilyWild`, no
 /// address, the display's number, `MIT-MAGIC-COOKIE-1` and 16 bytes.
-fn cookie_of(display: &X11Display) -> Vec<u8> {
+fn checked_cookie_of(display: &X11Display) -> Vec<u8> {
     let bytes = fs::read(&display.xauthority).expect("the Xauthority file");
     assert_eq!(&bytes[..2], &[0xFF, 0xFF], "FamilyWild");
-    let mut fields = Vec::new();
-    let mut at = 2;
-    for _ in 0..4 {
-        let length = usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
-        fields.push(bytes[at + 2..at + 2 + length].to_vec());
-        at += 2 + length;
-    }
-    assert_eq!(at, bytes.len(), "one entry");
+    let (fields, end) = entry_fields(&bytes).expect("an entry");
+    assert_eq!(end, bytes.len(), "one entry");
     assert_eq!(fields[0], b"");
     assert_eq!(fields[1], display.number.to_string().as_bytes());
     assert_eq!(fields[2], b"MIT-MAGIC-COOKIE-1");
@@ -250,7 +245,7 @@ fn xwayland_starts_on_the_first_connection_and_serves_it() {
         .expect("Yuna dispatches");
     assert_eq!(server_of(&compositor, OWNER_SEAT), None);
 
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, took) = serve(&mut compositor, client).expect("the client is answered");
     eprintln!(
         "an X11 client's first reply came {} ms after it connected",
@@ -278,7 +273,7 @@ fn xwayland_on_the_software_device_loads_no_gpu_driver() {
     let folder = Folder::new("software");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, _) = serve(&mut compositor, client).expect("answered");
     let pid = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
     let maps = fs::read_to_string(format!("/proc/{pid}/maps")).expect("Xwayland's mappings");
@@ -303,7 +298,7 @@ fn the_first_client_reads_xft_dpi_of_the_largest_scale() {
     ];
     let mut compositor = compositor(&folder, outputs, IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
-    let (number, cookie) = (display.number, cookie_of(&display));
+    let (number, cookie) = (display.number, checked_cookie_of(&display));
     let client = thread::spawn(move || -> Result<(Vec<u8>, Vec<u8>, bool), String> {
         let connection = connect(number, Some(&cookie)).map_err(|e| e.to_string())?;
         let ask = |e: x11rb::errors::ReplyError| e.to_string();
@@ -375,7 +370,7 @@ fn a_client_without_the_cookie_is_refused() {
         refused(connect(number, Some(&[7; 16])))
     });
     serve(&mut compositor, refusals).expect("both are refused");
-    let client = answered_client(number, cookie_of(&display));
+    let client = answered_client(number, checked_cookie_of(&display));
     serve(&mut compositor, client).expect("the seat's cookie is let in");
 }
 
@@ -411,7 +406,7 @@ fn a_seat_s_cookie_does_not_open_another_seat_s_display() {
             display.xauthority,
             folder.0.join(format!("seat-{}.x11/Xauthority", seat.0))
         );
-        seats.push((seat, display.number, cookie_of(&display)));
+        seats.push((seat, display.number, checked_cookie_of(&display)));
     }
     let [(a, number_a, cookie_a), (b, number_b, cookie_b)] = &seats[..] else {
         unreachable!("two seats");
@@ -458,7 +453,7 @@ fn xwayland_stops_when_idle_and_starts_again() {
     let folder = Folder::new("idle");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
     let display = display_of(&compositor, OWNER_SEAT);
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, _) = serve(&mut compositor, client).expect("answered");
     let first = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
     drop(connection);
@@ -477,7 +472,7 @@ fn xwayland_stops_when_idle_and_starts_again() {
     );
     assert!(!exists(first), "Xwayland was not reaped");
 
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     serve(&mut compositor, client).expect("a new connection is answered");
     let second = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs again");
     assert_ne!(first, second);
@@ -491,7 +486,7 @@ fn xwaylands_idle_stop_is_named_by_the_rest_auditor() {
     let folder = Folder::new("rest-audit");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
     let display = display_of(&compositor, OWNER_SEAT);
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, _) = serve(&mut compositor, client).expect("answered");
     let before = compositor.rest_counts();
     let owners = &before.seats[&OWNER_SEAT];
@@ -532,7 +527,7 @@ fn a_crash_of_xwayland_leaves_yuna_running() {
     let folder = Folder::new("crash");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, _) = serve(&mut compositor, client).expect("answered");
     let first = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
     let pid = Pid::from_raw(first).expect("a process id");
@@ -547,7 +542,7 @@ fn a_crash_of_xwayland_leaves_yuna_running() {
     let reply = connection.get_input_focus().map(|cookie| cookie.reply());
     assert!(!matches!(reply, Ok(Ok(_))), "a dead Xwayland answered");
 
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     serve(&mut compositor, client).expect("a new connection is answered");
     assert_ne!(server_of(&compositor, OWNER_SEAT), Some(first));
 }
@@ -571,7 +566,7 @@ fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
     };
     let mut killed = Instant::now();
     for start in 0..2 {
-        let client = answered_client(display.number, cookie_of(&display));
+        let client = answered_client(display.number, checked_cookie_of(&display));
         let (connection, _) = serve(&mut compositor, client).expect("answered");
         assert_eq!(pauses(&compositor), 0, "a pause before start {start}");
         let pid = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
@@ -584,7 +579,7 @@ fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
         );
         drop(connection);
     }
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (_, waited) = serve(&mut compositor, client).expect("answered after the pause");
     let after_crash = killed.elapsed();
     eprintln!(
@@ -630,7 +625,7 @@ fn a_display_whose_abstract_name_is_taken_is_skipped() {
         let address = listener.local_addr().expect("its address");
         UnixStream::connect_addr(&address).expect("the held socket accepts");
     }
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     serve(&mut compositor, client).expect("Yuna's display is answered");
 }
 
@@ -704,7 +699,7 @@ fn yuna_rests_with_xwayland_idle() {
     rests(&mut compositor);
 
     let display = display_of(&compositor, OWNER_SEAT);
-    let client = answered_client(display.number, cookie_of(&display));
+    let client = answered_client(display.number, checked_cookie_of(&display));
     let (connection, _) = serve(&mut compositor, client).expect("answered");
     let pid = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
     drop(connection);

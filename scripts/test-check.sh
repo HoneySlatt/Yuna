@@ -83,6 +83,8 @@ expect_stopped indexes "a changelog fragment badly named" "something.md" \
     "printf -- '- Something.\n' > changelog.d/something.md"
 expect_stopped script-tests "SlimeEngine's job leaving out the drawing path" "files the job needs" \
     "sed -i 's|      - \"docs/\*\*\"|      - \"docs/**\"\n      - \"crates/yuna/src/render.rs\"|' .github/workflows/slimeengine.yml"
+expect_stopped script-tests "Opium's job leaving out the drawing path" "files the job needs" \
+    "sed -i 's|      - \"docs/\*\*\"|      - \"docs/**\"\n      - \"crates/yuna/src/render.rs\"|' .github/workflows/opium.yml"
 
 if [ ${#failures[@]} -gt 0 ]; then
     printf '\nChecks that stopped nothing:\n'

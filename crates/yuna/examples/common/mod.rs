@@ -1,7 +1,8 @@
 //! What the measures share: the run's folder and the fields of Yuna's log lines. Beside it, each
 //! included by the measures that need it: the CPU and GPU time Yuna and its clients used, in
 //! `usage.rs`; the machine's other programs' load, in `load.rs`; the `vkcube` clients that
-//! `frame_time` and `motion_time` start, in `vkcube.rs`.
+//! `frame_time` and `motion_time` start, in `vkcube.rs`; the environment they and `agent_time`
+//! give `vkcube`, in `vkcube_environment.rs`.
 
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
