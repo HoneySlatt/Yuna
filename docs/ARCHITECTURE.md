@@ -610,8 +610,10 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   output, window or program is unknown there. The owner's seat has no output, socket or
   `wl_seat`. A Yuna on the manual clock holds one seat at a time.
 - **The tools**: `seat`, `outputs`, `workspaces`, `spawn`, `windows`, `events`, `accessibility`,
-  `capture`, `pointer`, `keyboard`, `clipboard`, `clock` and `rest`. Each one's arguments and
-  results are in its schema (`mcp/tools/schemas.rs`).
+  `capture`, `pointer`, `keyboard`, `clipboard`, `clock` and `rest`. Each one's arguments are its
+  schema and its results are told in its description (`mcp/tools/schemas.rs`); the arguments are
+  read in `mcp/tools/arguments.rs`, and the results made in `mcp/tools/results.rs` and the tool's
+  own module.
 - **Calls that wait**, `windows`, `events`, `rest`, `clipboard get`, `accessibility` and a
   `spawn` waiting for its seat's bus, are answered from a later round or when their time is up,
   on real time, `MAX_WAIT` at most. `MAX_WAITING_CALLS` wait at once. `notifications/cancelled`

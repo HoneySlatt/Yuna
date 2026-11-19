@@ -79,6 +79,8 @@ nix develop -c cargo run -- --help        # Yuna's options
 nix develop -c cargo run -- --headless --output 1920x1080@60,1   # Yuna without a screen
 nix develop -c cargo run -- mcp            # an MCP server on standard input and output
 nix develop -c cargo test --workspace     # the tests alone
+nix develop -c cargo test --locked -p yuna --test headless <name>   # the stories whose name holds <name>
+nix develop -c cargo fmt --all            # formats, as the check's `format` step wants
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
 
@@ -234,7 +236,9 @@ X11 and Wine's notepad the longest, which each wait for Xwayland's end.
 Each `yuna` has one output, 1920 × 1080 at 60 Hz, or the mode `YUNA_APPLICATIONS_OUTPUT` names.
 `crates/yuna/tests/mcp.rs` runs `yuna mcp` with the programs it starts, Alacritty among them,
 in about 4 s; the MCP server's exchanges and the seats' input are tested in the compositor's
-tests (`mcp.rs` and `seats.rs` there).
+stories, `tests/headless/mcp.rs` and `seats.rs`: their `Mcp` speaks to the server in the test's
+own process, and `crate::client::Client` makes a Wayland window to click in. `nix develop` warns
+that the git tree is dirty whenever a file is changed: it is harmless.
 `crates/yuna/tests/consumers.rs` runs uwui's `measure.py` and Pluto's `pluto-input` against
 `yuna --headless --agent-seat`, in about 5 s once `pluto-input` is built, about 10 s, in
 `target/consumers/`; its crates come from crates.io the first time. A consumer's revision is
@@ -404,7 +408,9 @@ What other programs and projects rely on
   lists it: `YUNA_SEAT`, their seat's throwaway home
   ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), and the accessibility
   variables;
-- the MCP server: its revisions, its tools' names, arguments and results;
+- the MCP server: its revisions, its tools' names, arguments and results; `tools/list` holds the
+  names, the arguments' schemas, and the results in each tool's description, so that a new field
+  of a result is written there, and the contract file rewritten;
 - the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
   draws with its own Mesa and finds Xwayland and dbus-daemon
   ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md));
