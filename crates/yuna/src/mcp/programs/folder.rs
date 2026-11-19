@@ -135,16 +135,21 @@ impl FolderKind {
         };
         let user = rustix::process::geteuid().as_raw();
         for entry in entries.flatten() {
+            // The name first, which the directory's listing gives: `parent` may be a `/tmp` of
+            // tens of thousands of entries, and reading each one's metadata cost `yuna mcp`'s
+            // start 60 ms there (M2.1).
+            if !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| self.names(name))
+            {
+                continue;
+            }
             // The entry's own metadata: a link to a folder is not followed.
             let ours = entry
                 .metadata()
                 .is_ok_and(|metadata| metadata.is_dir() && metadata.uid() == user);
-            if !ours
-                || !entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| self.names(name))
-            {
+            if !ours {
                 continue;
             }
             let folder = entry.path();
