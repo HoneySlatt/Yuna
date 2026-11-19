@@ -232,6 +232,21 @@ impl CaptureClient {
             .expect("the buffer is read");
         bytes
     }
+
+    /// The first `width` × `height` pixels of frame `index`'s buffer, four bytes each in memory
+    /// order, row by row from the top, without the padding a longer stride leaves.
+    pub fn image(&self, index: usize, width: u32, height: u32) -> Vec<u8> {
+        let frame = &self.state.frames[index];
+        let row_bytes = width as usize * 4;
+        let mut image = vec![0; row_bytes * height as usize];
+        for (y, row) in (0..height).zip(image.chunks_exact_mut(row_bytes)) {
+            frame
+                .file
+                .read_exact_at(row, u64::from(frame.offset + y * frame.stride))
+                .expect("the buffer is read");
+        }
+        image
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for CaptureState {

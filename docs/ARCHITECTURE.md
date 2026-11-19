@@ -750,12 +750,24 @@ and each test file's documentation says what the file covers.
   `tests/common/`. SlimeEngine's examples and Opium run in ignored tests, which weekly jobs run.
 - **Documents as tests**: `headless/protocols.rs` checks that the rows `Offered` of
   [`protocols.md`](protocols.md) are the globals each seat's clients are shown.
+- **Captures held for parity**
+  ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)):
+  `headless/captures_held.rs` builds eight scenes (`captures_held/scenes.rs`) and captures each
+  output through `ext-image-copy-capture-v1` into the test client's own `wl_shm` buffer, which Yuna
+  fills from its readback; each capture is compared with a PNG in `crates/yuna/tests/captures/`.
+  Each pixel has a class from its scene's geometry (`captures_held/compare.rs`): *opaque*, one
+  buffer pixel to one output pixel, compared exactly; *blended* and *filtered*, within 2 on each
+  channel. A failure says how far each class moved, so that a change made on purpose, such as a
+  new blending, can be told from a regression. Yuna draws no cursor and no border; X11 windows
+  are not captured.
 
 To add a test:
 
 - a layout behaviour: a scenario in `crates/yuna-layout/tests/scenarios/`, always;
 - a compositor behaviour: a story in its subject's file in `crates/yuna/tests/headless/`, driving
   the manual clock, its figures exact; a new request goes into its test client;
+- a change to what Yuna draws: a scene in `headless/captures_held/scenes.rs` and its test in
+  `captures_held.rs`;
 - a bug: the story that fails first, then the fix;
 - what needs Yuna as a process, a real application or another project's driver: a test in the
   program-level files.

@@ -468,8 +468,20 @@ impl Client {
     /// Attaches a new buffer of `width` × `height` pixels, `0xAARRGGBB` row by row, damaged
     /// whole.
     pub fn attach_pixels(&mut self, window: usize, width: i32, height: i32, pixels: &[u32]) {
+        let surface = self.state.windows[window].surface.clone();
+        self.attach_pixels_to(&surface, width, height, pixels);
+    }
+
+    /// Attaches a new buffer of `width` × `height` pixels, `0xAARRGGBB` row by row, to
+    /// `surface`, a window's, a subsurface's or a popup's, damaged whole.
+    pub fn attach_pixels_to(
+        &mut self,
+        surface: &wl_surface::WlSurface,
+        width: i32,
+        height: i32,
+        pixels: &[u32],
+    ) {
         let buffer = self.buffer(width, height, pixels);
-        let surface = &self.state.windows[window].surface;
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, width, height);
     }

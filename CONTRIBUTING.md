@@ -426,6 +426,16 @@ server's `tools/list` as files in `crates/yuna/tests/contracts/`: a change to ei
 the file is rewritten, `YUNA_WRITE_CONTRACTS=1 cargo test -p yuna --test contracts`, and the
 rewrite shows in the diff beside its fragment.
 
+Stage 2a's parity net holds files the same way, though they are not contracts
+([ADR-0139](docs/adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
+`crates/yuna/tests/headless/captures_held.rs` compares captures of eight scenes with the PNGs in
+`crates/yuna/tests/captures/`: a change to what Yuna draws fails it, saying for each class of pixel
+how many changed and by how much, and writing the image captured and a difference image to a
+temporary folder it names. A change made on purpose, a Mesa update or a blending an ADR decided,
+is looked at in those images, then rewritten with `YUNA_WRITE_CAPTURES=1 cargo test -p yuna --test
+headless captures_held`, the new PNGs in the diff. During Stage 2a a step that fails it is
+reverted, not rewritten.
+
 ## From outside the project
 
 ([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md))

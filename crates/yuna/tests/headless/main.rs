@@ -10,6 +10,7 @@
 mod activation;
 mod capture_client;
 mod captures;
+mod captures_held;
 mod client;
 mod colour;
 mod colour_client;
