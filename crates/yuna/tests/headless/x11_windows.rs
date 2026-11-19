@@ -1,6 +1,7 @@
 //! X11 windows in Yuna's layout, as `xdg_toplevel`s are: placed, sized, focused, typed into,
-//! clicked, closed, made fullscreen, hidden, captured, slid by the motion, and drawn sharp at
-//! XWayland's scale and the right size on every output
+//! clicked, closed, made fullscreen, kept in an emulated mode, across an output's change of mode
+//! too, hidden, captured, slid by the motion, and drawn sharp at XWayland's scale and the right
+//! size on every output
 //! ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md),
 //! [ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md),
 //! [ADR-0069](../../../../docs/adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
@@ -196,6 +197,25 @@ pub(crate) fn wait<T>(
         }
         assert!(Instant::now() < deadline, "{what}: not within {PATIENCE:?}");
         pump(compositor);
+    }
+}
+
+/// Runs the compositor's loop until, for half a second, the seat's Xwayland has committed nothing
+/// and no deadline has been armed. It returns with none armed.
+pub(crate) fn rest(seat: &mut X11Seat) {
+    let deadline = Instant::now() + PATIENCE;
+    let mut commits = seat.compositor.seat_commits(seat.seat);
+    let mut quiet_since = Instant::now();
+    loop {
+        assert!(Instant::now() < deadline, "the seat never rests");
+        pump(&mut seat.compositor);
+        let now = seat.compositor.seat_commits(seat.seat);
+        if now != commits || seat.compositor.next_deadline().is_some() {
+            commits = now;
+            quiet_since = Instant::now();
+        } else if quiet_since.elapsed() >= Duration::from_millis(500) {
+            return;
+        }
     }
 }
 
@@ -967,6 +987,43 @@ fn a_hidden_x11_window_is_told_hidden() {
     state_has_hidden(&mut seat.compositor, client, false);
 }
 
+/// The game `window` of `client` sets the `width` × `height` mode Xwayland offers on the output at
+/// X11 position (`x`, `y`), sizes its window to it there, as a fullscreen game does, and draws
+/// [`Image::sharp`] at that size once X11 granted it. Returns the image drawn.
+fn play_in_emulated_mode(
+    compositor: &mut Compositor,
+    client: X11Client,
+    window: Window,
+    (x, y): (i32, i32),
+    (width, height): (u16, u16),
+) -> (X11Client, Image) {
+    step(compositor, client, move |client| {
+        client.set_mode(x, y, width, height)?;
+        client
+            .connection
+            .configure_window(
+                window,
+                &ConfigureWindowAux::new()
+                    .x(x)
+                    .y(y)
+                    .width(u32::from(width))
+                    .height(u32::from(height)),
+            )
+            .map_err(|e| e.to_string())?;
+        client.connection.flush().map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + PATIENCE;
+        while client.geometry(window)?.width != u32::from(width) {
+            if Instant::now() > deadline {
+                return Err("the emulated mode's size was not granted".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let image = Image::sharp(u32::from(width), u32::from(height));
+        client.draw(window, &image)?;
+        Ok(image)
+    })
+}
+
 #[test]
 fn a_fullscreen_x11_window_keeps_its_emulated_mode() {
     let mut seat = X11Seat::at_both("emulated");
@@ -995,31 +1052,13 @@ fn a_fullscreen_x11_window_keeps_its_emulated_mode() {
 
     // The game sets that output's 1920 × 1080 mode, as Xwayland offers it, sizes its window to
     // it, and draws.
-    let (client, image) = step(&mut seat.compositor, client, move |client| {
-        client.set_mode(2880, 0, 1920, 1080)?;
-        client
-            .connection
-            .configure_window(
-                window,
-                &ConfigureWindowAux::new()
-                    .x(2880)
-                    .y(0)
-                    .width(1920)
-                    .height(1080),
-            )
-            .map_err(|e| e.to_string())?;
-        client.connection.flush().map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + PATIENCE;
-        while client.geometry(window)?.width != 1920 {
-            if Instant::now() > deadline {
-                return Err("the emulated mode's size was not granted".to_owned());
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let image = Image::sharp(1920, 1080);
-        client.draw(window, &image)?;
-        Ok(image)
-    });
+    let (client, image) = play_in_emulated_mode(
+        &mut seat.compositor,
+        client,
+        window,
+        (2880, 0),
+        (1920, 1080),
+    );
     // Xwayland scales it through its viewport to the whole output: drawn at the output's mode,
     // pixel for pixel.
     let whole = CaptureTarget::Output {
@@ -1059,6 +1098,113 @@ fn a_fullscreen_x11_window_keeps_its_emulated_mode() {
         |frame| is_exactly(frame, &image),
     );
     assert!(is_exactly(&frame, &image));
+}
+
+/// debt.md, The headless compositor: "No test drives an X11 window that keeps its size across an
+/// output's change". The X11 side of `outputs.rs`'s game that keeps its size: a fullscreen game
+/// sets the 1920 × 1080 mode Xwayland emulates on an output of 2880 × 1620 at 1.5, sizes its
+/// window to it and draws, and Xwayland's viewport shows it over the whole output, 1920 × 1080
+/// units. The output is given 3840 × 2160 at 1.5: Yuna asks the game the whole output, 2560 ×
+/// 1440 units, and tells its window the emulated mode's rectangle, which it has already. The
+/// window keeps its size and commits nothing; the layout places it at the size asked. X11
+/// acknowledges no configure: the game's next frame, its first commit since, answers, though its
+/// size through the viewport Xwayland keeps, 1920 × 1080 units, did not change, and the game is
+/// centred, at (320, 180).
+#[test]
+fn an_x11_game_that_keeps_its_size_is_centred_again_once_it_commits_after_the_new_mode() {
+    let mut seat = X11Seat::new("keeps-size", &[at_1_5()], ClockMode::Real, off());
+    let output = seat.outputs[0];
+    let client = seat.client();
+    let spec = WindowSpec {
+        fullscreen: true,
+        ..WindowSpec::named("game")
+    };
+    let (client, window, described, _) = open_drawn(&mut seat.compositor, client, &spec);
+    let id = described.id;
+    let game = |seat: &X11Seat| {
+        seat.compositor
+            .windows()
+            .into_iter()
+            .find(|listed| listed.id == id)
+            .expect("the game is listed")
+    };
+    // X11 sees the output as 2880 × 1620 at (0, 0).
+    let whole = Geometry {
+        x: 0,
+        y: 0,
+        width: 2880,
+        height: 1620,
+    };
+    let client = geometry_becomes(&mut seat.compositor, client, window, whole);
+    let (client, image) =
+        play_in_emulated_mode(&mut seat.compositor, client, window, (0, 0), (1920, 1080));
+    rest(&mut seat);
+    let emulated = Geometry {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
+    let at_corner = |w: f64, h: f64| Rect {
+        x: 0.0,
+        y: 0.0,
+        w,
+        h,
+    };
+    assert_eq!(game(&seat).place, Some(at_corner(1920.0, 1080.0)));
+
+    let commits = seat.compositor.seat_commits(seat.seat);
+    let larger = OutputMode::new(3840, 2160, 60.0, 1.5).expect("a valid mode");
+    seat.compositor
+        .configure_output(output, larger)
+        .expect("the output takes the mode");
+    rest(&mut seat);
+    let (client, geometry) = step(&mut seat.compositor, client, move |client| {
+        client.geometry(window)
+    });
+    assert_eq!(
+        geometry, emulated,
+        "its window keeps the emulated mode's size"
+    );
+    assert_eq!(
+        seat.compositor.seat_commits(seat.seat),
+        commits,
+        "the game commits nothing"
+    );
+    assert!(seat.compositor.layout().awaits_commit(id));
+    assert_eq!(
+        game(&seat).place,
+        Some(at_corner(2560.0, 1440.0)),
+        "placed at the size asked until it answers"
+    );
+
+    // The game's next frame, at its own size.
+    let (client, ()) = step(&mut seat.compositor, client, move |client| {
+        client.draw(window, &image)
+    });
+    rest(&mut seat);
+    let (client, geometry) = step(&mut seat.compositor, client, move |client| {
+        client.geometry(window)
+    });
+    assert!(seat.compositor.seat_commits(seat.seat) > commits);
+    assert_eq!(geometry, emulated, "Yuna leaves its window as it is");
+    assert!(
+        !seat.compositor.layout().awaits_commit(id),
+        "its first commit answered the size asked"
+    );
+    let centred = Rect {
+        x: 320.0,
+        y: 180.0,
+        w: 1920.0,
+        h: 1080.0,
+    };
+    let answered = game(&seat);
+    assert_eq!(
+        (answered.place, answered.rect),
+        (Some(centred), Some(centred)),
+        "centred at the size it committed"
+    );
+    drop(client);
 }
 
 #[test]

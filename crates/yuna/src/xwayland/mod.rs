@@ -82,6 +82,7 @@ pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
 pub use bridge::{MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
 use display::Display;
 pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
+pub use manager::MAX_PROPERTIES_PER_CLIENT;
 use manager::{Commands, ManagerEvent, OverBound, Stop};
 #[cfg(debug_assertions)]
 pub use manager::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};

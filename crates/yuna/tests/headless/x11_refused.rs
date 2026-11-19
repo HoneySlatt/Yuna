@@ -8,17 +8,15 @@
 //!
 //! Each story holds the window's serial back as `x11_pairing.rs` does: just after its program
 //! maps the new window, it renames another window of its own [`RENAMES`] times, and Yuna's window
-//! manager reads each rename before the serial, while Xwayland commits the surface at once. On a
-//! machine where the manager keeps up anyway, the serial comes first, and these stories guard
-//! nothing there. They run the development shell's Xwayland for an agent's seat, on the real
-//! clock.
+//! manager reads each rename before the serial, while Xwayland commits the surface at once. Each
+//! asserts that order from Yuna's counters: a manager that keeps up, the serial first, fails the
+//! story rather than leaving it to guard nothing. They run the development shell's Xwayland for
+//! an agent's seat, on the real clock.
 //!
 //! A cap refuses an X11 window outside a commit only when the layout holds [`MAX_WINDOWS`]: one
 //! X11 program never passes its own cap with a window Yuna is told of, since its seat's window
 //! manager tells Yuna of 1,000 windows of one X11 client at most, the cap's own figure
-//! (`MAX_PROPERTIES_PER_CLIENT` in `xwayland/manager/mod.rs`).
-
-use std::time::{Duration, Instant};
+//! ([`yuna::MAX_PROPERTIES_PER_CLIENT`]).
 
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
@@ -28,9 +26,10 @@ use yuna::yuna_layout::{OpenOptions, WindowId};
 use yuna::{ClockMode, MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT, OutputMode};
 
 use crate::client::Client;
-use crate::x11_client::{Image, PATIENCE, WindowSpec, X11Client, step};
+use crate::x11_client::{Image, WindowSpec, X11Client, step};
 use crate::x11_drags::RENAMES;
-use crate::x11_windows::{X11Seat, off, open_drawn, pump, wait};
+use crate::x11_pairing::pairings_since;
+use crate::x11_windows::{X11Seat, off, open_drawn, rest, wait};
 
 /// Grey, as X11 and Wayland pixels.
 const GREY: u32 = 0xFF_80_80_80;
@@ -49,38 +48,19 @@ fn grey(title: &str) -> WindowSpec {
     }
 }
 
-/// Runs the compositor's loop until the seat's Xwayland has committed nothing for half a second
-/// and nothing is armed: the windows opened before have their frame callbacks, and no deadline
-/// of the hidden windows would send a refused window's by chance.
-fn rest(seat: &mut X11Seat) {
-    let deadline = Instant::now() + PATIENCE;
-    let mut commits = seat.compositor.seat_commits(seat.seat);
-    let mut quiet_since = Instant::now();
-    loop {
-        assert!(Instant::now() < deadline, "the seat never rests");
-        pump(&mut seat.compositor);
-        let now = seat.compositor.seat_commits(seat.seat);
-        if now != commits || seat.compositor.next_deadline().is_some() {
-            commits = now;
-            quiet_since = Instant::now();
-        } else if quiet_since.elapsed() >= Duration::from_millis(500) {
-            return;
-        }
-    }
-}
-
 /// `client` maps a new grey window, then renames `renamed`, a window of its own in the layout,
-/// [`RENAMES`] times, and once X11 says the new window is mapped, maps a menu of 8 × 8 X11 pixels
-/// at the output's corner. Returns once Yuna draws that menu: its window manager has read the
-/// renames, and the new window's serial, which came before the menu's, while Xwayland committed
-/// the new window's surface.
+/// [`RENAMES`] times. Returns once Yuna has paired the new window with its surface, which it did
+/// commit first, as Yuna's counters say: its window manager read the renames, then the window's
+/// serial, while Xwayland committed the window's surface at once. A manager that reads the serial
+/// first fails the story here.
 fn map_with_serial_held_back(
     seat: &mut X11Seat,
     client: X11Client,
     renamed: Window,
 ) -> (X11Client, Window) {
     rest(seat);
-    let (client, (late, marker)) = step(&mut seat.compositor, client, move |client| {
+    let before = pairings_since(&seat.compositor, (0, 0));
+    let (client, late) = step(&mut seat.compositor, client, move |client| {
         let fail = |e: x11rb::errors::ConnectionError| e.to_string();
         let late = client.create(&grey("late"))?;
         client.connection.map_window(late).map_err(fail)?;
@@ -101,22 +81,22 @@ fn map_with_serial_held_back(
             "the late window mapped",
             |event| matches!(event, Event::MapNotify(mapped) if mapped.window == late),
         )?;
-        let marker = client.create(&WindowSpec {
-            background: Some(GREY & 0x00FF_FFFF),
-            ..WindowSpec::menu("marker", 0, 0, 8, 8)
-        })?;
-        client.connection.map_window(marker).map_err(fail)?;
-        client.sync()?;
-        Ok((late, marker))
+        Ok(late)
     });
-    let output = seat.outputs[0];
-    wait(&mut seat.compositor, "the menu is drawn", |compositor| {
-        compositor
-            .drawn_x11_menus(output)
-            .iter()
-            .any(|drawn| drawn.window == marker)
-            .then_some(())
-    });
+    let paired = wait(
+        &mut seat.compositor,
+        "the late window pairs",
+        |compositor| {
+            let paired = pairings_since(compositor, before);
+            (paired != (0, 0)).then_some(paired)
+        },
+    );
+    assert_eq!(
+        paired,
+        (1, 0),
+        "the late window, the one window paired, its surface committed before the manager read \
+         its serial"
+    );
     (client, late)
 }
 

@@ -3,8 +3,9 @@
 //! ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md),
 //! [ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): a
 //! made-up event that x11rb misreads, the commands Yuna owes a manager that no longer takes them,
-//! the titles and atom names an X11 client makes Yuna keep, Xwayland's environment, and a panic
-//! of the manager's thread.
+//! the slice of each round Yuna's loop gives a burst of a manager's events, the windows whose
+//! properties a manager follows, the titles and atom names an X11 client makes Yuna keep,
+//! Xwayland's environment, and a panic of the manager's thread.
 //!
 //! Each runs the development shell's Xwayland for one agent's seat, on the real clock. The
 //! memory figures are the process's anonymous memory, Yuna's and its managers' threads': a story
@@ -18,20 +19,25 @@ use rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ConnectionExt as _, EventMask, KEYMAP_NOTIFY_EVENT, PropMode, Window,
+    Atom, AtomEnum, ConfigureWindowAux, ConnectionExt as _, EventMask, KEYMAP_NOTIFY_EVENT,
+    PropMode, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::rest::{RestCounts, Source};
-use yuna::{ClockMode, Compositor, MANAGER_STALL, MAX_WINDOWS_PER_CLIENT, STALL_RECHECK};
+use yuna::{
+    ClockMode, Compositor, MANAGER_SLICE, MANAGER_STALL, MAX_PROPERTIES_PER_CLIENT, STALL_RECHECK,
+};
 #[cfg(debug_assertions)]
 use yuna::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 
+use crate::client::Client;
 use crate::selection_client::SelectionClient;
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step};
 use crate::x11_misbehaving::assert_rests_real;
 use crate::x11_selections::{atoms_of, notify, open_wayland_window, take_selection};
 use crate::x11_windows::{
-    TILE, X11Seat, at_1_5, button_press_at, click_at, off, open_drawn, pump, wait, window_titled,
+    TILE, X11Seat, at_1_5, button_press_at, click_at, off, open_drawn, pump, rest, wait,
+    window_titled,
 };
 
 /// The variable that marks the process a story runs alone in.
@@ -463,6 +469,182 @@ fn a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_n
     drop(again);
 }
 
+/// How many requests the story of the managers' slice sends at once: well within the channel that
+/// carries a manager's events to Yuna (`EVENT_QUEUE`, 256), so that all of them wait for one
+/// round of Yuna's loop.
+const BURST: u32 = 200;
+
+/// How many bursts the story of the managers' slice sends at most, while none is answered whole
+/// in its second round. Under 32 copies of the story at once, a load of about 60 on 16 threads,
+/// about one second round in five was slowed past its slice (2026-11-19): three in a row failed
+/// one run in 96.
+const BURST_TRIES: usize = 8;
+
+/// What the two rounds of Yuna's loop after a burst of [`BURST`] requests did: how many requests
+/// each answered, and how long the second took.
+#[derive(Clone, Copy)]
+struct BurstRounds {
+    first: u64,
+    second: u64,
+    second_took: Duration,
+}
+
+impl BurstRounds {
+    /// The two rounds in words, for the story's output.
+    fn described(&self) -> String {
+        let slice = if self.second_took >= MANAGER_SLICE {
+            "past its slice"
+        } else {
+            "within its slice"
+        };
+        format!(
+            "{} answered, then {} of the {} left in {:?}, {slice}",
+            self.first,
+            self.second,
+            BURST - 1,
+            self.second_took
+        )
+    }
+}
+
+/// Runs the compositor's loop until `wayland`'s window `hidden` has had one more frame callback
+/// than it had read so far.
+fn called_back(seat: &mut X11Seat, wayland: &mut Client, hidden: usize) {
+    let frames = wayland.window(hidden).frames.len();
+    let deadline = Instant::now() + PATIENCE;
+    while wayland.window(hidden).frames.len() == frames {
+        assert!(
+            Instant::now() < deadline,
+            "the hidden window is never called back"
+        );
+        pump(&mut seat.compositor);
+        wayland.read_events();
+    }
+}
+
+/// Once the seat rests, `wayland`'s window `hidden`, which no output shows, is called back, then
+/// asks its next frame callback, due [`yuna::HIDDEN_FRAME_INTERVAL`] later. Yuna's loop then stands
+/// still while `client` asks [`BURST`] times that its window `asking`, never mapped, be resized,
+/// and its manager posts each request, until the callback is overdue. Then two rounds of the loop
+/// run, and the loop runs on until every request is answered. Each answer is one of Yuna's
+/// configures.
+fn burst_after_a_deadline_due(
+    seat: &mut X11Seat,
+    client: &X11Client,
+    asking: Window,
+    wayland: &mut Client,
+    hidden: usize,
+) -> BurstRounds {
+    rest(seat);
+    wayland.request_frame(hidden);
+    wayland.commit(hidden);
+    wayland.send();
+    called_back(seat, wayland, hidden);
+    wayland.request_frame(hidden);
+    wayland.commit(hidden);
+    wayland.roundtrip(&mut seat.compositor);
+    let due = seat
+        .compositor
+        .next_deadline()
+        .expect("the hidden window's callback is due later");
+    for n in 0..BURST {
+        client
+            .connection
+            .configure_window(asking, &ConfigureWindowAux::new().width(100 + n))
+            .expect("the request is sent");
+    }
+    client.sync().expect("X11 handled the requests");
+    std::thread::sleep(due.saturating_sub(seat.compositor.now()) + Duration::from_millis(300));
+
+    let answered = |seat: &X11Seat| seat.compositor.counters().configures;
+    let before = answered(seat);
+    let frames = wayland.window(hidden).frames.len();
+    seat.compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("Yuna dispatches");
+    let first = answered(seat) - before;
+    wayland.read_events();
+    assert_eq!(
+        wayland.window(hidden).frames.len(),
+        frames + 1,
+        "the overdue callback is sent in the first round"
+    );
+    assert_eq!(
+        seat.compositor.next_deadline(),
+        None,
+        "no deadline is armed for the second round"
+    );
+    let started = Instant::now();
+    seat.compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("Yuna dispatches");
+    let second_took = started.elapsed();
+    let second = answered(seat) - before - first;
+    let deadline = Instant::now() + PATIENCE;
+    while answered(seat) - before < u64::from(BURST) {
+        assert!(Instant::now() < deadline, "the requests are never answered");
+        pump(&mut seat.compositor);
+    }
+    BurstRounds {
+        first,
+        second,
+        second_took,
+    }
+}
+
+/// debt.md, XWayland: "no story sees the whole flood handled in one round, nor tests
+/// `manager_slice_end`'s wiring". A round of Yuna's loop handles its managers' events in a slice
+/// that ends [`MANAGER_SLICE`] after it starts, or once a deadline armed is near
+/// (`manager_slice_end`). An X11 client asks [`BURST`] times at once that a window be resized,
+/// while a frame callback of a hidden Wayland window is overdue: the next round answers one
+/// request, its slice over at once, and sends the callback; the round after it, nothing armed,
+/// answers the [`BURST`] − 1 others, well within its slice. A second round that answers fewer was
+/// slowed past its slice by a loaded machine, or met a manager that had not posted every request
+/// when the first round read its channel: the burst runs again, [`BURST_TRIES`] times at most. A
+/// slice that Yuna ends too soon leaves every burst short, and the story fails; one that ignores
+/// the deadline answers the whole burst in the first round, and the story fails at once.
+#[test]
+fn a_burst_of_x11_requests_waits_for_a_deadline_due_then_goes_whole_in_one_round() {
+    let mut seat = X11Seat::new("slice", &[at_1_5()], ClockMode::Real, off());
+    let client = seat.client();
+    let (client, asking) = step(&mut seat.compositor, client, |client| {
+        let window = client.create(&WindowSpec::named("asking"))?;
+        client.sync()?;
+        Ok(window)
+    });
+    // The owner's seat has no output: its window is hidden.
+    let mut wayland = Client::connect(&mut seat.compositor);
+    let hidden = wayland.open_window(&mut seat.compositor);
+    wayland.ack(hidden);
+    wayland.attach(hidden, 64, 64, 0xFF_80_80_80);
+    wayland.commit(hidden);
+    wayland.roundtrip(&mut seat.compositor);
+
+    let mut bursts = Vec::new();
+    loop {
+        let rounds = burst_after_a_deadline_due(&mut seat, &client, asking, &mut wayland, hidden);
+        bursts.push(rounds);
+        assert_eq!(
+            rounds.first, 1,
+            "the round that met an overdue deadline answered {} requests, not one",
+            rounds.first
+        );
+        if rounds.second == u64::from(BURST) - 1 {
+            break;
+        }
+        let described: Vec<String> = bursts.iter().map(BurstRounds::described).collect();
+        assert!(
+            bursts.len() < BURST_TRIES,
+            "{BURST_TRIES} bursts, none answered whole in its second round: {described:?}"
+        );
+    }
+    let described: Vec<String> = bursts.iter().map(BurstRounds::described).collect();
+    println!(
+        "{BURST} X11 requests at once, one round's slice ended by a deadline due: {described:?}"
+    );
+    drop(client);
+}
+
 /// The bytes of a title of `length` Latin-1 bytes, each 0xE9 (é): two bytes each in UTF-8.
 fn latin1_title(length: usize) -> Vec<u8> {
     vec![0xE9; length]
@@ -545,11 +727,11 @@ fn unmapped_windows_hold_at_most_the_debts_figure() {
     );
 }
 
-/// ADR-0131's figure for one X11 client's windows in the layout, 1,000, bounds the windows whose
-/// properties Yuna follows: an X11 client makes 1,000 windows it does not map, then a thousand and
-/// first, which it maps. That one is followed without its properties and counts as past its
-/// client's limit: X11 maps it, and it never shows. The first of the thousand, mapped after it,
-/// shows.
+/// [`MAX_PROPERTIES_PER_CLIENT`], ADR-0131's figure for one X11 client's windows in the layout,
+/// 1,000, bounds the windows whose properties Yuna follows: an X11 client makes 1,000 windows it
+/// does not map, then a thousand and first, which it maps. That one is followed without its
+/// properties and counts as past its client's limit: X11 maps it, and it never shows. The first
+/// of the thousand, mapped after it, shows.
 #[test]
 fn a_window_past_its_clients_thousand_followed_never_shows() {
     let mut seat = X11Seat::new("past-thousand", &[at_1_5()], ClockMode::Real, off());
@@ -557,7 +739,7 @@ fn a_window_past_its_clients_thousand_followed_never_shows() {
     let (client, first) = step(&mut seat.compositor, client, |client| {
         let fail = |e: x11rb::errors::ConnectionError| e.to_string();
         let mut first = None;
-        for index in 0..MAX_WINDOWS_PER_CLIENT {
+        for index in 0..MAX_PROPERTIES_PER_CLIENT {
             let window = client.create(&WindowSpec::named(&format!("within-{index}")))?;
             first.get_or_insert(window);
             if index % 64 == 0 {
@@ -598,7 +780,7 @@ fn a_window_past_its_clients_thousand_followed_never_shows() {
     drop(client);
     assert!(
         !shown,
-        "a window past its client's limit of {MAX_WINDOWS_PER_CLIENT} shows"
+        "a window past its client's limit of {MAX_PROPERTIES_PER_CLIENT} shows"
     );
 }
 
@@ -622,7 +804,7 @@ fn a_window_past_its_clients_thousand_takes_no_click_from_a_window_shown() {
     let (hostile, (first_within, before)) = step(&mut seat.compositor, hostile, move |client| {
         let fail = |e: x11rb::errors::ConnectionError| e.to_string();
         let mut first = None;
-        for index in 0..MAX_WINDOWS_PER_CLIENT {
+        for index in 0..MAX_PROPERTIES_PER_CLIENT {
             let window = client.create(&WindowSpec::named(&format!("within-{index}")))?;
             first.get_or_insert(window);
             if index % 64 == 0 {

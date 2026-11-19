@@ -1,12 +1,12 @@
 //! An X11 window's opening, from Yuna's side of XWayland: its pairing with the surface Xwayland
-//! draws it into, in each order the two meet, the order taken read from Yuna's log
+//! draws it into, in each order the two meet, the order taken read from Yuna's counters
 //! (`xwayland/windows.rs` tests every order alone, on the struct that pairs them); the size its
 //! hints may ask, bounded by its seat's outputs as they are when it opens and as they change; the
 //! activation token its startup id names, taken for a window of the token's own seat alone, as a
 //! Wayland window's is; and the menus one Xwayland shows at once, and shows again once others go.
 //!
 //! The X11 stories run the development shell's Xwayland for an agent's seat, its output at 1.5
-//! (`x11_windows.rs`), on the real clock.
+//! (`x11_windows.rs`), on the real clock, but for the serial first's, on the manual clock.
 
 use std::time::{Duration, Instant};
 
@@ -19,9 +19,9 @@ use yuna::{ClockMode, Compositor, MAX_MENUS_PER_CLIENT, MAX_MENUS_PER_XWAYLAND, 
 
 use crate::client::Client;
 use crate::seats::{two_seats, windows_of};
-use crate::x11_client::{WindowSpec, X11Client, step};
+use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step};
 use crate::x11_drags::RENAMES;
-use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait};
+use crate::x11_windows::{TILE, X11Seat, at_1_5, off, open_drawn, pump, wait, window_titled};
 use crate::{BLUE, RED};
 
 /// Runs the compositor's loop for `how_long`.
@@ -40,6 +40,16 @@ fn listed(compositor: &Compositor, title: &str) -> bool {
         .any(|window| window.title.as_deref() == Some(title))
 }
 
+/// The X11 windows Yuna paired with their surface since it had counted `before`, commit first
+/// and serial first; with `(0, 0)`, since it started.
+pub(crate) fn pairings_since(compositor: &Compositor, before: (u64, u64)) -> (u64, u64) {
+    let counters = compositor.counters();
+    (
+        counters.x11_paired_commit_first - before.0,
+        counters.x11_paired_serial_first - before.1,
+    )
+}
+
 /// A surface that commits its serial before the manager names its window waits for that window,
 /// and pairs with it once the manager does. It is the order most pairings take, the serial
 /// coming through the manager's thread: but a quick manager may win. One X11 program renames a
@@ -54,7 +64,7 @@ fn a_surface_committed_before_its_windows_serial_is_paired_with_it() {
     let client = seat.client();
     let (client, renamed, _, _) =
         open_drawn(&mut seat.compositor, client, &WindowSpec::named("renamed"));
-    let before = seat.compositor.counters();
+    let before = pairings_since(&seat.compositor, (0, 0));
     let (client, menu) = step(&mut seat.compositor, client, move |client| {
         let fail = |e: x11rb::errors::ConnectionError| e.to_string();
         let spec = WindowSpec {
@@ -86,15 +96,120 @@ fn a_surface_committed_before_its_windows_serial_is_paired_with_it() {
     });
     // At S = s = 1.5, an X11 pixel is a physical one, and the output's X11 corner is (0, 0).
     assert_eq!(drawn.rect, (300, 200, 60, 40));
-    let after = seat.compositor.counters();
     assert_eq!(
-        (
-            after.x11_paired_commit_first - before.x11_paired_commit_first,
-            after.x11_paired_serial_first - before.x11_paired_serial_first,
-        ),
+        pairings_since(&seat.compositor, before),
         (1, 0),
         "the menu, the one window paired, its surface committed before the manager named its serial"
     );
+    seat.compositor
+        .check_windows()
+        .expect("the layout and the shells agree");
+    drop(client);
+}
+
+/// How many windows [`a_surface_committed_after_its_windows_serial_is_paired_with_it`] maps at
+/// most, one after another, while each it maps pairs commit first after its serial came late.
+const SERIAL_FIRST_TRIES: usize = 3;
+
+/// `client` makes a window as `spec` says and asks that it be mapped. Yuna's loop runs a round at
+/// a time until it has configured the window, its commands to configure and map it going at that
+/// round's end, then stands still while X11 maps it, and half a second more, while Xwayland
+/// commits its surface and sends its serial to the manager, and the manager posts it. Then one
+/// round runs. Returns the window.
+fn map_while_the_loop_stands_still(
+    seat: &mut X11Seat,
+    client: &mut X11Client,
+    spec: &WindowSpec,
+) -> Window {
+    let configures = seat.compositor.counters().configures;
+    let window = client.create(spec).expect("the window is made");
+    client
+        .connection
+        .map_window(window)
+        .expect("it asks to be mapped");
+    client.connection.flush().expect("its requests are sent");
+    let deadline = Instant::now() + PATIENCE;
+    while seat.compositor.counters().configures == configures {
+        assert!(
+            Instant::now() < deadline,
+            "Yuna never configures the window"
+        );
+        seat.compositor
+            .dispatch(Some(Duration::from_millis(2)))
+            .expect("Yuna dispatches");
+    }
+    client
+        .wait_for(
+            "the window mapped",
+            |event| matches!(event, Event::MapNotify(mapped) if mapped.window == window),
+        )
+        .expect("X11 maps the window without Yuna");
+    std::thread::sleep(Duration::from_millis(500));
+    seat.compositor
+        .dispatch(Some(Duration::ZERO))
+        .expect("Yuna dispatches");
+    window
+}
+
+/// debt.md, XWayland: "serial first, by the unit tests alone, since the managers' slice may end
+/// between a window's map and its serial". The other order: the manager names a window's serial
+/// before Yuna reads the commit of its surface, which then pairs with the window. A new window is
+/// mapped while Yuna's loop stands still ([`map_while_the_loop_stands_still`]); the round that
+/// follows handles the managers' events before it reads its clients' requests. Yuna's counters say
+/// the window was paired serial first, and it opens at its tile. On the manual clock, whose slice
+/// no deadline ends, so that the window's map and serial are handled in one round.
+///
+/// A window paired commit first in that round fails the story: the serial came, and was handled
+/// after the commit. A window that round paired neither way met a manager that had not posted its
+/// serial yet, on a loaded machine: the loop runs on until it pairs. Serial first passes; commit
+/// first, the serial posted after the commit was read, maps a new window, [`SERIAL_FIRST_TRIES`]
+/// at most; a window that never pairs fails the story.
+#[test]
+fn a_surface_committed_after_its_windows_serial_is_paired_with_it() {
+    let mut seat = X11Seat::new("pair-serial", &[at_1_5()], ClockMode::Manual, off());
+    let mut client = seat.client();
+    let spec = WindowSpec {
+        background: Some(0x0040_C040),
+        ..WindowSpec::named("serial-first")
+    };
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let before = pairings_since(&seat.compositor, (0, 0));
+        let window = map_while_the_loop_stands_still(&mut seat, &mut client, &spec);
+        let in_that_round = pairings_since(&seat.compositor, before);
+        if in_that_round != (0, 0) {
+            assert_eq!(
+                in_that_round,
+                (0, 1),
+                "the window, the one paired, its serial handled before its surface's commit"
+            );
+            break;
+        }
+        let paired = wait(&mut seat.compositor, "the window pairs", |compositor| {
+            let paired = pairings_since(compositor, before);
+            (paired != (0, 0)).then_some(paired)
+        });
+        if paired == (0, 1) {
+            break;
+        }
+        assert_eq!(paired, (1, 0), "the window, the one paired");
+        assert!(
+            tries < SERIAL_FIRST_TRIES,
+            "{SERIAL_FIRST_TRIES} windows, each paired commit first, their serial posted late"
+        );
+        // Its manager posted its serial late: the window goes, and a new one is mapped.
+        client
+            .connection
+            .destroy_window(window)
+            .expect("the window is destroyed");
+        client.connection.flush().expect("its request is sent");
+        wait(&mut seat.compositor, "the window closes", |compositor| {
+            compositor.windows().is_empty().then_some(())
+        });
+    }
+    let opened = window_titled(&mut seat.compositor, "serial-first");
+    assert_eq!(opened.place, Some(TILE));
     seat.compositor
         .check_windows()
         .expect("the layout and the shells agree");

@@ -228,9 +228,6 @@ read again.
   output's removal: it may sit on no output until it moves
   ([ADR-0090](adr/0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md)). Taken up with
   Yuna's own seats and input at Stage 2a, M2.12 (seats and input).
-- No test drives an X11 window that keeps its size across an output's change: its answer is
-  taken from its first commit after the size is told, read but not run. Paid at Stage 2a, M2.1
-  (baselines): a test before the rewrite.
 
 ## Colours
 
@@ -784,11 +781,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   `ConfigureWindow` for each mapped window past the limit, their number unbounded (4,000 in the
   flood story). Stacking the new bottom just below the old one, when it stays mapped, would need
   one. Paid at Stage 2a, M2.17 (the X11 manager, a task).
-- The orders in which a window and its surface pair: commit first is forced by a story and
-  counted by Yuna; serial first, by the unit tests alone, since the managers' slice may end
-  between a window's map and its serial. The stories of `x11_refused.rs` guard their fix only
-  while the manager reads the serial after the commit, which nothing asserts. Paid at Stage 2a, M2.1
-  (baselines): tests before the rewrite.
 - An X11 client's `_NET_ACTIVE_WINDOW` is taken as xdg-activation without a token: the window
   takes the focus only when its client has it already; a pager's request (source 2) is no better.
   Revisited at Stage 2c, with Hollow's taskbar.
@@ -801,10 +793,14 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 - Commands to a manager go at the end of the round that made them; the X11 focus and a window's
   place reach Xwayland on its manager's connection, the keyboard's `enter` on its Wayland one, in
   no set order between them. Kept: no client found that depends on the order.
-- The managers' slice is checked by unit tests of `handle_within_slice`; no story sees the whole
-  flood handled in one round, nor tests `manager_slice_end`'s wiring. `x11_bounds.rs`'s story of
-  the properties' bound uses `MAX_WINDOWS_PER_CLIENT`, the layout's cap, which has the same
-  figure, 1,000. Paid at Stage 2a, M2.1, tests before the rewrite.
+- Two X11 stories failed once each on a machine loaded 40 to 65 times its cores' worth, and
+  passed again: `an_x11_window_asks_fullscreen` read `_NET_WM_STATE` empty just after the window
+  took the output's size, and `x11_reads_the_wayland_selection_only_while_an_x11_window_has_the_keyboard`
+  read no selection (M2.1). Each looks like a race between the manager's thread and the story's
+  reads; neither is reproduced. Two stories, `the_x11_cap_counts_x11_clients_not_xwayland` and
+  the 5,000-window flood of `x11_misbehaving.rs`, name the layout's 1,000 where the properties'
+  bound, `MAX_PROPERTIES_PER_CLIENT`, of the same figure, stops the windows. Paid at Stage 2a,
+  M2.17 (the X11 manager, a task).
 - A backlog of the managers' events that comes back at least every 11 s keeps moving a stalled
   manager's watchdog, so that it is not ended; its memory stays within what Yuna may owe it. Paid at
   Stage 2a, M2.17 (the X11 manager, a task): the recovery is wrong, not the memory.

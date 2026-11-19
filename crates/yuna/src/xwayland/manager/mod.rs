@@ -137,7 +137,7 @@ pub(crate) const EVENT_QUEUE: usize = 256;
 /// program that shows its windows passes. Past it, a window costs the manager its record without
 /// text, and Yuna nothing, where one with its properties costs each up to three texts of
 /// `MAX_KEPT_TEXT_BYTES` (`properties.rs`).
-pub(crate) const MAX_PROPERTIES_PER_CLIENT: usize = 1_000;
+pub const MAX_PROPERTIES_PER_CLIENT: usize = 1_000;
 
 /// The DPI of an X11 program at scale 1, as X11 and its toolkits count it.
 const BASE_DPI: f64 = 96.0;
