@@ -8,6 +8,10 @@
 //! listening sockets (`-listenfd`), on which it accepts once a client owns `WM_S0`. It reads the
 //! seat's cookie (`-auth`) and listens on no TCP port.
 //!
+//! Its environment is Yuna's kept variables alone ([`KEPT_VARIABLES`], [`KEPT_PREFIXES`]), with
+//! Yuna's own values, and `WAYLAND_SOCKET`: nothing else of the program that started Yuna, an
+//! agent's harness in `yuna mcp`, reaches Xwayland, nor the `xkbcomp` it runs.
+//!
 //! When Yuna draws on llvmpipe, Xwayland touches no GPU either: it draws in shared memory
 //! (`-shm`), since Yuna names no device to share GPU buffers on, and it has no GLX
 //! (`-extension GLX`). Mesa's GLX for Xwayland, `libdril`, loads the machine's own drivers and
@@ -22,6 +26,7 @@
 //! ([`Compositor::child_reaped`](crate::Compositor::child_reaped)), and the pidfd finds it
 //! reaped, its end then unknown and come after.
 
+use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -35,9 +40,39 @@ use smithay::reexports::rustix::process::{Pid, PidfdFlags, Signal, pidfd_open};
 use super::display::Display;
 use crate::process::{give_descriptors, keep_descriptors_from_the_program};
 
-/// The variables of Yuna's environment Xwayland does not get: those that name a display, which
-/// Xwayland is, or a Wayland connection, which it gets through `WAYLAND_SOCKET`.
-const DROPPED_VARIABLES: &[&str] = &["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY"];
+/// The variables of Yuna's environment Xwayland keeps, with Yuna's values: what it, the drivers
+/// glamor loads with `--gpu` and the `xkbcomp` it runs read. Its own list, not the one
+/// `yuna mcp` gives its programs (`mcp/programs/environment.rs`): XWayland is part of Yuna's
+/// core, which does not reach into the MCP server, and Xwayland takes Yuna's own values of the
+/// variables Yuna's package sets for Yuna alone (`flake.nix`), its drivers', where a program gets
+/// back its caller's. No `DISPLAY`, `XAUTHORITY` or `WAYLAND_DISPLAY`: Xwayland is the display,
+/// reads its cookie from `-auth`, and gets its Wayland connection through `WAYLAND_SOCKET`.
+const KEPT_VARIABLES: &[&str] = &[
+    "PATH",
+    "HOME",
+    "LANG",
+    "LANGUAGE",
+    "LOCALE_ARCHIVE",
+    "XDG_CACHE_HOME",
+    "LD_LIBRARY_PATH",
+    "XKB_CONFIG_ROOT",
+    "LIBGL_DRIVERS_PATH",
+    "LIBGL_ALWAYS_SOFTWARE",
+    "GBM_BACKENDS_PATH",
+    "__EGL_VENDOR_LIBRARY_FILENAMES",
+    "__EGL_VENDOR_LIBRARY_DIRS",
+];
+
+/// The prefixes of the variables Xwayland keeps: the locale's categories, and the settings of
+/// Mesa and of Vulkan's loader, which its drivers read.
+const KEPT_PREFIXES: &[&str] = &["LC_", "VK_", "MESA_"];
+
+/// Whether Xwayland keeps Yuna's variable `name`.
+fn kept(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        KEPT_VARIABLES.contains(&name) || KEPT_PREFIXES.iter().any(|p| name.starts_with(p))
+    })
+}
 
 /// An Xwayland just started, and Yuna's ends of what it was given.
 #[derive(Debug)]
@@ -85,10 +120,9 @@ pub(crate) fn spawn(
     if software {
         command.arg("-shm").args(["-extension", "GLX"]);
     }
-    for variable in DROPPED_VARIABLES {
-        command.env_remove(variable);
-    }
     command
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(name, _)| kept(name)))
         .env("WAYLAND_SOCKET", wayland_theirs.as_raw_fd().to_string())
         .stdin(Stdio::null())
         // Never on Yuna's output, which is MCP's in `yuna mcp`; its errors join Yuna's log.
@@ -130,4 +164,36 @@ pub(crate) fn spawn(
         wm,
         displayfd,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xwayland_keeps_what_it_and_its_drivers_read_and_nothing_of_another_display() {
+        for name in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "MESA_LOADER_DRIVER_OVERRIDE",
+            "VK_ICD_FILENAMES",
+            "LC_ALL",
+        ] {
+            assert!(kept(OsStr::new(name)), "{name} is not kept");
+        }
+        for name in [
+            "DISPLAY",
+            "XAUTHORITY",
+            "WAYLAND_DISPLAY",
+            "WAYLAND_SOCKET",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_RUNTIME_DIR",
+            "SSH_AUTH_SOCK",
+            "CARGO_HOME",
+            "MESA",
+        ] {
+            assert!(!kept(OsStr::new(name)), "{name} is kept");
+        }
+    }
 }

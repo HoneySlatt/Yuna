@@ -12,7 +12,7 @@
 
 use std::fs;
 use std::os::linux::net::SocketAddrExt;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
@@ -222,7 +222,10 @@ fn xsettings_integer(blob: &[u8], name: &str) -> Option<i32> {
 
 /// The first X11 connection starts Xwayland, which serves it; nothing runs before it. The
 /// display's files are the user's alone: its Xauthority file 0600 in a folder 0700; its lock
-/// holds Yuna's process id, and its file socket is beside the abstract one.
+/// holds Yuna's process id, and its file socket is beside the abstract one. The compositor gone,
+/// its lock is gone: the lock file it made is no longer linked. Another story's compositor of
+/// this process may take the number at once and make its own lock, naming the same process: the
+/// path alone cannot tell the two apart.
 #[test]
 fn xwayland_starts_on_the_first_connection_and_serves_it() {
     let folder = Folder::new("first");
@@ -233,8 +236,10 @@ fn xwayland_starts_on_the_first_connection_and_serves_it() {
     assert_eq!(display.xauthority, folder.0.join("owner.x11/Xauthority"));
     assert_eq!(mode(&display.xauthority), 0o600);
     assert_eq!(mode(&folder.0.join("owner.x11")), 0o700);
-    let lock = fs::read_to_string(format!("/tmp/.X{}-lock", display.number)).expect("its lock");
+    let lock_path = format!("/tmp/.X{}-lock", display.number);
+    let lock = fs::read_to_string(&lock_path).expect("its lock");
     assert_eq!(lock, format!("{:>10}\n", std::process::id()));
+    let own_lock = fs::File::open(&lock_path).expect("its lock");
     let file_socket =
         fs::metadata(format!("/tmp/.X11-unix/X{}", display.number)).expect("its file socket");
     assert!(file_socket.file_type().is_socket());
@@ -261,11 +266,8 @@ fn xwayland_starts_on_the_first_connection_and_serves_it() {
     assert!(!exists(pid), "Xwayland outlived the compositor");
     assert!(!display.xauthority.exists());
     assert!(!folder.0.join("owner.x11").exists());
-    let lock = fs::read_to_string(format!("/tmp/.X{}-lock", display.number));
-    assert!(
-        lock.is_err() || lock.is_ok_and(|text| text.trim() != std::process::id().to_string()),
-        "the lock was left"
-    );
+    let links = own_lock.metadata().expect("the lock's metadata").nlink();
+    assert_eq!(links, 0, "the lock was left");
 }
 
 /// Yuna on llvmpipe, Xwayland touches no GPU either: it loads no DRI driver, which is the
@@ -552,18 +554,28 @@ fn a_crash_of_xwayland_leaves_yuna_running() {
 
 /// Xwayland killed twice in a row: the first time it starts again at once, the second its
 /// display pauses [`FIRST_PAUSE`] first, a program connecting meanwhile waiting in the backlog
-/// until it is served.
+/// until it is served. Whether Yuna paused is read from what it did, its pause's timer waking it
+/// (the rest auditor's `XwaylandPause`), not from how long a program waited: on a loaded machine
+/// Xwayland's start alone may take longer than the pause.
 #[test]
 fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
     let folder = Folder::new("crash-loop");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
-    let mut waits = Vec::new();
-    for _ in 0..2 {
+    let pauses = |compositor: &Compositor| {
+        compositor
+            .rest_counts()
+            .seats
+            .get(&OWNER_SEAT)
+            .map_or(0, |seat| seat.wakes_by(Source::XwaylandPause))
+    };
+    let mut killed = Instant::now();
+    for start in 0..2 {
         let client = answered_client(display.number, cookie_of(&display));
-        let (connection, took) = serve(&mut compositor, client).expect("answered");
-        waits.push(took);
+        let (connection, _) = serve(&mut compositor, client).expect("answered");
+        assert_eq!(pauses(&compositor), 0, "a pause before start {start}");
         let pid = server_of(&compositor, OWNER_SEAT).expect("Xwayland runs");
+        killed = Instant::now();
         kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL).expect("killed");
         dispatch_until(
             &mut compositor,
@@ -573,21 +585,17 @@ fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
         drop(connection);
     }
     let client = answered_client(display.number, cookie_of(&display));
-    let (_, paused) = serve(&mut compositor, client).expect("answered after the pause");
+    let (_, waited) = serve(&mut compositor, client).expect("answered after the pause");
+    let after_crash = killed.elapsed();
     eprintln!(
-        "first replies after {} ms, {} ms, then {} ms after the second crash",
-        waits[0].as_millis(),
-        waits[1].as_millis(),
-        paused.as_millis()
+        "after the second crash: answered {} ms after it, the program waited {} ms",
+        after_crash.as_millis(),
+        waited.as_millis()
     );
+    assert_eq!(pauses(&compositor), 1, "the second crash paused once");
     assert!(
-        waits[1] < FIRST_PAUSE,
-        "the first crash paused: {:?}",
-        waits[1]
-    );
-    assert!(
-        paused >= FIRST_PAUSE - Duration::from_millis(100),
-        "{paused:?}"
+        after_crash >= FIRST_PAUSE,
+        "served {after_crash:?} after the second crash"
     );
 }
 

@@ -30,15 +30,21 @@
 //! which the manager follows from the root's events, the serial that pairs it with its Wayland
 //! surface (`WL_SURFACE_SERIAL`, a client message Xwayland sends the manager; a client's copy is
 //! ignored), its sync counter's changes, and the client messages it sends: `_NET_WM_STATE`,
-//! `_NET_ACTIVE_WINDOW`, a ping's answer. Yuna decides, and its [`Command`]s come back through a
-//! channel the thread reads when its wake-up socket says so: map, configure with or without a
-//! sync request, let commits go, set the states, focus, close, ping, restack. What follows from a
-//! decision by ICCCM and EWMH alone, the manager does itself: `WM_STATE`, `_NET_FRAME_EXTENTS`,
-//! `_NET_CLIENT_LIST`, set once per batch of events and commands, the synthetic `ConfigureNotify`
-//! after a configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7), whether a window is asked to
-//! close or its client is ended, and at a withdrawal the deletion of `_NET_WM_STATE`, and of
-//! `_XWAYLAND_ALLOW_COMMITS` if a sync request held it. `_NET_WM_MOVERESIZE` and
-//! `WM_CHANGE_STATE` are taken and logged: Yuna has no interactive move, and minimises nothing.
+//! `_NET_ACTIVE_WINDOW`, a ping's answer. It reads the properties of
+//! [`MAX_PROPERTIES_PER_CLIENT`] windows of one X11 client at most: a window made past them is
+//! followed without them, and Yuna is never told of it. The manager maps it when it asks, as
+//! Yuna maps a window past its client's limit in the layout, and it never shows. Yuna decides,
+//! and its [`Command`]s come back through what Yuna owes the manager (`owed.rs`), bounded, which
+//! the thread takes when its wake-up socket says so and between X11's events: map, configure with
+//! or without a sync request, let commits go, set the states, focus, close, ping, restack. A
+//! manager that stops taking them is ended with its Xwayland (`xwayland/mod.rs`). What follows
+//! from a decision by ICCCM and EWMH alone, the manager does itself: `WM_STATE`,
+//! `_NET_FRAME_EXTENTS`, `_NET_CLIENT_LIST`, set once per batch of events and commands, the
+//! synthetic `ConfigureNotify` after a configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7),
+//! whether a window is asked to close or its client is ended, and at a withdrawal the deletion of
+//! `_NET_WM_STATE`, and of `_XWAYLAND_ALLOW_COMMITS` if a sync request held it.
+//! `_NET_WM_MOVERESIZE` and `WM_CHANGE_STATE` are taken and logged: Yuna has no interactive move,
+//! and minimises nothing.
 //!
 //! It also carries the seat's clipboard and primary selection between X11 and Wayland, both ways
 //! (`bridge.rs`): it posts what X11 clients copy and ask, and takes Yuna's word of what Wayland
@@ -52,9 +58,14 @@
 //! reparenting manager unless told otherwise, needs `_JAVA_AWT_WM_NONREPARENTING=1`
 //! ([debt](../../../../../docs/debt.md#xwayland)).
 //!
+//! Its connection reads Xwayland's socket through a stream of its own (`stream.rs`), which keeps a
+//! made-up `KeymapNotify` from making x11rb lose its place among the replies.
+//!
 //! The thread ends when Xwayland closes the connection, when Yuna lets the commands go, or on an
 //! error; its channel's end tells Yuna, which then ends that Xwayland, even when the thread
-//! panicked. Nothing an X11 client sends can make it panic: every value it reads is checked.
+//! panicked. Nothing an X11 client sends can make it panic: every value it reads is checked. A
+//! debug build panics on demand, for the test of that path (`YUNA_PANIC_ON_X11_CLOSE`,
+//! `commands.rs`).
 //!
 //! Its parts, in `manager/`:
 //!
@@ -63,6 +74,8 @@
 //!   each window it follows, [`Tracked`];
 //! - `messages.rs`: what the thread posts, [`ManagerEvent`], and the commands it takes,
 //!   [`Command`];
+//! - `owed.rs`: the commands Yuna sent that the thread has not taken yet, bounded;
+//! - `stream.rs`: the connection's stream, which follows X11's framing as it reads;
 //! - `serve.rs`: its loop, where it sleeps, and the root's lists of windows it writes once a
 //!   batch;
 //! - `x11_events.rs`: X11's events;
@@ -71,14 +84,17 @@
 
 mod commands;
 mod messages;
+mod owed;
 mod reading;
 mod serve;
+mod stream;
 mod x11_events;
 
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use smithay::reexports::calloop::channel::SyncSender;
 use smithay::reexports::rustix;
@@ -101,10 +117,20 @@ use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};
 use super::xdnd::{self, Xdnd};
 pub(crate) use messages::{Command, ManagerEvent, NetState, StateAction, StateChange, Stop};
+use owed::Owed;
+pub(crate) use owed::{MAX_OWED_BYTES, OverBound};
+pub(crate) use stream::{ManagerConnection, ManagerStream};
 
 /// How many of the manager's events wait for Yuna's loop before the thread waits in turn: X11's
 /// own buffers then hold what comes, rather than Yuna's memory.
 pub(crate) const EVENT_QUEUE: usize = 256;
+
+/// The most windows of one X11 client whose properties the manager reads and Yuna is told of:
+/// ADR-0070's figure for one client's windows in the layout (`MAX_WINDOWS_PER_CLIENT`), which no
+/// program that shows its windows passes. Past it, a window costs the manager its record without
+/// text, and Yuna nothing, where one with its properties costs each up to three texts of
+/// `MAX_KEPT_TEXT_BYTES` (`properties.rs`).
+pub(crate) const MAX_PROPERTIES_PER_CLIENT: usize = 1_000;
 
 /// The DPI of an X11 program at scale 1, as X11 and its toolkits count it.
 const BASE_DPI: f64 = 96.0;
@@ -114,24 +140,48 @@ const WITHDRAWN_STATE: u32 = 0;
 const NORMAL_STATE: u32 = 1;
 const ICONIC_STATE: u32 = 3;
 
-/// Yuna's side of a manager: its commands, and the socket that wakes its thread for them. When it
-/// drops, the thread ends.
+/// Yuna's side of a manager: what Yuna owes it, and the socket that wakes its thread for it. When
+/// it drops, the thread ends.
 #[derive(Debug)]
 pub(crate) struct Commands {
-    sender: mpsc::Sender<Command>,
+    owed: Arc<Mutex<Owed>>,
     wake: UnixStream,
 }
 
 impl Commands {
-    /// Passes `command` to the manager's thread and wakes it. Never waits: a thread that has
-    /// ended loses it, and Yuna learns of its end through the events' channel.
-    pub(crate) fn send(&self, command: Command) {
-        if self.sender.send(command).is_ok() {
-            // A full socket wakes the thread all the same; NOSIGNAL, so that a thread gone is
-            // no SIGPIPE.
-            let _ = rustix::net::send(&self.wake, &[0], SendFlags::DONTWAIT | SendFlags::NOSIGNAL);
-        }
+    /// Adds `command` to what Yuna owes the manager's thread, which [`Commands::wake`] wakes for
+    /// it. Never waits. Refused past [`MAX_OWED_BYTES`]: the manager is that far behind, stalled.
+    /// A thread that has ended never takes it, and Yuna learns of its end through the events'
+    /// channel.
+    pub(crate) fn send(&self, command: Command) -> Result<(), OverBound> {
+        lock(&self.owed).push(command, Instant::now())
     }
+
+    /// Wakes the manager's thread for the commands sent. Never waits: a full socket wakes the
+    /// thread all the same; NOSIGNAL, so that a thread gone is no SIGPIPE.
+    pub(crate) fn wake(&self) {
+        let _ = rustix::net::send(&self.wake, &[0], SendFlags::DONTWAIT | SendFlags::NOSIGNAL);
+    }
+
+    /// When the oldest command the manager's thread has not taken was sent; none when it owes
+    /// none.
+    pub(crate) fn untaken_since(&self) -> Option<Instant> {
+        lock(&self.owed).untaken_since()
+    }
+}
+
+impl Drop for Commands {
+    /// Lets the manager go, and frees what it was owed now: its thread ends at its next wake-up,
+    /// which the wake-up socket's closing gives, or its next command taken.
+    fn drop(&mut self) {
+        lock(&self.owed).release();
+    }
+}
+
+/// What Yuna owes a manager, locked. Each holder leaves it whole between its own steps, so that
+/// a panic elsewhere, the manager's thread's, leaves nothing half done: its poisoning is ignored.
+fn lock(owed: &Mutex<Owed>) -> MutexGuard<'_, Owed> {
+    owed.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Why the manager stopped: an X11 error, an I/O error, or what it found wrong.
@@ -225,21 +275,22 @@ pub(crate) fn start(
     scale: f64,
     events: SyncSender<ManagerEvent>,
 ) -> io::Result<Commands> {
-    let (sender, commands) = mpsc::channel();
+    let owed = Arc::new(Mutex::new(Owed::default()));
     let (wake, woken) = UnixStream::pair()?;
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
+    let taken = Arc::clone(&owed);
     std::thread::Builder::new()
         .name(format!("yuna-x11-{}", seat.0))
         .spawn(move || {
-            let stop = match run(wm, scale, &events, &commands, &woken) {
+            let stop = match run(wm, scale, &events, &taken, &woken) {
                 Ok(()) => Stop::Released,
                 Err(failure) if is_closed(&*failure) => Stop::Closed,
                 Err(failure) => Stop::Failed(failure.to_string()),
             };
             let _ = events.send(ManagerEvent::Stopped(stop));
         })?;
-    Ok(Commands { sender, wake })
+    Ok(Commands { owed, wake })
 }
 
 /// Whether `failure` is Xwayland closing the connection.
@@ -261,17 +312,17 @@ fn run(
     wm: UnixStream,
     scale: f64,
     events: &SyncSender<ManagerEvent>,
-    commands: &mpsc::Receiver<Command>,
+    owed: &Mutex<Owed>,
     woken: &UnixStream,
 ) -> Result<(), Failure> {
     let (stream, _) = DefaultStream::from_unix_stream(wm)?;
     // Xwayland has a single screen.
-    let connection = RustConnection::connect_to_stream(stream, 0)?;
+    let connection = RustConnection::connect_to_stream(ManagerStream::new(stream), 0)?;
     let (atoms, own, proxy) = take_charge(&connection, scale)?;
     if events.send(ManagerEvent::Ready).is_err() {
         return Ok(());
     }
-    let mut manager = Manager::new(&connection, atoms, own, proxy, events, commands)?;
+    let mut manager = Manager::new(&connection, atoms, own, proxy, events, owed)?;
     manager.serve(woken)
 }
 
@@ -279,7 +330,7 @@ fn run(
 /// that `WM_S0` is the manager's. Returns the atoms, the manager's own window and the drags'
 /// proxy.
 fn take_charge(
-    connection: &RustConnection,
+    connection: &ManagerConnection,
     scale: f64,
 ) -> Result<(Atoms, Window, Window), Failure> {
     let atoms = Atoms::new(connection)?.reply()?;
@@ -434,7 +485,7 @@ fn supported(atoms: &Atoms) -> Vec<Atom> {
 /// Makes `window` the owner of `selection` and tells the root's listeners, as ICCCM asks of a
 /// manager (its section 2.8).
 fn take_selection(
-    connection: &RustConnection,
+    connection: &ManagerConnection,
     root: Window,
     window: Window,
     selection: Atom,
@@ -470,11 +521,14 @@ struct Tracked {
     alarm: Option<(Alarm, Counter)>,
     /// Whether its `_XWAYLAND_ALLOW_COMMITS` is 0: a sync request waits.
     commits_held: bool,
+    /// Whether it was made past its client's [`MAX_PROPERTIES_PER_CLIENT`]: its properties not
+    /// read, nothing of it posted to Yuna, and mapped by the manager when it asks.
+    past_limit: bool,
 }
 
 /// The manager serving: its connection, what it follows, and where it posts.
 struct Manager<'a> {
-    connection: &'a RustConnection,
+    connection: &'a ManagerConnection,
     atoms: Atoms,
     root: Window,
     /// The manager's own window, which owns its selections; never followed.
@@ -489,6 +543,9 @@ struct Manager<'a> {
     /// The window each sync alarm watches.
     alarms: HashMap<Alarm, Window>,
     windows: HashMap<Window, Tracked>,
+    /// How many windows each X11 client has whose properties are read, by the bits of a
+    /// window's id that name its client: [`MAX_PROPERTIES_PER_CLIENT`] at most.
+    with_properties: HashMap<u32, usize>,
     /// The managed windows mapped, in the order they were: `_NET_CLIENT_LIST`.
     clients: Vec<Window>,
     /// The same windows, bottom to top as Yuna stacked them: `_NET_CLIENT_LIST_STACKING`.
@@ -501,7 +558,8 @@ struct Manager<'a> {
     /// Whether `clients` or `stacking` changed since the root's lists were last set.
     lists_changed: bool,
     events: &'a SyncSender<ManagerEvent>,
-    commands: &'a mpsc::Receiver<Command>,
+    /// What Yuna owes it.
+    owed: &'a Mutex<Owed>,
     /// The seat's selections on X11's side.
     bridge: Bridge<'a>,
     /// The seat's drags on X11's side.
@@ -513,12 +571,12 @@ pub(super) type GoOn = bool;
 
 impl<'a> Manager<'a> {
     fn new(
-        connection: &'a RustConnection,
+        connection: &'a ManagerConnection,
         atoms: Atoms,
         own: Window,
         proxy: Window,
         events: &'a SyncSender<ManagerEvent>,
-        commands: &'a mpsc::Receiver<Command>,
+        owed: &'a Mutex<Owed>,
     ) -> Result<Manager<'a>, Failure> {
         let setup = connection.setup();
         let root = setup
@@ -548,6 +606,7 @@ impl<'a> Manager<'a> {
             sync,
             alarms: HashMap::new(),
             windows: HashMap::new(),
+            with_properties: HashMap::new(),
             clients: Vec::new(),
             stacking: Vec::new(),
             restacked: Vec::new(),
@@ -555,7 +614,7 @@ impl<'a> Manager<'a> {
             order: vec![own, proxy],
             lists_changed: false,
             events,
-            commands,
+            owed,
             bridge: Bridge::new(connection, events, atoms, root, own),
             xdnd: Xdnd::new(connection, events, atoms, own, proxy),
         })
@@ -564,6 +623,14 @@ impl<'a> Manager<'a> {
     /// Posts `event` to Yuna's loop; false once it is gone.
     fn post(&self, event: ManagerEvent) -> GoOn {
         self.events.send(event).is_ok()
+    }
+
+    /// Whether Yuna is told of `window`: a window the manager follows, and not past its client's
+    /// [`MAX_PROPERTIES_PER_CLIENT`].
+    fn told(&self, window: Window) -> bool {
+        self.windows
+            .get(&window)
+            .is_some_and(|tracked| !tracked.past_limit)
     }
 }
 
@@ -616,6 +683,11 @@ fn xsettings(serial: u32, settings: &[(&str, i32)]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_windows_followed_with_their_properties_are_the_layouts_figure() {
+        assert_eq!(MAX_PROPERTIES_PER_CLIENT, crate::MAX_WINDOWS_PER_CLIENT);
+    }
 
     #[test]
     fn the_xsettings_blob_is_little_endian_with_each_name_padded() {

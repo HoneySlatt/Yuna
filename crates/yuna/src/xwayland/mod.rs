@@ -16,7 +16,9 @@
 //!   charge (`manager/mod.rs`); once it owns `WM_S0`, Xwayland accepts the waiting program. A start
 //!   that has not reached that point within [`START_TIMEOUT`] is ended. Xwayland ends itself
 //!   [`XwaylandConfig::idle_seconds`] after its last X11 client leaves; it may also crash, be
-//!   killed, or be ended by Yuna when its manager fails. Its pidfd reaps it, or, in `yuna mcp`,
+//!   killed, or be ended by Yuna when its manager fails or stalls: when it has taken none of the
+//!   commands Yuna owes it for [`MANAGER_STALL`], or when they pass their bound
+//!   (`manager/owed.rs`). Its pidfd reaps it, or, in `yuna mcp`,
 //!   the reaping of every child gives its status ([`Xwayland::child_reaped`]); its Wayland
 //!   client goes, and the display is watched again.
 //! - **Paused**: after starts that fail in a row, the display waits before it is watched again
@@ -27,7 +29,9 @@
 //! menus of its override-redirect windows (`menus.rs`), each paired with its Wayland surface
 //! through xwayland-shell-v1 (`shell.rs`), and waits on their sync requests and pings
 //! (`answers.rs`); what the state decides goes back to the manager as commands, at the round's
-//! end ([`Xwayland::send_commands`]). The manager also carries the seat's clipboard and primary
+//! end ([`Xwayland::send_commands`]). A manager that owes commands from an earlier round, checked
+//! at each round, has its watchdog armed, and only then: a manager that takes them at once, as one
+//! served does, never has one. The manager also carries the seat's clipboard and primary
 //! selection between X11 and Wayland, both ways: on its thread (`bridge.rs`), Yuna's state
 //! deciding what the seat's Wayland selections are (`selections.rs`). And it carries drags
 //! between them, both ways: XDND on its thread (`xdnd.rs`), each seat's drags decided on Yuna's
@@ -76,7 +80,7 @@ pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
 pub use bridge::{MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
 use display::Display;
 pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
-use manager::{Commands, ManagerEvent, Stop};
+use manager::{Commands, MAX_OWED_BYTES, ManagerEvent, OverBound, Stop};
 pub(crate) use menus::ShownMenus;
 pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
 pub(crate) use shell::{SURFACE_ROLE, shell_global};
@@ -95,6 +99,14 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// It closes it when it exits, its teardown taking milliseconds; an Xwayland still there after
 /// it lost its manager otherwise, to another client's `KillClient`.
 pub const MANAGER_GRACE: Duration = Duration::from_secs(5);
+
+/// How long a manager may go without taking any of the commands Yuna owes it before Yuna takes it
+/// as stalled and ends its Xwayland, as when it fails: its X11 programs then start a new one. A
+/// manager takes them at each wake-up and between X11's events, within milliseconds, within a
+/// second on a machine loaded far past its cores; one that waits on an Xwayland stopped or hung
+/// never does. Its time counts while Yuna reads the managers' events, never while Yuna's own
+/// backlog keeps a manager waiting to post.
+pub(crate) const MANAGER_STALL: Duration = Duration::from_secs(10);
 
 /// How long Yuna handles its managers' events in one round of its loop, at most: a burst of
 /// thousands, a program opening its windows, never keeps its loop from its clients for long.
@@ -200,6 +212,9 @@ pub(crate) enum Note {
     ManagerGone { server: u64 },
     /// An Xwayland has not started, or not exited, in time.
     Overdue { server: u64 },
+    /// An Xwayland's manager's watchdog came due: it may have taken no command for
+    /// [`MANAGER_STALL`].
+    Stalled { server: u64 },
     /// An Xwayland has ended, and was reaped.
     Exited { server: u64, end: End },
     /// A seat's pause after failed starts has ended.
@@ -223,6 +238,8 @@ pub(crate) struct Xwayland {
     tmp_logged: bool,
     /// Whether the managers' channels are read: not while their events wait in a backlog.
     reading_managers: bool,
+    /// Since when they are read: a manager's time to take its commands counts from then.
+    reading_since: Instant,
 }
 
 /// A seat's display and where it stands.
@@ -270,6 +287,9 @@ struct XServer {
     manager_events: Option<RegistrationToken>,
     /// The timer that ends it if it does not start, or exit, in time.
     overdue: Option<RegistrationToken>,
+    /// The timer that checks, while its manager owes commands from an earlier round, that it
+    /// takes them within [`MANAGER_STALL`].
+    watchdog: Option<RegistrationToken>,
 }
 
 impl XServer {
@@ -283,11 +303,45 @@ impl XServer {
     /// Removes its sources but its pidfd's, and lets its manager's thread go.
     fn release(&mut self, handle: &LoopHandle<'static, State>) {
         self.manager_events = None;
-        for token in self.sources.drain(..).chain(self.overdue.take()) {
+        let timers = self.overdue.take().into_iter().chain(self.watchdog.take());
+        for token in self.sources.drain(..).chain(timers) {
             handle.remove(token);
         }
         self.manager = None;
         self.wm = None;
+    }
+
+    /// Arms its watchdog at `due`, replacing the one armed.
+    fn arm_watchdog(&mut self, id: u64, due: Instant, handle: &LoopHandle<'static, State>) {
+        self.disarm_watchdog(handle);
+        let armed = insert_source(
+            handle,
+            Wake::of_seat(Source::XwaylandTimeout, self.seat),
+            Timer::from_deadline(due),
+            move |_, _, state| {
+                state.xwayland_notes.push(Note::Stalled { server: id });
+                TimeoutAction::Drop
+            },
+        );
+        match armed {
+            Ok(token) => self.watchdog = Some(token),
+            Err(error) => {
+                tracing::warn!(error = %error.error, "a manager's watchdog cannot be armed");
+            }
+        }
+    }
+
+    fn disarm_watchdog(&mut self, handle: &LoopHandle<'static, State>) {
+        if let Some(token) = self.watchdog.take() {
+            handle.remove(token);
+        }
+    }
+
+    /// Ends it at once because its manager stalled, without the loop's handle: its sources go
+    /// when it is reaped, and its manager now, with what Yuna owed it.
+    fn end_stalled(&mut self) {
+        kill(&self.pidfd);
+        self.manager = None;
     }
 
     /// Arms the timer that ends it after `delay`, replacing the one armed.
@@ -333,6 +387,7 @@ impl Xwayland {
             next_server: 1,
             tmp_logged: false,
             reading_managers: true,
+            reading_since: Instant::now(),
         })
     }
 
@@ -460,6 +515,7 @@ impl Xwayland {
                 }
                 Note::ManagerGone { server } => self.manager_gone(server, handle),
                 Note::Overdue { server } => self.overdue(server, handle),
+                Note::Stalled { server } => self.stalled(server, handle),
                 Note::Exited { server, end } => self.exited(server, end, state, handle),
                 Note::PauseEnded(seat) => self.watch(seat, handle),
             }
@@ -468,6 +524,54 @@ impl Xwayland {
         backlog.append(&mut state.xwayland_notes);
         state.xwayland_notes = backlog;
         self.read_managers(state.xwayland_notes.is_empty(), handle);
+        self.watch_managers(handle);
+    }
+
+    /// Arms the watchdog of each manager that owes commands sent at an earlier round's end, and
+    /// disarms the others': done before this round's commands are sent, so that a manager that
+    /// takes them at once, as one served does, never has one armed. None is armed while the
+    /// managers' events wait in Yuna's backlog: a manager may be waiting to post then.
+    fn watch_managers(&mut self, handle: &LoopHandle<'static, State>) {
+        for (&id, xserver) in &mut self.servers {
+            let owed_since = xserver.manager.as_ref().and_then(Commands::untaken_since);
+            match owed_since {
+                Some(since) if self.reading_managers => {
+                    if xserver.watchdog.is_none() {
+                        let due = since.max(self.reading_since) + MANAGER_STALL;
+                        xserver.arm_watchdog(id, due, handle);
+                    }
+                }
+                _ => xserver.disarm_watchdog(handle),
+            }
+        }
+    }
+
+    /// Manager `id`'s watchdog came due: if it has taken none of Yuna's commands for
+    /// [`MANAGER_STALL`] while Yuna read its events, it is stalled, and its Xwayland ends as when
+    /// it fails; if it took some since, its watchdog counts from the oldest it owes now.
+    fn stalled(&mut self, id: u64, handle: &LoopHandle<'static, State>) {
+        let Some(xserver) = self.servers.get_mut(&id) else {
+            return;
+        };
+        xserver.watchdog = None;
+        let Some(since) = xserver.manager.as_ref().and_then(Commands::untaken_since) else {
+            return;
+        };
+        // While Yuna's backlog waits, the next round's check arms it again from its end.
+        if !self.reading_managers {
+            return;
+        }
+        let due = since.max(self.reading_since) + MANAGER_STALL;
+        if Instant::now() < due {
+            xserver.arm_watchdog(id, due, handle);
+            return;
+        }
+        tracing::warn!(
+            seat = xserver.seat.0,
+            owed_for = ?since.elapsed(),
+            "Xwayland's manager takes none of Yuna's commands: it is stalled, and Xwayland ends"
+        );
+        xserver.end(handle);
     }
 
     /// Whether notes wait from an earlier round: the loop must not sleep.
@@ -493,6 +597,9 @@ impl Xwayland {
             return;
         }
         self.reading_managers = read;
+        if read {
+            self.reading_since = Instant::now();
+        }
         for xserver in self.servers.values() {
             let Some(token) = xserver.manager_events else {
                 continue;
@@ -559,6 +666,7 @@ impl Xwayland {
             sources: Vec::new(),
             manager_events: None,
             overdue: None,
+            watchdog: None,
         };
         tracing::info!(
             seat = seat.0,
@@ -672,19 +780,42 @@ impl Xwayland {
         }
     }
 
-    /// Passes the commands the state left for the managers to each, in order: at the round's
-    /// end, so that the state never holds a manager, whose life is its Xwayland's. A command for
-    /// an Xwayland whose manager is gone is dropped.
+    /// Passes the commands the state left for the managers to each, in order, then wakes each
+    /// manager that got some: at the round's end, so that the state never holds a manager, whose
+    /// life is its Xwayland's. A command for an Xwayland whose manager is gone is dropped. A
+    /// manager owed more than its bound is taken as stalled: its Xwayland ends at once.
     pub(crate) fn send_commands(&mut self, state: &mut State) {
         state.x11_selection_commands();
         state.x11_drag_commands();
+        let mut woken = Vec::new();
         for (id, command) in state.x11.take_outbox() {
+            let Some(xserver) = self.servers.get_mut(&id) else {
+                continue;
+            };
+            let Some(manager) = &xserver.manager else {
+                continue;
+            };
+            match manager.send(command) {
+                Ok(()) if !woken.contains(&id) => woken.push(id),
+                Ok(()) => {}
+                Err(OverBound) => {
+                    tracing::warn!(
+                        seat = xserver.seat.0,
+                        bound = MAX_OWED_BYTES,
+                        "Xwayland's manager is owed more commands than its bound: it is \
+                         stalled, and Xwayland ends"
+                    );
+                    xserver.end_stalled();
+                }
+            }
+        }
+        for id in woken {
             if let Some(manager) = self
                 .servers
                 .get(&id)
                 .and_then(|xserver| xserver.manager.as_ref())
             {
-                manager.send(command);
+                manager.wake();
             }
         }
     }

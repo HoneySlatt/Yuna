@@ -6,13 +6,21 @@
 //! [`MAX_TEXT_BYTES`] for text, [`MAX_LIST`] atoms for a list, and for a property of fixed
 //! size, that size. A value of the wrong type or format, or whose numbers make no sense, is
 //! malformed: it is ignored, as if the property were not set, and the manager says so once per
-//! window. Text beyond the bound is cut, at a character's edge.
+//! window. Text beyond the bound is cut, at a character's edge; a title or a class is then kept
+//! to [`MAX_KEPT_TEXT_BYTES`] once decoded, since the manager and Yuna each keep it for every
+//! window.
 
 use std::fmt;
 
 /// The most bytes of text read from a title or a class: 64 KiB, far beyond any title a window
 /// shows, and small enough that a client changing its title again and again costs little.
 pub(crate) const MAX_TEXT_BYTES: u32 = 64 * 1024;
+
+/// The most bytes of a title or a class kept once decoded, in UTF-8: 4 KiB, a thousand
+/// characters of any script and more than a window shows. The manager and Yuna each keep two
+/// titles and a class of every window an X11 client makes, mapped or not: 24 KiB a window at
+/// most, where the 64 KiB read, Latin-1 doubled in UTF-8, would be 768 KiB.
+pub(crate) const MAX_KEPT_TEXT_BYTES: usize = 4 * 1024;
 
 /// The most atoms read from a list (`WM_PROTOCOLS`, `_NET_WM_STATE`, `_NET_WM_WINDOW_TYPE`): the
 /// specifications name about twenty, a client lists a few.
@@ -169,7 +177,8 @@ pub(crate) struct Text {
 
 /// Text in one of the encodings ICCCM allows: `UTF8_STRING`; `STRING`, Latin-1; `COMPOUND_TEXT`,
 /// read as Latin-1. Trailing NULs are dropped; UTF-8 cut by the bound ends at the last whole
-/// character. Invalid UTF-8, another type or another format is malformed.
+/// character; the text is kept to [`MAX_KEPT_TEXT_BYTES`], at a character's edge. Invalid UTF-8,
+/// another type or another format is malformed.
 pub(crate) fn decode_text(raw: Raw<'_>, types: TextTypes) -> Decoded<Text> {
     if raw.is_unset() {
         return Ok(None);
@@ -191,7 +200,7 @@ pub(crate) fn decode_text(raw: Raw<'_>, types: TextTypes) -> Decoded<Text> {
 }
 
 /// `WM_CLASS`'s class, the second of its two NUL-ended Latin-1 strings, which Yuna gives as the
-/// window's application id. A value with no NUL holds no class.
+/// window's application id, kept to [`MAX_KEPT_TEXT_BYTES`]. A value with no NUL holds no class.
 pub(crate) fn decode_class(raw: Raw<'_>, string: u32) -> Decoded<String> {
     if raw.is_unset() {
         return Ok(None);
@@ -456,21 +465,31 @@ fn trim_nuls(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
-/// Latin-1 bytes as text: each byte is the character of its number.
+/// Latin-1 bytes as text, kept to [`MAX_KEPT_TEXT_BYTES`]: each byte is the character of its
+/// number, two bytes in UTF-8 past ASCII.
 fn latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|&byte| char::from(byte)).collect()
+    let mut text = String::new();
+    for character in bytes.iter().map(|&byte| char::from(byte)) {
+        if text.len() + character.len_utf8() > MAX_KEPT_TEXT_BYTES {
+            break;
+        }
+        text.push(character);
+    }
+    text
 }
 
-/// UTF-8 bytes as text; when `truncated`, a character the bound cut is dropped. Invalid UTF-8 is
-/// malformed.
+/// UTF-8 bytes as text, kept to [`MAX_KEPT_TEXT_BYTES`]; when `truncated`, a character the bound
+/// cut is dropped. Invalid UTF-8 is malformed, wherever it lies in what was read.
 fn utf8(bytes: &[u8], truncated: bool) -> Result<String, Malformed> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => Ok(text.to_owned()),
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
         Err(error) if truncated && error.error_len().is_none() => {
-            Ok(String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned())
+            std::str::from_utf8(&bytes[..error.valid_up_to()])
+                .map_err(|_| Malformed("invalid UTF-8"))?
         }
-        Err(_) => Err(Malformed("invalid UTF-8")),
-    }
+        Err(_) => return Err(Malformed("invalid UTF-8")),
+    };
+    Ok(text[..text.floor_char_boundary(MAX_KEPT_TEXT_BYTES)].to_owned())
 }
 
 #[cfg(test)]
@@ -559,6 +578,51 @@ mod tests {
         );
         // Not cut, the same bytes are malformed.
         assert!(decode_text(text(UTF8, b"caf\xC3"), TYPES).is_err());
+    }
+
+    #[test]
+    fn titles_and_classes_are_kept_to_their_bound_at_a_characters_edge() {
+        let read = |raw| decode_text(raw, TYPES).map(|text| text.map(|text| text.text));
+        // ASCII: the bound's bytes exactly.
+        let ascii = vec![b'a'; MAX_TEXT_BYTES as usize];
+        assert_eq!(
+            read(text(UTF8, &ascii)),
+            Ok(Some("a".repeat(MAX_KEPT_TEXT_BYTES)))
+        );
+        assert_eq!(
+            read(text(STRING, &ascii[..MAX_KEPT_TEXT_BYTES])),
+            Ok(Some("a".repeat(MAX_KEPT_TEXT_BYTES)))
+        );
+        // Latin-1's é is two bytes in UTF-8: half as many fit.
+        let latin1_e = vec![0xE9; MAX_KEPT_TEXT_BYTES];
+        assert_eq!(
+            read(text(STRING, &latin1_e)),
+            Ok(Some("é".repeat(MAX_KEPT_TEXT_BYTES / 2)))
+        );
+        // "€" is three bytes: the last one that fits whole is kept.
+        let euros = "€".repeat(MAX_KEPT_TEXT_BYTES);
+        let kept = read(text(UTF8, euros.as_bytes()))
+            .expect("read")
+            .expect("set");
+        assert_eq!(kept, "€".repeat(MAX_KEPT_TEXT_BYTES / 3));
+        // Below the bound, nothing is cut.
+        assert_eq!(
+            read(text(UTF8, "Café".as_bytes())),
+            Ok(Some("Café".to_owned()))
+        );
+        // Invalid UTF-8 past the bound is still malformed: the bytes read decide.
+        let mut late = vec![b'a'; MAX_KEPT_TEXT_BYTES * 2];
+        late.push(0xFF);
+        late.push(b'a');
+        assert!(read(text(UTF8, &late)).is_err());
+        // The class, Latin-1 too.
+        let mut class = b"instance\0".to_vec();
+        class.extend(vec![0xE9; MAX_KEPT_TEXT_BYTES]);
+        class.push(0);
+        assert_eq!(
+            decode_class(text(STRING, &class), STRING),
+            Ok(Some("é".repeat(MAX_KEPT_TEXT_BYTES / 2)))
+        );
     }
 
     #[test]

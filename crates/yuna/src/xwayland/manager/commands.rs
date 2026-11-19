@@ -3,11 +3,9 @@
 //! `xwayland/xdnd.rs`.
 //!
 //! It is apart from X11's events (`x11_events.rs`), so that what Yuna asks of the manager and
-//! what X11 tells it read one at a time. `serve.rs` takes the commands at each wake-up, and
-//! `x11_events.rs` before it answers a selection request; the state they change is the parent
-//! module's.
-
-use std::sync::mpsc;
+//! what X11 tells it read one at a time. `serve.rs` takes the commands at each wake-up and
+//! between X11's events, and `x11_events.rs` before it answers a selection request; what Yuna
+//! owes is `owed.rs`'s; the state they change is the parent module's.
 
 use x11rb::connection::Connection;
 use x11rb::protocol::sync::{ConnectionExt as _, CreateAlarmAux, Int64, TESTTYPE, VALUETYPE};
@@ -15,28 +13,47 @@ use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageEvent, ConfigureNotifyEvent, ConfigureWindowAux, ConnectionExt as _,
     EventMask, InputFocus, PropMode, StackMode, Window,
 };
-use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
 use super::messages::{Command, ManagerEvent};
-use super::{Failure, GoOn, Manager, NORMAL_STATE};
+use super::{Failure, GoOn, Manager, ManagerConnection, NORMAL_STATE, lock};
 use crate::xwayland::properties::X11Rect;
 
+/// The variable that, in a debug build, makes an X11 manager's thread panic when Yuna asks it to
+/// close a window: what the test of a manager's panic uses
+/// ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+/// It is read once, at the first close a manager of the process is asked, and holds for every
+/// manager of the process. A release build has neither the variable nor the panic.
+#[cfg(debug_assertions)]
+pub(crate) const PANIC_ON_X11_CLOSE: &str = "YUNA_PANIC_ON_X11_CLOSE";
+
+/// Panics when [`PANIC_ON_X11_CLOSE`] is set: the manager's panic its test asks for, in a debug
+/// build alone.
+#[cfg(debug_assertions)]
+fn panic_if_asked() {
+    static ASKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ASKED.get_or_init(|| std::env::var_os(PANIC_ON_X11_CLOSE).is_some()) {
+        panic!("{PANIC_ON_X11_CLOSE} asks the X11 manager's thread to panic when a window closes");
+    }
+}
+
 impl Manager<'_> {
-    /// Carries out every command Yuna's loop sent so far; false once Yuna let them go.
+    /// Carries out every command Yuna's loop sent so far, in the order sent; false once Yuna let
+    /// them go.
     pub(super) fn take_commands(&mut self) -> Result<GoOn, Failure> {
-        let commands = self.commands;
-        loop {
-            match commands.try_recv() {
-                Ok(command) => {
-                    if !self.command(command)? {
-                        return Ok(false);
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => return Ok(true),
-                Err(mpsc::TryRecvError::Disconnected) => return Ok(false),
+        let taken = {
+            let mut owed = lock(self.owed);
+            if owed.released() {
+                return Ok(false);
+            }
+            owed.take()
+        };
+        for command in taken {
+            if !self.command(command)? {
+                return Ok(false);
             }
         }
+        Ok(true)
     }
 
     /// Carries out one of Yuna's commands; false once Yuna's loop is gone. A request on a window
@@ -45,39 +62,7 @@ impl Manager<'_> {
         let connection = self.connection;
         let atoms = &self.atoms;
         match command {
-            Command::Map(window) => {
-                // Xwayland reads it when it makes the window's surface: a hold left from before
-                // would keep the window from ever showing.
-                if let Some(tracked) = self.windows.get_mut(&window)
-                    && std::mem::take(&mut tracked.commits_held)
-                {
-                    connection.delete_property(window, atoms._XWAYLAND_ALLOW_COMMITS)?;
-                }
-                connection.change_property32(
-                    PropMode::REPLACE,
-                    window,
-                    atoms.WM_STATE,
-                    atoms.WM_STATE,
-                    &[NORMAL_STATE, x11rb::NONE],
-                )?;
-                // Yuna draws no frame: none is added around the window.
-                connection.change_property32(
-                    PropMode::REPLACE,
-                    window,
-                    atoms._NET_FRAME_EXTENTS,
-                    AtomEnum::CARDINAL,
-                    &[0, 0, 0, 0],
-                )?;
-                connection.map_window(window)?;
-                if let Some(tracked) = self.windows.get_mut(&window) {
-                    tracked.managed = true;
-                    if !self.clients.contains(&window) {
-                        self.clients.push(window);
-                        self.stacking.push(window);
-                        self.publish_lists();
-                    }
-                }
-            }
+            Command::Map(window) => self.map(window)?,
             Command::Configure { window, rect, sync } => {
                 if let Some(value) = sync {
                     self.request_sync(window, value)?;
@@ -137,6 +122,8 @@ impl Manager<'_> {
             }
             Command::Focus(window) => self.focus(window)?,
             Command::Close(window) => {
+                #[cfg(debug_assertions)]
+                panic_if_asked();
                 // A window destroyed while the command was on its way: its id may already name
                 // another program's resource, which `KillClient` would end.
                 let Some(tracked) = self.windows.get(&window) else {
@@ -242,6 +229,46 @@ impl Manager<'_> {
             Command::CancelWaylandDrag(drag) => return self.xdnd.cancel_wayland(drag),
         }
         Ok(true)
+    }
+
+    /// Maps a window that asked to be, its `WM_STATE` Normal, without a frame: when Yuna asks, or
+    /// at once for a window past its client's limit, which Yuna is never told of: Yuna maps a
+    /// window past its client's limit in the layout so too, and never shows it.
+    pub(super) fn map(&mut self, window: Window) -> Result<(), Failure> {
+        let connection = self.connection;
+        let atoms = &self.atoms;
+        // Xwayland reads it when it makes the window's surface: a hold left from before would
+        // keep the window from ever showing.
+        if let Some(tracked) = self.windows.get_mut(&window)
+            && std::mem::take(&mut tracked.commits_held)
+        {
+            connection.delete_property(window, atoms._XWAYLAND_ALLOW_COMMITS)?;
+        }
+        connection.change_property32(
+            PropMode::REPLACE,
+            window,
+            atoms.WM_STATE,
+            atoms.WM_STATE,
+            &[NORMAL_STATE, x11rb::NONE],
+        )?;
+        // Yuna draws no frame: none is added around the window.
+        connection.change_property32(
+            PropMode::REPLACE,
+            window,
+            atoms._NET_FRAME_EXTENTS,
+            AtomEnum::CARDINAL,
+            &[0, 0, 0, 0],
+        )?;
+        connection.map_window(window)?;
+        if let Some(tracked) = self.windows.get_mut(&window) {
+            tracked.managed = true;
+            if !self.clients.contains(&window) {
+                self.clients.push(window);
+                self.stacking.push(window);
+                self.publish_lists();
+            }
+        }
+        Ok(())
     }
 
     /// Sends `window` a sync request of `value` (`_NET_WM_SYNC_REQUEST`), ahead of a configure,
@@ -361,7 +388,7 @@ impl Manager<'_> {
 /// `ConfigureNotify`, as ICCCM 4.1.5 asks of a manager that moves a window: the real one does
 /// not come when only its place relative to its parent is unchanged. The rectangle is cut to
 /// X11's 16-bit coordinates.
-fn configure(connection: &RustConnection, window: Window, rect: X11Rect) -> Result<(), Failure> {
+fn configure(connection: &ManagerConnection, window: Window, rect: X11Rect) -> Result<(), Failure> {
     let x = i16::try_from(rect.x).unwrap_or(if rect.x < 0 { i16::MIN } else { i16::MAX });
     let y = i16::try_from(rect.y).unwrap_or(if rect.y < 0 { i16::MIN } else { i16::MAX });
     let side = |value: u32| u16::try_from(value.clamp(1, 32_767)).unwrap_or(u16::MAX);

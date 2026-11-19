@@ -172,19 +172,12 @@ impl Hostile {
         self.others_untouched();
         drop(clients);
         let (seat, output) = (self.seat, self.output);
-        wait(
-            &mut self.compositor,
-            "the hostile windows close",
-            |compositor| {
-                let windows = compositor
-                    .windows()
-                    .iter()
-                    .filter(|window| window.seat == seat)
-                    .count();
-                let menus = compositor.drawn_x11_menus(output).len();
-                (windows == 0 && menus == 0).then_some(())
-            },
-        );
+        // A flood's thousands of windows go one slice of a round at a time: they close as fast
+        // as the machine lets Yuna's loop run, which only needs to keep moving.
+        run_until("the hostile windows close", 0, || {
+            pump(&mut self.compositor);
+            self.hostile_windows() + self.compositor.drawn_x11_menus(output).len()
+        });
         self.others_untouched();
         // Xwayland ends itself once its clients are gone; its end wakes Yuna, rightly, and must
         // come before the rest is judged, or it may land inside the half second judged.
@@ -224,7 +217,7 @@ fn activity(before: Counters, after: Counters) -> (u64, u64, u64, u64, u64) {
 
 /// On the real clock: once what is due has run, half a second of the loop draws, calls back,
 /// configures, commits and wakes nothing, and leaves no deadline armed.
-fn assert_rests_real(compositor: &mut Compositor) {
+pub(crate) fn assert_rests_real(compositor: &mut Compositor) {
     let deadline = Instant::now() + PATIENCE;
     loop {
         assert!(Instant::now() < deadline, "Yuna never rests");
@@ -304,8 +297,9 @@ fn a_title_of_16_mib_is_read_to_its_bound() {
             .into_iter()
             .find(|window| window.app_id.as_deref() == Some("X11Test") && window.rect.is_some())
     });
+    // Read to 64 KiB, the bound of a read; kept to 4 KiB, the bound of a title kept.
     let title = described.title.expect("a title");
-    assert_eq!(title.len(), 64 * 1024, "the title is cut at its bound");
+    assert_eq!(title.len(), 4 * 1024, "the title is cut at its bound");
     assert!(title.bytes().all(|byte| byte == b'a'));
     hostile.end(vec![client]);
 }
@@ -725,21 +719,84 @@ fn thread_cpu_time() -> Duration {
     )
 }
 
-/// One round of the loop, the sentinel's window `w` asking its next frame at each callback: an
-/// animation on another seat. Returns the CPU time the round took Yuna.
-fn animate(compositor: &mut Compositor, sentinel: &mut Client, w: usize) -> Duration {
-    let before = thread_cpu_time();
-    pump(compositor);
-    let took = thread_cpu_time().saturating_sub(before);
-    let frames = sentinel.window(w).frames.len();
-    sentinel.read_events();
-    if sentinel.window(w).frames.len() > frames {
-        sentinel.request_frame(w);
-        sentinel.commit(w);
-        sentinel.send();
+/// Runs `round_and_count`, a round of the loop that gives a count, until the count is `target`.
+/// Fails only once it stops moving: [`PATIENCE`] without a change. How fast a flood is taken is
+/// the machine's, slower when it is loaded; a count that no longer moves is Yuna's stall.
+fn run_until(what: &str, target: usize, mut round_and_count: impl FnMut() -> usize) {
+    let mut count = round_and_count();
+    let mut moved = Instant::now();
+    while count != target {
+        assert!(
+            moved.elapsed() < PATIENCE,
+            "{what}: {count} of {target}, unchanged for {PATIENCE:?}"
+        );
+        let now = round_and_count();
+        if now != count {
+            count = now;
+            moved = Instant::now();
+        }
     }
-    took
 }
+
+/// A refresh period of the sentinel's output, at 60 Hz.
+const SENTINEL_PERIOD: Duration = Duration::from_micros(16_667);
+
+/// The sentinel's window animating on another seat while a flood is taken, a frame asked at each
+/// callback, and what Yuna's loop did for it, round by round.
+struct Animation {
+    window: usize,
+    /// When the sentinel last asked its next frame.
+    asked: Instant,
+    /// The rounds since then that began two refresh periods after it or later, when its frame
+    /// was due whatever the machine's speed, and that ended without its callback.
+    due_without_frame: u32,
+    /// The most such rounds in a row.
+    most_due_without_frame: u32,
+    /// The longest round, in CPU time of Yuna's thread.
+    longest_round: Duration,
+}
+
+impl Animation {
+    /// The sentinel's `window` asks its first frame.
+    fn start(sentinel: &mut Client, window: usize) -> Animation {
+        sentinel.request_frame(window);
+        sentinel.commit(window);
+        sentinel.send();
+        Animation {
+            window,
+            asked: Instant::now(),
+            due_without_frame: 0,
+            most_due_without_frame: 0,
+            longest_round: Duration::ZERO,
+        }
+    }
+
+    /// One round of the loop, then the sentinel's next frame asked if its callback came.
+    fn round(&mut self, compositor: &mut Compositor, sentinel: &mut Client) {
+        let began = Instant::now();
+        let before = thread_cpu_time();
+        pump(compositor);
+        let took = thread_cpu_time().saturating_sub(before);
+        self.longest_round = self.longest_round.max(took);
+        let frames = sentinel.window(self.window).frames.len();
+        sentinel.read_events();
+        if sentinel.window(self.window).frames.len() > frames {
+            sentinel.request_frame(self.window);
+            sentinel.commit(self.window);
+            sentinel.send();
+            self.asked = Instant::now();
+            self.due_without_frame = 0;
+        } else if began >= self.asked + 2 * SENTINEL_PERIOD {
+            self.due_without_frame += 1;
+            self.most_due_without_frame = self.most_due_without_frame.max(self.due_without_frame);
+        }
+    }
+}
+
+/// The most rounds in a row, each begun when the sentinel's frame was due, that may end without
+/// its callback: a round may read its commit after the refresh it would have made, the next one
+/// draws it.
+const MOST_DUE_WITHOUT_FRAME: u32 = 2;
 
 #[test]
 fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
@@ -750,16 +807,13 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
     // The sentinel animates throughout: a frame asked at each callback.
     let w = hostile.sentinel_window;
     let first = hostile.sentinel.window(w).frames.len();
-    hostile.sentinel.request_frame(w);
-    hostile.sentinel.commit(w);
-    hostile.sentinel.send();
+    let mut animation = Animation::start(&mut hostile.sentinel, w);
     let flood_started = Instant::now();
     let sentinel = &mut hostile.sentinel;
-    let mut longest_round = Duration::ZERO;
     let (client, ()) = step_pumping(
         &mut hostile.compositor,
         client,
-        |compositor| longest_round = longest_round.max(animate(compositor, sentinel, w)),
+        |compositor| animation.round(compositor, sentinel),
         |client| {
             let fail = |e: x11rb::errors::ConnectionError| e.to_string();
             for index in 0..5_000 {
@@ -780,17 +834,14 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
     let sent_in = flood_started.elapsed();
     // Yuna takes them while the sentinel animates on: until a thousand are open, then half a
     // second more.
-    let deadline = Instant::now() + PATIENCE;
-    while hostile.hostile_windows() < MAX_WINDOWS_PER_CLIENT {
-        assert!(Instant::now() < deadline, "a thousand windows never opened");
-        let took = animate(&mut hostile.compositor, &mut hostile.sentinel, w);
-        longest_round = longest_round.max(took);
-    }
+    run_until("the windows open", MAX_WINDOWS_PER_CLIENT, || {
+        animation.round(&mut hostile.compositor, &mut hostile.sentinel);
+        hostile.hostile_windows()
+    });
     let opened_in = flood_started.elapsed();
     let quiet = Instant::now() + Duration::from_millis(500);
     while Instant::now() < quiet {
-        let took = animate(&mut hostile.compositor, &mut hostile.sentinel, w);
-        longest_round = longest_round.max(took);
+        animation.round(&mut hostile.compositor, &mut hostile.sentinel);
     }
     assert_eq!(
         hostile.hostile_windows(),
@@ -805,7 +856,7 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
     let (menus, ()) = step_pumping(
         &mut hostile.compositor,
         menus,
-        |compositor| longest_round = longest_round.max(animate(compositor, sentinel, w)),
+        |compositor| animation.round(compositor, sentinel),
         |client| {
             let fail = |e: x11rb::errors::ConnectionError| e.to_string();
             for index in 0..5_000_u16 {
@@ -824,30 +875,28 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
         },
     );
     let output = hostile.output;
-    let deadline = Instant::now() + PATIENCE;
-    while hostile.compositor.drawn_x11_menus(output).len() < MAX_MENUS_PER_CLIENT {
-        assert!(Instant::now() < deadline, "the menus never showed");
-        let took = animate(&mut hostile.compositor, &mut hostile.sentinel, w);
-        longest_round = longest_round.max(took);
-    }
+    run_until("the menus show", MAX_MENUS_PER_CLIENT, || {
+        animation.round(&mut hostile.compositor, &mut hostile.sentinel);
+        hostile.compositor.drawn_x11_menus(output).len()
+    });
     let menus_in = flood_started.elapsed();
     let quiet = Instant::now() + Duration::from_millis(500);
     while Instant::now() < quiet {
-        let took = animate(&mut hostile.compositor, &mut hostile.sentinel, w);
-        longest_round = longest_round.max(took);
+        animation.round(&mut hostile.compositor, &mut hostile.sentinel);
     }
     assert_eq!(
         hostile.compositor.drawn_x11_menus(output).len(),
         MAX_MENUS_PER_CLIENT,
         "the cap of menus holds"
     );
-    // While the manager's channel was full, the sentinel kept being called back, four times a
-    // second at least, whatever the machine's load: never starved. In a release build no round
-    // of Yuna's loop works a period at 60 Hz, in CPU time of its thread, which other programs
-    // lengthen far less than the time between two callbacks: 7 ms measured, the callbacks then
-    // two periods apart at most. An unoptimised build arranges a thousand windows a frame in
-    // tens of milliseconds, 90 ms a round measured alone, three times that with every test at
-    // once: its rounds are printed, not checked.
+    // While the manager's channel was full, every round of Yuna's loop that began when the
+    // sentinel's frame was due sent it, or the next one did: the managers' events, handled in a
+    // slice of each round, never kept it from its frames, however long the machine made a round.
+    // How many frames came in a second, and how long a round took, are the machine's: printed.
+    // In a release build no round works a period at 60 Hz, in CPU time of its thread, which other
+    // programs lengthen far less than the time between two callbacks: 7 ms measured. An
+    // unoptimised build arranges a thousand windows a frame in tens of milliseconds, 90 ms a round
+    // measured alone, three times that with every test at once: its rounds are not checked.
     let frames = hostile.sentinel.window(w).frames[first..].to_vec();
     let longest = frames
         .windows(2)
@@ -856,16 +905,22 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
         .unwrap_or(0);
     println!(
         "5,000 X11 windows sent in {sent_in:?}, 1,000 open in {opened_in:?}, 5,000 menus mapped \
-         and 64 shown by {menus_in:?}: {} sentinel frames, the longest gap {longest} ms, the \
-         longest round {longest_round:?} of CPU",
-        frames.len()
+         and 64 shown by {menus_in:?}: {} sentinel frames, the longest gap {longest} ms, at most \
+         {} rounds in a row without the frame due, the longest round {:?} of CPU",
+        frames.len(),
+        animation.most_due_without_frame,
+        animation.longest_round,
     );
-    let starved = frames.len() < 10 || frames.len() as f64 / menus_in.as_secs_f64() < 4.0;
-    assert!(!starved, "{} frames in {menus_in:?}", frames.len());
+    assert!(
+        animation.most_due_without_frame <= MOST_DUE_WITHOUT_FRAME,
+        "{} rounds in a row, each begun when the sentinel's frame was due, ended without it",
+        animation.most_due_without_frame
+    );
     if !cfg!(debug_assertions) {
         assert!(
-            longest_round <= Duration::from_millis(16),
-            "a round of {longest_round:?} of CPU"
+            animation.longest_round <= Duration::from_millis(16),
+            "a round of {:?} of CPU",
+            animation.longest_round
         );
     }
     hostile.end(vec![client, menus]);

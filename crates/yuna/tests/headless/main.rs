@@ -39,6 +39,7 @@ mod vrr;
 mod window_cap;
 mod wlr_capture_client;
 mod wlr_screencopy;
+mod x11_bounds;
 mod x11_client;
 mod x11_crash;
 mod x11_drags;

@@ -69,10 +69,9 @@ use x11rb::protocol::xproto::{
     PropMode, Property, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
     SelectionRequestEvent, Timestamp, Window, WindowClass,
 };
-use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::manager::{Atoms, Failure, GoOn, ManagerEvent};
+use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent};
 
 /// How long a transfer of a selection between X11 and Wayland may go without progress, no byte
 /// read or written and no step of its X11 peer, before it ends: as long as a ping waits
@@ -107,8 +106,15 @@ const MAX_DRAG_ASKS: u8 = 4;
 /// The bytes of a `ChangeProperty` request before its data.
 const CHANGE_PROPERTY_HEADER: usize = 24;
 
-/// How many atoms' names the manager keeps; past it, it forgets them all and asks again.
+/// How many atoms' names the manager keeps; past it, it forgets them all and asks again. A name
+/// longer than [`MAX_MIME_TYPE_BYTES`] is not kept: it is no MIME type, nor any target the
+/// bridge reads, and X11 allows 65,535 bytes, so that 4,096 of them would hold 256 MiB.
 const MAX_NAMES: usize = 4096;
+
+/// How many atoms' names the manager asks at once: a name may be 65,535 bytes, which x11rb holds
+/// until the manager reads its answer, so that 16 answers hold 1 MiB at most where an owner's
+/// 256 targets asked together would hold 16 MiB. An owner lists a few targets, asked in one go.
+const NAMES_ASKED_AT_ONCE: usize = 16;
 
 /// The MIME types of text, as the rest of the desktop names them.
 const UTF8_TEXT: &str = "text/plain;charset=utf-8";
@@ -133,6 +139,15 @@ impl Selection {
             Selection::Primary => AtomEnum::PRIMARY.into(),
         }
     }
+}
+
+/// An atom's name, as the bridge keeps it: none when it is not UTF-8, or longer than any MIME
+/// type it passes on ([`MAX_MIME_TYPE_BYTES`]).
+fn kept_name(name: Vec<u8>) -> Option<String> {
+    if name.len() > MAX_MIME_TYPE_BYTES {
+        return None;
+    }
+    String::from_utf8(name).ok()
 }
 
 /// Whether `name` reads as a MIME type, which a Wayland client may take as it is: a type and a
@@ -356,7 +371,7 @@ enum Step<T> {
 /// The selections on X11's side of a seat's manager: what it holds for Wayland, the X11 owners it
 /// reads for Wayland, and the transfers each way.
 pub(super) struct Bridge<'a> {
-    connection: &'a RustConnection,
+    connection: &'a ManagerConnection,
     events: &'a SyncSender<ManagerEvent>,
     atoms: Atoms,
     root: Window,
@@ -377,7 +392,8 @@ pub(super) struct Bridge<'a> {
     to_x11: HashMap<u64, ToX11>,
     next_transfer: u64,
     next_owner: u64,
-    /// The names of the atoms met in owners' targets; none for an atom X11 does not know.
+    /// The names of the atoms met in owners' targets; none for an atom X11 does not know, or
+    /// whose name is longer than [`MAX_MIME_TYPE_BYTES`].
     names: HashMap<Atom, Option<String>>,
     /// When the transfers of the latest drags last moved, once they ended, each way, by drag:
     /// a drag's time limit runs from its last move, ended transfers included.
@@ -396,7 +412,7 @@ fn note_move(moves: &mut Vec<(u64, Instant)>, drag: u64, at: Instant) {
 
 impl<'a> Bridge<'a> {
     pub(super) fn new(
-        connection: &'a RustConnection,
+        connection: &'a ManagerConnection,
         events: &'a SyncSender<ManagerEvent>,
         atoms: Atoms,
         root: Window,
@@ -746,7 +762,8 @@ impl<'a> Bridge<'a> {
             .unwrap_or_default())
     }
 
-    /// The names of `atoms`, those X11 knows, asked at once for those not known yet.
+    /// The names of `atoms`, those X11 knows and no longer than [`MAX_MIME_TYPE_BYTES`], asked
+    /// for those not known yet, [`NAMES_ASKED_AT_ONCE`] at a time.
     pub(super) fn names_of(&mut self, atoms: &[Atom]) -> Result<Vec<(Atom, String)>, Failure> {
         if self.names.len() > MAX_NAMES {
             self.names.clear();
@@ -758,14 +775,15 @@ impl<'a> Bridge<'a> {
             .collect();
         unknown.sort_unstable();
         unknown.dedup();
-        let cookies = unknown
-            .into_iter()
-            .map(|atom| Ok((atom, self.connection.get_atom_name(atom)?)))
-            .collect::<Result<Vec<_>, ConnectionError>>()?;
-        for (atom, cookie) in cookies {
-            let name = refused_is_none(cookie.reply())?
-                .and_then(|reply| String::from_utf8(reply.name).ok());
-            self.names.insert(atom, name);
+        for group in unknown.chunks(NAMES_ASKED_AT_ONCE) {
+            let cookies = group
+                .iter()
+                .map(|&atom| Ok((atom, self.connection.get_atom_name(atom)?)))
+                .collect::<Result<Vec<_>, ConnectionError>>()?;
+            for (atom, cookie) in cookies {
+                let name = refused_is_none(cookie.reply())?.and_then(|reply| kept_name(reply.name));
+                self.names.insert(atom, name);
+            }
         }
         Ok(atoms
             .iter()
@@ -1643,6 +1661,15 @@ mod tests {
             offer_of_targets(&targets),
             [(UTF8_TEXT.to_owned(), 9), (PLAIN_TEXT.to_owned(), 5)]
         );
+    }
+
+    #[test]
+    fn an_atom_name_longer_than_any_mime_type_is_not_kept() {
+        let longest = "a".repeat(MAX_MIME_TYPE_BYTES);
+        assert_eq!(kept_name(longest.clone().into_bytes()), Some(longest));
+        assert_eq!(kept_name(vec![b'a'; MAX_MIME_TYPE_BYTES + 1]), None);
+        assert_eq!(kept_name(vec![b'a'; 65_535]), None);
+        assert_eq!(kept_name(vec![0xFF]), None);
     }
 
     #[test]

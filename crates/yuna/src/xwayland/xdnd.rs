@@ -58,14 +58,13 @@ use x11rb::protocol::xproto::{
     Atom, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask,
     PropMode, SelectionNotifyEvent, SelectionRequestEvent, StackMode, Timestamp, Window,
 };
-use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
 use super::bridge::{
     Bridge, Served, X11_TRANSFER_TIMEOUT, offer_of_targets, refused_is_none, targets_of_offer,
 };
 use super::drag_session::DragAction;
-use super::manager::{Atoms, Failure, GoOn, ManagerEvent};
+use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent};
 
 /// The XDND version Yuna speaks: the last.
 const XDND_VERSION: u8 = 5;
@@ -389,7 +388,7 @@ enum Stage {
 
 /// Drag and drop on X11's side of a seat's manager.
 pub(super) struct Xdnd<'a> {
-    connection: &'a RustConnection,
+    connection: &'a ManagerConnection,
     events: &'a SyncSender<ManagerEvent>,
     atoms: Atoms,
     actions: Actions,
@@ -418,7 +417,7 @@ pub(super) struct Xdnd<'a> {
 
 impl<'a> Xdnd<'a> {
     pub(super) fn new(
-        connection: &'a RustConnection,
+        connection: &'a ManagerConnection,
         events: &'a SyncSender<ManagerEvent>,
         atoms: Atoms,
         own: Window,
@@ -1535,7 +1534,7 @@ fn listed_actions(actions: Actions, proposed: DragAction) -> Option<(Vec<Atom>, 
 /// Makes the proxy, unmapped, over X11's whole root, `XdndAware` 5 and named [`PROXY_NAME`]:
 /// before the manager listens to the root, so that no `CreateNotify` makes a window of it.
 pub(super) fn create_proxy(
-    connection: &RustConnection,
+    connection: &ManagerConnection,
     root: Window,
     atoms: &Atoms,
 ) -> Result<Window, Failure> {

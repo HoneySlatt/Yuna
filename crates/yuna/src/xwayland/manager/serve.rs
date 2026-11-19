@@ -1,8 +1,8 @@
 //! The manager serving: the loop that carries out Yuna's commands, moves the selections'
-//! transfers and the drags, and handles X11's events; and its writing of the root's lists of
-//! windows. Between them it sleeps in `poll` on its connection, its wake-up socket and the pipes
-//! its transfers wait on, until the first transfer's or drag's time limit: with neither, until
-//! something comes.
+//! transfers and the drags, and handles X11's events, Yuna's commands taken between them too; and
+//! its writing of the root's lists of windows. Between them it sleeps in `poll` on its
+//! connection, its wake-up socket and the pipes its transfers wait on, until the first transfer's
+//! or drag's time limit: with neither, until something comes.
 //!
 //! It is apart from what each wake-up does, X11's events in `x11_events.rs` and Yuna's commands
 //! in `commands.rs`, so that the order of one round, and why the thread sleeps where it does,
@@ -20,10 +20,9 @@ use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, PropMode};
-use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::{Failure, Manager};
+use super::{Failure, Manager, ManagerConnection};
 
 impl Manager<'_> {
     /// Reads X11's events and Yuna's commands, and moves the transfers of selections and the
@@ -51,7 +50,10 @@ impl Manager<'_> {
                 let mut handled = false;
                 while let Some(event) = next_event(self.connection)? {
                     handled = true;
-                    if !self.event(event)? {
+                    // Yuna's commands are taken between events too: a flood of events, which
+                    // may last seconds, never keeps them waiting, nor reads as the stall Yuna's
+                    // watchdog ends (`xwayland/mod.rs`).
+                    if !self.event(event)? || !self.take_commands()? {
                         return Ok(());
                     }
                 }
@@ -123,7 +125,7 @@ impl Manager<'_> {
 /// The next event read, none when none waits. An event x11rb cannot parse, which any X11 client
 /// can make up and send to the root, is logged and skipped: it must not end the manager, and its
 /// seat's every X11 program with it.
-fn next_event(connection: &RustConnection) -> Result<Option<Event>, ConnectionError> {
+fn next_event(connection: &ManagerConnection) -> Result<Option<Event>, ConnectionError> {
     loop {
         match connection.poll_for_event() {
             Err(ConnectionError::ParseError(error)) => {

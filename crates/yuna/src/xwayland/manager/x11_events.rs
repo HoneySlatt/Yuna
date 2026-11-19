@@ -18,7 +18,9 @@ use x11rb::wrapper::ConnectionExt as _;
 
 use super::messages::{ManagerEvent, StateAction, StateChange};
 use super::reading::Read;
-use super::{Failure, GoOn, ICONIC_STATE, Manager, Tracked, WITHDRAWN_STATE};
+use super::{
+    Failure, GoOn, ICONIC_STATE, MAX_PROPERTIES_PER_CLIENT, Manager, Tracked, WITHDRAWN_STATE,
+};
 use crate::xwayland::properties::{Properties, X11Rect};
 
 /// The bit of an event's type that says a client sent it with `SendEvent` (X11's protocol,
@@ -71,10 +73,19 @@ impl Manager<'_> {
                 self.xdnd.window_destroyed(destroyed.window)? && self.forget(destroyed.window)
             }
             Event::MapRequest(request) => {
-                if let Some(tracked) = self.windows.get_mut(&request.window) {
-                    tracked.override_redirect = false;
+                let past_limit = self
+                    .windows
+                    .get_mut(&request.window)
+                    .is_some_and(|tracked| {
+                        tracked.override_redirect = false;
+                        tracked.past_limit
+                    });
+                if past_limit {
+                    self.map(request.window)?;
+                    true
+                } else {
+                    self.post(ManagerEvent::MapRequest(request.window))
                 }
-                self.post(ManagerEvent::MapRequest(request.window))
             }
             Event::MapNotify(mapped) if !self.xdnd.mapped(mapped.window)? => false,
             Event::MapNotify(mapped) => match self.windows.get_mut(&mapped.window) {
@@ -82,10 +93,11 @@ impl Manager<'_> {
                     tracked.mapped = true;
                     tracked.override_redirect = mapped.override_redirect;
                     let window = mapped.window;
-                    self.post(ManagerEvent::Mapped {
-                        window,
-                        override_redirect: mapped.override_redirect,
-                    }) && self.post_place_in_stacking(window)
+                    !self.told(window)
+                        || self.post(ManagerEvent::Mapped {
+                            window,
+                            override_redirect: mapped.override_redirect,
+                        }) && self.post_place_in_stacking(window)
                 }
                 _ => true,
             },
@@ -165,7 +177,8 @@ impl Manager<'_> {
     }
 
     /// Follows a new top-level window: its properties' changes, its properties now and its
-    /// process, posted together.
+    /// process, posted together. A window past its client's [`MAX_PROPERTIES_PER_CLIENT`] is
+    /// followed without them, and never posted.
     fn track(
         &mut self,
         window: Window,
@@ -175,11 +188,9 @@ impl Manager<'_> {
         if window == self.own || window == self.xdnd.proxy() || self.windows.contains_key(&window) {
             return Ok(true);
         }
-        // Selected before the properties are read, so that no change between falls through.
-        self.connection.change_window_attributes(
-            window,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-        )?;
+        let client = window & !self.resource_mask;
+        let with_properties = self.with_properties.entry(client).or_default();
+        let past_limit = *with_properties >= MAX_PROPERTIES_PER_CLIENT;
         let mut tracked = Tracked {
             properties: Properties::default(),
             geometry,
@@ -189,18 +200,33 @@ impl Manager<'_> {
             logged: false,
             alarm: None,
             commits_held: false,
+            past_limit,
         };
+        // A window made or reparented to the root goes on top of its siblings.
+        self.order.push(window);
+        if past_limit {
+            tracing::debug!(
+                window,
+                "an X11 window past its client's limit is followed without its properties"
+            );
+            self.windows.insert(window, tracked);
+            return Ok(true);
+        }
+        *with_properties += 1;
+        // Selected before the properties are read, so that no change between falls through.
+        self.connection.change_window_attributes(
+            window,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )?;
         let pid = self.pid_of(window)?;
         for (read, raw) in self.read_all(window)? {
             self.apply(window, &mut tracked, read, raw.as_ref());
         }
         let properties = Box::new(tracked.properties.clone());
         self.windows.insert(window, tracked);
-        // A window made or reparented to the root goes on top of its siblings.
-        self.order.push(window);
         Ok(self.post(ManagerEvent::Created {
             window,
-            client: window & !self.resource_mask,
+            client,
             override_redirect,
             geometry,
             pid,
@@ -208,17 +234,27 @@ impl Manager<'_> {
         }))
     }
 
-    /// Forgets a window gone from the root, and tells Yuna.
+    /// Forgets a window gone from the root, and tells Yuna, if Yuna was told of it.
     fn forget(&mut self, window: Window) -> GoOn {
         self.bridge.window_left(window);
         let Some(tracked) = self.windows.remove(&window) else {
             return true;
         };
+        self.order.retain(|&stacked| stacked != window);
+        self.unlist(window);
+        if tracked.past_limit {
+            return true;
+        }
+        let client = window & !self.resource_mask;
+        if let Some(count) = self.with_properties.get_mut(&client) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.with_properties.remove(&client);
+            }
+        }
         if let Some((alarm, _)) = tracked.alarm {
             self.destroy_alarm(alarm);
         }
-        self.order.retain(|&stacked| stacked != window);
-        self.unlist(window);
         self.post(ManagerEvent::Destroyed(window))
     }
 
@@ -243,8 +279,8 @@ impl Manager<'_> {
         };
         let moved = std::mem::replace(&mut tracked.geometry, rect) != rect;
         tracked.override_redirect = configured.override_redirect;
-        let override_redirect = tracked.override_redirect;
-        if override_redirect && moved && !self.post(ManagerEvent::Configured { window, rect }) {
+        let posted = tracked.override_redirect && moved && !tracked.past_limit;
+        if posted && !self.post(ManagerEvent::Configured { window, rect }) {
             return false;
         }
         self.restacked(window, above)
@@ -268,13 +304,13 @@ impl Manager<'_> {
         self.post_place_in_stacking(window)
     }
 
-    /// Tells Yuna where `window`, if it is a mapped override-redirect window, lies among the
-    /// others: just above the first one mapped below it.
+    /// Tells Yuna where `window`, if it is a mapped override-redirect window it was told of, lies
+    /// among the others: just above the first one mapped below it.
     fn post_place_in_stacking(&self, window: Window) -> GoOn {
         let is_menu = |window: &Window| {
-            self.windows
-                .get(window)
-                .is_some_and(|tracked| tracked.mapped && tracked.override_redirect)
+            self.windows.get(window).is_some_and(|tracked| {
+                tracked.mapped && tracked.override_redirect && !tracked.past_limit
+            })
         };
         if !is_menu(&window) {
             return true;
@@ -301,6 +337,7 @@ impl Manager<'_> {
             return Ok(true);
         }
         tracked.mapped = false;
+        let told = !tracked.past_limit;
         if std::mem::take(&mut tracked.managed) {
             self.connection.change_property32(
                 PropMode::REPLACE,
@@ -319,7 +356,7 @@ impl Manager<'_> {
             }
             self.unlist(window);
         }
-        Ok(self.post(ManagerEvent::Unmapped(window)))
+        Ok(!told || self.post(ManagerEvent::Unmapped(window)))
     }
 
     /// Takes `window` out of `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING`, if it is there.
@@ -333,8 +370,12 @@ impl Manager<'_> {
     }
 
     /// Passes a client's `ConfigureRequest` to Yuna: what it asks, its current place on the axes
-    /// it does not name. Its stacking is left: Yuna stacks windows.
+    /// it does not name. Its stacking is left: Yuna stacks windows. A window Yuna was not told of
+    /// keeps its size.
     fn configure_request(&self, request: &ConfigureRequestEvent) -> GoOn {
+        if !self.told(request.window) {
+            return true;
+        }
         let current = self
             .windows
             .get(&request.window)
@@ -376,6 +417,9 @@ impl Manager<'_> {
         else {
             return Ok(true);
         };
+        if !self.told(window) {
+            return Ok(true);
+        }
         let Some(mut tracked) = self.windows.remove(&window) else {
             return Ok(true);
         };
@@ -408,6 +452,9 @@ impl Manager<'_> {
                 tracing::debug!(window, "a WL_SURFACE_SERIAL sent by a client is ignored");
                 return true;
             }
+            if !self.told(window) {
+                return true;
+            }
             let serial = u64::from(data[0]) | (u64::from(data[1]) << 32);
             return self.post(ManagerEvent::SurfaceSerial { window, serial });
         }
@@ -417,12 +464,12 @@ impl Manager<'_> {
             && data[0] == atoms._NET_WM_PING
         {
             let pinged = data[2];
-            if self.windows.contains_key(&pinged) {
+            if self.told(pinged) {
                 return self.post(ManagerEvent::PingAnswered(pinged));
             }
             return true;
         }
-        if !self.windows.contains_key(&window) {
+        if !self.told(window) {
             return true;
         }
         if message.type_ == atoms._NET_WM_STATE {

@@ -19,7 +19,8 @@ use crate::xwayland::bridge::Selection;
 use crate::xwayland::drag_session::DragAction;
 use crate::xwayland::properties::{Properties, X11Rect};
 
-/// What the manager's thread posts to Yuna's loop.
+/// What the manager's thread posts to Yuna's loop. Nothing is posted of a window made past its
+/// client's [`MAX_PROPERTIES_PER_CLIENT`](super::MAX_PROPERTIES_PER_CLIENT): Yuna never knows it.
 #[derive(Debug)]
 pub(crate) enum ManagerEvent {
     /// It took charge: `WM_S0` is its, and X11 clients are let in.
