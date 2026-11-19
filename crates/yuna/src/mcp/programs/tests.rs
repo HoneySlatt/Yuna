@@ -2,7 +2,8 @@
 
 use std::ffi::OsStr;
 
-use super::folder::is_folder_name;
+use super::folder::{HOMES_FOLDER, PROGRAMS_FOLDER};
+use super::homes::{add_home_variables, needs_home};
 use super::processes::living_descendants;
 use super::*;
 use crate::process::{ProcessStat, read_stat};
@@ -308,8 +309,8 @@ fn a_short_log_keeps_everything_and_reads_across_head_and_tail() {
 
 #[test]
 fn only_yuna_mcps_folders_are_swept() {
-    assert!(is_folder_name("yuna-mcp-123"));
-    assert!(is_folder_name("yuna-mcp-123-4"));
+    assert!(PROGRAMS_FOLDER.names("yuna-mcp-123"));
+    assert!(PROGRAMS_FOLDER.names("yuna-mcp-123-4"));
     for other in [
         "yuna-mcp-",
         "yuna-mcp-12-",
@@ -318,9 +319,105 @@ fn only_yuna_mcps_folders_are_swept() {
         "yuna-mcp-12-a",
         ".yuna-mcp-12-starting",
         "wayland-1",
+        "yuna-mcp-homes-12",
     ] {
-        assert!(!is_folder_name(other), "{other}");
+        assert!(!PROGRAMS_FOLDER.names(other), "{other}");
     }
+}
+
+/// The homes' folders are swept by their own names, never a programs' folder; the fatal path
+/// takes its own process's alone.
+#[test]
+fn only_yuna_mcps_homes_are_swept_and_its_own_named() {
+    assert!(HOMES_FOLDER.names("yuna-mcp-homes-123"));
+    assert!(HOMES_FOLDER.names("yuna-mcp-homes-123-4"));
+    for other in [
+        "yuna-mcp-123",
+        "yuna-mcp-homes-",
+        "yuna-mcp-homes-12-",
+        "yuna-mcp-homes-notes",
+        ".yuna-mcp-homes-12-starting",
+    ] {
+        assert!(!HOMES_FOLDER.names(other), "{other}");
+    }
+    assert!(HOMES_FOLDER.names_for("yuna-mcp-homes-123", 123));
+    assert!(HOMES_FOLDER.names_for("yuna-mcp-homes-123-2", 123));
+    for other in [
+        "yuna-mcp-homes-1234",
+        "yuna-mcp-homes-12",
+        "yuna-mcp-homes-124-1",
+    ] {
+        assert!(!HOMES_FOLDER.names_for(other, 123), "{other}");
+    }
+}
+
+/// A program's home is its seat's: `HOME` and the four XDG base folders in it, the defaults of
+/// the XDG base directory specification, each one the agent names its own; the user's never
+/// reach it, and the system's folders stay Yuna's. A program whose agent names all five needs
+/// no home.
+#[test]
+fn a_program_gets_its_seats_home_and_keeps_the_systems_folders() {
+    let inherited = [
+        ("HOME", "/home/user"),
+        ("XDG_CONFIG_HOME", "/home/user/.config"),
+        ("XDG_DATA_HOME", "/home/user/.local/share"),
+        ("XDG_CACHE_HOME", "/home/user/.cache"),
+        ("XDG_STATE_HOME", "/home/user/.local/state"),
+        ("XDG_CONFIG_DIRS", "/etc/xdg"),
+        ("XDG_DATA_DIRS", "/usr/share"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+    let added = BTreeMap::from([("XDG_CACHE_HOME".to_owned(), "/own/cache".to_owned())]);
+    let mut environment = program_environment(
+        inherited,
+        Path::new("/r"),
+        Path::new("/w"),
+        None,
+        SeatId(3),
+        &added,
+    );
+    let home = Path::new("/tmp/yuna-mcp-homes-7/seat-3");
+    add_home_variables(&mut environment, home, &added);
+    let variable = |name: &str| environment[OsStr::new(name)].to_str().expect("UTF-8");
+    assert_eq!(variable("HOME"), "/tmp/yuna-mcp-homes-7/seat-3");
+    assert_eq!(
+        variable("XDG_CONFIG_HOME"),
+        "/tmp/yuna-mcp-homes-7/seat-3/.config"
+    );
+    assert_eq!(
+        variable("XDG_DATA_HOME"),
+        "/tmp/yuna-mcp-homes-7/seat-3/.local/share"
+    );
+    assert_eq!(variable("XDG_CACHE_HOME"), "/own/cache");
+    assert_eq!(
+        variable("XDG_STATE_HOME"),
+        "/tmp/yuna-mcp-homes-7/seat-3/.local/state"
+    );
+    assert_eq!(variable("XDG_CONFIG_DIRS"), "/etc/xdg");
+    assert_eq!(variable("XDG_DATA_DIRS"), "/usr/share");
+
+    assert!(needs_home(&added));
+    let all: BTreeMap<String, String> = [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), format!("/own/{name}")))
+    .collect();
+    assert!(!needs_home(&all));
+    let environment = program_environment(
+        std::iter::once((OsString::from("HOME"), OsString::from("/home/user"))),
+        Path::new("/r"),
+        Path::new("/w"),
+        None,
+        SeatId(3),
+        &all,
+    );
+    assert_eq!(environment[OsStr::new("HOME")], "/own/HOME");
 }
 
 #[test]

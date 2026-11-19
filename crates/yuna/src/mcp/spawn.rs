@@ -21,7 +21,7 @@ use yuna_layout::SeatId;
 use super::Server;
 use super::accessibility::{BusState, Outcome};
 use super::programs::{self, END_GRACE, KILL_WAIT, Programs, Start, THROTTLE};
-use super::protocol::{self, Revision};
+use super::protocol::Revision;
 use super::tools::{self, AccessibilityCall, MAX_WAITING_CALLS, SpawnCall, ToolResult};
 use crate::rest::{Source, Wake, insert_source};
 use crate::state::OWNER_SEAT;
@@ -141,8 +141,7 @@ impl Server {
     /// bus that became ready are started, those of a bus that ended fail.
     pub(super) fn take_accessibility(&mut self, outcome: Outcome) {
         for (id, revision, result) in outcome.answers {
-            self.queue
-                .push(&protocol::response(id, result.into_result(revision)));
+            self.answer_waited(id, revision, result);
         }
         for seat in outcome.ready {
             let BusState::Ready(address) = self.accessibility.bus_state(seat) else {
@@ -157,10 +156,7 @@ impl Server {
                 let mut wait = self.spawn_waits.remove(index);
                 wait.start.accessibility = Some(address.clone());
                 let result = self.start_program(seat, wait.start);
-                self.queue.push(&protocol::response(
-                    wait.id,
-                    result.into_result(wait.revision),
-                ));
+                self.answer_waited(wait.id, wait.revision, result);
             }
         }
         for (seat, reason) in outcome.ended {
@@ -178,10 +174,7 @@ impl Server {
             }
             let wait = self.spawn_waits.remove(index);
             let result = ToolResult::failed(reason);
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
     }
 

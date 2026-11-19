@@ -33,7 +33,7 @@ use super::captures::CaptureStage;
 use super::clipboard::ReadEnd;
 use super::events::{EventData, Kind};
 use super::programs::ProgramWakes;
-use super::protocol::{self, Revision};
+use super::protocol::Revision;
 use super::tools::{
     self, EventsCall, MAX_WAIT, MAX_WAITING_CALLS, RestCall, ToolResult, WindowsCall,
 };
@@ -162,10 +162,7 @@ impl Server {
             let wait = self.waits.remove(index);
             self.compositor.loop_handle().remove(wait.timer);
             let result = ToolResult::done(json!({ "windows": matching }));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
     }
 
@@ -302,10 +299,7 @@ impl Server {
             let result = ToolResult::done(tools::events_json(&reading, false));
             let wait = self.event_waits.remove(index);
             self.compositor.loop_handle().remove(wait.timer);
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
     }
 
@@ -434,10 +428,7 @@ impl Server {
             let programs = programs_since(&self.program_wakes(), &wait.programs);
             let result =
                 ToolResult::done(self.rest_json(&window, wait.seat, Some(wait.wait_ms), &programs));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
             return;
         }
         if let Some(index) = self.event_waits.iter().position(|wait| wait.key == key) {
@@ -449,10 +440,7 @@ impl Server {
             // An event recorded in this round, not yet told, comes with it.
             let timed_out = reading.events.is_empty();
             let result = ToolResult::done(tools::events_json(&reading, timed_out));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
             return;
         }
         if let Some(index) = self.clipboard_reads.iter().position(|read| read.key == key) {
@@ -475,10 +463,7 @@ impl Server {
                  on a manual clock, advance it",
                 MAX_WAIT.as_secs()
             ));
-            self.queue.push(&protocol::response(
-                capture.id,
-                result.into_result(capture.revision),
-            ));
+            self.answer_waited(capture.id, capture.revision, result);
             return;
         }
         let Some(index) = self.waits.iter().position(|wait| wait.key == key) else {
@@ -487,10 +472,7 @@ impl Server {
         // Its timer removed itself.
         let wait = self.waits.remove(index);
         let result = ToolResult::done(json!({ "windows": [], "timed_out": true }));
-        self.queue.push(&protocol::response(
-            wait.id,
-            result.into_result(wait.revision),
-        ));
+        self.answer_waited(wait.id, wait.revision, result);
     }
 
     /// Drops the waiting calls of request `id`, unanswered, as MCP asks. A seat closing goes on,
@@ -558,10 +540,7 @@ impl Server {
         for wait in closed {
             handle.remove(wait.timer);
             let result = ToolResult::failed(format!("seat {} was closed", seat.0));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
         let (closed, waiting): (Vec<EventWait>, Vec<EventWait>) =
             std::mem::take(&mut self.event_waits)
@@ -571,10 +550,7 @@ impl Server {
         for wait in closed {
             handle.remove(wait.timer);
             let result = ToolResult::failed(format!("seat {} was closed", seat.0));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
         while let Some(index) = self
             .clipboard_reads
@@ -583,14 +559,10 @@ impl Server {
         {
             let read = self.drop_clipboard_read(index);
             let result = ToolResult::failed(format!("seat {} was closed", seat.0));
-            self.queue.push(&protocol::response(
-                read.id,
-                result.into_result(read.revision),
-            ));
+            self.answer_waited(read.id, read.revision, result);
         }
         for (id, revision, result) in self.accessibility.remove_seat(seat) {
-            self.queue
-                .push(&protocol::response(id, result.into_result(revision)));
+            self.answer_waited(id, revision, result);
         }
         self.fail_spawn_waits(seat, &format!("seat {} was closed", seat.0));
         while let Some(index) = self
@@ -600,10 +572,7 @@ impl Server {
         {
             let capture = self.drop_capture(index);
             let result = ToolResult::failed(format!("seat {} was closed", seat.0));
-            self.queue.push(&protocol::response(
-                capture.id,
-                result.into_result(capture.revision),
-            ));
+            self.answer_waited(capture.id, capture.revision, result);
         }
         let mut index = 0;
         while index < self.waits.len() {
@@ -614,10 +583,7 @@ impl Server {
             let wait = self.waits.remove(index);
             handle.remove(wait.timer);
             let result = ToolResult::failed(format!("seat {} was closed", seat.0));
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
     }
 }

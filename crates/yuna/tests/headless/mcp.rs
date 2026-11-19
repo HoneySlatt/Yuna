@@ -11,7 +11,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yuna::colour::description::PG32UCDM;
-use yuna::mcp::{MAX_LINE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS, MODERN_REVISION, Server, Stop};
+use yuna::mcp::{
+    MAX_LINE, MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS,
+    MAX_WORKSPACE_NAME, MODERN_REVISION, Server, Stop,
+};
 use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, Config, OutputMode};
 
@@ -1598,4 +1601,275 @@ fn windows_and_events_waits_share_one_bound() {
     assert_eq!(windows["isError"], json!(true), "{windows}");
     let events = mcp.call("events", json!({"seat": seat, "wait_ms": 10_000}));
     assert_eq!(events["isError"], json!(true), "{events}");
+}
+
+/// A workspace's name is bounded where `windows` repeats it (Stage 1's audit, m1.13-audit-mcp-5):
+/// each window's entry of `windows` gives its workspace's name whole, in its structured content
+/// and its text, so that a name bounded by a request's line alone, 600 KiB here, made the reply
+/// to one call grow with the name times the windows, past the replies that may wait,
+/// `MAX_QUEUED_OUTPUT`, with 30 windows already. Such a name is refused, plainly; a name at the
+/// bound, repeated by 30 windows, keeps the reply under.
+#[test]
+fn a_workspaces_name_is_bounded_where_windows_repeats_it() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let long = "w".repeat(600 << 10);
+    let id = 900;
+    let sending = mcp.send_on_thread(&json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": modern(json!({"name": "workspaces",
+            "arguments": {"action": "focus", "seat": seat, "name": long}}))
+    }));
+    let focused = mcp.reply_to(id);
+    sending.join().expect("the request is sent");
+    assert_eq!(
+        focused["result"]["isError"],
+        json!(true),
+        "the long name is taken"
+    );
+    let at_bound = "w".repeat(MAX_WORKSPACE_NAME);
+    let shown = mcp.call(
+        "workspaces",
+        json!({"action": "focus", "seat": seat, "name": at_bound}),
+    );
+    assert_eq!(shown["isError"], json!(false), "{shown}");
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    for n in 0..30 {
+        open_placed_window(&mut mcp, &mut client, "org.example.Long", &n.to_string());
+    }
+    // The reply read here as bytes up to its newline: `Mcp::replies` scans all it holds at
+    // each read, which takes long over tens of megabytes in a debug build.
+    assert!(mcp.replies().is_empty());
+    mcp.send(&json!({
+        "jsonrpc": "2.0", "id": 901, "method": "tools/call",
+        "params": modern(json!({"name": "windows", "arguments": {"seat": seat}}))
+    }));
+    let until = Instant::now() + Duration::from_secs(120);
+    let mut bytes = 0;
+    let mut buffer = vec![0; 1 << 20];
+    'reading: loop {
+        assert!(
+            Instant::now() < until,
+            "no whole reply in 120 s: {bytes} bytes"
+        );
+        mcp.server
+            .dispatch(Some(Duration::ZERO))
+            .expect("the server dispatches");
+        loop {
+            match mcp.replies.read(&mut buffer) {
+                Ok(0) => break 'reading,
+                Ok(read) => {
+                    bytes += read;
+                    if buffer[..read].contains(&b'\n') {
+                        break 'reading;
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) => panic!("the reply cannot be read: {error}"),
+            }
+        }
+    }
+    eprintln!("`windows`' reply for 30 windows takes {bytes} bytes");
+    assert!(
+        bytes <= MAX_QUEUED_OUTPUT,
+        "one reply of {bytes} bytes, past the {MAX_QUEUED_OUTPUT} that may wait"
+    );
+}
+
+/// A workspace's name is `MAX_WORKSPACE_NAME` bytes at most wherever an agent names one:
+/// `create`, `remove`, `focus` and `move_window` refuse a byte more plainly, and take a name at
+/// the bound.
+#[test]
+fn a_workspaces_name_past_its_bound_is_refused_wherever_it_is_named() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut client, "org.example.Named", "Named");
+    let listed = mcp.call("windows", json!({"seat": seat}));
+    let window = listed["structuredContent"]["windows"][0]["id"].clone();
+    assert!(window.is_u64(), "{listed}");
+    let past = "p".repeat(MAX_WORKSPACE_NAME + 1);
+    let at = "a".repeat(MAX_WORKSPACE_NAME);
+    let calls = |name: &str| {
+        [
+            json!({"action": "create", "seat": seat, "name": name}),
+            json!({"action": "focus", "seat": seat, "name": name}),
+            json!({"action": "move_window", "seat": seat, "window": window, "workspace": name}),
+            json!({"action": "remove", "seat": seat, "name": name}),
+        ]
+    };
+    for arguments in calls(&past) {
+        let refused = mcp.call("workspaces", arguments.clone());
+        assert_eq!(refused["isError"], json!(true), "{arguments}: {refused}");
+        let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains(&format!("{MAX_WORKSPACE_NAME} bytes")),
+            "{arguments}: {refused}"
+        );
+    }
+    for arguments in calls(&at) {
+        let taken = mcp.call("workspaces", arguments.clone());
+        assert_eq!(taken["isError"], json!(false), "{arguments}: {taken}");
+    }
+}
+
+/// An output's side is `MAX_OUTPUT_SIDE` pixels at most, and Yuna's outputs together hold
+/// `MAX_OUTPUT_PIXELS` at most, the pixels of 16 outputs at 3840 × 2160: a mode past either,
+/// made by `seat create` or `outputs create` or given by `outputs configure`, is refused plainly
+/// before anything is made or changed. A side at the bound is taken, and an output configured is
+/// counted with its new mode alone. The pixels' bound itself is checked to the pixel by
+/// `outputs.rs`'s tests, which allocate nothing: here, one output of 8,192 × 8,192 costs 256 MiB.
+#[test]
+fn an_output_past_its_side_or_the_pixels_of_16_4k_outputs_is_refused() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let side = MAX_OUTPUT_SIDE;
+    let refused_for = |result: &Value, figure: u64| {
+        assert_eq!(result["isError"], json!(true), "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(text.contains(&figure.to_string()), "{result}");
+    };
+    let wide = mcp.call(
+        "seat",
+        json!({"action": "create", "width": side + 1, "height": 1}),
+    );
+    refused_for(&wide, u64::from(side));
+    assert_eq!(mcp.server.compositor().seats().len(), 1, "a seat was made");
+    // At the side's bound: a square of 8,192 pixels, 67,108,864 of them.
+    let created = mcp.call(
+        "seat",
+        json!({"action": "create", "width": side, "height": side, "rate": 60, "scale": 1}),
+    );
+    assert_eq!(created["isError"], json!(false), "{created}");
+    let seat = created["structuredContent"]["seat"]
+        .as_u64()
+        .expect("a seat");
+    let first = created["structuredContent"]["outputs"][0]["id"]
+        .as_u64()
+        .expect("its output");
+    let tall = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": first, "height": side + 1}),
+    );
+    refused_for(&tall, u64::from(side));
+    let tall_new = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 1, "height": side + 1}),
+    );
+    refused_for(&tall_new, u64::from(side));
+    // One row of 8,192 past what is left of the pixels' bound: 8,192 × 8,009.
+    let left = MAX_OUTPUT_PIXELS - u64::from(side) * u64::from(side);
+    let rows = (left / u64::from(side)) as u32;
+    let past = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": side, "height": rows + 1}),
+    );
+    refused_for(&past, MAX_OUTPUT_PIXELS);
+    let small = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": seat, "width": 1, "height": 1}),
+    );
+    assert_eq!(small["isError"], json!(false), "{small}");
+    let second = small["structuredContent"]["output"]["id"]
+        .as_u64()
+        .expect("an id");
+    let grown = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": second, "width": side,
+               "height": rows + 1}),
+    );
+    refused_for(&grown, MAX_OUTPUT_PIXELS);
+    let listed = mcp.call("outputs", json!({"action": "list", "seat": seat}));
+    let sizes: Vec<(Value, Value)> = listed["structuredContent"]["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .map(|output| (output["width"].clone(), output["height"].clone()))
+        .collect();
+    assert_eq!(sizes, [(json!(side), json!(side)), (json!(1), json!(1))]);
+    // Its rate changed, the large output is counted once, with its new mode: twice, it would
+    // pass the bound.
+    let retimed = mcp.call(
+        "outputs",
+        json!({"action": "configure", "seat": seat, "output": first, "rate": 120}),
+    );
+    assert_eq!(retimed["isError"], json!(false), "{retimed}");
+}
+
+/// The answers of calls that waited respect the replies that may wait: while
+/// `MAX_QUEUED_OUTPUT` of replies wait for a client that does not read them, the 64 `windows`
+/// calls a window answers are held, none written, and come once the client reads, with every
+/// other reply.
+#[test]
+fn the_answers_of_waiting_calls_wait_while_16_mib_of_replies_wait() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let waiting: Vec<u64> = (500..500 + MAX_WAITING_CALLS as u64).collect();
+    for id in &waiting {
+        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": modern(json!({"name": "windows", "arguments":
+                {"seat": seat, "app_id": "org.example.Held", "wait_ms": 40_000}}))}));
+    }
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    let request = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list",
+                         "params": modern(json!({}))});
+    let reply_length = {
+        let reply = mcp.request("tools/list", modern(json!({})));
+        reply.to_string().len() + 1
+    };
+    let count = MAX_QUEUED_OUTPUT / reply_length * 2;
+    let mut writer = mcp.requests.try_clone().expect("a second handle");
+    let lines: String = (0..count)
+        .map(|index| {
+            let mut request = request.clone();
+            request["id"] = json!(index + 1_000);
+            request.to_string() + "\n"
+        })
+        .collect();
+    let writing = std::thread::spawn(move || writer.write_all(lines.as_bytes()));
+    let until = Instant::now() + Duration::from_secs(30);
+    while !mcp.server.input_paused() {
+        assert!(Instant::now() < until, "the input was never paused");
+        mcp.server
+            .dispatch(Some(Duration::from_millis(1)))
+            .expect("the server dispatches");
+    }
+    let queued = mcp.server.queued_output();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut client, "org.example.Held", "Held");
+    for _ in 0..10 {
+        mcp.server
+            .dispatch(Some(Duration::from_millis(1)))
+            .expect("the server dispatches");
+    }
+    assert_eq!(
+        mcp.server.queued_output(),
+        queued,
+        "the waiting calls' answers were queued past the bound"
+    );
+
+    let mut answered = Vec::new();
+    let mut listed = 0;
+    while listed < count || answered.len() < waiting.len() {
+        assert!(
+            Instant::now() < until,
+            "{listed} lists of {count}, {} answers",
+            answered.len()
+        );
+        for reply in mcp.replies() {
+            let id = reply["id"].as_u64().expect("an id");
+            if id >= 1_000 {
+                listed += 1;
+                continue;
+            }
+            let windows = &reply["result"]["structuredContent"]["windows"];
+            assert_eq!(windows[0]["app_id"], json!("org.example.Held"), "{reply}");
+            answered.push(id);
+        }
+    }
+    answered.sort_unstable();
+    assert_eq!(answered, waiting);
+    writing
+        .join()
+        .expect("the writer")
+        .expect("every request was written");
 }

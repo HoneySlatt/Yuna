@@ -672,8 +672,13 @@ impl State {
     }
 }
 
-/// The most outputs a compositor keeps: an agent creates them through MCP, and each costs its
-/// buffer, about 33 MB at 3840 × 2160, so 16 of them about 530 MB.
+/// The most outputs a compositor keeps. Each costs its buffer, 4 bytes a pixel: about 33 MB at
+/// 3840 × 2160, but 1 GiB at 16,384 × 16,384, llvmpipe's limit on a side, so that the count
+/// alone bounds nothing. An agent creates outputs through MCP, which bounds their size as well:
+/// a side of [`MAX_OUTPUT_SIDE`](crate::mcp::MAX_OUTPUT_SIDE), and the pixels of 16 outputs at
+/// 3840 × 2160 for all of them together ([`MAX_OUTPUT_PIXELS`](crate::mcp::MAX_OUTPUT_PIXELS)),
+/// about 530 MB of buffers. The outputs of `--output` and of Yuna's library are bounded by this
+/// count and the renderer's limit alone.
 pub const MAX_OUTPUTS: usize = 16;
 
 /// How long the global of a removed output stays, disabled, before it is destroyed: a client

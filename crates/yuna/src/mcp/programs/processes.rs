@@ -5,10 +5,10 @@
 //! clients (`../spawn.rs`), or from its panic hook, which has no loop ([`end_after_panic`]): a
 //! panic of Yuna's state stops it at once
 //! ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)),
-//! and the hook ends the programs and removes the folder with the same signals and the same walk
-//! through `/proc`, its waits slept. Every child is reaped at SIGCHLD; the status of one that is
-//! not a program, an Xwayland's, goes back to the compositor, whose own wait on it then finds it
-//! reaped.
+//! and the hook ends the programs and removes the folder and the seats' homes with the same
+//! signals and the same walk through `/proc`, its waits slept. Every child is reaped at SIGCHLD;
+//! the status of one that is not a program, an Xwayland's, goes back to the compositor, whose
+//! own wait on it then finds it reaped.
 //!
 //! Its neighbours: `mod.rs` reaps the programs and finds a seat's processes; `../seats.rs` ends
 //! them when their seat closes.
@@ -23,6 +23,7 @@ use smithay::reexports::rustix;
 use smithay::reexports::rustix::process::{Pid, Signal, WaitOptions, WaitStatus};
 
 use super::folder::remove_folder;
+use super::homes::remove_linked_homes;
 use crate::process::{ProcessStat, read_stat};
 
 /// How long the programs have, once Yuna stops, between SIGTERM and SIGKILL.
@@ -87,9 +88,11 @@ pub(super) fn reap_children(mut ended: impl FnMut(Pid, WaitStatus)) {
     }
 }
 
-/// Ends every process under Yuna, then removes `folder`, the programs' folder: what `yuna mcp`
-/// does when it stops on purpose, for its fatal path, on the thread whose panic stops Yuna
-/// ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+/// Ends every process under Yuna, then removes the seats' homes, through the link `folder`
+/// holds, and `folder`, the programs' folder: what `yuna mcp` does when it stops on purpose, for
+/// its fatal path, on the thread whose panic stops Yuna
+/// ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md),
+/// [ADR-0105](../../../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)).
 /// It touches neither the compositor nor the server, which the panic may have left half
 /// changed: with no event loop to serve the programs' clients or to wake it, it sleeps 10 ms
 /// (`ENDING_POLL`) between looks. SIGTERM first, then SIGKILL [`END_GRACE`] later to those left, sent again at each look,
@@ -117,6 +120,7 @@ pub fn end_after_panic(folder: &Path) {
             std::thread::sleep(left.min(ENDING_POLL));
         }
     }
+    remove_linked_homes(folder);
     remove_folder(folder);
 }
 

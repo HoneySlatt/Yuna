@@ -25,6 +25,9 @@ struct Fake {
     children: Vec<(&'static str, &'static str)>,
     role: u32,
     name: &'static str,
+    description: &'static str,
+    /// The toolkit's name, which the root alone is asked.
+    toolkit: &'static str,
     states: Vec<u32>,
     extents: Option<(i32, i32, i32, i32)>,
 }
@@ -34,6 +37,8 @@ fn fake(children: &[(&'static str, &'static str)], role: u32, name: &'static str
         children: children.to_vec(),
         role,
         name,
+        description: "",
+        toolkit: "GTK",
         states: vec![1 << 25, 0],
         extents: None,
     }
@@ -66,7 +71,8 @@ fn answer(tree: &HashMap<&str, Fake>, call: &Message) -> Message {
             let (_, property): (String, String) = call.body("ss").unwrap();
             let text = match property.as_str() {
                 "Name" => node.name,
-                "ToolkitName" => "GTK",
+                "Description" => node.description,
+                "ToolkitName" => node.toolkit,
                 _ => "",
             };
             Body::new("v", &Variant::from(text))
@@ -273,4 +279,101 @@ fn one_applications_calls_in_flight_are_bounded() {
         in_flight += 1;
     }
     assert_eq!(in_flight, IN_FLIGHT_PER_APP);
+}
+
+/// What a walk keeps of a node's name is bounded as what it gives,
+/// [`super::super::MAX_TEXT`] characters: a program on the seat's bus that names its nodes with
+/// texts of megabytes must not make Yuna hold megabytes a node, up to `MAX_NODES` of them
+/// (Stage 1's audit, m1.13-audit-mcp-4).
+#[test]
+fn a_walk_keeps_no_more_of_a_name_than_it_may_give() {
+    let long: &'static str = Box::leak("n".repeat(3 << 20).into_boxed_str());
+    let children: Vec<(&'static str, &'static str)> = (0..20)
+        .map(|n| (BUS, &*Box::leak(format!("/c{n}").into_boxed_str())))
+        .collect();
+    let mut tree = HashMap::new();
+    tree.insert("/root", fake(&children, 75, long));
+    for (_, path) in &children {
+        tree.insert(*path, fake(&[], 62, long));
+    }
+    // A filter that matches nothing: the walk visits every node and gives none.
+    let filter = Filter {
+        name: Some("no such name".to_owned()),
+        ..Filter::default()
+    };
+    let mut walk = Walk::new(vec![app()], filter, 1000);
+    run(&mut walk, &tree);
+    let nodes = walk.apps[0].nodes.len();
+    let kept: usize = walk.apps[0]
+        .nodes
+        .iter()
+        .filter_map(|node| node.name.as_ref())
+        .map(String::len)
+        .sum();
+    eprintln!("{nodes} nodes visited keep {kept} bytes of names");
+    // A character takes 4 bytes in UTF-8 at most.
+    let given = nodes * super::super::MAX_TEXT * 4;
+    assert!(
+        kept <= given,
+        "{nodes} nodes keep {kept} bytes of names, past the {given} a walk may give of them"
+    );
+}
+
+/// A description and a toolkit's name are kept as a walk gives them, cut at
+/// [`super::super::MAX_TEXT`] characters with the mark of a cut, whatever their length.
+#[test]
+fn a_walk_keeps_no_more_of_a_description_or_a_toolkit_than_it_may_give() {
+    let long: &'static str = Box::leak("é".repeat(1 << 20).into_boxed_str());
+    let mut root = fake(&[(BUS, "/w")], 75, "demo");
+    root.toolkit = long;
+    let mut window = fake(&[], 23, "Dialogs");
+    window.description = long;
+    let mut tree = HashMap::new();
+    tree.insert("/root", root);
+    tree.insert("/w", window);
+    // Every node is a candidate: its description is asked.
+    let mut walk = Walk::new(vec![app()], Filter::default(), 100);
+    run(&mut walk, &tree);
+    let toolkit = walk.apps[0].toolkit.as_deref().expect("a toolkit");
+    let description = walk.apps[0].nodes[1]
+        .description
+        .as_deref()
+        .expect("a description");
+    for kept in [toolkit, description] {
+        assert_eq!(kept.chars().count(), super::super::MAX_TEXT + 1);
+        assert!(kept.ends_with('…'));
+    }
+}
+
+/// An object path past [`MAX_OBJECT_PATH`] bytes names no node the walk keeps: a child so named
+/// is left out, one at the bound walked.
+#[test]
+fn a_walk_leaves_out_a_child_whose_path_passes_its_bound() {
+    let past: &'static str =
+        Box::leak(format!("/{}", "p".repeat(MAX_OBJECT_PATH)).into_boxed_str());
+    let at: &'static str =
+        Box::leak(format!("/{}", "a".repeat(MAX_OBJECT_PATH - 1)).into_boxed_str());
+    let mut tree = HashMap::new();
+    tree.insert("/root", fake(&[(BUS, past), (BUS, at)], 75, "demo"));
+    tree.insert(past, fake(&[], 43, "past"));
+    tree.insert(at, fake(&[], 43, "at"));
+    let mut walk = Walk::new(vec![app()], Filter::default(), 100);
+    run(&mut walk, &tree);
+    let paths: Vec<&str> = walk.apps[0].nodes.iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(paths, ["/root", at]);
+}
+
+/// A node's states are kept as AT-SPI's state set, [`STATE_WORDS`] words, whatever a program
+/// sends.
+#[test]
+fn a_walk_keeps_a_state_sets_words_alone() {
+    let mut root = fake(&[], 75, "demo");
+    root.states = vec![1 << 8; 1 << 16];
+    let mut tree = HashMap::new();
+    tree.insert("/root", root);
+    let mut walk = Walk::new(vec![app()], Filter::default(), 100);
+    run(&mut walk, &tree);
+    let states = walk.apps[0].nodes[0].states.as_deref().expect("its states");
+    assert_eq!(states.len(), STATE_WORDS);
+    assert_eq!(states, [1 << 8; STATE_WORDS]);
 }

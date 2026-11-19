@@ -23,7 +23,8 @@
 //! Any other call that waits for a reply gets `UnknownMethod`. Unlike registryd, Yuna sets no
 //! application's `Id`, which no toolkit needs, and sends no `ChildrenChanged` and no
 //! `Available` signals, which no program here listens to: the bus stays quiet. At most
-//! [`MAX_APPS`] applications are embedded; past it, `Embed` fails.
+//! [`MAX_APPS`] applications are embedded; past it, `Embed` fails, as it does for a root whose
+//! path passes [`MAX_OBJECT_PATH`].
 
 use std::collections::HashMap;
 
@@ -31,6 +32,7 @@ use serde::Serialize;
 use zbus::wire::{ObjectPath, OwnedObjectPath, Variant};
 
 use super::names::DESKTOP_FRAME;
+use super::reader::MAX_OBJECT_PATH;
 use crate::dbus::{Body, FAILED, Kind, Message, NOT_SUPPORTED, UNKNOWN_METHOD};
 
 /// The name Yuna owns on each seat's bus.
@@ -231,6 +233,12 @@ impl Registry {
         let (named, root) = call
             .body::<(String, OwnedObjectPath)>("(so)")
             .map_err(|e| (crate::dbus::INVALID_ARGS, e.to_string()))?;
+        if root.as_str().len() > MAX_OBJECT_PATH {
+            return Err((
+                crate::dbus::INVALID_ARGS,
+                format!("a root's path is {MAX_OBJECT_PATH} bytes at most"),
+            ));
+        }
         let name = caller_name(call, &named)?;
         let app = App {
             bus_name: name.clone(),

@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use yuna_layout::{OutputId, WindowId};
 
-use super::{DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, TEXT_TYPES};
+use super::{DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_WORKSPACE_NAME, TEXT_TYPES};
 use crate::compositor::WindowDescription;
 use crate::mcp::events::Kind;
 use crate::xwayland::Selection;
@@ -96,6 +96,27 @@ pub enum WorkspacesCall {
         window: u64,
         workspace: String,
     },
+}
+
+impl WorkspacesCall {
+    /// Refuses a workspace's name past [`MAX_WORKSPACE_NAME`] bytes, whichever action names it.
+    pub fn check_name(&self) -> Result<(), String> {
+        let name = match self {
+            WorkspacesCall::List { .. } => return Ok(()),
+            WorkspacesCall::Create { name, .. }
+            | WorkspacesCall::Remove { name, .. }
+            | WorkspacesCall::Focus { name, .. } => name,
+            WorkspacesCall::MoveWindow { workspace, .. } => workspace,
+        };
+        if name.len() > MAX_WORKSPACE_NAME {
+            return Err(format!(
+                "a workspace's name is {MAX_WORKSPACE_NAME} bytes at most in UTF-8: this one \
+                 takes {}",
+                name.len()
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `pointer`'s arguments.

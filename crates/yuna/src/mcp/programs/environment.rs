@@ -2,17 +2,21 @@
 //! environment names.
 //!
 //! A program gets the few variables of Yuna's own that it needs to find itself, its libraries,
-//! its locale and its drivers ([`KEPT_VARIABLES`], [`KEPT_PREFIXES`]), with the caller's own
-//! values of those Yuna's package set for Yuna alone ([`WRAPPED_VARIABLES`]); `WAYLAND_DISPLAY`,
-//! the full path of its seat's socket; `DISPLAY` and `XAUTHORITY`, its seat's X display and
-//! cookie, when the seat has one
+//! its locale and its drivers ([`KEPT_VARIABLES`], [`KEPT_PREFIXES`]), the system's
+//! `XDG_CONFIG_DIRS` and `XDG_DATA_DIRS` among them, with the caller's own values of those
+//! Yuna's package set for Yuna alone ([`WRAPPED_VARIABLES`]); `WAYLAND_DISPLAY`, the full path of
+//! its seat's socket, and `XDG_SESSION_TYPE=wayland`; `DISPLAY` and `XAUTHORITY`, its seat's X
+//! display and cookie, when the seat has one
 //! ([ADR-0067](../../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md));
 //! and an `XDG_RUNTIME_DIR` of its own, empty, so that it finds neither the user's D-Bus nor
 //! their sound server there. With a `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS=disabled:`, so that
 //! D-Bus's library does not launch a bus of its own through X11, which would hold the seat's
-//! Xwayland. Nothing else: not Yuna's own `DISPLAY`, not the user's bus. The agent's own
-//! variables come next and win, but for `YUNA_SEAT`, its seat's id, which comes last. Then the
-//! accessibility variables, each one the agent did not give ([`add_accessibility_variables`]):
+//! Xwayland. Nothing else: not Yuna's own `DISPLAY`, not the user's bus, not the user's `HOME`
+//! nor their XDG base folders. The agent's own variables come next and win, but for
+//! `YUNA_SEAT`, its seat's id, which comes last. Then its seat's throwaway home, `HOME` and the
+//! XDG base folders in it, each one the agent did not give (`homes.rs`,
+//! [ADR-0105](../../../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)); then
+//! the accessibility variables, each one the agent did not give ([`add_accessibility_variables`]):
 //! with `accessibility: true`, its seat's accessibility bus and the switches that turn every
 //! toolkit's accessibility on ([`ACCESSIBILITY_VARIABLES`]); without, the two that keep GTK and
 //! the ATK bridge from looking for a bus ([`NO_ACCESSIBILITY_VARIABLES`]). A seat's
@@ -31,10 +35,10 @@ use yuna_layout::SeatId;
 
 use crate::xwayland::X11Display;
 
-/// The variables of Yuna's environment a program keeps.
+/// The variables of Yuna's environment a program keeps. `HOME` and the XDG base folders are not
+/// among them: a program gets its seat's throwaway home instead (`homes.rs`).
 pub const KEPT_VARIABLES: &[&str] = &[
     "PATH",
-    "HOME",
     "USER",
     "LOGNAME",
     "SHELL",
@@ -43,10 +47,6 @@ pub const KEPT_VARIABLES: &[&str] = &[
     "TZ",
     "TZDIR",
     "LOCALE_ARCHIVE",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_STATE_HOME",
     "XDG_CONFIG_DIRS",
     "XDG_DATA_DIRS",
     "LD_LIBRARY_PATH",
@@ -93,9 +93,9 @@ pub const NO_ACCESSIBILITY_VARIABLES: &[(&str, &str)] =
     &[("NO_AT_BRIDGE", "1"), ("GTK_A11Y", "none")];
 
 /// A program's environment: the variables of `inherited` that [`KEPT_VARIABLES`] and
-/// [`KEPT_PREFIXES`] name, then its own runtime folder, its seat's socket and its seat's X
-/// display, `x11`, when it has one, then the agent's `added`, which win, then `YUNA_SEAT`, which
-/// names its seat for its closing.
+/// [`KEPT_PREFIXES`] name, then its own runtime folder, its seat's socket, the session's type,
+/// `wayland`, and its seat's X display, `x11`, when it has one, then the agent's `added`, which
+/// win, then `YUNA_SEAT`, which names its seat for its closing.
 pub fn program_environment(
     inherited: impl Iterator<Item = (OsString, OsString)>,
     runtime_dir: &Path,

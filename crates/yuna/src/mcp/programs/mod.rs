@@ -2,11 +2,12 @@
 //! ([ADR-0033](../../../../../docs/adr/0033-the-mcp-server.md),
 //! [ADR-0078](../../../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
 //!
-//! Each program gets an environment of its own (`environment.rs`). Its standard input is
-//! `/dev/null`; its output and errors go, through a pipe Yuna reads, to a log the agent reads
-//! through `spawn log` (`log.rs`). A seat's accessibility bus (`../accessibility/bus.rs`) runs
-//! `dbus-daemon` with an environment of Yuna's kept variables alone: its own folder,
-//! `seat-<id>.a11y`, is in the programs' folder (`folder.rs`).
+//! Each program gets an environment of its own (`environment.rs`) and its seat's throwaway home
+//! (`homes.rs`). Its standard input is `/dev/null`; its output and errors go, through a pipe
+//! Yuna reads, to a log the agent reads through `spawn log` (`log.rs`). A seat's accessibility
+//! bus (`../accessibility/bus.rs`) runs `dbus-daemon` with an environment of Yuna's kept
+//! variables alone: its own folder, `seat-<id>.a11y`, is in the programs' folder (`folder.rs`).
+//! When a seat closes, its home goes with its programs' logs and runtime folders.
 //!
 //! Each program leads a process group of its own, which `stop` signals, and which `freeze`,
 //! `thaw` and `slow` stop and continue (`pace.rs`). A client's program is the one its process
@@ -21,14 +22,17 @@
 //! - `pace.rs`: a program frozen, thawed or slowed, and its pace ended;
 //! - `environment.rs`: the variables a program and a seat's `dbus-daemon` get, and the seat a
 //!   process's environment names;
+//! - `homes.rs`: the seats' throwaway homes, and their folder in `TMPDIR`;
 //! - `log.rs`: a program's log, and the source that reads its output into it;
-//! - `folder.rs`: the folder, its lock, and the sweep of the folders gone Yunas left;
+//! - `folder.rs`: the programs' folder and the homes', their locks, and the sweep of the folders
+//!   gone Yunas left;
 //! - `processes.rs`: the processes under Yuna, found through `/proc`, signalled, reaped and
 //!   ended, by the fatal path too;
 //! - `tests.rs`: their tests.
 
 mod environment;
 mod folder;
+mod homes;
 mod log;
 mod pace;
 mod processes;
@@ -58,10 +62,11 @@ use yuna_layout::SeatId;
 use crate::compositor::{ClientProcess, ClientProtocolError};
 use crate::process::keep_descriptors_from_the_program;
 use crate::rest::{Source, Wake};
-use crate::state::State;
+use crate::state::{OWNER_SEAT, State};
 use crate::xwayland::X11Display;
 use environment::{add_accessibility_variables, program_environment, seat_in_environment};
-use folder::{FOLDER_PREFIX, name_folder, prepare_folder, remove_folder, remove_stale_folders};
+use folder::{PROGRAMS_FOLDER, remove_folder};
+use homes::{Homes, add_home_variables, needs_home};
 use log::{ProgramLog, Throttled, watch_output};
 use pace::unpace;
 use processes::{processes_under, reap_children};
@@ -190,13 +195,14 @@ pub struct Start {
     pub accessibility: Option<String>,
 }
 
-/// The programs of one `yuna mcp`, and the folder of the seats' sockets, the programs' logs and
-/// their runtime folders.
+/// The programs of one `yuna mcp`, the folder of the seats' sockets, the programs' logs and
+/// their runtime folders, and the seats' homes.
 #[derive(Debug)]
 pub struct Programs {
     folder: PathBuf,
     /// The folder's lock file, locked while this Yuna lives ([`LOCK_FILE`]).
     _lock: File,
+    homes: Homes,
     list: Vec<Program>,
     next_id: u64,
     /// The output sources that stopped reading once their program wrote more than its log
@@ -207,32 +213,21 @@ pub struct Programs {
 impl Programs {
     /// Creates the folder of the seats' sockets, the programs' logs and their runtime folders,
     /// `yuna-mcp-<pid>` in `runtime_dir`, readable by its user alone, and locks its
-    /// [`LOCK_FILE`] for as long as this Yuna lives. First removes the folders of Yunas that are
-    /// gone ([`remove_stale_folders`]). The folder is made and locked under a name of its own,
-    /// which no sweep takes, then given its name: another Yuna's sweep never finds it unlocked.
+    /// [`LOCK_FILE`] for as long as this Yuna lives (`folder.rs`). First removes the folders of
+    /// Yunas that are gone, in `runtime_dir` and in the temporary folder, where the seats'
+    /// homes go (`homes.rs`); those are made at their seats' first programs.
     pub fn new(runtime_dir: &Path) -> io::Result<Programs> {
-        remove_stale_folders(runtime_dir);
-        let pid = std::process::id();
-        let staging = runtime_dir.join(format!(".{FOLDER_PREFIX}{pid}-starting"));
-        match prepare_folder(&staging) {
-            Ok(lock) => match name_folder(runtime_dir, pid, &staging) {
-                Ok(folder) => Ok(Programs {
-                    folder,
-                    _lock: lock,
-                    list: Vec::new(),
-                    next_id: 1,
-                    throttled: Throttled::default(),
-                }),
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&staging);
-                    Err(error)
-                }
-            },
-            Err(error) => {
-                let _ = fs::remove_dir_all(&staging);
-                Err(error)
-            }
-        }
+        PROGRAMS_FOLDER.remove_stale(runtime_dir);
+        let homes = Homes::new(homes::temp_dir());
+        let (folder, lock) = PROGRAMS_FOLDER.make(runtime_dir)?;
+        Ok(Programs {
+            folder,
+            _lock: lock,
+            homes,
+            list: Vec::new(),
+            next_id: 1,
+            throttled: Throttled::default(),
+        })
     }
 
     /// Where seat `seat`'s Wayland socket goes, in the folder.
@@ -291,10 +286,10 @@ impl Programs {
     }
 
     /// Starts a program on `seat`, whose clients connect through `socket`, and its X11 clients
-    /// to `x11` when the seat has an X display, its output read by a source of `handle`'s loop
-    /// into its log. Refused, with the reason, for an empty command, a variable that cannot be
-    /// one, more than [`MAX_RUNNING`] programs, all seats together, or a program that cannot
-    /// start.
+    /// to `x11` when the seat has an X display, in its seat's home, its output read by a source
+    /// of `handle`'s loop into its log. Refused, with the reason, for an empty command, a
+    /// variable that cannot be one, more than [`MAX_RUNNING`] programs, all seats together, a
+    /// home that cannot be made, or a program that cannot start.
     pub fn start(
         &mut self,
         handle: &LoopHandle<'static, State>,
@@ -329,6 +324,12 @@ impl Programs {
                 "{MAX_RUNNING} programs run already: stop one first"
             ));
         }
+        let home = if needs_home(&start.env) {
+            let home = self.homes.seat_home(seat, &self.folder);
+            Some(home.map_err(|e| format!("its seat's home cannot be made: {e}"))?)
+        } else {
+            None
+        };
         // Taken first, so that a start that fails leaves no folder or log a later one would
         // find in its way.
         let id = self.next_id;
@@ -337,6 +338,9 @@ impl Programs {
         let log = self.folder.join("logs").join(format!("{id}.log"));
         let mut environment =
             program_environment(std::env::vars_os(), &runtime, socket, x11, seat, &start.env);
+        if let Some(home) = &home {
+            add_home_variables(&mut environment, home, &start.env);
+        }
         add_accessibility_variables(&mut environment, start.accessibility.as_deref(), &start.env);
         let (pid, log_state) = match self.launch(handle, seat, environment, &start, &runtime, &log)
         {
@@ -544,14 +548,20 @@ impl Programs {
     }
 
     /// The living processes under Yuna that belong to `seat`, whose Wayland clients have the
-    /// process ids `client_pids`. A process belongs to it when it, or a process above it under
-    /// Yuna, is one of the seat's programs still running, is in the process group one of its
-    /// programs led, running or ended (an orphan stays in it), is one of its clients, or has the
-    /// seat's `YUNA_SEAT` in its environment; and when nothing says it is another seat's: another
-    /// seat's `YUNA_SEAT`, or another seat's running program or its group, so that a pid an
+    /// process ids `client_pids`; `last_seat` is the highest seat id given so far, every seat up
+    /// to it existing now or before, since ids are given in order and never reused.
+    ///
+    /// Lineage decides first: a process that is, or is under, one of the seat's programs still
+    /// running is the seat's, whatever its environment names; one that is, or is under, another
+    /// seat's running program is that seat's. A running program is not reaped yet: its pid is
+    /// its own, never reused. Otherwise a process belongs to the seat when it, or a process above
+    /// it under Yuna, is in the process group one of the seat's programs led, running or ended
+    /// (an orphan stays in it), is one of its clients, or has the seat's `YUNA_SEAT` in its
+    /// environment; and when nothing says it is another seat's: the `YUNA_SEAT` of another seat
+    /// that exists or existed, or the group of another seat's running program, so that a pid an
     /// ended program freed and another seat's program took is never ended with this seat. A
     /// process that leaves its group and its parents and empties its environment is not found.
-    pub fn seat_processes(&self, seat: SeatId, client_pids: &[i32]) -> Vec<Pid> {
+    pub fn seat_processes(&self, seat: SeatId, client_pids: &[i32], last_seat: SeatId) -> Vec<Pid> {
         let groups: Vec<i32> = self
             .list
             .iter()
@@ -564,8 +574,8 @@ impl Programs {
             .filter(|program| program.seat == seat && program.end.is_none())
             .map(|program| program.pid.as_raw_nonzero().get())
             .collect();
-        // Another seat's running programs: a process that is one, or in one's group, is that
-        // seat's, whatever a reused pid says.
+        // Another seat's running programs: a process that is one, or under one, or in one's
+        // group, is that seat's, whatever a reused pid says.
         let others: Vec<i32> = self
             .list
             .iter()
@@ -573,8 +583,28 @@ impl Programs {
             .map(|program| program.pid.as_raw_nonzero().get())
             .collect();
         let processes = processes_under(rustix::process::getpid());
+        // Whether the process is the seat's by its lineage: none when no running program is it
+        // or above it.
+        let lineage = |pid: i32| -> Option<bool> {
+            let mut current = pid;
+            while let Some(process) = processes.get(&current) {
+                if running.contains(&current) {
+                    return Some(true);
+                }
+                if others.contains(&current) {
+                    return Some(false);
+                }
+                current = process.parent;
+            }
+            None
+        };
+        // A seat a process's environment names counts only if it exists or existed: a variable
+        // naming any other seat says nothing of the process.
+        let named_seat = |pid: i32| {
+            seat_in_environment(pid).filter(|named| (OWNER_SEAT.0..=last_seat.0).contains(&named.0))
+        };
         let mut memo: HashMap<i32, bool> = HashMap::new();
-        let mut belongs = |pid: i32| -> bool {
+        let mut member = |pid: i32| -> bool {
             // From the process up to Yuna, the first one found decides for those below it.
             let mut chain = Vec::new();
             let mut current = pid;
@@ -586,15 +616,11 @@ impl Programs {
                     break false;
                 };
                 chain.push(current);
-                let named = seat_in_environment(current);
-                let foreign = named.is_some_and(|named| named != seat)
-                    || others.contains(&current)
-                    || others.contains(&process.group);
-                if foreign {
+                let named = named_seat(current);
+                if named.is_some_and(|named| named != seat) || others.contains(&process.group) {
                     break false;
                 }
-                let direct = running.contains(&current)
-                    || groups.contains(&process.group)
+                let direct = groups.contains(&process.group)
                     || client_pids.contains(&current)
                     || named == Some(seat);
                 if direct {
@@ -611,7 +637,7 @@ impl Programs {
             .iter()
             .filter(|(_, process)| !process.zombie)
             .map(|(&pid, _)| pid)
-            .filter(|&pid| belongs(pid))
+            .filter(|&pid| lineage(pid).unwrap_or_else(|| member(pid)))
             .filter_map(Pid::from_raw)
             .collect();
         found.sort_by_key(|pid| pid.as_raw_nonzero().get());
@@ -619,8 +645,9 @@ impl Programs {
     }
 
     /// Forgets the programs of `seat`, which closed, and deletes their logs and runtime
-    /// folders. Their pace has ended already ([`Programs::unpace_seat`]).
+    /// folders, and the seat's home. Their pace has ended already ([`Programs::unpace_seat`]).
     pub fn forget_seat(&mut self, seat: SeatId) {
+        self.homes.remove_seat(seat);
         let folder = self.folder.clone();
         self.list.retain(|program| {
             let kept = program.seat != seat;
@@ -632,8 +659,10 @@ impl Programs {
         });
     }
 
-    /// Removes the folder of logs and runtime folders, once every program has ended.
+    /// Removes the seats' homes and the folder of logs and runtime folders, once every program
+    /// has ended.
     pub fn remove_folder(self) {
+        self.homes.remove();
         remove_folder(&self.folder);
     }
 

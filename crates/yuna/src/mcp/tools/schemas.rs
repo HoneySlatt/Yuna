@@ -9,10 +9,11 @@ use serde_json::{Value, json};
 
 use super::{
     DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES, MAX_LOG_READ, MAX_WAIT,
-    TEXT_TYPES,
+    MAX_WORKSPACE_NAME, TEXT_TYPES,
 };
 use crate::mcp::accessibility::MAX_NODES;
 use crate::mcp::events::Kind;
+use crate::mcp::outputs::{MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE};
 use crate::mcp::stdio::MAX_LINE;
 use crate::rest::{Cause, Source};
 use crate::{CLIPBOARD_TIMEOUT, MAX_LAYOUT_NAME};
@@ -56,9 +57,9 @@ pub fn definitions() -> Value {
                 "type": "object",
                 "properties": {
                     "action": { "type": "string", "enum": ["create", "list", "close"] },
-                    "width": { "type": "integer", "minimum": 1,
+                    "width": { "type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_SIDE,
                         "description": "create: its output's physical pixels; default 3840" },
-                    "height": { "type": "integer", "minimum": 1,
+                    "height": { "type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_SIDE,
                         "description": "create: physical pixels; default 2160" },
                     "rate": { "type": "number", "minimum": 1, "maximum": 1000,
                         "description": "create: refreshes a second; default 240" },
@@ -75,26 +76,29 @@ pub fn definitions() -> Value {
         {
             "name": "outputs",
             "title": "Virtual outputs",
-            "description": "List, create, configure or remove a seat's virtual outputs: screens \
-                no monitor shows, drawn at their own size, rate and scale, at a fixed rate or \
-                under VRR, announcing SDR or HDR colours. Windows open on the seat's focused \
-                output. Coordinates are logical: physical pixels divided by the scale. A seat \
-                keeps one output at least. list gives each output's VRR range in Hz and the \
+            "description": format!("List, create, configure or remove a seat's virtual outputs: \
+                screens no monitor shows, drawn at their own size, rate and scale, at a fixed \
+                rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's \
+                focused output. Coordinates are logical: physical pixels divided by the scale. \
+                A seat keeps one output at least. An output's side is {MAX_OUTPUT_SIDE} pixels \
+                at most, and Yuna's outputs, every seat's, hold {MAX_OUTPUT_PIXELS} pixels at \
+                most together, those of 16 at 3840 × 2160. list gives each output's VRR range \
+                in Hz and the \
                 monitor whose HDR colours it announces, each null when it has none. configure \
                 changes an output as a monitor set to another mode, whole or not at all: it \
                 keeps its top-left corner, the seat's outputs on its right move with its right \
                 edge so that none overlaps it, and its windows are placed again in it; X11 \
                 windows keep the scale their X server started with. create and configure \
-                answer with the output as list gives it.",
+                answer with the output as list gives it."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": { "type": "string",
                         "enum": ["list", "create", "configure", "remove"] },
                     "seat": seat,
-                    "width": { "type": "integer", "minimum": 1,
+                    "width": { "type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_SIDE,
                         "description": format!("create: physical pixels; default 3840{own}") },
-                    "height": { "type": "integer", "minimum": 1,
+                    "height": { "type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_SIDE,
                         "description": format!("create: physical pixels; default 2160{own}") },
                     "rate": { "type": "number", "minimum": 1, "maximum": 1000,
                         "description": format!("create: refreshes a second; default 240{own}") },
@@ -124,13 +128,16 @@ pub fn definitions() -> Value {
                     "action": { "type": "string",
                         "enum": ["list", "create", "remove", "focus", "move_window"] },
                     "seat": seat,
-                    "name": { "type": "string", "minLength": 1,
-                        "description": "create, remove, focus: the workspace's name" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": MAX_WORKSPACE_NAME,
+                        "description": format!("create, remove, focus: the workspace's name, \
+                            {MAX_WORKSPACE_NAME} bytes at most in UTF-8") },
                     "output": { "type": "integer",
                         "description": "create: the output it lives on; the focused one by default" },
                     "window": { "type": "integer", "description": "move_window: the window's id" },
                     "workspace": { "type": "string", "minLength": 1,
-                        "description": "move_window: the workspace's name" }
+                        "maxLength": MAX_WORKSPACE_NAME,
+                        "description": format!("move_window: the workspace's name, \
+                            {MAX_WORKSPACE_NAME} bytes at most in UTF-8") }
                 },
                 "required": ["action", "seat"],
                 "additionalProperties": false
@@ -142,7 +149,11 @@ pub fn definitions() -> Value {
             "description": "Start a program on a seat, list a seat's programs, stop one, read \
                 its log, or make it stuck or slow. A program gets its seat's Wayland socket and \
                 X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a \
-                log of its output and errors; its windows open on its seat. env \
+                log of its output and errors; its windows open on its seat. It runs on its \
+                seat's throwaway home, never the user's: HOME names a folder the seat's \
+                programs share, removed when the seat closes, with XDG_CONFIG_HOME, \
+                XDG_DATA_HOME, XDG_CACHE_HOME and XDG_STATE_HOME inside it; a variable named in \
+                env wins, to give a program a test profile, or the user's own home on purpose. env \
                 {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives \
                 each program's state, its log's size, its run_percent (100 free, 0 frozen) and \
                 protocol_error: the last Wayland protocol error one of its connections was \
@@ -446,8 +457,9 @@ pub fn definitions() -> Value {
                 selection, which its X11 and Wayland programs copy to and paste from alike. get \
                 gives the MIME types the selection offers, none when it is empty, and the data of \
                 one of them, mime, by default the first text type it offers of {text_types}, \
-                null when it offers none: as text when it is UTF-8, else in base64 with base64 \
-                true; at most max_bytes, with truncated when there was more. It waits for the \
+                null when it offers none: as text when it is UTF-8 with no control character \
+                but tab, newline and carriage return, else in base64 with base64 true; at \
+                most max_bytes, with truncated when there was more. It waits for the \
                 program that copied to write the data, {timeout} s at most, then answers with \
                 what came and timed_out. set holds the selection for you, offering text as \
                 {agent_types}, until a program copies something else or clear; a program pastes \

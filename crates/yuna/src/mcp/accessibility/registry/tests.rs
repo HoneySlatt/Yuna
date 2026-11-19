@@ -340,6 +340,22 @@ fn embedding_is_bounded_and_checked() {
     assert_eq!(read(answer.reply).kind, Kind::Error);
 }
 
+/// A root whose path passes `MAX_OBJECT_PATH` is refused, so that what the registry keeps of
+/// each of its 128 applications stays small; one at the bound is embedded.
+#[test]
+fn a_root_past_the_bound_of_a_path_is_refused() {
+    let mut registry = Registry::default();
+    let past = format!("/{}", "p".repeat(MAX_OBJECT_PATH));
+    let answer = registry.answer(&socket_call(":1.4", "Embed", "", &past), OWN);
+    assert!(answer.embedded.is_none());
+    assert_eq!(read(answer.reply).kind, Kind::Error);
+    assert!(registry.apps().is_empty());
+    let at = format!("/{}", "a".repeat(MAX_OBJECT_PATH - 1));
+    let answer = registry.answer(&socket_call(":1.4", "Embed", "", &at), OWN);
+    assert_eq!(answer.embedded.as_deref(), Some(":1.4"));
+    assert_eq!(registry.apps()[0].root, at);
+}
+
 /// `Socket.<member>((so))` from `sender`, naming `named`'s application at `root`.
 fn socket_call(sender: &str, member: &str, named: &str, root: &str) -> Message {
     let body = Body::new("(so)", &reference(named, root)).unwrap();

@@ -22,7 +22,7 @@ use yuna_layout::SeatId;
 
 use super::Server;
 use super::programs::{self, END_GRACE, KILL_WAIT};
-use super::protocol::{self, Revision};
+use super::protocol::Revision;
 use super::tools::{self, SeatCall, ToolResult};
 use crate::ClockMode;
 use crate::output::OutputMode;
@@ -66,7 +66,10 @@ impl Server {
                 vrr_min,
                 hdr,
             } => match self.mode_of(width, height, rate, scale, vrr_min, hdr) {
-                Ok(mode) => self.create_seat(mode),
+                Ok(mode) => match self.check_output_size(&mode, None) {
+                    Ok(()) => self.create_seat(mode),
+                    Err(failed) => failed,
+                },
                 Err(failed) => failed,
             },
             SeatCall::List {} => {
@@ -104,6 +107,7 @@ impl Server {
             Ok(seat) => seat,
             Err(error) => return ToolResult::failed(error.to_string()),
         };
+        self.last_seat = self.last_seat.max(seat);
         let made = self
             .compositor
             .add_output(seat, mode)
@@ -177,7 +181,7 @@ impl Server {
         let processes = match &mut self.programs {
             Some((programs, _)) => {
                 programs.unpace_seat(&handle, seat);
-                programs.seat_processes(seat, &client_pids)
+                programs.seat_processes(seat, &client_pids, self.last_seat)
             }
             None => Vec::new(),
         };
@@ -265,7 +269,7 @@ impl Server {
             .filter(|pid| living.contains(pid))
             .collect();
         if let Some((programs, _)) = &self.programs {
-            for pid in programs.seat_processes(closing.seat, &closing.client_pids) {
+            for pid in programs.seat_processes(closing.seat, &closing.client_pids, self.last_seat) {
                 if !targets.contains(&pid) {
                     targets.push(pid);
                 }
@@ -327,8 +331,7 @@ impl Server {
     pub(super) fn answer_closing(&mut self, closing: SeatClosing, left: &[Pid]) {
         let result = self.seat_closed(closing.seat, &closing.signalled, left);
         if let Some((id, revision)) = closing.reply {
-            self.queue
-                .push(&protocol::response(id, result.into_result(revision)));
+            self.answer_waited(id, revision, result);
         }
     }
 

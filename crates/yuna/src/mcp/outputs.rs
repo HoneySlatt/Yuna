@@ -3,8 +3,10 @@
 //! [ADR-0090](../../../../docs/adr/0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md)),
 //! and its workspaces listed, created, removed, shown, and given a window.
 //!
-//! An output's mode is read here from a call's values, `seat create`'s too (`seats.rs`). Its
-//! neighbours: `mod.rs` holds the server; `tools/` the tools' schemas, arguments and results.
+//! An output's mode is read here from a call's values, `seat create`'s too (`seats.rs`), and
+//! its size checked against what an agent's outputs may cost: a side of [`MAX_OUTPUT_SIDE`] at
+//! most, and [`MAX_OUTPUT_PIXELS`] for all of Yuna's outputs together. Its neighbours: `mod.rs`
+//! holds the server; `tools/` the tools' schemas, arguments and results.
 
 use serde_json::{Map, Value, json};
 use yuna_layout::{OutputId, SeatId, WindowId};
@@ -12,7 +14,17 @@ use yuna_layout::{OutputId, SeatId, WindowId};
 use super::Server;
 use super::tools::{self, OutputsCall, ToolResult, WorkspacesCall};
 use crate::colour::description::PG32UCDM;
-use crate::output::{InvalidOutput, OutputMode};
+use crate::output::{InvalidOutput, MAX_OUTPUTS, OutputMode};
+
+/// The longest side of an output an agent makes or configures: 8,192 pixels, twice a 4K
+/// monitor's width and over any monitor's height, where a buffer of 8,192 × 8,192 takes
+/// 256 MiB. The renderer's own limit, 16,384 on llvmpipe, would let one output take 1 GiB.
+pub const MAX_OUTPUT_SIDE: u32 = 8_192;
+
+/// The most pixels all of Yuna's outputs hold together once an agent has made or configured
+/// one: those of [`MAX_OUTPUTS`] outputs at 3840 × 2160, 132,710,400, whose buffers take about
+/// 530 MB at 4 bytes a pixel. Without it, 16 outputs at [`MAX_OUTPUT_SIDE`] would take 4 GiB.
+pub const MAX_OUTPUT_PIXELS: u64 = MAX_OUTPUTS as u64 * 3_840 * 2_160;
 
 impl Server {
     /// An output mode from a call's values, each defaulting to the seats' default output's, its
@@ -74,6 +86,23 @@ impl Server {
         )
     }
 
+    /// Refuses `mode` for an output, a new one or `replacing`'s new mode, when its side passes
+    /// [`MAX_OUTPUT_SIDE`] or when Yuna's outputs would then hold more than
+    /// [`MAX_OUTPUT_PIXELS`] together: checked before anything is made or changed.
+    pub(super) fn check_output_size(
+        &self,
+        mode: &OutputMode,
+        replacing: Option<OutputId>,
+    ) -> Result<(), ToolResult> {
+        let others = self
+            .compositor
+            .output_descriptions()
+            .into_iter()
+            .filter(|output| Some(output.id) != replacing)
+            .map(|output| (output.mode.width(), output.mode.height()));
+        output_fits(mode.width(), mode.height(), others).map_err(ToolResult::failed)
+    }
+
     /// The mode of output `output` of `seat`; none for an unknown one or another seat's.
     fn output_mode(&self, seat: SeatId, output: OutputId) -> Option<OutputMode> {
         self.compositor
@@ -129,6 +158,9 @@ impl Server {
                     Ok(mode) => mode,
                     Err(failed) => return failed,
                 };
+                if let Err(failed) = self.check_output_size(&mode, None) {
+                    return failed;
+                }
                 match self.compositor.add_output(seat, mode) {
                     Ok(id) => ToolResult::done(json!({ "output": self.output_of(seat, id) })),
                     Err(error) => ToolResult::failed(error.to_string()),
@@ -157,6 +189,9 @@ impl Server {
                         Ok(mode) => mode,
                         Err(failed) => return failed,
                     };
+                if let Err(failed) = self.check_output_size(&mode, Some(id)) {
+                    return failed;
+                }
                 match self.compositor.configure_output(id, mode) {
                     Ok(()) => ToolResult::done(json!({ "output": self.output_of(seat, id) })),
                     Err(error) => ToolResult::failed(error.to_string()),
@@ -194,6 +229,9 @@ impl Server {
             Ok(seat) => seat,
             Err(failed) => return failed,
         };
+        if let Err(reason) = call.check_name() {
+            return ToolResult::failed(reason);
+        }
         let changed = match call {
             WorkspacesCall::List { .. } => Ok(()),
             WorkspacesCall::Create { name, output, .. } => {
@@ -283,4 +321,49 @@ fn checked_mode(
         mode = mode.with_hdr(monitor);
     }
     Ok(mode)
+}
+
+/// Refuses an output of `width` × `height` pixels, beside outputs of the sizes `others`, when a
+/// side passes [`MAX_OUTPUT_SIDE`] or all of them together pass [`MAX_OUTPUT_PIXELS`]; says why.
+fn output_fits(
+    width: u32,
+    height: u32,
+    others: impl Iterator<Item = (u32, u32)>,
+) -> Result<(), String> {
+    if width > MAX_OUTPUT_SIDE || height > MAX_OUTPUT_SIDE {
+        return Err(format!(
+            "an output's side is {MAX_OUTPUT_SIDE} pixels at most: {width} × {height} was asked"
+        ));
+    }
+    let pixels = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
+    let total = others.map(pixels).sum::<u64>() + pixels((width, height));
+    if total > MAX_OUTPUT_PIXELS {
+        return Err(format!(
+            "with an output of {width} × {height}, Yuna's outputs would hold {total} pixels \
+             together, past the {MAX_OUTPUT_PIXELS} of {MAX_OUTPUTS} outputs at 3840 × 2160: make \
+             it smaller, or remove an output first"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A side of 8,192 is taken and one more refused; the pixels of every output together are
+    /// taken up to the bound and refused one row of 8,192 past it, the output's own counted.
+    #[test]
+    fn an_outputs_size_is_bounded_by_its_side_and_all_outputs_pixels() {
+        assert!(output_fits(MAX_OUTPUT_SIDE, 1, std::iter::empty()).is_ok());
+        assert!(output_fits(MAX_OUTPUT_SIDE + 1, 1, std::iter::empty()).is_err());
+        assert!(output_fits(1, MAX_OUTPUT_SIDE + 1, std::iter::empty()).is_err());
+        let full = (MAX_OUTPUT_SIDE, MAX_OUTPUT_SIDE);
+        let rows = ((MAX_OUTPUT_PIXELS - 8_192 * 8_192) / 8_192) as u32;
+        assert!(output_fits(MAX_OUTPUT_SIDE, rows, std::iter::once(full)).is_ok());
+        assert!(output_fits(MAX_OUTPUT_SIDE, rows + 1, std::iter::once(full)).is_err());
+        let four_k = std::iter::repeat_n((3_840, 2_160), MAX_OUTPUTS - 1);
+        assert!(output_fits(3_840, 2_160, four_k.clone()).is_ok());
+        assert!(output_fits(3_840, 2_161, four_k).is_err());
+    }
 }

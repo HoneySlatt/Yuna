@@ -18,6 +18,7 @@
         },
         "height": {
           "description": "create: physical pixels; default 2160",
+          "maximum": 8192,
           "minimum": 1,
           "type": "integer"
         },
@@ -46,6 +47,7 @@
         },
         "width": {
           "description": "create: its output's physical pixels; default 3840",
+          "maximum": 8192,
           "minimum": 1,
           "type": "integer"
         }
@@ -59,7 +61,7 @@
     "title": "Seats"
   },
   {
-    "description": "List, create, configure or remove a seat's virtual outputs: screens no monitor shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's focused output. Coordinates are logical: physical pixels divided by the scale. A seat keeps one output at least. list gives each output's VRR range in Hz and the monitor whose HDR colours it announces, each null when it has none. configure changes an output as a monitor set to another mode, whole or not at all: it keeps its top-left corner, the seat's outputs on its right move with its right edge so that none overlaps it, and its windows are placed again in it; X11 windows keep the scale their X server started with. create and configure answer with the output as list gives it.",
+    "description": "List, create, configure or remove a seat's virtual outputs: screens no monitor shows, drawn at their own size, rate and scale, at a fixed rate or under VRR, announcing SDR or HDR colours. Windows open on the seat's focused output. Coordinates are logical: physical pixels divided by the scale. A seat keeps one output at least. An output's side is 8192 pixels at most, and Yuna's outputs, every seat's, hold 132710400 pixels at most together, those of 16 at 3840 × 2160. list gives each output's VRR range in Hz and the monitor whose HDR colours it announces, each null when it has none. configure changes an output as a monitor set to another mode, whole or not at all: it keeps its top-left corner, the seat's outputs on its right move with its right edge so that none overlaps it, and its windows are placed again in it; X11 windows keep the scale their X server started with. create and configure answer with the output as list gives it.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -78,6 +80,7 @@
         },
         "height": {
           "description": "create: physical pixels; default 2160; configure: the output's own by default",
+          "maximum": 8192,
           "minimum": 1,
           "type": "integer"
         },
@@ -110,6 +113,7 @@
         },
         "width": {
           "description": "create: physical pixels; default 3840; configure: the output's own by default",
+          "maximum": 8192,
           "minimum": 1,
           "type": "integer"
         }
@@ -139,7 +143,8 @@
           "type": "string"
         },
         "name": {
-          "description": "create, remove, focus: the workspace's name",
+          "description": "create, remove, focus: the workspace's name, 256 bytes at most in UTF-8",
+          "maxLength": 256,
           "minLength": 1,
           "type": "string"
         },
@@ -157,7 +162,8 @@
           "type": "integer"
         },
         "workspace": {
-          "description": "move_window: the workspace's name",
+          "description": "move_window: the workspace's name, 256 bytes at most in UTF-8",
+          "maxLength": 256,
           "minLength": 1,
           "type": "string"
         }
@@ -172,7 +178,7 @@
     "title": "Workspaces"
   },
   {
-    "description": "Start a program on a seat, list a seat's programs, stop one, read its log, or make it stuck or slow. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log of its output and errors; its windows open on its seat. env {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives each program's state, its log's size, its run_percent (100 free, 0 frozen) and protocol_error: the last Wayland protocol error one of its connections was ended for (interface, object, code, message), null for none. stop sends its process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of them, 64 KiB by default, 1 MiB at most, from the byte offset from since it started, or its newest without from; size is every byte it wrote, dropped those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; ended is true once its output has closed. freeze stops its process group (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of each 100 ms and stops it the rest, on real time whatever the clock, until thaw, freeze, stop or the end of its group. A frozen program reads no event: once its Wayland socket's buffer fills, Yuna closes its connection, and events tells client_left with reason closed. Logs go when the seat closes. With accessibility, it joins its seat's accessibility bus, which the first such program starts, and the accessibility tool reads its tree: GTK, Qt and the ATK bridge's toolkits turn their accessibility on; Chromium and Electron also need --force-renderer-accessibility in their command for a page's own content. Without it, a program runs with its toolkit's accessibility off.",
+    "description": "Start a program on a seat, list a seat's programs, stop one, read its log, or make it stuck or slow. A program gets its seat's Wayland socket and X display, an environment without Yuna's own DISPLAY or the user's D-Bus, and a log of its output and errors; its windows open on its seat. It runs on its seat's throwaway home, never the user's: HOME names a folder the seat's programs share, removed when the seat closes, with XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and XDG_STATE_HOME inside it; a variable named in env wins, to give a program a test profile, or the user's own home on purpose. env {\"WAYLAND_DEBUG\": \"client\"} writes its Wayland trace to its log. list gives each program's state, its log's size, its run_percent (100 free, 0 frozen) and protocol_error: the last Wayland protocol error one of its connections was ended for (interface, object, code, message), null for none. stop sends its process group SIGTERM then SIGCONT, or SIGKILL with force. log gives text, the bytes from to to of its output as UTF-8, invalid bytes replaced: max_bytes of them, 64 KiB by default, 1 MiB at most, from the byte offset from since it started, or its newest without from; size is every byte it wrote, dropped those its log did not keep: a log keeps its first 256 KiB and its newest 1 MiB; ended is true once its output has closed. freeze stops its process group (SIGSTOP) until thaw continues it (SIGCONT); slow lets it run run_percent of each 100 ms and stops it the rest, on real time whatever the clock, until thaw, freeze, stop or the end of its group. A frozen program reads no event: once its Wayland socket's buffer fills, Yuna closes its connection, and events tells client_left with reason closed. Logs go when the seat closes. With accessibility, it joins its seat's accessibility bus, which the first such program starts, and the accessibility tool reads its tree: GTK, Qt and the ATK bridge's toolkits turn their accessibility on; Chromium and Electron also need --force-renderer-accessibility in their command for a page's own content. Without it, a program runs with its toolkit's accessibility off.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -585,7 +591,7 @@
     "title": "Keyboard"
   },
   {
-    "description": "Read, set or clear a seat's clipboard, or its primary selection, which its X11 and Wayland programs copy to and paste from alike. get gives the MIME types the selection offers, none when it is empty, and the data of one of them, mime, by default the first text type it offers of text/plain;charset=utf-8, UTF8_STRING, text/plain, STRING, TEXT, null when it offers none: as text when it is UTF-8, else in base64 with base64 true; at most max_bytes, with truncated when there was more. It waits for the program that copied to write the data, 5 s at most, then answers with what came and timed_out. set holds the selection for you, offering text as text/plain;charset=utf-8, text/plain, UTF8_STRING, until a program copies something else or clear; a program pastes it while its window has the seat's keyboard, as any paste. clear empties the selection, whoever copied it.",
+    "description": "Read, set or clear a seat's clipboard, or its primary selection, which its X11 and Wayland programs copy to and paste from alike. get gives the MIME types the selection offers, none when it is empty, and the data of one of them, mime, by default the first text type it offers of text/plain;charset=utf-8, UTF8_STRING, text/plain, STRING, TEXT, null when it offers none: as text when it is UTF-8 with no control character but tab, newline and carriage return, else in base64 with base64 true; at most max_bytes, with truncated when there was more. It waits for the program that copied to write the data, 5 s at most, then answers with what came and timed_out. set holds the selection for you, offering text as text/plain;charset=utf-8, text/plain, UTF8_STRING, until a program copies something else or clear; a program pastes it while its window has the seat's keyboard, as any paste. clear empties the selection, whoever copied it.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

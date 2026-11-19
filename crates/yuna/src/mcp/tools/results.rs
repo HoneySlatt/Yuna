@@ -463,8 +463,12 @@ pub struct ClipboardData {
 }
 
 /// `clipboard get`'s result: the MIME types the selection offers and, when one was read, its
-/// data, as text when it is UTF-8, else in base64 with `base64` true, and its length in bytes.
-/// Data cut inside a character, by `max_bytes` or the time limit, is text up to that character.
+/// data, as text when it is UTF-8 with no control character but tab, newline and carriage
+/// return, else in base64 with `base64` true, and its length in bytes. Data cut inside a
+/// character, by `max_bytes` or the time limit, is text up to that character. JSON writes each
+/// other control character in six bytes, `\u00XX`, and the reply gives the data twice, the
+/// second escaped again: as text, a byte of them would take 13 in the reply, against 8/3 in
+/// base64 ([`MAX_CLIPBOARD_BYTES`](super::MAX_CLIPBOARD_BYTES)).
 pub fn clipboard_json(mime_types: &[String], data: Option<&ClipboardData>) -> Value {
     let Some(data) = data else {
         return json!({
@@ -486,6 +490,11 @@ pub fn clipboard_json(mime_types: &[String], data: Option<&ClipboardData>) -> Va
         }
         Err(_) => None,
     };
+    let text = text.filter(|text| {
+        !text
+            .bytes()
+            .any(|byte| byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
+    });
     let (given, bytes, in_base64) = match text {
         Some(text) => (text.to_owned(), text.len(), false),
         None => (base64(&data.bytes), data.bytes.len(), true),

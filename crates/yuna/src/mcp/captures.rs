@@ -16,7 +16,7 @@ use yuna_layout::SeatId;
 
 use super::Server;
 use super::image::{self, Encoded, MAX_IMAGE_SIDE};
-use super::protocol::{self, Revision};
+use super::protocol::Revision;
 use super::tools::{self, CaptureCall, CopiedCapture, MAX_WAIT, ToolResult};
 use crate::rest::{Source, Wake, insert_source};
 use crate::{CaptureTicket, ClockMode};
@@ -164,14 +164,20 @@ impl Server {
             && let Some((key, frame)) = self.waiting_encoders.pop_front()
         {
             let results = self.encoder_results.clone();
+            let panic_asked = self.encoder_panic_asked();
             let started = std::thread::Builder::new()
                 .name("yuna-capture".to_owned())
                 .spawn(move || {
                     let began = Instant::now();
                     // A panic here is a bug of Yuna's; it fails this capture, not the seat's
                     // next ones, which would wait on it for ever.
-                    let encoded = std::panic::catch_unwind(|| image::encode(&frame))
-                        .unwrap_or_else(|_| Err("the capture's encoder failed".to_owned()));
+                    let encoded = std::panic::catch_unwind(|| {
+                        if panic_asked {
+                            panic!("a test asks this capture's encoder to panic");
+                        }
+                        image::encode(&frame)
+                    })
+                    .unwrap_or_else(|_| Err("the capture's encoder failed".to_owned()));
                     tracing::debug!(
                         width = frame.mapping.width,
                         height = frame.mapping.height,
@@ -195,6 +201,21 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// Whether the encoder about to start is to panic: one of the first ones
+    /// [`PANIC_IN_ENCODERS`](super::PANIC_IN_ENCODERS) names, in a debug build alone.
+    #[cfg(debug_assertions)]
+    fn encoder_panic_asked(&mut self) -> bool {
+        let asked = self.encoder_panics > 0;
+        self.encoder_panics = self.encoder_panics.saturating_sub(1);
+        asked
+    }
+
+    /// Never, in a release build.
+    #[cfg(not(debug_assertions))]
+    fn encoder_panic_asked(&mut self) -> bool {
+        false
     }
 
     /// Records the images the encoders finished.
@@ -259,20 +280,14 @@ impl Server {
                 }
                 Err(why) => ToolResult::failed(why),
             };
-            self.queue.push(&protocol::response(
-                wait.id,
-                result.into_result(wait.revision),
-            ));
+            self.answer_waited(wait.id, wait.revision, result);
         }
     }
 
     /// Answers the capture at `index` with `result`, now.
     fn answer_capture(&mut self, index: usize, result: ToolResult) {
         let capture = self.captures.remove(index);
-        self.queue.push(&protocol::response(
-            capture.id,
-            result.into_result(capture.revision),
-        ));
+        self.answer_waited(capture.id, capture.revision, result);
     }
 
     /// Drops the capture at `index`, unanswered: its frame no longer waited for, or no longer

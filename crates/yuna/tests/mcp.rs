@@ -13,7 +13,7 @@ mod application_environment;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
@@ -32,6 +32,11 @@ fn short_temp_dir() -> PathBuf {
     } else {
         PathBuf::from("/tmp")
     }
+}
+
+/// The folder of test `name`'s `yuna mcp`: its runtime folder, its `TMPDIR` and its log.
+fn test_folder(name: &str) -> PathBuf {
+    short_temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()))
 }
 
 /// The longest a step may take: a debug build of Yuna starts llvmpipe, and CI's runners are slow.
@@ -86,12 +91,14 @@ impl Yuna {
         variables: &[(&str, &str)],
         options: &[&str],
     ) -> Yuna {
-        let folder = short_temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()));
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(folder.join("runtime"))
-            .expect("a runtime folder");
+        let folder = test_folder(name);
+        for inner in ["runtime", "tmp"] {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(folder.join(inner))
+                .expect("a runtime folder and a temporary one");
+        }
         let yuna = env!("CARGO_BIN_EXE_yuna");
         let mut command = match descriptors {
             None => Command::new(yuna),
@@ -110,6 +117,8 @@ impl Yuna {
             .args(["mcp", "--output", "1920x1080@60,1"])
             .args(options)
             .env("XDG_RUNTIME_DIR", folder.join("runtime"))
+            // The seats' homes go there (ADR-0105), removed with the test's folder.
+            .env("TMPDIR", folder.join("tmp"))
             .env("YUNA_LOG", "info")
             .env("DISPLAY", ":99")
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
@@ -143,6 +152,18 @@ impl Yuna {
 
     fn runtime_dir(&self) -> PathBuf {
         self.folder.join("runtime")
+    }
+
+    /// Its `TMPDIR`, where its seats' homes go.
+    fn temp_dir(&self) -> PathBuf {
+        self.folder.join("tmp")
+    }
+
+    /// The folder of its seats' throwaway homes, in its `TMPDIR`
+    /// ([ADR-0105](../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)).
+    fn homes_folder(&self) -> PathBuf {
+        self.temp_dir()
+            .join(format!("yuna-mcp-homes-{}", self.child.id()))
     }
 
     /// Sends a call of a tool in 2026-07-28, without waiting for its reply; returns its id.
@@ -2731,6 +2752,418 @@ fn the_rest_audit_logs_each_second_that_woke_yuna_and_nothing_at_rest() {
         lines.join("\n")
     );
     assert_eq!(later, lines, "Yuna logged at rest\n{}", yuna.log());
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A seat's own program, still running, whose environment names a seat that does not exist, is
+/// still the seat's: Yuna started it on that seat and has not reaped it, so its pid is its own.
+/// Closing the seat ends it, and says so (Stage 1's audit, m1.13-audit-mcp-3).
+#[test]
+fn closing_a_seat_ends_its_own_program_whatever_its_environment_names() {
+    let mut yuna = Yuna::start("close-named");
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c", "echo shell=$$; export YUNA_SEAT=99; exec sleep 600"
+        ]}),
+    );
+    let program = &started["structuredContent"]["program"];
+    let pid = program["pid"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("{started}")) as i32;
+    let log = PathBuf::from(program["log"].as_str().expect("a log"));
+    assert_eq!(printed(&log, "shell"), pid);
+    wait_for("the exec of sleep, its environment naming seat 99", || {
+        let environ = fs::read(format!("/proc/{pid}/environ")).ok()?;
+        environ
+            .split(|&byte| byte == 0)
+            .any(|entry| entry == b"YUNA_SEAT=99")
+            .then_some(())
+    });
+    let listed = yuna.call("spawn", json!({"action": "list", "seat": SEAT}));
+    assert_eq!(
+        listed["structuredContent"]["programs"][0]["state"],
+        json!("running"),
+        "{listed}"
+    );
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    // `close` answers once the processes it found are gone. What happened is read before the
+    // process is ended by hand, so that a failure leaves nothing running.
+    let outlived = alive(pid);
+    let _ = kill_process(Pid::from_raw(pid).expect("a pid"), Signal::KILL);
+    eprintln!("seat close answered: {closed}");
+    assert!(
+        !outlived,
+        "seat {SEAT}'s own running program, pid {pid}, outlived its seat's closing: {closed}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A process left in the group of a seat's program that ended, adopted by Yuna, whose
+/// environment names a seat that never existed, is still the seat's: only a seat that exists or
+/// existed says a process is another seat's, so closing the seat ends it.
+#[test]
+fn closing_a_seat_ends_an_orphan_whose_environment_names_a_seat_that_never_was() {
+    let mut yuna = Yuna::start("close-never");
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c", "(export YUNA_SEAT=99; exec sleep 600) & echo orphan=$!"
+        ]}),
+    );
+    let log = PathBuf::from(
+        started["structuredContent"]["program"]["log"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{started}")),
+    );
+    let orphan = printed(&log, "orphan");
+    let yuna_pid = yuna.child.id() as i32;
+    wait_for(
+        "the orphan's adoption, its environment naming seat 99",
+        || {
+            let environ = fs::read(format!("/proc/{orphan}/environ")).ok()?;
+            let named = environ
+                .split(|&byte| byte == 0)
+                .any(|entry| entry == b"YUNA_SEAT=99");
+            (named && parent_of(orphan) == Some(yuna_pid)).then_some(())
+        },
+    );
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    let outlived = alive(orphan);
+    let _ = kill_process(Pid::from_raw(orphan).expect("a pid"), Signal::KILL);
+    assert!(
+        !outlived,
+        "the orphan outlived its seat's closing: {closed}"
+    );
+    assert!(
+        closed["structuredContent"]["ended"]
+            .as_array()
+            .is_some_and(|ended| ended.contains(&json!(orphan))),
+        "{closed}"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// The variables of the user's home and folders that a test gives Yuna, which its programs must
+/// not see (ADR-0105), and the system's folders, which they keep.
+const USERS_FOLDERS: &[(&str, &str)] = &[
+    ("HOME", "/nonexistent/user"),
+    ("XDG_CONFIG_HOME", "/nonexistent/user/config"),
+    ("XDG_DATA_HOME", "/nonexistent/user/data"),
+    ("XDG_CACHE_HOME", "/nonexistent/user/cache"),
+    ("XDG_STATE_HOME", "/nonexistent/user/state"),
+    ("XDG_CONFIG_DIRS", "/nonexistent/etc/xdg"),
+    ("XDG_DATA_DIRS", "/nonexistent/share"),
+];
+
+/// The four XDG base folders a seat's home holds.
+const XDG_HOMES: [&str; 4] = [
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+];
+
+/// A folder's permissions, its type left out.
+fn mode_of(folder: &std::path::Path) -> u32 {
+    fs::metadata(folder)
+        .unwrap_or_else(|error| panic!("{}: {error}", folder.display()))
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+/// A seat's programs share a throwaway home
+/// ([ADR-0105](../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)): made in
+/// Yuna's `TMPDIR` at the seat's first program, readable by the user alone, with `HOME` and the
+/// four XDG base folders inside it, never the user's, which Yuna was given; a file one program
+/// writes there another finds; `XDG_CONFIG_DIRS` and `XDG_DATA_DIRS` stay Yuna's; a variable the
+/// agent names in `env` wins, the others staying in the home; each seat has its own. The seat's
+/// home goes with its closing, and the folder of homes with Yuna.
+#[test]
+fn a_seats_programs_share_a_throwaway_home_that_goes_with_the_seat() {
+    let mut yuna = Yuna::launch("home", None, USERS_FOLDERS);
+    for seat in [SEAT, 3] {
+        let created = yuna.call("seat", json!({"action": "create"}));
+        assert_eq!(
+            created["structuredContent"]["seat"],
+            json!(seat),
+            "{created}"
+        );
+    }
+    assert!(
+        !yuna.homes_folder().exists(),
+        "the homes are made before any program"
+    );
+    let env = BTreeMap::new();
+    let writer = yuna.start_program(
+        SEAT,
+        &[
+            "sh",
+            "-c",
+            "mkdir -p \"$XDG_CONFIG_HOME/app\"; echo kept > \"$XDG_CONFIG_HOME/app/settings\"; \
+             env; sleep 600",
+        ],
+        &env,
+        false,
+    );
+    let writer_log = PathBuf::from(writer["log"].as_str().expect("a log"));
+    let home = PathBuf::from(printed_variable(&writer_log, "HOME").expect("HOME"));
+    assert!(
+        home.starts_with(yuna.homes_folder()),
+        "{} is not in the seat's throwaway home",
+        home.display()
+    );
+    let mut inside = Vec::new();
+    for name in XDG_HOMES {
+        let folder = PathBuf::from(
+            printed_variable(&writer_log, name).unwrap_or_else(|| panic!("no {name}")),
+        );
+        assert!(
+            folder.starts_with(&home) && folder != home,
+            "{name}={}",
+            folder.display()
+        );
+        inside.push(folder);
+    }
+    inside.sort();
+    inside.dedup();
+    assert_eq!(inside.len(), XDG_HOMES.len(), "{inside:?}");
+    assert_eq!(
+        printed_variable(&writer_log, "XDG_CONFIG_DIRS").as_deref(),
+        Some("/nonexistent/etc/xdg")
+    );
+    assert_eq!(
+        printed_variable(&writer_log, "XDG_DATA_DIRS").as_deref(),
+        Some("/nonexistent/share")
+    );
+    assert!(home.is_dir(), "{}", home.display());
+    for folder in [yuna.homes_folder(), home.clone()] {
+        assert_eq!(mode_of(&folder), 0o700, "{}", folder.display());
+    }
+    let config = PathBuf::from(printed_variable(&writer_log, "XDG_CONFIG_HOME").expect("set"));
+    assert_eq!(
+        fs::read_to_string(config.join("app/settings")).expect("the file the program wrote"),
+        "kept\n"
+    );
+
+    // Another program of the seat finds it.
+    let reader = yuna.start_program(
+        SEAT,
+        &[
+            "sh",
+            "-c",
+            "echo found=$(cat \"$XDG_CONFIG_HOME/app/settings\"); env; sleep 600",
+        ],
+        &env,
+        false,
+    );
+    let reader_log = PathBuf::from(reader["log"].as_str().expect("a log"));
+    assert_eq!(
+        printed_variable(&reader_log, "found").as_deref(),
+        Some("kept")
+    );
+    assert_eq!(
+        printed_variable(&reader_log, "HOME").as_deref(),
+        home.to_str()
+    );
+    // One that names HOME gets its own, and the XDG folders still in the seat's home.
+    let own = BTreeMap::from([("HOME".to_owned(), "/nonexistent/own".to_owned())]);
+    let named = yuna.start_program(SEAT, &["sh", "-c", "env; sleep 600"], &own, false);
+    let named_log = PathBuf::from(named["log"].as_str().expect("a log"));
+    assert_eq!(
+        printed_variable(&named_log, "HOME").as_deref(),
+        Some("/nonexistent/own")
+    );
+    assert_eq!(
+        printed_variable(&named_log, "XDG_CONFIG_HOME").as_deref(),
+        config.to_str()
+    );
+    // Another seat's programs have another home.
+    let neighbour = yuna.start_program(3, &["sh", "-c", "env; sleep 600"], &env, false);
+    let neighbour_log = PathBuf::from(neighbour["log"].as_str().expect("a log"));
+    let neighbour_home = PathBuf::from(printed_variable(&neighbour_log, "HOME").expect("HOME"));
+    assert!(
+        neighbour_home.starts_with(yuna.homes_folder()) && neighbour_home != home,
+        "{}",
+        neighbour_home.display()
+    );
+
+    let closed = yuna.call("seat", json!({"action": "close", "seat": SEAT}));
+    assert_eq!(closed["isError"], json!(false), "{closed}");
+    assert!(!home.exists(), "{} outlived its seat", home.display());
+    assert!(neighbour_home.is_dir(), "{}", neighbour_home.display());
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+    assert!(
+        !yuna.homes_folder().exists(),
+        "{} outlived Yuna",
+        yuna.homes_folder().display()
+    );
+}
+
+/// A `yuna mcp` killed by SIGKILL leaves its seats' homes in `TMPDIR`: the next one removes
+/// their folder when it starts, under its runtime folder's rule (ADR-0105): when its lock file's
+/// lock is free, whatever pid its name holds, a retry's `yuna-mcp-homes-<pid>-<n>` too. It keeps
+/// a folder whose lock is held; one with no lock file; a link, which it does not follow; and any
+/// other name, a runtime folder's among them. A live Yuna holds its own homes' lock.
+#[test]
+fn an_old_yunas_homes_are_removed_at_start_and_a_living_ones_kept() {
+    use yuna::mcp::LOCK_FILE;
+    let top = test_folder("homes-stale");
+    let temp = top.join("tmp");
+    let gone = temp.join("yuna-mcp-homes-999999999");
+    let gone_retry = temp.join("yuna-mcp-homes-999999998-1");
+    let locked = temp.join("yuna-mcp-homes-999999997");
+    let no_lock = temp.join("yuna-mcp-homes-999999996");
+    let link = temp.join("yuna-mcp-homes-999999995");
+    let runtime_folder = temp.join("yuna-mcp-999999994");
+    let unrelated = temp.join("yuna-mcp-homes-notes");
+    let elsewhere = top.join("elsewhere");
+    for folder in [
+        &gone,
+        &gone_retry,
+        &locked,
+        &no_lock,
+        &runtime_folder,
+        &unrelated,
+        &elsewhere,
+    ] {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder.join("seat-2/.config"))
+            .expect("a folder");
+        fs::write(folder.join("seat-2/.config/settings"), "kept\n").expect("a file");
+        if folder != &no_lock {
+            fs::write(folder.join(LOCK_FILE), "").expect("a lock file");
+        }
+    }
+    std::os::unix::fs::symlink(&elsewhere, &link).expect("a link");
+    let held = fs::File::open(locked.join(LOCK_FILE)).expect("the lock file");
+    held.try_lock().expect("the lock, as a live Yuna holds it");
+
+    let mut yuna = Yuna::start("homes-stale");
+    assert_eq!(yuna.temp_dir(), temp);
+    for removed in [&gone, &gone_retry] {
+        assert!(
+            !removed.exists(),
+            "{} is left\n{}",
+            removed.display(),
+            yuna.log()
+        );
+    }
+    for kept in [&locked, &no_lock, &runtime_folder, &unrelated, &elsewhere] {
+        assert!(
+            kept.join("seat-2/.config/settings").exists(),
+            "{} is gone",
+            kept.display()
+        );
+    }
+    assert!(fs::symlink_metadata(&link).is_ok_and(|link| link.file_type().is_symlink()));
+    yuna.start_program(SEAT, &["sleep", "600"], &BTreeMap::new(), false);
+    let own_lock = fs::File::open(yuna.homes_folder().join(LOCK_FILE)).expect("its lock file");
+    assert!(
+        matches!(own_lock.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "a live Yuna's lock is free"
+    );
+    assert!(
+        !temp
+            .join(format!(".yuna-mcp-homes-{}-starting", yuna.child.id()))
+            .exists()
+    );
+    drop(held);
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
+/// A panic of Yuna's state removes its seats' homes as it removes its folder
+/// ([ADR-0105](../../../docs/adr/0105-an-agents-programs-on-a-throwaway-home.md),
+/// [ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
+#[cfg(debug_assertions)]
+#[test]
+fn a_panic_of_the_state_removes_the_seats_homes() {
+    let mut yuna = Yuna::launch("panic-home", None, PANIC_ON_CLOCK);
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    let program = yuna.start_program(
+        SEAT,
+        &["sh", "-c", "env; sleep 600"],
+        &BTreeMap::new(),
+        false,
+    );
+    let log = PathBuf::from(program["log"].as_str().expect("a log"));
+    let home = PathBuf::from(printed_variable(&log, "HOME").expect("HOME"));
+    assert!(
+        home.is_dir() && home.starts_with(yuna.homes_folder()),
+        "{}",
+        home.display()
+    );
+    yuna.send("clock", json!({}));
+    let status = yuna.wait_for_exit();
+    assert_eq!(status.code(), Some(101), "{status}\n{}", yuna.log());
+    assert!(
+        !yuna.homes_folder().exists(),
+        "{} outlived the panic",
+        yuna.homes_folder().display()
+    );
+}
+
+/// A capture's encoder that panics fails its capture alone
+/// ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): the
+/// call is answered with `isError`, the encoder is no longer counted, and Yuna goes on. The
+/// panics are asked through `YUNA_PANIC_IN_ENCODERS`, which a debug build alone has: the first
+/// `MAX_ENCODERS` + 1 encoders panic, one more than a count that kept them would let start, so
+/// that each of those captures fails as its encoder's, none refused for encoders running; the
+/// next is encoded.
+#[cfg(debug_assertions)]
+#[test]
+fn an_encoders_panic_fails_its_capture_alone() {
+    use yuna::mcp::{MAX_ENCODERS, PANIC_IN_ENCODERS};
+    let panics = (MAX_ENCODERS + 1).to_string();
+    let mut yuna = Yuna::launch(
+        "encoder-panic",
+        None,
+        &[
+            (PANIC_IN_ENCODERS, panics.as_str()),
+            ("RUST_BACKTRACE", "0"),
+        ],
+    );
+    let created = yuna.call("seat", json!({"action": "create"}));
+    assert_eq!(
+        created["structuredContent"]["seat"],
+        json!(SEAT),
+        "{created}"
+    );
+    for _ in 0..=MAX_ENCODERS {
+        let failed = yuna.call("capture", json!({"seat": SEAT}));
+        assert_eq!(failed["isError"], json!(true), "{failed}");
+        assert_eq!(
+            failed["content"][0]["text"],
+            json!("the capture's encoder failed"),
+            "{failed}"
+        );
+    }
+    let captured = yuna.call("capture", json!({"seat": SEAT}));
+    assert_eq!(captured["isError"], json!(false), "{captured}");
+    assert!(
+        captured["content"]
+            .as_array()
+            .is_some_and(|parts| parts.iter().any(|part| part["type"] == json!("image"))),
+        "{captured}"
+    );
+    assert!(
+        yuna.log().contains("panicked at"),
+        "no encoder panicked\n{}",
+        yuna.log()
+    );
     let status = yuna.close_and_wait();
     assert!(status.success(), "{status}\n{}", yuna.log());
 }

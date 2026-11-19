@@ -12,14 +12,18 @@
 //! [`IN_FLIGHT_PER_APP`] in flight for one application, and ends the walk at its deadline.
 //! Bounds: [`Walk::new`]'s budget of nodes, all applications together; [`MAX_DEPTH`] levels; a
 //! node's path seen once per application, so that a tree that loops is walked once; a child on
-//! another connection, an application embedded in this one, is left to its own walk.
+//! another connection, an application embedded in this one, is left to its own walk. What a
+//! walk keeps of each reply is bounded as it arrives, whatever the application sends, up to the
+//! bus's 4 MiB a message: a name, a description and a toolkit's name are cut at
+//! [`MAX_TEXT`](super::MAX_TEXT) characters, as they are given; a child whose path passes
+//! [`MAX_OBJECT_PATH`] is left out; a node's states are [`STATE_WORDS`] words.
 
 use std::collections::{HashSet, VecDeque};
 
 use zbus::wire::{OwnedObjectPath, OwnedVariant, Variant};
 
-use super::names;
 use super::registry::{ACCESSIBLE, APPLICATION, App, COMPONENT, NULL_PATH, PROPERTIES};
+use super::{clipped, names};
 use crate::dbus::{Body, Kind, Message};
 
 /// How many of one application's calls may be in flight at once.
@@ -27,6 +31,15 @@ pub(super) const IN_FLIGHT_PER_APP: usize = 32;
 
 /// How deep a walk goes below an application's root.
 pub(super) const MAX_DEPTH: usize = 64;
+
+/// The longest object path a walk keeps, in bytes: a child named by a longer one is left out.
+/// GTK 4's and Qt's paths take tens of bytes; D-Bus bounds them by a message alone, 4 MiB,
+/// which a walk would keep twice for each of its 10,000 nodes.
+pub(super) const MAX_OBJECT_PATH: usize = 4_096;
+
+/// How many words of a node's states a walk keeps: AT-SPI's state set is 64 bits, two words
+/// (`GetState`'s `au`), and a program that sends more names no state Yuna knows.
+pub(super) const STATE_WORDS: usize = 2;
 
 /// AT-SPI's coordinates of a window: from its top-left corner.
 const WINDOW_COORDINATES: u32 = 1;
@@ -277,8 +290,12 @@ impl Walk {
                 self.apps[app].nodes[node].description = reply.and_then(text_property)
             }
             Query::States => {
-                self.apps[app].nodes[node].states =
-                    reply.and_then(|reply| reply.body::<Vec<u32>>("au").ok())
+                self.apps[app].nodes[node].states = reply
+                    .and_then(|reply| reply.body::<Vec<u32>>("au").ok())
+                    .map(|mut words| {
+                        words.truncate(STATE_WORDS);
+                        words
+                    })
             }
             Query::Extents => {
                 self.apps[app].nodes[node].extents =
@@ -305,6 +322,9 @@ impl Walk {
         };
         for (name, path) in children {
             let app_walk = &self.apps[app];
+            if path.as_str().len() > MAX_OBJECT_PATH {
+                continue;
+            }
             let path = path.as_str().to_owned();
             let own = name == app_walk.app.bus_name || name.is_empty();
             if !own || path == NULL_PATH || app_walk.seen.contains(&path) {
@@ -460,11 +480,12 @@ fn call_message(bus_name: &str, path: &str, query: Query) -> Option<Message> {
     }
 }
 
-/// A property's text, from a `Properties.Get` reply: a variant holding a string.
+/// A property's text, from a `Properties.Get` reply: a variant holding a string, cut as a walk
+/// gives it ([`clipped`]), so that a walk never keeps more of it.
 fn text_property(reply: &Message) -> Option<String> {
     let value = reply.body::<OwnedVariant>("v").ok()?;
     match &*value {
-        Variant::Str(text) => Some(text.as_str().to_owned()),
+        Variant::Str(text) => Some(clipped(text.as_str())),
         _ => None,
     }
 }

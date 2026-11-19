@@ -18,7 +18,7 @@ use smithay::reexports::rustix;
 use yuna_layout::SeatId;
 
 use super::Server;
-use super::protocol::{self, Revision};
+use super::protocol::Revision;
 use super::tools::{
     self, ClipboardCall, ClipboardData, MAX_CLIPBOARD_TEXT_BYTES, MAX_WAITING_CALLS, ToolResult,
 };
@@ -284,10 +284,7 @@ impl Server {
                 ToolResult::done(tools::clipboard_json(&read.mime_types, Some(&data)))
             }
         };
-        self.queue.push(&protocol::response(
-            read.id,
-            result.into_result(read.revision),
-        ));
+        self.answer_waited(read.id, read.revision, result);
     }
 
     /// Takes the clipboard read at `index` out, unanswered, its sources removed.

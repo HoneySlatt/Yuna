@@ -48,8 +48,12 @@ pub const DEFAULT_LOG_READ: u64 = 64 << 10;
 /// How many bytes of a log `spawn log` gives at most.
 pub const MAX_LOG_READ: u64 = 1 << 20;
 
-/// The most bytes of data `clipboard get` gives: 1 MiB, its base64 or its escaped text well
-/// under the replies that may wait ([`MAX_QUEUED_OUTPUT`](super::MAX_QUEUED_OUTPUT)).
+/// The most bytes of data `clipboard get` gives: 1 MiB. Its reply gives it twice, in its
+/// structured content and in its text, the structured content's JSON escaped again: data in
+/// base64 takes 4/3 of its bytes each time, about 2.7 MiB in all; text holds no control
+/// character JSON writes in six bytes, `\u00XX`, which goes in base64 (`clipboard_json`), so
+/// that a byte takes 6 at most, a quote or a backslash escaped once then twice: 6 MiB, under
+/// the replies that may wait ([`MAX_QUEUED_OUTPUT`](super::MAX_QUEUED_OUTPUT)), 16 MiB.
 pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
 
 /// The most bytes of text `clipboard set` takes: 256 KiB, a quarter of a request's line
@@ -57,6 +61,13 @@ pub const MAX_CLIPBOARD_BYTES: usize = 1 << 20;
 /// escaped as JSON. A client that escapes all but ASCII writes a character of 2 or 3 bytes as
 /// `\uXXXX`, 6 bytes, and one of 4 bytes as two of them, 12: three times its length at most.
 pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 256 << 10;
+
+/// The most bytes of a workspace's name an agent gives, in UTF-8: 256, as a keyboard layout's
+/// name ([`MAX_LAYOUT_NAME`](crate::MAX_LAYOUT_NAME)), more than a person reads at a glance.
+/// `windows`, `workspaces` and `seat list` repeat a workspace's name for each window or
+/// workspace that has it, up to thousands in one reply: a name bounded by a request's line
+/// alone, 1 MiB, would make one reply gigabytes.
+pub const MAX_WORKSPACE_NAME: usize = 256;
 
 /// How many bytes of data `clipboard get` gives by default: 64 KiB, more than a text copied by
 /// hand, small beside a model's context.
@@ -885,5 +896,63 @@ mod tests {
             json!({"mime_types": [], "mime": null, "data": null, "base64": false, "bytes": 0,
                    "truncated": false, "timed_out": false})
         );
+    }
+
+    /// `MAX_CLIPBOARD_BYTES` says that 1 MiB of data, "its base64 or its escaped text", stays
+    /// well under the replies that may wait, `MAX_QUEUED_OUTPUT`, 16 MiB. Measured here: the
+    /// reply to a `clipboard get` of 1 MiB of control characters, which are UTF-8 (Stage 1's
+    /// audit, m1.13-audit-mcp-6).
+    #[test]
+    fn a_clipboard_reply_stays_well_under_the_replies_that_may_wait() {
+        let data = ClipboardData {
+            mime: "text/plain;charset=utf-8".to_owned(),
+            bytes: vec![1; MAX_CLIPBOARD_BYTES],
+            truncated: false,
+            timed_out: false,
+        };
+        let answer = clipboard_json(&["text/plain;charset=utf-8".to_owned()], Some(&data));
+        let reply = crate::mcp::protocol::response(
+            json!(1),
+            ToolResult::done(answer).into_result(Revision::Modern),
+        );
+        let bytes = serde_json::to_vec(&reply)
+            .expect("a reply serialises")
+            .len();
+        eprintln!(
+            "a reply to 1 MiB of control characters takes {bytes} bytes, against {} that may wait",
+            super::super::MAX_QUEUED_OUTPUT
+        );
+        assert!(
+            bytes <= super::super::MAX_QUEUED_OUTPUT / 4,
+            "{bytes} bytes for 1 MiB of data"
+        );
+    }
+
+    /// Text holding a control character JSON writes in six bytes, `\u00XX`, is given in base64;
+    /// tabs, newlines and carriage returns, which JSON writes in two, leave text as text.
+    #[test]
+    fn clipboard_text_with_control_characters_is_base64_but_for_tabs_and_line_ends() {
+        use crate::mcp::image::base64;
+        let read = |text: &str| {
+            let data = ClipboardData {
+                mime: "text/plain".to_owned(),
+                bytes: text.as_bytes().to_vec(),
+                truncated: false,
+                timed_out: false,
+            };
+            clipboard_json(&["text/plain".to_owned()], Some(&data))
+        };
+        let lines = read("a\tb\r\nc\n");
+        assert_eq!(
+            (&lines["data"], &lines["base64"]),
+            (&json!("a\tb\r\nc\n"), &json!(false))
+        );
+        for control in ["\u{0}", "\u{1}", "\u{8}", "\u{c}", "\u{1b}", "\u{1f}"] {
+            let text = format!("a{control}b");
+            let given = read(&text);
+            assert_eq!(given["base64"], json!(true), "{text:?}");
+            assert_eq!(given["data"], json!(base64(text.as_bytes())), "{text:?}");
+            assert_eq!(given["bytes"], json!(3));
+        }
     }
 }

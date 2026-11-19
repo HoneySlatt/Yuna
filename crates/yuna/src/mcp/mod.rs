@@ -16,7 +16,9 @@
 //!
 //! Bounds: a line over [`stdio::MAX_LINE`] ends the connection; while more than
 //! [`MAX_QUEUED_OUTPUT`] of replies wait, because the client does not read them, no further
-//! request is answered and its input is not read. The calls that wait and the captures being
+//! request is answered and its input is not read, and the answer of a call that waited is held,
+//! as its result, until the client has read enough (`Server::answer_waited`): the replies
+//! waiting pass the bound by one reply at most. The calls that wait and the captures being
 //! encoded have bounds of their own (`waits.rs`, `captures.rs`).
 //!
 //! With `--rest-audit`, each round's end logs the rest audit's second that ended, each client's
@@ -24,7 +26,8 @@
 //!
 //! A panic of the server's thread is fatal: the program's panic hook ends the programs and
 //! removes their folder ([`Server::programs_folder`], [`end_after_panic`]), then stops Yuna. In a
-//! debug build, `PANIC_ON_TOOL` makes a tool's call panic, for the tests of that path.
+//! debug build, `PANIC_ON_TOOL` makes a tool's call panic, for the tests of that path, and
+//! `PANIC_IN_ENCODERS` the first captures' encoders, whose panic fails their capture alone.
 //!
 //! This module holds [`Server`]: its state, its life in the loop, the client's lines read and
 //! its replies written, and each request routed to its tool. Each group of tools adds its own
@@ -100,6 +103,7 @@ pub use accessibility::{
 pub use captures::{MAX_ENCODERS, RECENT_CAPTURES};
 pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
+pub use outputs::{MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE};
 pub use programs::{
     ACCESSIBILITY_VARIABLES, BUS_VARIABLE, END_GRACE, KEPT_PREFIXES, KEPT_VARIABLES, KILL_WAIT,
     LOCK_FILE, LOG_HEAD, LOG_TAIL, MAX_KEPT, MAX_RUNNING, NO_ACCESSIBILITY_VARIABLES, PACE_PERIOD,
@@ -109,7 +113,7 @@ pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
 pub use tools::{
     DEFAULT_CLIPBOARD_BYTES, DEFAULT_LOG_READ, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES,
-    MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS,
+    MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS, MAX_WORKSPACE_NAME,
 };
 
 /// How many bytes of replies may wait for the client before its input stops being read: 16 MiB,
@@ -123,11 +127,27 @@ pub const MAX_QUEUED_OUTPUT: usize = 16 << 20;
 #[cfg(debug_assertions)]
 pub const PANIC_ON_TOOL: &str = "YUNA_PANIC_ON_TOOL";
 
+/// The variable that, in a debug build, gives how many captures' encoders panic, the first ones:
+/// what the test of an encoder's contained panic uses
+/// ([ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). It
+/// is read when the server starts; a value that is not a number is none. A release build has
+/// neither the variable nor the panic.
+#[cfg(debug_assertions)]
+pub const PANIC_IN_ENCODERS: &str = "YUNA_PANIC_IN_ENCODERS";
+
 /// How much of the client's input is read at a time.
 const READ_SIZE: usize = 64 * 1024;
 
 /// How long Yuna, stopping, still tries to write the replies the client has not read.
 const LAST_WRITE_WAIT: Duration = Duration::from_secs(1);
+
+/// The answer of a call that waited, held while [`MAX_QUEUED_OUTPUT`] of replies wait.
+#[derive(Debug)]
+struct HeldAnswer {
+    id: Value,
+    revision: Revision,
+    result: ToolResult,
+}
 
 /// What the event loop's sources noted during a round, read after it.
 #[derive(Debug, Default)]
@@ -165,6 +185,10 @@ pub struct Server {
     lines: VecDeque<Vec<u8>>,
     read_buffer: Vec<u8>,
     queue: OutputQueue,
+    /// The answers of calls that waited, held, oldest first, while too many replies wait: no
+    /// more than the calls that wait and the seats that close, since no request is answered
+    /// while one is held.
+    held: VecDeque<HeldAnswer>,
     events: Rc<RefCell<Events>>,
     waits: Vec<WindowWait>,
     event_waits: Vec<EventWait>,
@@ -181,6 +205,10 @@ pub struct Server {
     /// The keys of waiting calls and of closings, never reused.
     next_wait: u64,
     closings: Vec<SeatClosing>,
+    /// The highest id of the seats `seat create` made: ids are given in order from the owner's
+    /// and never reused, so that a seat up to it exists or existed, which a process's
+    /// `YUNA_SEAT` must name to say it is another seat's.
+    last_seat: SeatId,
     captures: Vec<CaptureWait>,
     clipboard_reads: Vec<ClipboardRead>,
     /// Where the encoders send the captures' images, by key.
@@ -210,6 +238,9 @@ pub struct Server {
     /// The tool whose calls panic, from [`PANIC_ON_TOOL`].
     #[cfg(debug_assertions)]
     panic_on_tool: Option<String>,
+    /// How many of the next captures' encoders panic, from [`PANIC_IN_ENCODERS`].
+    #[cfg(debug_assertions)]
+    encoder_panics: u32,
 }
 
 /// Why the server stops.
@@ -338,6 +369,7 @@ impl Server {
             lines: VecDeque::new(),
             read_buffer: vec![0; READ_SIZE],
             queue: OutputQueue::default(),
+            held: VecDeque::new(),
             events,
             waits: Vec::new(),
             event_waits: Vec::new(),
@@ -349,6 +381,7 @@ impl Server {
             program_exits: Vec::new(),
             next_wait: 1,
             closings: Vec::new(),
+            last_seat: OWNER_SEAT,
             captures: Vec::new(),
             clipboard_reads: Vec::new(),
             encoder_results,
@@ -364,6 +397,11 @@ impl Server {
             stopping: None,
             #[cfg(debug_assertions)]
             panic_on_tool: std::env::var(PANIC_ON_TOOL).ok(),
+            #[cfg(debug_assertions)]
+            encoder_panics: std::env::var(PANIC_IN_ENCODERS)
+                .ok()
+                .and_then(|count| count.parse().ok())
+                .unwrap_or(0),
         })
     }
 
@@ -539,6 +577,14 @@ impl Server {
                 .collect();
             self.answer_closing(closing, &left);
         }
+        // Stopping, Yuna reads nothing more: what it holds is written with the rest, for a
+        // second at most.
+        for held in std::mem::take(&mut self.held) {
+            self.queue.push(&protocol::response(
+                held.id,
+                held.result.into_result(held.revision),
+            ));
+        }
         let until = Instant::now() + LAST_WRITE_WAIT;
         while !self.queue.is_empty() && self.queue.write_to(&self.output).is_ok() {
             let left = until.saturating_duration_since(Instant::now());
@@ -603,12 +649,47 @@ impl Server {
     }
 
     /// Answers the lines read, in order, while fewer than [`MAX_QUEUED_OUTPUT`] bytes of
-    /// replies wait; the rest wait for the client to read.
+    /// replies wait and no answer is held; the rest wait for the client to read.
     fn answer_lines(&mut self) {
-        while self.queue.len() < MAX_QUEUED_OUTPUT
+        while self.has_room()
             && let Some(line) = self.lines.pop_front()
         {
             self.answer_line(&line);
+        }
+    }
+
+    /// Whether a reply may be queued now: fewer than [`MAX_QUEUED_OUTPUT`] bytes wait, and no
+    /// answer held waits before it.
+    fn has_room(&self) -> bool {
+        self.held.is_empty() && self.queue.len() < MAX_QUEUED_OUTPUT
+    }
+
+    /// Answers request `id`, a call that waited, with `result`: queued now when there is room,
+    /// else held as it is until the client has read enough. A burst of answers, 64 waiting
+    /// calls answered in one round, never passes the replies that may wait by more than one.
+    pub(super) fn answer_waited(&mut self, id: Value, revision: Revision, result: ToolResult) {
+        if self.has_room() {
+            self.queue
+                .push(&protocol::response(id, result.into_result(revision)));
+        } else {
+            self.held.push_back(HeldAnswer {
+                id,
+                revision,
+                result,
+            });
+        }
+    }
+
+    /// Queues the answers held, oldest first, while fewer than [`MAX_QUEUED_OUTPUT`] bytes
+    /// wait.
+    fn release_held(&mut self) {
+        while self.queue.len() < MAX_QUEUED_OUTPUT
+            && let Some(held) = self.held.pop_front()
+        {
+            self.queue.push(&protocol::response(
+                held.id,
+                held.result.into_result(held.revision),
+            ));
         }
     }
 
@@ -725,12 +806,19 @@ impl Server {
         }
     }
 
-    /// Writes what waits, watches the output while some is left, and stops reading the input
-    /// while too much is.
+    /// Writes what waits, the answers held as room comes, watches the output while some is
+    /// left, and stops reading the input while too much is, or an answer is held.
     fn write_output(&mut self) {
-        if let Err(error) = self.queue.write_to(&self.output) {
-            self.stop(Stop::Broken(format!("its output failed: {error}")));
-            return;
+        loop {
+            self.release_held();
+            if let Err(error) = self.queue.write_to(&self.output) {
+                self.stop(Stop::Broken(format!("its output failed: {error}")));
+                return;
+            }
+            // A file takes every byte at once and never wakes the loop: what is held goes now.
+            if self.held.is_empty() || !self.queue.is_empty() {
+                break;
+            }
         }
         let handle = self.compositor.loop_handle();
         let watch = !self.queue.is_empty();
@@ -746,7 +834,7 @@ impl Server {
                 self.output_watched = watch;
             }
         }
-        let pause = self.queue.len() >= MAX_QUEUED_OUTPUT;
+        let pause = !self.has_room();
         if pause != self.input_paused && self.stopping.is_none() {
             let changed = if pause {
                 handle.disable(&self.input_source)
