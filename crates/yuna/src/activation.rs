@@ -6,7 +6,9 @@
 //! a serial the seat sent there: the last keyboard `enter` or key press while the seat's keyboard
 //! is on that surface, or a button press on the surface's window. A valid token lasts
 //! [`TOKEN_LIFETIME`] on Yuna's clock and is used once, for a window of the same seat. A token
-//! asked otherwise is still given, since the protocol requires one, but is not valid.
+//! asked otherwise is still given, since the protocol requires one, but is not valid. A window of
+//! another seat that names a token, with xdg-activation or an X11 window's startup id, is judged
+//! as with a token that is not valid, and leaves the token unused, to its own seat.
 //!
 //! An activation with a valid token asks the layout ([`Layout::request_activation`]): the window
 //! takes the focus at the next refresh, unless a fullscreen window holds the screen.
@@ -102,13 +104,12 @@ impl XdgActivationHandler for State {
         token_data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
-        // A token is used once.
-        self.xdg_activation_state.remove_token(&token);
         let origin = token_data
             .user_data
             .get::<TokenOrigin>()
             .copied()
             .unwrap_or(TokenOrigin::UNKNOWN);
+        self.use_token(&token, origin, seat_of_surface(&surface));
         let Some(toplevel) = self.toplevels.get_mut(&surface.id()) else {
             tracing::debug!("an activation of a surface that is not a toplevel is ignored");
             return;
@@ -141,9 +142,14 @@ impl State {
         self.mark_urgent(window);
     }
 
-    /// The activation `token` carries, if Yuna gave it and it was not used, taken out: a token
-    /// is used once. An X11 window's `_NET_STARTUP_ID` may name one (`xwayland/windows.rs`).
-    pub(crate) fn take_activation_token(&mut self, token: &str) -> Option<TokenOrigin> {
+    /// The activation `token` carries for a window of `seat`, if Yuna gave it and it was not
+    /// used; used by that window if it is of the token's seat (`use_token`). An X11
+    /// window's `_NET_STARTUP_ID` may name one (`xwayland/windows.rs`).
+    pub(crate) fn take_activation_token(
+        &mut self,
+        token: &str,
+        seat: SeatId,
+    ) -> Option<TokenOrigin> {
         let token = XdgActivationToken::from(token.to_owned());
         let origin = self
             .xdg_activation_state
@@ -152,8 +158,18 @@ impl State {
             .get::<TokenOrigin>()
             .copied()
             .unwrap_or(TokenOrigin::UNKNOWN);
-        self.xdg_activation_state.remove_token(&token);
+        self.use_token(&token, origin, seat);
         Some(origin)
+    }
+
+    /// A window of `seat` names `token`, of `origin`: a token is used once, by a window of its
+    /// own seat, and forgotten then. A window of another seat leaves it to its own: whoever
+    /// learnt a token, from a launched program's environment, could otherwise use another
+    /// seat's up, so that the program it was asked for opens without the focus.
+    fn use_token(&mut self, token: &XdgActivationToken, origin: TokenOrigin, seat: SeatId) {
+        if origin.seat == seat {
+            self.xdg_activation_state.remove_token(token);
+        }
     }
 
     /// Whether `window` is urgent: an activation of it was refused, or came without a valid

@@ -475,14 +475,15 @@ impl State {
         }
     }
 
-    /// `seat`'s pointer holds no button any more.
+    /// `seat`'s pointer holds no button any more: an X11 program's drag waits for its source
+    /// until the deadline armed here.
     pub(crate) fn drag_released(&mut self, seat: SeatId) {
         let now = self.clock.now();
         let Some(drags) = self.x11.drags.seats.get_mut(&seat) else {
             return;
         };
-        let effects = drags.released(now);
-        self.apply_drag_effects(seat, effects);
+        drags.released(now);
+        self.arm_drags_deadline();
     }
 
     /// A Wayland client of `seat` starts a drag with `source`, which Smithay's grab is given

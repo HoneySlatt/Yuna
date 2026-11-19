@@ -6,17 +6,18 @@
 //! A window's life, from its creation to its end, is told once, in
 //! [ARCHITECTURE](../../../../docs/ARCHITECTURE.md#an-x11-windows-life).
 //!
-//! [`X11Windows`] holds every Xwayland's windows as their manager described them. A managed window
-//! paired with its surface has its record in [`State::toplevels`], [`Shell::X11`], beside
+//! [`X11Windows`] holds every Xwayland's windows as their manager described them; which surface
+//! each is drawn into is a `Pairing`'s, plain Rust whose every order is tested alone. A managed
+//! window paired with its surface has its record in [`State::toplevels`], [`Shell::X11`], beside
 //! xdg-shell's. Commands wait in an outbox until the round's end, when the compositor passes them
 //! to each manager (`Compositor::flush`): Yuna's state never holds a manager, whose life is
 //! Xwayland's (`mod.rs`).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Point};
 use x11rb::protocol::xproto::Window;
@@ -87,13 +88,8 @@ pub(super) struct X11Server {
     /// XWayland's scale, S, fixed for its life.
     pub(super) scale: f64,
     pub(super) windows: HashMap<Window, X11Window>,
-    /// The window of each surface paired.
-    pub(super) surfaces: HashMap<ObjectId, Window>,
-    /// The surfaces whose serial was committed before any window had it, by serial.
-    waiting: HashMap<u64, WlSurface>,
-    /// The windows whose serial came before their surface committed it, by serial: thousands of
-    /// surfaces pairing at once find theirs without a walk of every window.
-    serials: HashMap<u64, Window>,
+    /// Which surface each of its windows is drawn into.
+    pub(super) pairing: Pairing<WlSurface>,
     /// The window last given the X input focus.
     focused: Option<Window>,
     /// The stacking last sent, bottom to top.
@@ -110,6 +106,8 @@ pub(super) struct X11Server {
     refusals_said: HashSet<u32>,
     /// The X11 clients whose override-redirect window past their cap was said: once each.
     pub(super) menu_refusals_said: HashSet<u32>,
+    /// Whether an override-redirect window past the bound of all its clients' was said: once.
+    pub(super) menu_bound_said: bool,
     /// The transfers of its selections to Wayland clients passed to its manager and not ended.
     pub(super) transfers_to_wayland: usize,
 }
@@ -122,9 +120,6 @@ pub(super) struct X11Window {
     /// Its process, as X11 knows its client's: none without XRes.
     pid: Option<i32>,
     pub(super) properties: Properties,
-    /// The serial Xwayland gave its surface, until the surface with it commits.
-    serial: Option<u64>,
-    pub(super) surface: Option<WlSurface>,
     /// It asked to be mapped and Yuna mapped it; cleared when it is unmapped.
     requested: bool,
     /// X11 says it is mapped.
@@ -169,6 +164,133 @@ impl X11Window {
     fn own_size(&self) -> (u32, u32) {
         let rect = self.told.unwrap_or(self.geometry);
         (rect.width, rect.height)
+    }
+}
+
+/// Which surface each window of one Xwayland is drawn into, in plain Rust: no Smithay,
+/// wayland-server or x11rb type, so that each order in which a window and its surface meet is
+/// tested alone, as `drag_session.rs`'s drags are. `S` names a surface: a `WlSurface` in Yuna, a
+/// number in the tests; a window is its X11 id.
+///
+/// For each window it maps, Xwayland gives a new surface a serial, which the surface commits, and
+/// sends the same serial to the window's manager, which posts it (`shell.rs`). The two reach Yuna
+/// in either order, and the second pairs them:
+///
+/// - a window's serial before its surface's commit waits for that commit, by serial; a second
+///   serial before the commit takes the first's place, whose surface never committed it;
+/// - a surface's commit before its window's serial waits for that serial;
+/// - a window mapped again pairs with its new surface, and its old one pairs with nothing:
+///   destroyed later, it unpairs nothing;
+/// - a window destroyed forgets its serial and its surface; that surface, committing the
+///   forgotten serial later, waits until it is destroyed;
+/// - a surface destroyed no longer waits, and its window, if it had one, is unpaired.
+///
+/// The caller passes the serials of windows it knows alone: one Yuna does not know takes no
+/// surface, and the surface waiting stays for its own window.
+#[derive(Debug)]
+pub(super) struct Pairing<S> {
+    /// The surface each window is paired with.
+    surfaces: HashMap<u32, S>,
+    /// The window each surface is paired with: `surfaces` the other way.
+    windows: HashMap<S, u32>,
+    /// The surfaces whose serial was committed before any window had it, by serial.
+    waiting: HashMap<u64, S>,
+    /// The windows whose serial came before their surface committed it, by serial: thousands of
+    /// surfaces pairing at once find theirs without a walk of every window.
+    serials: HashMap<u64, u32>,
+    /// The serial each window of `serials` waits with.
+    serial_of: HashMap<u32, u64>,
+}
+
+impl<S> Default for Pairing<S> {
+    fn default() -> Pairing<S> {
+        Pairing {
+            surfaces: HashMap::new(),
+            windows: HashMap::new(),
+            waiting: HashMap::new(),
+            serials: HashMap::new(),
+            serial_of: HashMap::new(),
+        }
+    }
+}
+
+impl<S: Clone + Eq + Hash> Pairing<S> {
+    /// The surface `window` is paired with.
+    pub(super) fn surface(&self, window: u32) -> Option<&S> {
+        self.surfaces.get(&window)
+    }
+
+    /// The window `surface` is paired with.
+    pub(super) fn window(&self, surface: &S) -> Option<u32> {
+        self.windows.get(surface).copied()
+    }
+
+    /// Xwayland says `window` has `serial`: it is paired with the surface that committed that
+    /// serial already, which is returned; or it waits for it, any serial it waited with before
+    /// forgotten.
+    pub(super) fn window_serial(&mut self, window: u32, serial: u64) -> Option<S> {
+        if let Some(surface) = self.waiting.remove(&serial) {
+            self.pair(window, surface.clone());
+            return Some(surface);
+        }
+        if let Some(before) = self.serial_of.insert(window, serial) {
+            self.serials.remove(&before);
+        }
+        // Xwayland never gives a serial twice: a window that had it before, through a forged
+        // message, waits no more.
+        if let Some(other) = self.serials.insert(serial, window)
+            && other != window
+        {
+            self.serial_of.remove(&other);
+        }
+        None
+    }
+
+    /// `surface` committed `serial`: it is paired with the window that has that serial, which is
+    /// returned; or it waits for it.
+    pub(super) fn surface_serial(&mut self, surface: S, serial: u64) -> Option<u32> {
+        let Some(window) = self.serials.remove(&serial) else {
+            self.waiting.insert(serial, surface);
+            return None;
+        };
+        self.pair(window, surface);
+        Some(window)
+    }
+
+    /// `surface` is destroyed: it no longer waits, and the window it was paired with, returned, is
+    /// unpaired.
+    pub(super) fn surface_destroyed(&mut self, surface: &S) -> Option<u32> {
+        self.waiting.retain(|_, waiting| waiting != surface);
+        let window = self.windows.remove(surface)?;
+        self.surfaces.remove(&window);
+        Some(window)
+    }
+
+    /// `window` is destroyed: its serial and its surface are forgotten.
+    pub(super) fn window_destroyed(&mut self, window: u32) {
+        if let Some(serial) = self.serial_of.remove(&window) {
+            self.serials.remove(&serial);
+        }
+        if let Some(surface) = self.surfaces.remove(&window) {
+            self.windows.remove(&surface);
+        }
+    }
+
+    /// Pairs `window` with `surface`, in place of the surface it had, if any; a surface paired
+    /// with another window before, which Xwayland's single serial per surface rules out, leaves
+    /// that window.
+    fn pair(&mut self, window: u32, surface: S) {
+        if let Some(serial) = self.serial_of.remove(&window) {
+            self.serials.remove(&serial);
+        }
+        if let Some(before) = self.surfaces.insert(window, surface.clone()) {
+            self.windows.remove(&before);
+        }
+        if let Some(other) = self.windows.insert(surface, window)
+            && other != window
+        {
+            self.surfaces.remove(&other);
+        }
     }
 }
 
@@ -355,16 +477,29 @@ pub(super) fn x11_origin(output: &VirtualOutput, scale: f64) -> (i32, i32) {
 /// A window's size hints in logical units, as the layout takes them: its window, its X11 size
 /// less its frame extents, divided by XWayland's scale and rounded outward, so that the layout
 /// never refuses a size the hints allow: the minimum down, the maximum up. 0 for none; a maximum
-/// below the minimum is dropped, as for an xdg-shell window.
-fn logical_limits(hints: SizeHints, extents: FrameExtents, scale: f64) -> (Size, Size) {
+/// below the minimum is dropped, as for an xdg-shell window. The minimum of its whole X11 window
+/// is first bounded by `largest`, its seat's largest output on each axis in X11 pixels, as a
+/// window manager bounds windows to its screens: a hint up to X11's 32,767 pixels would
+/// otherwise be configured, a window no output shows whose buffer Xwayland would have to make.
+fn logical_limits(
+    hints: SizeHints,
+    extents: FrameExtents,
+    scale: f64,
+    largest: Option<(u32, u32)>,
+) -> (Size, Size) {
     let inside = |(w, h): (u32, u32)| {
         (
             f64::from(w.saturating_sub(extents.left + extents.right)) / scale,
             f64::from(h.saturating_sub(extents.top + extents.bottom)) / scale,
         )
     };
+    let bounded = |(w, h): (u32, u32)| match largest {
+        Some((largest_w, largest_h)) => (w.min(largest_w), h.min(largest_h)),
+        None => (w, h),
+    };
     let (min_w, min_h) = hints
         .min
+        .map(bounded)
         .map(inside)
         .map_or((0.0, 0.0), |(w, h)| (w.floor(), h.floor()));
     let (max_w, max_h) = hints
@@ -405,9 +540,7 @@ impl State {
                 seat,
                 scale,
                 windows: HashMap::new(),
-                surfaces: HashMap::new(),
-                waiting: HashMap::new(),
-                serials: HashMap::new(),
+                pairing: Pairing::default(),
                 focused: None,
                 stacking: Vec::new(),
                 menus: Vec::new(),
@@ -416,6 +549,7 @@ impl State {
                 menus_with: HashMap::new(),
                 refusals_said: HashSet::new(),
                 menu_refusals_said: HashSet::new(),
+                menu_bound_said: false,
                 transfers_to_wayland: 0,
             },
         );
@@ -482,8 +616,6 @@ impl State {
                             override_redirect,
                             pid,
                             properties: *properties,
-                            serial: None,
-                            surface: None,
                             requested: false,
                             mapped: false,
                             wishes: Wishes::default(),
@@ -568,10 +700,9 @@ impl State {
             .x11
             .servers
             .get(&server)?
-            .windows
-            .get(&window)?
-            .surface
-            .clone()?;
+            .pairing
+            .surface(window)?
+            .clone();
         self.toplevels
             .contains_key(&surface.id())
             .then_some(surface)
@@ -590,22 +721,15 @@ impl State {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
         };
-        let Some(x11_window) = record.windows.get_mut(&window) else {
+        if !record.windows.contains_key(&window) {
             tracing::debug!(
                 window,
                 "the serial of an X11 window Yuna does not know is ignored"
             );
             return;
-        };
-        match record.waiting.remove(&serial) {
-            Some(surface) => self.x11_pair(server, window, surface),
-            None => {
-                // Its surface's serial before: that surface never committed it, and is gone.
-                if let Some(before) = x11_window.serial.replace(serial) {
-                    record.serials.remove(&before);
-                }
-                record.serials.insert(serial, window);
-            }
+        }
+        if record.pairing.window_serial(window, serial).is_some() {
+            self.x11_paired(server, window);
         }
     }
 
@@ -615,11 +739,8 @@ impl State {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
         };
-        match record.serials.remove(&serial) {
-            Some(window) => self.x11_pair(server, window, surface),
-            None => {
-                record.waiting.insert(serial, surface);
-            }
+        if let Some(window) = record.pairing.surface_serial(surface, serial) {
+            self.x11_paired(server, window);
         }
     }
 
@@ -627,11 +748,7 @@ impl State {
     pub(crate) fn x11_surface_destroyed(&mut self, surface: &WlSurface) {
         let mut unpaired = Vec::new();
         for (&server, record) in &mut self.x11.servers {
-            record.waiting.retain(|_, waiting| waiting != surface);
-            if let Some(window) = record.surfaces.remove(&surface.id()) {
-                if let Some(x11_window) = record.windows.get_mut(&window) {
-                    x11_window.surface = None;
-                }
+            if let Some(window) = record.pairing.surface_destroyed(surface) {
                 unpaired.push((server, window));
             }
         }
@@ -643,33 +760,19 @@ impl State {
         }
     }
 
-    /// `window` and `surface` have the same serial: they are paired, and a managed window gets
-    /// its record of a window.
-    fn x11_pair(&mut self, server: u64, window: Window, surface: WlSurface) {
-        let Some(record) = self.x11.servers.get_mut(&server) else {
-            return;
-        };
-        let Some(x11_window) = record.windows.get_mut(&window) else {
-            return;
-        };
-        if let Some(serial) = x11_window.serial.take() {
-            record.serials.remove(&serial);
-        }
-        if let Some(before) = x11_window.surface.replace(surface.clone()) {
-            record.surfaces.remove(&before.id());
-        }
-        record.surfaces.insert(surface.id(), window);
+    /// `window` was just paired with its surface: a managed window gets its record of a window,
+    /// and an override-redirect window may show.
+    fn x11_paired(&mut self, server: u64, window: Window) {
         self.x11_reconcile(server, window);
         self.x11_update_menu(server, window);
     }
 
     /// The window of Xwayland surface `surface`, once paired.
     pub(super) fn x11_window_of_surface(&self, surface: &WlSurface) -> Option<(u64, Window)> {
-        let id = surface.id();
         self.x11
             .servers
             .iter()
-            .find_map(|(&server, record)| Some((server, *record.surfaces.get(&id)?)))
+            .find_map(|(&server, record)| Some((server, record.pairing.window(surface)?)))
     }
 
     /// Brings `window`'s record of a window in line with what is known of it: a managed window,
@@ -685,7 +788,7 @@ impl State {
         let managed = x11_window.requested
             && !x11_window.override_redirect
             && x11_window.properties.window_type.is_managed();
-        let (Some(surface), true) = (x11_window.surface.clone(), managed) else {
+        let (Some(surface), true) = (record.pairing.surface(window).cloned(), managed) else {
             return;
         };
         if !surface.is_alive() {
@@ -758,6 +861,7 @@ impl State {
             properties.size_hints,
             properties.frame_extents,
             record.scale,
+            self.largest_x11_output(record.seat, record.scale),
         );
         let parent = properties
             .transient_for
@@ -769,6 +873,19 @@ impl State {
             max_size,
             ..OpenOptions::default()
         }
+    }
+
+    /// The largest side of `seat`'s outputs on each axis, in X11 pixels at XWayland's scale
+    /// `scale`: its logical size times S, rounded, as Xwayland is told it. None for a seat without
+    /// an output.
+    fn largest_x11_output(&self, seat: SeatId, scale: f64) -> Option<(u32, u32)> {
+        // A logical side is finite and not negative: the cast is exact, or saturates.
+        let x11_side = |logical: f64| (logical * scale).round() as u32;
+        self.outputs
+            .iter()
+            .filter(|output| output.seat == seat)
+            .map(|output| (x11_side(output.rect.w), x11_side(output.rect.h)))
+            .reduce(|(w, h), (other_w, other_h)| (w.max(other_w), h.max(other_h)))
     }
 
     /// Records the size the X11 window of `root` committed, once it opened, as the layout took
@@ -918,7 +1035,7 @@ impl State {
         );
         let startup_id = x11_window.properties.startup_id.clone();
         // Read when it asks to be mapped: a token Yuna gave makes its opening an activation.
-        let activation = startup_id.and_then(|token| self.take_activation_token(&token));
+        let activation = startup_id.and_then(|token| self.take_activation_token(&token, seat));
         if let Some(x11_window) = self.x11_window_mut(server, window) {
             x11_window.activation = activation;
         }
@@ -998,13 +1115,10 @@ impl State {
             return;
         };
         let removed = record.windows.remove(&window);
-        if let Some(serial) = removed.as_ref().and_then(|x11_window| x11_window.serial) {
-            record.serials.remove(&serial);
-        }
         let waited = removed
             .as_ref()
             .is_some_and(|x11_window| x11_window.waits.waiting());
-        record.surfaces.retain(|_, paired| *paired != window);
+        record.pairing.window_destroyed(window);
         record.stacking.retain(|&stacked| stacked != window);
         record.menus.retain(|&menu| menu != window);
         if record.focused == Some(window) {
@@ -1394,6 +1508,193 @@ mod tests {
     /// The window's own size, where no axis is left to it.
     const NO_OWN: (u32, u32) = (0, 0);
 
+    /// Window 7's surface is 70, by serial 1; window 8's is 80, by serial 2.
+    const WINDOW: u32 = 7;
+    const SURFACE: u32 = 70;
+    const OTHER_WINDOW: u32 = 8;
+    const OTHER_SURFACE: u32 = 80;
+
+    /// Checks that `pairing` pairs exactly `pairs`, both ways.
+    #[track_caller]
+    fn assert_paired(pairing: &Pairing<u32>, pairs: &[(u32, u32)]) {
+        for window in [WINDOW, OTHER_WINDOW] {
+            let expected = pairs.iter().find(|(w, _)| *w == window).map(|(_, s)| s);
+            assert_eq!(pairing.surface(window), expected, "window {window}");
+        }
+        for surface in [SURFACE, OTHER_SURFACE] {
+            let expected = pairs.iter().find(|(_, s)| *s == surface).map(|(w, _)| *w);
+            assert_eq!(pairing.window(&surface), expected, "surface {surface}");
+        }
+    }
+
+    /// Checks that `pairing` holds nothing more: no window, no surface waiting.
+    #[track_caller]
+    fn assert_empty(pairing: &Pairing<u32>) {
+        assert!(
+            pairing.surfaces.is_empty()
+                && pairing.windows.is_empty()
+                && pairing.waiting.is_empty()
+                && pairing.serials.is_empty()
+                && pairing.serial_of.is_empty(),
+            "{pairing:?}"
+        );
+    }
+
+    #[test]
+    fn a_windows_serial_before_its_surfaces_commit_waits_for_it() {
+        let mut pairing = Pairing::default();
+        assert_eq!(pairing.window_serial(WINDOW, 1), None);
+        assert_paired(&pairing, &[]);
+        assert_eq!(
+            pairing.surface_serial(OTHER_SURFACE, 2),
+            None,
+            "not its serial"
+        );
+        assert_eq!(pairing.surface_serial(SURFACE, 1), Some(WINDOW));
+        assert_paired(&pairing, &[(WINDOW, SURFACE)]);
+        assert!(pairing.serials.is_empty() && pairing.serial_of.is_empty());
+    }
+
+    #[test]
+    fn a_surfaces_commit_before_its_windows_serial_waits_for_it() {
+        let mut pairing = Pairing::default();
+        assert_eq!(pairing.surface_serial(SURFACE, 1), None);
+        assert_paired(&pairing, &[]);
+        assert_eq!(
+            pairing.window_serial(OTHER_WINDOW, 2),
+            None,
+            "not its serial"
+        );
+        assert_eq!(pairing.window_serial(WINDOW, 1), Some(SURFACE));
+        assert_paired(&pairing, &[(WINDOW, SURFACE)]);
+        assert!(pairing.waiting.is_empty());
+        // The other window's surface comes later: it pairs too.
+        assert_eq!(pairing.surface_serial(OTHER_SURFACE, 2), Some(OTHER_WINDOW));
+        assert_paired(
+            &pairing,
+            &[(WINDOW, SURFACE), (OTHER_WINDOW, OTHER_SURFACE)],
+        );
+    }
+
+    #[test]
+    fn a_second_serial_before_the_commit_takes_the_firsts_place() {
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.window_serial(WINDOW, 2);
+        assert_eq!(pairing.serials.len(), 1, "the first serial is forgotten");
+        // The first serial's surface never pairs; the second's does.
+        assert_eq!(pairing.surface_serial(SURFACE, 1), None);
+        assert_eq!(pairing.surface_serial(OTHER_SURFACE, 2), Some(WINDOW));
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+        // The first's surface waits until it is destroyed, and unpairs nothing then.
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+        assert!(pairing.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_window_destroyed_first_leaves_nothing() {
+        // Destroyed while its serial waits: its surface, committing the serial later, waits for
+        // no window, until it is destroyed.
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.window_destroyed(WINDOW);
+        assert_eq!(pairing.surface_serial(SURFACE, 1), None);
+        assert_paired(&pairing, &[]);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_empty(&pairing);
+
+        // Destroyed once paired: its surface, destroyed later, unpairs nothing.
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.surface_serial(SURFACE, 1);
+        pairing.window_destroyed(WINDOW);
+        assert_paired(&pairing, &[]);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_empty(&pairing);
+
+        // Destroyed while its surface waits, before its serial came: the surface waits on.
+        let mut pairing = Pairing::default();
+        pairing.surface_serial(SURFACE, 1);
+        pairing.window_destroyed(WINDOW);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_empty(&pairing);
+    }
+
+    #[test]
+    fn a_surface_destroyed_first_unpairs_its_window() {
+        // Destroyed while it waits: its window's serial, coming later, finds no surface.
+        let mut pairing = Pairing::default();
+        pairing.surface_serial(SURFACE, 1);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_eq!(pairing.window_serial(WINDOW, 1), None);
+        assert_paired(&pairing, &[]);
+        pairing.window_destroyed(WINDOW);
+        assert_empty(&pairing);
+
+        // Destroyed once paired: its window is unpaired, and said.
+        let mut pairing = Pairing::default();
+        pairing.surface_serial(SURFACE, 1);
+        pairing.window_serial(WINDOW, 1);
+        pairing.window_serial(OTHER_WINDOW, 2);
+        pairing.surface_serial(OTHER_SURFACE, 2);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), Some(WINDOW));
+        assert_paired(&pairing, &[(OTHER_WINDOW, OTHER_SURFACE)]);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None, "once");
+    }
+
+    #[test]
+    fn a_window_mapped_again_pairs_with_its_new_surface() {
+        // Its new serial and surface come while the old surface lives; the old one, destroyed
+        // after, unpairs nothing.
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.surface_serial(SURFACE, 1);
+        assert_eq!(pairing.window_serial(WINDOW, 2), None);
+        assert_paired(&pairing, &[(WINDOW, SURFACE)]);
+        assert_eq!(pairing.surface_serial(OTHER_SURFACE, 2), Some(WINDOW));
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+
+        // The new surface commits first.
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.surface_serial(SURFACE, 1);
+        assert_eq!(pairing.surface_serial(OTHER_SURFACE, 2), None);
+        assert_eq!(pairing.window_serial(WINDOW, 2), Some(OTHER_SURFACE));
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), None);
+
+        // The old surface destroyed before the new one pairs: the window is unpaired between.
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.surface_serial(SURFACE, 1);
+        assert_eq!(pairing.surface_destroyed(&SURFACE), Some(WINDOW));
+        assert_paired(&pairing, &[]);
+        pairing.window_serial(WINDOW, 2);
+        assert_eq!(pairing.surface_serial(OTHER_SURFACE, 2), Some(WINDOW));
+        assert_paired(&pairing, &[(WINDOW, OTHER_SURFACE)]);
+        pairing.window_destroyed(WINDOW);
+        pairing.surface_destroyed(&OTHER_SURFACE);
+        assert_empty(&pairing);
+    }
+
+    /// Xwayland gives each serial once; the manager drops a forged `WL_SURFACE_SERIAL`. A serial
+    /// named for two windows all the same goes to the last, and the first waits no more.
+    #[test]
+    fn a_serial_named_for_two_windows_goes_to_the_last() {
+        let mut pairing = Pairing::default();
+        pairing.window_serial(WINDOW, 1);
+        pairing.window_serial(OTHER_WINDOW, 1);
+        assert_eq!(pairing.surface_serial(SURFACE, 1), Some(OTHER_WINDOW));
+        assert_paired(&pairing, &[(OTHER_WINDOW, SURFACE)]);
+        pairing.window_destroyed(WINDOW);
+        pairing.window_destroyed(OTHER_WINDOW);
+        pairing.surface_destroyed(&SURFACE);
+        assert_empty(&pairing);
+    }
+
     #[test]
     fn an_x11_rectangle_is_the_place_times_s_its_size_rounded() {
         // A tile of 1256 × 1408 at (16, 16), at S = 1.5: 1884 × 2112 at (24, 24).
@@ -1499,7 +1800,7 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, NO_EXTENTS, 1.5),
+            logical_limits(hints, NO_EXTENTS, 1.5, None),
             (Size { w: 200.0, h: 100.0 }, Size { w: 600.0, h: 300.0 })
         );
         // The frame extents are no part of the window the layout sizes.
@@ -1514,7 +1815,7 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, extents, 1.0).0,
+            logical_limits(hints, extents, 1.0, None).0,
             Size { w: 100.0, h: 100.0 }
         );
         // A maximum below the minimum is dropped; none is 0.
@@ -1524,12 +1825,88 @@ mod tests {
             ..SizeHints::default()
         };
         assert_eq!(
-            logical_limits(hints, NO_EXTENTS, 1.0),
+            logical_limits(hints, NO_EXTENTS, 1.0, None),
             (Size { w: 300.0, h: 300.0 }, Size { w: 0.0, h: 600.0 })
         );
         assert_eq!(
-            logical_limits(SizeHints::default(), NO_EXTENTS, 1.5),
+            logical_limits(SizeHints::default(), NO_EXTENTS, 1.5, None),
             (Size::default(), Size::default())
+        );
+    }
+
+    /// A minimum beyond the seat's largest output, X11's 32,767 pixels at most, is bounded by that
+    /// output's X11 size on each axis, frame extents included: at S = 1.5, an output of 1920 ×
+    /// 1080 units is 2880 × 1620 X11 pixels, 1920 × 1080 units again. A minimum within it, a
+    /// maximum, and a seat without an output keep the hints.
+    #[test]
+    fn a_minimum_size_is_bounded_by_the_seats_largest_output() {
+        let largest = Some((2880, 1620));
+        let huge = SizeHints {
+            min: Some((32_767, 32_767)),
+            max: Some((32_767, 32_767)),
+            ..SizeHints::default()
+        };
+        let (min, max) = logical_limits(huge, NO_EXTENTS, 1.5, largest);
+        assert_eq!(
+            min,
+            Size {
+                w: 1920.0,
+                h: 1080.0
+            }
+        );
+        // The maximum is no part of it: 32,767 / 1.5 up.
+        assert_eq!(
+            max,
+            Size {
+                w: 21_845.0,
+                h: 21_845.0
+            }
+        );
+        // Bounded on one axis alone, its whole X11 window with its shadow.
+        let extents = FrameExtents {
+            left: 30,
+            right: 30,
+            top: 20,
+            bottom: 40,
+        };
+        let tall = SizeHints {
+            min: Some((640, 5000)),
+            ..SizeHints::default()
+        };
+        assert_eq!(
+            logical_limits(tall, extents, 1.0, largest).0,
+            Size {
+                w: 580.0,
+                h: 1560.0
+            }
+        );
+        // At the bound exactly, and within it: as asked.
+        let at = SizeHints {
+            min: Some((2880, 1620)),
+            ..SizeHints::default()
+        };
+        assert_eq!(
+            logical_limits(at, NO_EXTENTS, 1.5, largest).0,
+            Size {
+                w: 1920.0,
+                h: 1080.0
+            }
+        );
+        let small = SizeHints {
+            min: Some((301, 151)),
+            ..SizeHints::default()
+        };
+        assert_eq!(
+            logical_limits(small, NO_EXTENTS, 1.5, largest).0,
+            Size { w: 200.0, h: 100.0 }
+        );
+        // A seat without an output: the hints as they are, 32,767 / 1.5 down.
+        assert_eq!(
+            logical_limits(huge, NO_EXTENTS, 1.5, None).0,
+            Size {
+                w: 21_844.0,
+                h: 21_844.0
+            }
         );
     }
 

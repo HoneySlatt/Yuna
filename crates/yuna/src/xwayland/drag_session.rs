@@ -20,10 +20,12 @@
 //! the pointer's last motion goes again: the source may have looked for its target for that
 //! motion before, and would look no more until the next. A release that reaches the source
 //! before it looked again is not covered: the source decides on the target it found. The proxy
-//! stays at the release, if the source entered it: the source may still read the window under
-//! the pointer for a motion that came before its release, and would leave a proxy gone. Once
-//! the pointer comes over an X11 window, after the release too, it is hidden, so that it never
-//! takes an X11 window's pointer. A Wayland target is entered only once the source's
+//! stays at the release, whether the source entered it or not: the source may still read the
+//! window under the pointer for a motion that came before its release, in the same round too,
+//! and would leave a proxy gone, or find the X11 window under it, hidden or covered. It hides at
+//! the source's drop or leave, when the drag ends, at [`X11_DROP_TIMEOUT`], and once the pointer
+//! comes over an X11 window, after the release too, so that it never takes an X11 window's
+//! pointer. A Wayland target is entered only once the source's
 //! `XdndEnter` and first position reached the proxy, its types and action known, and left at its
 //! `XdndLeave`; the manager tells no `XdndEnter` again with the same types. Nothing happens at
 //! the release: the source decides. Its `XdndDrop` drops on the Wayland target if the target
@@ -628,21 +630,19 @@ impl<T: Clone + PartialEq> SeatDrags<T> {
 
     /// The pointer holds no button any more, at `now` on Yuna's clock: an X11 program's drag
     /// waits for its source's drop or leave. Nothing else happens: the source decides, and finds
-    /// the proxy where it was, if it entered it; a source that never did hides it. A Wayland
+    /// the proxy where it was, whether it entered it already or not. A source that has not may
+    /// still look for its target for the pointer's last motion, which came in the release's own
+    /// round when an agent moves and releases in one call: the proxy gone, it would find the X11
+    /// window under the pointer, hidden or covered by the Wayland window shown there. A Wayland
     /// client's drag follows Smithay's grab instead.
-    pub(crate) fn released(&mut self, now: Duration) -> Vec<Effect<T>> {
-        let mut effects = Vec::new();
+    pub(crate) fn released(&mut self, now: Duration) {
         for session in &mut self.sessions {
             if let Session::FromX11(session) = session
                 && session.stage == X11Stage::Dragging
             {
                 session.stage = X11Stage::Released { at: now };
-                if !session.entered {
-                    session.show_proxy(false, &mut effects);
-                }
             }
         }
-        effects
     }
 
     /// The source of X11 drag `drag` of `server` entered the proxy: its types are known, and the
@@ -1145,9 +1145,11 @@ mod tests {
         assert_eq!(crossing, 40, "each return over Wayland is offered");
     }
 
-    /// The proxy after the release: kept for a source that entered it, until the pointer comes
-    /// over an X11 window; hidden at once for a source that never entered it, which will send it
-    /// nothing. It never takes an X11 window's pointer.
+    /// The proxy after the release: kept, for a source that entered it and for one that has not
+    /// yet, which may still look for its target for the pointer's last motion, made in the
+    /// release's own round; until the pointer comes over an X11 window, or the drag ends, at the
+    /// source's leave or drop or at [`X11_DROP_TIMEOUT`], when the manager hides it with the drag
+    /// it forgets. It never takes an X11 window's pointer.
     #[test]
     fn the_proxy_hides_after_the_release_when_it_no_longer_serves() {
         let hidden = Effect::ShowProxy {
@@ -1155,20 +1157,52 @@ mod tests {
             drag: 1,
             shown: false,
         };
+        let forgotten = [
+            Effect::Forget {
+                server: SERVER,
+                drag: 1,
+            },
+            Effect::Ended(x11_key(1)),
+        ];
         let mut drags = x11_drag_entered();
         drags.moved(Pick::Nothing);
-        assert!(
-            drags.released(Duration::ZERO).is_empty(),
-            "kept for the source"
-        );
-        assert!(drags.follows_motion());
+        drags.released(Duration::ZERO);
+        assert!(drags.follows_motion(), "kept for the source");
         assert_eq!(drags.moved(over_x11(6)).1, std::slice::from_ref(&hidden));
         assert!(!drags.follows_motion());
 
-        let mut never_entered = SeatDrags::<u32>::default();
-        never_entered.x11_offered(SERVER, 1, CLIENT, PRESSED, over_x11(5));
-        never_entered.moved(Pick::Nothing);
-        assert_eq!(never_entered.released(Duration::ZERO), [hidden]);
+        // Moved over a Wayland window and released in one round, before the source entered.
+        let not_entered_yet = || {
+            let mut drags = SeatDrags::<u32>::default();
+            drags.x11_offered(SERVER, 1, CLIENT, PRESSED, over_x11(5));
+            drags.moved(Pick::Wayland(30));
+            drags.released(SECOND);
+            assert!(drags.follows_motion(), "kept for a source yet to look");
+            drags
+        };
+        let mut drags = not_entered_yet();
+        assert!(drags.moved(Pick::Wayland(31)).1.is_empty(), "still kept");
+        assert_eq!(drags.moved(over_x11(6)).1, std::slice::from_ref(&hidden));
+        // The source's leave ends the drag, and the manager hides the proxy with it.
+        assert_eq!(not_entered_yet().x11_left(SERVER, 1), forgotten);
+        // So does the time limit.
+        let mut drags = not_entered_yet();
+        assert_eq!(drags.next_deadline(), Some(SECOND + X11_DROP_TIMEOUT));
+        assert_eq!(drags.timed_out(SECOND + X11_DROP_TIMEOUT), forgotten);
+        // Its drop, with no Wayland target entered, is refused, the proxy hidden.
+        assert_eq!(
+            not_entered_yet().x11_dropped(SERVER, 1, true),
+            [
+                hidden,
+                Effect::Finish {
+                    server: SERVER,
+                    drag: 1,
+                    accepted: false,
+                    action: DragAction::None
+                },
+                Effect::Ended(x11_key(1))
+            ]
+        );
     }
 
     /// R4: a Wayland target is entered only once the source's `XdndEnter` reached the proxy,
@@ -1263,15 +1297,17 @@ mod tests {
         );
     }
 
-    /// R7: nothing happens at the release but the proxy hiding; `XdndDrop` drops on a target
+    /// R7: nothing happens at the release, which gives no effect; `XdndDrop` drops on a target
     /// that accepted, and its `finish` is the source's `XdndFinished`.
     #[test]
     fn nothing_happens_at_the_release_and_the_drop_waits_for_xdnd_drop() {
         let mut drags = x11_drag_entered();
         drags.moved(Pick::Wayland(30));
+        // No drop, no leave: `released` returns nothing to carry out.
+        drags.released(SECOND);
         assert!(
-            drags.released(SECOND).is_empty(),
-            "no drop, no leave, the proxy kept for a motion the source has yet to read"
+            drags.follows_motion(),
+            "the proxy kept for a motion the source has yet to read"
         );
         assert!(drags.moved(Pick::Wayland(31)).1.is_empty(), "released");
         assert_eq!(

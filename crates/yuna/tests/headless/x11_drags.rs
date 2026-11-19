@@ -1290,11 +1290,12 @@ fn an_x11_drag_across_a_wayland_window_drops_on_another_x11_window() {
     );
 }
 
-/// How many times the next story renames the source's window, keeping Yuna's window manager
-/// busy reading titles for a while, as a program that updates its title fast would: the source
-/// then looks for its target before the proxy is hidden. On a machine where the manager keeps up
-/// anyway, the story would pass without Yuna's repeated motion too, and guard nothing there.
-const RENAMES: usize = 2_000;
+/// How many times a story renames a window, keeping Yuna's window manager busy reading titles for
+/// a while, as a program that updates its title fast would. In the next story, the source then
+/// looks for its target before the proxy is hidden; on a machine where the manager keeps up
+/// anyway, that story would pass without Yuna's repeated motion too, and guard nothing there.
+/// `x11_pairing.rs` holds a window's serial back the same way.
+pub(crate) const RENAMES: usize = 2_000;
 
 /// An X11 program's drag held over a Wayland window moves in one motion onto another X11
 /// program's window, while Yuna's window manager is still busy with a few thousand renames of the
@@ -2723,4 +2724,71 @@ fn the_seat_removed_during_an_x11_drag_over_wayland_leaves_yuna_sound() {
     wayland_accepts(&mut drag, entered, TEXT, DndAction::Copy);
     move_until_accepted(&mut drag, &source, onto);
     seat_removed_mid_drag(drag);
+}
+
+/// Moves the seat's pointer to `spot` and releases its button in the same round of Yuna's loop,
+/// as MCP's `release` given x and y does, or a hand that lets go as it arrives.
+fn move_and_release_at_once(drag: &mut DragSeat, (output, x, y): Spot) {
+    let seat = drag.seat.seat;
+    drag.seat
+        .compositor
+        .pointer_move(seat, Some(output), x, y)
+        .expect("the pointer moves");
+    drag.seat
+        .compositor
+        .pointer_button(seat, BUTTON_LEFT, false)
+        .expect("released");
+    drag.round();
+}
+
+/// An X11 program's drag moved from its window onto a Wayland window in one motion and released
+/// in the same round, the manager idle. Under the Wayland window, in X11's stacking, lies an X11
+/// window of another workspace, hidden and aware of XDND: Yuna keeps a hidden window mapped at
+/// its X11 place. The proxy Yuna shows for the motion stays at the release, since the source
+/// has not looked for its target yet: the source finds the proxy, never the hidden window.
+#[test]
+fn an_x11_drag_released_onto_a_wayland_window_never_drops_into_a_hidden_window_idle() {
+    let mut drag = DragSeat::new("dnd-hidden-idle");
+    let seat = drag.seat.seat;
+    let (hidden_client, hidden_window, hidden_id) = drag.open_x11("hidden-target");
+    let atoms = xdnd_atoms(&hidden_client).expect("the XDND atoms");
+    let hidden = XdndTarget::start(
+        &mut drag.seat.compositor,
+        hidden_client,
+        hidden_window,
+        TargetSpec::copying(&atoms, atoms.UTF8_STRING),
+    );
+    drag.seat
+        .compositor
+        .change_layout(|layout| layout.move_to_workspace(seat, "two"))
+        .expect("its own workspace");
+    drag.seat
+        .compositor
+        .change_layout(|layout| layout.focus_workspace(seat, "one"))
+        .expect("the first workspace again");
+    drag.until("the X11 window is hidden", |drag| {
+        drag.seat
+            .compositor
+            .windows()
+            .into_iter()
+            .find(|window| window.id == hidden_id && window.output.is_none())
+    });
+    let (wayland, _) = drag.open_wayland();
+    let (client, window, from) = drag.open_x11("source");
+    let spec = SourceSpec::offering(
+        vec![(atoms.UTF8_STRING, b"meant for the Wayland window".to_vec())],
+        atoms.XdndActionCopy,
+    );
+    let source = XdndSource::start(&mut drag.seat.compositor, client, window, spec);
+    press_on_source(&mut drag, &source, from);
+    let spot = drag.point_in(wayland, (0.5, 0.5));
+    move_and_release_at_once(&mut drag, spot);
+    drag.settle(DRAG_TIME_LIMIT + MARGIN);
+    let got = hidden.got();
+    let reads = hidden.reads();
+    println!("the hidden X11 window got {got:#?}\nand read {reads:?}");
+    assert!(
+        !got.iter().any(is_drop) && reads.is_empty(),
+        "a hidden X11 window got the drop meant for the Wayland window over it"
+    );
 }

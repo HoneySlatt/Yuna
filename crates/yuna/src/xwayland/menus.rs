@@ -25,7 +25,7 @@ use x11rb::protocol::xproto::Window;
 use yuna_layout::{OutputId, WindowId};
 
 use super::properties::X11Rect;
-use super::windows::{X11Windows, x11_origin};
+use super::windows::{X11Server, X11Windows, x11_origin};
 use crate::output::VirtualOutput;
 use crate::render;
 use crate::shell::has_buffer;
@@ -37,6 +37,14 @@ use crate::state::State;
 /// walk the shown ones at each refresh and event. One past it is not shown until another goes,
 /// logged once per X11 client.
 pub const MAX_MENUS_PER_CLIENT: usize = 64;
+
+/// The most override-redirect windows one Xwayland may have shown at once, all its X11 clients
+/// together. An X11 client is a connection, and one program may open many, each with its own
+/// [`MAX_MENUS_PER_CLIENT`]: up to Xwayland's limit of clients, thousands of menus that the frame
+/// loop and the pointer would walk at each refresh and event. Four clients at their own cap, far
+/// more than the handful a seat's programs show at once. One past it is not shown until another
+/// goes, as one past a client's cap, logged once per Xwayland.
+pub(crate) const MAX_MENUS_PER_XWAYLAND: usize = 256;
 
 /// Where an override-redirect window shown is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,10 +108,37 @@ pub struct DrawnX11Menu {
     pub rect: (i32, i32, i32, i32),
 }
 
+impl X11Server {
+    /// Whether a new menu of `client` waits, its client or this Xwayland showing their most
+    /// already: said once per X11 client, and once per Xwayland.
+    fn refuses_menu_of(&mut self, client: u32) -> bool {
+        let of_client = self.menus_shown_of.get(&client).copied().unwrap_or(0);
+        if of_client >= MAX_MENUS_PER_CLIENT {
+            if self.menu_refusals_said.insert(client) {
+                tracing::warn!(
+                    cap = MAX_MENUS_PER_CLIENT,
+                    "an X11 menu is not shown: its client has its most; said once per client"
+                );
+            }
+            return true;
+        }
+        if self.shown_menus.len() >= MAX_MENUS_PER_XWAYLAND {
+            if !std::mem::replace(&mut self.menu_bound_said, true) {
+                tracing::warn!(
+                    bound = MAX_MENUS_PER_XWAYLAND,
+                    "an X11 menu is not shown: its Xwayland shows its most; said once per Xwayland"
+                );
+            }
+            return true;
+        }
+        false
+    }
+}
+
 impl X11Windows {
     /// Checks, for tests, that what the hot paths read of each Xwayland's menus agrees with its
-    /// windows: the shown menus, in X11's stacking order; their count per client; the menus
-    /// drawn with each window. Says which rule is broken.
+    /// windows: the shown menus, in X11's stacking order, within [`MAX_MENUS_PER_XWAYLAND`];
+    /// their count per client; the menus drawn with each window. Says which rule is broken.
     pub(crate) fn check_menus(&self) -> Result<(), String> {
         for record in self.servers.values() {
             let menu_of = |window: &Window| record.windows.get(window).and_then(|w| w.menu);
@@ -127,6 +162,12 @@ impl X11Windows {
             if all_shown != shown.len() {
                 return Err(format!(
                     "{all_shown} menus are shown, {} of them mapped",
+                    shown.len()
+                ));
+            }
+            if shown.len() > MAX_MENUS_PER_XWAYLAND {
+                return Err(format!(
+                    "{} menus are shown, past the bound of {MAX_MENUS_PER_XWAYLAND}",
                     shown.len()
                 ));
             }
@@ -180,8 +221,9 @@ fn holds(rect: X11Rect, (x, y): (i32, i32)) -> bool {
 impl State {
     /// Shows or hides `window` as an override-redirect window, as it is now: shown while it is
     /// mapped, override-redirect, and paired with a surface that has a buffer, unless its client
-    /// has [`MAX_MENUS_PER_CLIENT`] shown already. Shown, it is placed (`x11_menu_place`); a
-    /// change is drawn at its seat's outputs' next refresh.
+    /// has [`MAX_MENUS_PER_CLIENT`] shown already, or its Xwayland [`MAX_MENUS_PER_XWAYLAND`].
+    /// Shown, it is placed (`x11_menu_place`); a change is drawn at its seat's outputs' next
+    /// refresh.
     pub(super) fn x11_update_menu(&mut self, server: u64, window: Window) {
         let Some(record) = self.x11.servers.get(&server) else {
             return;
@@ -191,24 +233,19 @@ impl State {
         };
         let showable = x11_window.mapped
             && x11_window.override_redirect
-            && x11_window
-                .surface
-                .as_ref()
+            && record
+                .pairing
+                .surface(window)
                 .is_some_and(|surface| surface.is_alive() && has_buffer(surface));
         let client = x11_window.client;
         match (showable, x11_window.menu.is_some()) {
             (true, false) => {
-                let shown = record.menus_shown_of.get(&client).copied().unwrap_or(0);
-                if shown >= MAX_MENUS_PER_CLIENT {
-                    if let Some(record) = self.x11.servers.get_mut(&server)
-                        && record.menu_refusals_said.insert(client)
-                    {
-                        tracing::warn!(
-                            cap = MAX_MENUS_PER_CLIENT,
-                            "an X11 menu is not shown: its client has its most; said once per \
-                             client"
-                        );
-                    }
+                if self
+                    .x11
+                    .servers
+                    .get_mut(&server)
+                    .is_some_and(|record| record.refuses_menu_of(client))
+                {
                     return;
                 }
                 let place = self.x11_menu_place(server, window);
@@ -446,7 +483,9 @@ impl State {
                 let Some(x11_window) = record.windows.get(&window) else {
                     continue;
                 };
-                let (Some(place), Some(surface)) = (x11_window.menu, &x11_window.surface) else {
+                let (Some(place), Some(surface)) =
+                    (x11_window.menu, record.pairing.surface(window))
+                else {
                     continue;
                 };
                 match place {
@@ -505,11 +544,13 @@ impl State {
             .shown_menus
             .iter()
             .rev()
-            .filter_map(|menu| record.windows.get(menu))
-            .filter(|menu| {
-                matches!(menu.menu, Some(MenuPlace::With { parent, .. }) if parent == x11.window)
+            .filter(|&&menu| {
+                record.windows.get(&menu).is_some_and(|x11_window| {
+                    matches!(x11_window.menu, Some(MenuPlace::With { parent, .. })
+                        if parent == x11.window)
+                })
             })
-            .filter_map(|menu| menu.surface.clone())
+            .filter_map(|&menu| record.pairing.surface(menu).cloned())
             .collect()
     }
 
@@ -591,7 +632,7 @@ impl State {
                     continue;
                 };
                 let (Some(MenuPlace::Alone), Some(surface)) =
-                    (x11_window.menu, &x11_window.surface)
+                    (x11_window.menu, record.pairing.surface(window))
                 else {
                     continue;
                 };

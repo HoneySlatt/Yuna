@@ -45,6 +45,7 @@ mod x11_crash;
 mod x11_drags;
 mod x11_menus;
 mod x11_misbehaving;
+mod x11_pairing;
 mod x11_selections;
 mod x11_windows;
 mod xdnd_client;
