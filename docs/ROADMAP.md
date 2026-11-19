@@ -84,7 +84,7 @@ until it is met.
 | Budget | Figure | Measured by |
 |---|---|---|
 | At rest | 0 frames, 0 own wake-ups a second, 0 % of a core | every thread's context switches over 10 s, headless and on the desktop |
-| Motion | no missed frame at 240 Hz while scrolling, animating or switching workspaces | presentation feedback over scripted gestures, headless and on the owner's monitor |
+| Motion | at 3840 × 2160, 240 Hz and scale 1.5, scrolling, moving columns, switching workspaces and fading the special workspace miss no more frames than the same output redrawn whole without motion, over 10,000 frames or more ([ADR-0127](adr/0127-motions-budget-no-frame-lost-to-motion.md)) | `examples/motion_time.rs`, headless on the GPU, its still baseline measured in the same run; on a real display, the owner's tour at Stage 2's exit, how it judges its misses still open (ADR-0127) |
 | Input to present | at a fixed rate, no commit presented after the first boundary it could reach, and end to end at the 99th percentile against gamescope and KWin; under VRR or tearing, one frame, 4.17 ms on the high tier ([ADR-0076](adr/0076-input-to-present-read-by-mode.md)) | input given through the compositor, presentation feedback and the frame log read |
 | A frame's cost | in a fullscreen game, CPU and GPU time a frame at most the best peer's at equal work, the same day: 198 µs and 203 µs on the high tier, Umbriel's on 2026-11-16 ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)) | the kernel's DRM usage statistics and each thread's CPU time; the renderer's timers for each effect from Stage 6 ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)) |
 | Power | below dwl's and mango's, at rest and in motion, on the high tier and the laptop | the GPU's sensor on the desktop; the battery on the laptop |
@@ -131,8 +131,11 @@ audit.
 
 ### Without a figure
 
-- Games recognised and served first: VRR in a high band, tearing on request, direct scanout,
-  effects off.
+- Games recognised and served first: VRR in a high band, tearing on request, direct scanout.
+  Effects stay on in games by default, settings choosing what a game turns off
+  ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)); Yuna
+  announces what is fullscreen, and the shell decides what follows
+  ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - Films at a constant rate, an exact multiple of their own.
 - A configuration error never stops Yuna.
 - Reduced motion and reduced transparency honoured by each animation and each effect; the rest of

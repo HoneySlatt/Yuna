@@ -1,8 +1,11 @@
 //! `xdg-shell` and `xdg-decoration` in front of the layout model
 //! ([ADR-0024](../../../docs/adr/0024-no-title-bars.md),
-//! [ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)), and the record of windows
+//! [ADR-0111](../../../docs/adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)), and the record of windows
 //! both shells share, [`Toplevel`]: an `xdg_toplevel`, or an X11 window paired with its
 //! Xwayland surface (`xwayland/windows.rs`).
+//!
+//! Every configure tells a window it is tiled on all four edges. Its decorations are on the
+//! server's side, whatever mode its client asks, and Yuna draws none: no title bars.
 //!
 //! A toplevel's life: its initial commit gets a first configure with the size
 //! [`Layout::size_on_open`](yuna_layout::Layout::size_on_open) foretells; its first buffer opens
@@ -59,7 +62,7 @@ pub const MAX_WINDOWS_PER_CLIENT: usize = 1_000;
 
 /// The most windows the layout holds, all clients together: the layout's operations and Yuna's
 /// frame loop walk every window, linearly, at each commit and refresh, and each window holds
-/// memory (ADR-0028). A window over the cap is treated as one over its client's cap.
+/// memory (ADR-0131). A window over the cap is treated as one over its client's cap.
 pub const MAX_WINDOWS: usize = 10_000;
 
 /// What Yuna keeps of a window, whichever shell its client speaks: one record for the layout,

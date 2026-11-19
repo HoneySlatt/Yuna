@@ -1,15 +1,16 @@
-//! Seats ([ADR-0015](../../../docs/adr/0015-agents-workspaces.md),
-//! [ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
-//! [ADR-0095](../../../docs/adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)): the owner's, and one for
-//! each agent.
+//! Seats ([ADR-0116](../../../docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+//! [ADR-0117](../../../docs/adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md)):
+//! the owner's, and one for each agent.
 //!
 //! Each seat is a Smithay [`Seat`] with a keyboard, and, for an agent's, a pointer. Each has its own
-//! keyboard focus, popup grab, selections and cursor. Every client belongs to one seat: the seat
+//! keyboard focus, popup grab, selections and cursor. Seats isolate focus and input, not
+//! processes: any program of the user may reach any seat's socket, X display or accessibility
+//! bus; seats are no security boundary between agents. Every client belongs to one seat: the seat
 //! whose socket it connected through, recorded in its [`ClientState`]. Its windows open on that
 //! seat's workspaces, and only that seat's input reaches them (`input.rs`). The owner's seat
 //! exists from the start, with or without a `wl_seat` global; in `yuna mcp` it has none, so that
 //! a client sees no other seat's `wl_seat`, nor its outputs' `wl_output`s
-//! ([ADR-0042](../../../docs/adr/0042-main-on-smithays-fork.md)): Yuna's fork of Smithay shows
+//! ([ADR-0112](../../../docs/adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)): Yuna's fork of Smithay shows
 //! those globals only to the clients [`belongs_to`] accepts. Every focus of a seat is on its own
 //! clients' surfaces as well, so that a client that held another seat's global would get nothing.
 //!

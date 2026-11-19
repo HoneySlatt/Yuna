@@ -1,10 +1,12 @@
 //! Yuna's clock: the time the frame loop reads, and the deadlines it waits for
-//! ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md)).
+//! ([ADR-0118](../../../docs/adr/0118-frames-presentation-times-and-the-clock.md)).
 //!
 //! Every timer of the frame loop is a deadline the clock holds. In real mode, time is
 //! `CLOCK_MONOTONIC` and the compositor arms one calloop timer at the earliest deadline. In manual
-//! mode, for tests, time moves only when [`Compositor::advance`](crate::Compositor::advance) moves
-//! it, and every deadline it passes runs, in order. Either way, nothing is armed at rest.
+//! mode, for tests and for `yuna mcp --manual-clock`, time starts at the real monotonic time and
+//! moves only when [`Compositor::advance`](crate::Compositor::advance) moves it, a test's call or
+//! MCP's `clock` tool, which never moves it past real time; every deadline it passes runs, at its
+//! own time, in order. Either way, nothing is armed at rest.
 
 use std::time::Duration;
 
@@ -16,7 +18,8 @@ use yuna_layout::OutputId;
 pub enum ClockMode {
     /// `CLOCK_MONOTONIC`: deadlines fire on their own.
     Real,
-    /// Time starts at the real monotonic time and moves only when a test advances it.
+    /// Time starts at the real monotonic time and moves only when a test, or an agent through
+    /// MCP's `clock` tool, advances it.
     Manual,
 }
 
@@ -44,8 +47,8 @@ pub struct Clock {
     system: SystemClock<Monotonic>,
     /// Manual mode's time; unused in real mode.
     manual_now: Duration,
-    /// Armed deadlines, in the order they were first armed: two per output and two more at
-    /// most, so a scan costs less than any ordered structure.
+    /// Armed deadlines, in the order they were first armed: two per output and one of each
+    /// other kind at most, so a scan costs less than any ordered structure.
     deadlines: Vec<(Duration, Deadline)>,
 }
 

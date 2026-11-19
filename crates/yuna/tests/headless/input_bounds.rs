@@ -1,5 +1,5 @@
 //! The bounds on what a seat's keyboard and pointer hold at once
-//! ([ADR-0028](../../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)): a virtual
+//! ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)): a virtual
 //! keyboard's press past the keys a seat may hold, or of a key its keymap does not have, and a
 //! virtual pointer's press past the buttons a seat may hold, are dropped, as a device past its
 //! client's cap is; MCP's own presses past them are refused. A `wl_keyboard.enter` lists every

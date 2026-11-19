@@ -17,7 +17,7 @@ nix develop -c <command>    # or run one command in it
 The shell gives:
 
 - the Rust toolchain named in [`rust-toolchain.toml`](rust-toolchain.toml), with clippy, rustfmt,
-  rust-src and rust-analyzer ([ADR-0016](docs/adr/0016-the-rust-toolchain.md));
+  rust-src and rust-analyzer ([ADR-0125](docs/adr/0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md));
 - `cargo deny`, which checks the dependencies against [`deny.toml`](deny.toml);
 - `lychee`, which checks the links between the Markdown files;
 - git, which the link check uses to list the Markdown files;
@@ -31,7 +31,7 @@ The shell gives:
 - what Yuna draws with, loaded at run time: `LD_LIBRARY_PATH` names libglvnd's EGL, and
   `__EGL_VENDOR_LIBRARY_FILENAMES` the shell's own Mesa, so that Yuna and its tests draw on that
   Mesa's llvmpipe, never on the host's drivers
-  ([ADR-0022](docs/adr/0022-the-headless-backend-in-yuna.md));
+  ([ADR-0123](docs/adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md));
 - `XKB_CONFIG_ROOT`, where the keyboard's default keymap comes from;
 - the applications the tests run in Yuna, kept off the shell's own `PATH`: Alacritty, GTK 4's
   `gtk4-demo`, Qt's `qml`, `vkcube`, mpv and Wine, in `YUNA_APPLICATIONS_PATH`, with what the
@@ -48,10 +48,20 @@ work), Umbriel (built from its source at the revision `flake.lock` pins, the fla
 input), Hyprland, Mutter, wlr-randr, weston, ffmpeg, D-Bus, Xwayland, the Mesa they all draw
 with, coreutils and bash. CI never fetches it.
 
-Yuna itself reads two variables: `XDG_RUNTIME_DIR`, the folder its Wayland socket goes in, which
-`yuna --headless` requires; and `YUNA_LOG`, the level of its logs on standard error: `error`,
-`warn`, `info` (the default), `debug` (a line per frame drawn, and per round of the loop with its
-counters) or `trace`.
+`yuna --help` lists the variables Yuna's own code reads, `XDG_RUNTIME_DIR` and `YUNA_LOG` among
+them, and its exit statuses; its contract,
+[`crates/yuna/tests/contracts/help.txt`](crates/yuna/tests/contracts/help.txt), is their one
+home. It leaves out `TMPDIR`, which `yuna mcp` reads as any program does, for its agents'
+throwaway homes; the comment above `HELP` in
+[`crates/yuna/src/main.rs`](crates/yuna/src/main.rs) names what else, and why. At
+`YUNA_LOG=debug`, Yuna logs a line per frame drawn and per round of the loop with its counters;
+the documentation of `main.rs` lists the lines tests and measures read.
+
+The first `nix develop` downloads the toolchain, the shell's Mesa and the tests' applications.
+[`docs/measurements.md`](docs/measurements.md) has only parts of it: the applications add
+1.34 GB unpacked (M1.4, B3), and a cold check took about 13 s at M1.1, before Smithay and the
+applications were in the shell. Neither the whole first download nor a cold check of today's
+tree is measured.
 
 Nix sees only the files git knows: `git add` a new file before `nix develop` reads it. Plain
 `nix develop`, never `nix develop path:.`, which copies the whole folder, `target/` included, into
@@ -86,7 +96,7 @@ It needs no screen of its own. On the owner's machine, agents run it inside `age
 one measure at a time.
 
 Motion's cost is measured with `crates/yuna/examples/motion_time.rs`, as
-[ADR-0056](docs/adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md) asks: it
+[ADR-0127](docs/adr/0127-motions-budget-no-frame-lost-to-motion.md) asks: it
 runs Yuna in its own process with six `vkcube`, and plays a round of scrolls, column moves,
 workspace switches and the special workspace's fade, against a still baseline of as many frames;
 it prints, for each, the frames a second against the output's rate, the frames drawn at once and
@@ -103,9 +113,8 @@ nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
 
 It runs alone among measurements, as `frame_time` does; on the owner's machine, inside
 `agent-headless`, under the agents' lock of exclusive runs. The measures share
-`crates/yuna/examples/common/`; beside its `mod.rs`, each included by the measures that need it,
-the `vkcube` clients of these two are in its `vkcube.rs`, the CPU and GPU time Yuna and its
-clients used in `usage.rs`, and the other programs' load in `load.rs`.
+`crates/yuna/examples/common/`, whose [`mod.rs`](crates/yuna/examples/common/mod.rs) says which
+file each one includes.
 
 XWayland's cost is measured with `crates/yuna/examples/xwayland_time.rs`: an X11 program's wait
 for Xwayland, cold and after an idle exit; Xwayland's memory and Yuna's with one X11 window; and,
@@ -130,7 +139,7 @@ nix develop -c cargo run --release -p yuna --example layout_time
 ```
 
 What agents' Yunas cost is measured with `crates/yuna/examples/instances.rs`
-([ADR-0078](docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)): one `yuna
+([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)): one `yuna
 mcp`'s start to its seat's first frame and its memory at rest; N `yuna mcp` with a seat each
 against one with N seats, up to 10, each seat with Alacritty; and ten held at rest for 5 minutes,
 which must grow nothing. It reads the other programs' load beside each phase, as `xwayland_time`
@@ -143,8 +152,9 @@ nix develop -c target/release/examples/instances --phase start
 
 The rivals are measured with `crates/yuna-bench`
 ([ADR-0075](docs/adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench), where a table gives how each
-compositor runs). It runs sway, KWin, Yuna, dwl, mango, Umbriel, Hyprland and Mutter headless on
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-rivals-bench); a table in
+[`crates/yuna-bench/src/recipes.rs`](crates/yuna-bench/src/recipes.rs) gives how each compositor
+runs). It runs sway, KWin, Yuna, dwl, mango, Umbriel, Hyprland and Mutter headless on
 the GPU's render node, at 3840 × 2160, 240 Hz and scale 1.5, each in a sandbox of its own,
 through the same scenarios, and reads their costs from outside. niri and cosmic-comp cannot run
 headless: they are measured on the owner's tour alone. It needs the bench shell and the user's
@@ -199,15 +209,14 @@ the rates their runs of `game` reached, and how it ranks is in
 
 `yuna mcp` is what an agent's MCP configuration runs: a command speaking MCP on its standard
 input and output, with `--gpu`, one `--output` for each seat's first output, `--manual-clock`
-([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `--animations` or `--reduced-motion`, which
-`yuna --headless` takes too: both show each change at once without them
-([ADR-0055](docs/adr/0055-what-moves-first-and-animations-off-headless.md),
-[ADR-0059](docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). Both take
-`--rest-audit` too: a line at `info` for each second in which something woke Yuna, naming what
-did ([ADR-0062](docs/adr/0062-the-compositors-comfort-and-look.md)). An agent's first call is `seat
-create`; every other tool but `clock` takes the seat's handle, `rest` when it is to name only
-that seat's
-([ADR-0037](docs/adr/0037-seats-tools-input-and-closing.md)). For Claude Code, for example:
+([ADR-0120](docs/adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)), and `--animations` or
+`--reduced-motion`, which `yuna --headless` takes too: both show each change at once without them
+([ADR-0109](docs/adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)). Both
+take `--rest-audit` too: a line at `info` for each second in which something woke Yuna, naming
+what did ([ADR-0096](docs/adr/0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md)).
+An agent's first call is `seat create`; every other tool but `clock` takes the seat's handle,
+`rest` when it is to name only that seat's
+([ADR-0117](docs/adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md)). For Claude Code, for example:
 `claude mcp add --transport stdio yuna -- <path to yuna> mcp`. It stops when its input closes,
 and ends the programs it started then.
 
@@ -230,7 +239,7 @@ tests (`mcp.rs` and `seats.rs` there).
 `yuna --headless --agent-seat`, in about 5 s once `pluto-input` is built, about 10 s, in
 `target/consumers/`; its crates come from crates.io the first time. A consumer's revision is
 raised in a commit of its own: the input's URL in `flake.nix`, then `nix flake lock`, then
-these tests ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md)).
+these tests ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)).
 SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on
 `interface`, given a folder that holds them, as SlimeEngine's weekly job runs them:
 
@@ -248,7 +257,9 @@ slime-cook -- cook examples/assets <folder>/cooked`), and `assets/`, a copy of
 `examples/assets`.
 
 Opium's desktop window runs in an ignored test, `crates/yuna/tests/opium.rs`, given Opium's
-`bin/opium`, as the weekly Opium job runs it ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)): an agent, through `yuna mcp` alone,
+`bin/opium`, as the weekly Opium job runs it
+([ADR-0122](docs/adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)): an agent,
+through `yuna mcp` alone,
 starts Opium on a throwaway profile, in a network namespace of its own, checks its window by
 capture, clicks Songs in it, checks the new page by capture, and Yuna must rest once Opium is
 idle. Opium's Nix package is built at the revision `.github/workflows/opium.yml` pins, from
@@ -301,7 +312,7 @@ only <step>` runs one:
     Opium's jobs.
 
 `scripts/test-check.sh` proves that each step stops what it guards against
-([ADR-0058](docs/adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): it clones the last
+([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)): it clones the last
 commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
 warning, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
 without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
@@ -319,7 +330,7 @@ otherwise.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
 each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
-([ADR-0036](docs/adr/0036-yuna-is-public.md)). A change of Markdown files alone skips it:
+([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)). A change of Markdown files alone skips it:
 [`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`: their
 links, the length of those read at every session, the ADRs' index, the changelog's fragments and
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.
@@ -328,12 +339,13 @@ the tests of the scripts that check them, with lychee, git and python3 alone, in
 changes anything its test builds or reads: it names what it leaves out, and
 `scripts/test_workflows.py` checks that nothing it needs is among them; it builds the examples and cooks their
 data once per pinned revision and keeps the folder in GitHub's cache
-([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md),
-[ADR-0043](docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)). Its
+([ADR-0122](docs/adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)). Its
 times are in [`docs/measurements.md`](docs/measurements.md).
 [`.github/workflows/opium.yml`](.github/workflows/opium.yml) runs Opium's desktop window in Yuna
 every Saturday, on demand, and on a push that changes anything its test builds or reads, its
-path filter checked the same way ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)). It builds Opium's Nix package at the revision it
+path filter checked the same way
+([ADR-0122](docs/adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)). It builds
+Opium's Nix package at the revision it
 pins, uncached, and turns off the AppArmor rule of GitHub's Ubuntu 24.04 that keeps an
 unprivileged user from the network namespace the test runs Opium in. Its times go to
 [`docs/measurements.md`](docs/measurements.md) once it has run on GitHub's runners; none is
@@ -342,24 +354,39 @@ recorded yet.
 ## Dependencies
 
 A new dependency is asked of the owner first, with its reason, an alternative weighed and its
-licence. The owner accepted proptest, for the layout model's tests, on 2026-11-11, and, for
-the HDR prototype's branch only (M1.3, deleted since), the same day, Smithay's `backend_drm`, `backend_gbm`,
-`backend_egl`, `renderer_gl`, `backend_session_libseat` and `backend_libinput` features with the
-system libraries they link. Proptest serves the compositor's tests too since 2026-11-12
-([ADR-0025](docs/adr/0025-applications-in-ci.md)). For the headless compositor (M1.4), the owner accepted on 2026-11-12
-Smithay's `wayland_frontend`, `desktop` and `renderer_gl` features; `tracing` and
-`tracing-subscriber` with its `fmt` and `std` features alone; `wayland-client` and the client side
-of `wayland-protocols`, for tests only; and, in the shell, Mesa, libglvnd, libxkbcommon,
-xkeyboard-config, a font, and the applications the tests run
-([ADR-0025](docs/adr/0025-applications-in-ci.md)); on 2026-11-12 too, the action
-`actions/cache`, for SlimeEngine's binary. For Opium's test ([ADR-0104](docs/adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)), the owner accepted on
-2026-11-19 util-linux in the shell, for its `unshare`. For the MCP server (M1.5), the owner accepted on
-2026-11-13 `serde`, with its `derive` feature, and `serde_json`
-([ADR-0033](docs/adr/0033-the-mcp-server.md)), and `png` for captures, which C4 adds
-([ADR-0034](docs/adr/0034-captures.md)). Smithay is Yuna's public fork, read over HTTPS and
-pinned to one commit ([ADR-0017](docs/adr/0017-smithays-revision.md),
-[ADR-0045](docs/adr/0045-the-fork-over-https-a-branch-per-base.md)); its patches are listed in
-[`docs/smithay-patches.md`](docs/smithay-patches.md).
+licence. Why each crate is there, and which of its features, is the comment beside it in the
+manifests, the root `Cargo.toml`'s `[workspace.dependencies]` and each crate's own: their one
+home. The owner's decisions:
+
+- 2026-11-11: proptest, for the layout model's tests, and the compositor's from 2026-11-12
+  ([ADR-0122](docs/adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)); for the
+  HDR prototype's branch alone (M1.3, deleted since), Smithay's `backend_drm`, `backend_gbm`,
+  `backend_egl`, `renderer_gl`, `backend_session_libseat` and `backend_libinput` features with the
+  system libraries they link.
+- 2026-11-12, for the headless compositor (M1.4): Smithay's `wayland_frontend`, `desktop` and
+  `renderer_gl` features; `tracing`, and `tracing-subscriber` with its `fmt` and `std` features
+  alone; `wayland-client` and the client side of `wayland-protocols`, for tests only; in the
+  shell, Mesa, libglvnd, libxkbcommon, xkeyboard-config, a font, and the applications the tests
+  run (ADR-0122); the action `actions/cache`, for SlimeEngine's binary.
+- 2026-11-13, for the MCP server (M1.5): `serde`, with its `derive` feature, and `serde_json`
+  ([ADR-0120](docs/adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)); `png` for captures
+  ([ADR-0121](docs/adr/0121-captures-what-is-seen-at-the-logical-size.md)).
+- 2026-11-14: `x11rb`, with only the extensions the X11 window manager uses, and for the tests' X11
+  clients ([ADR-0066](docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
+- `wayland-protocols-misc` and `wayland-protocols-wlr`, already in `Cargo.lock` through Smithay,
+  under MIT: the client side of the virtual keyboard, for the rivals' bench (M1.9) and the tests'
+  drivers, and of the virtual pointer and `wlr-screencopy`, for the tests (M1.10;
+  [ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+  [ADR-0121](docs/adr/0121-captures-what-is-seen-at-the-logical-size.md)).
+- 2026-11-18: `zbus`, its D-Bus wire format alone, without its default features, for the
+  accessibility buses
+  ([ADR-0094](docs/adr/0094-the-accessibility-tree-yuna-as-the-registry-of-each-seats-bus.md));
+  `rustix`, named directly, the crate Smithay re-exports and `Cargo.lock` held already.
+- 2026-11-19: util-linux in the shell, for the Opium test's `unshare` (ADR-0122).
+
+Smithay is Yuna's public fork, read over HTTPS and pinned to one commit
+([ADR-0112](docs/adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)); its
+patches are listed in [`docs/smithay-patches.md`](docs/smithay-patches.md).
 Raising the toolchain, Smithay, the other crates or `flake.lock` happens at a stage's end, each in a
 commit of its own. `cargo update` takes a crate's new version only once it has been published for
 three days, as `.cargo/config.toml` says ([ADR-0103](docs/adr/0103-crates-updates-wait-three-days.md)).
@@ -370,13 +397,17 @@ What other programs and projects rely on
 ([ADR-0079](docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
 
 - the command line: `yuna --headless`, `yuna mcp`, their options, the `WAYLAND_DISPLAY=<socket>`
-  line printed at start, the exit codes;
-- the environment Yuna reads (`XDG_RUNTIME_DIR`, `YUNA_LOG`, `YUNA_DBUS_DAEMON`) and gives its
-  programs (`YUNA_SEAT`; with accessibility, `AT_SPI_BUS_ADDRESS` and the switches that turn
-  toolkits' accessibility on; without, `NO_AT_BRIDGE` and `GTK_A11Y`);
+  line printed at start, the environment Yuna reads and its exit statuses, all as `yuna --help`
+  gives them;
+- the environment Yuna gives its programs, as
+  [`crates/yuna/src/mcp/programs/environment.rs`](crates/yuna/src/mcp/programs/environment.rs)
+  lists it: `YUNA_SEAT`, their seat's throwaway home
+  ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), and the accessibility
+  variables;
 - the MCP server: its revisions, its tools' names, arguments and results;
 - the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
-  draws with its own Mesa and finds Xwayland and dbus-daemon ([ADR-0089](docs/adr/0089-yuna-for-the-owners-other-projects.md));
+  draws with its own Mesa and finds Xwayland and dbus-daemon
+  ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md));
 - Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
   `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
 

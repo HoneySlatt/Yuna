@@ -1,6 +1,6 @@
 //! What one X11 client can make a seat's X11 window manager hold, and how a manager that stops
 //! serving is ended
-//! ([ADR-0070](../../../../docs/adr/0070-bounds-on-what-one-x11-client-may-ask.md),
+//! ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md),
 //! [ADR-0080](../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): a
 //! made-up event that x11rb misreads, the commands Yuna owes a manager that no longer takes them,
 //! the titles and atom names an X11 client makes Yuna keep, Xwayland's environment, and a panic
@@ -545,7 +545,7 @@ fn unmapped_windows_hold_at_most_the_debts_figure() {
     );
 }
 
-/// ADR-0070's figure for one X11 client's windows in the layout, 1,000, bounds the windows whose
+/// ADR-0131's figure for one X11 client's windows in the layout, 1,000, bounds the windows whose
 /// properties Yuna follows: an X11 client makes 1,000 windows it does not map, then a thousand and
 /// first, which it maps. That one is followed without its properties and counts as past its
 /// client's limit: X11 maps it, and it never shows. The first of the thousand, mapped after it,

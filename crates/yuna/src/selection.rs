@@ -1,6 +1,11 @@
 //! The clipboard and the primary selection: `wl_data_device`, the primary selection
 //! (`zwp_primary_selection_device_manager_v1`) and `ext-data-control-v1`, on Smithay's handlers.
-//! Between Wayland clients, Yuna never touches the data they pass each other.
+//! Each seat has its own, which follow its keyboard focus: a client is offered them just before
+//! its `enter` ([`State::give_selections_to`]), and only the client with the focus may set them.
+//! A seat's focus is only on its own clients, so a selection never crosses seats. Between Wayland
+//! clients, Yuna never touches the data they pass each other: a reader's pipe goes to the
+//! source's client, and a selection lasts as long as its source. `ext-data-control-v1` reaches
+//! every seat's selections, so only the owner's seat's clients see it.
 //!
 //! Yuna also holds a seat's selection itself ([`HeldSelection`]), for two kinds of owner. For an
 //! X11 client of the seat ([`X11Offer`]), it offers the owner's MIME types as the seat's
@@ -14,8 +19,9 @@
 //!
 //! It learns when a Wayland client sets a selection, clears it, or its source goes, and when an
 //! agent sets or clears one: it records the MIME types, which X11 is offered. Yuna's fork of
-//! Smithay tells of a source that goes (`docs/smithay-patches.md`, patch 6).
-//! `docs/ARCHITECTURE.md` (*Selections*) gives the flow; `docs/debt.md`, what falls short.
+//! Smithay tells of a source that goes (`docs/smithay-patches.md`, patch 6). The flow between
+//! X11 and Wayland is `xwayland/bridge.rs`'s, step by step; what falls short is in
+//! `docs/debt.md`.
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;

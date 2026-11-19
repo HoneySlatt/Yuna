@@ -1,6 +1,7 @@
-//! The rest auditor ([ADR-0062](../../../docs/adr/0062-the-compositors-comfort-and-look.md),
-//! point 7): what woke Yuna and what made it draw, named and counted, so that an agent, or a log
-//! line, names each program or part of Yuna that broke its rest.
+//! The rest auditor
+//! ([ADR-0096](../../../docs/adr/0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md)):
+//! what woke Yuna and what made it draw, named and counted, so that an agent, or a log line,
+//! names each program or part of Yuna that broke its rest.
 //!
 //! **Wakes.** Every source of the event loop is inserted through `insert_source`, with what it
 //! is: a `Wake`, one of a closed list of [`Source`]s, with the seat it serves when it serves

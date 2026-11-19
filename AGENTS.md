@@ -6,10 +6,10 @@ Rules for AI agents working in this repository. Read this file fully at the star
 
 Yuna is a Wayland compositor in Rust, for Linux, in two modes: headless, where agents and tests
 drive it, and the desktop, its owner's daily compositor ([ADR-0001](docs/adr/0001-what-yuna-is.md)).
-It is built on Smithay ([ADR-0011](docs/adr/0011-built-on-smithay.md)), which it leaves step by
-step ([ADR-0039](docs/adr/0039-leaving-smithay-step-by-step.md)), headless first
+It is built on Smithay, which it leaves step by step
+([ADR-0112](docs/adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)), headless first
 ([ADR-0002](docs/adr/0002-the-headless-mode-first.md)). It is under GPL-3.0-or-later, and public
-([ADR-0036](docs/adr/0036-yuna-is-public.md)). Today it has its checks, its layout model, a
+([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)). Today it has its checks, its layout model, a
 headless compositor and its MCP server.
 
 Agents develop it; the owner sets its direction and validates its decisions. Anyone must be able to
@@ -49,7 +49,7 @@ Never here:
 - Never hold back for a game: the owner's activity sets the priority. A timed measure checks,
   before and while it runs, the load other programs put on the GPU and the processor; a run a
   game, a build or another session disturbs is marked so and reported to the owner, who decides
-  ([ADR-0060](docs/adr/0060-development-first-agents-in-their-own-yuna.md)).
+  ([ADR-0115](docs/adr/0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md)).
 - `--gpu` opens the GPU's render node, never a display device; an agent runs it freely, never in
   tests.
 
@@ -72,14 +72,14 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 ## Architecture rules
 
 - The layout model holds no Wayland or Smithay object; it is tested alone
-  ([ADR-0005](docs/adr/0005-the-layouts.md)).
+  ([ADR-0111](docs/adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
 - The colour and HDR pipeline, the layout and the animations do not depend on the renderer; only
-  the final drawing is Vulkan ([ADR-0073](docs/adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
+  the final drawing is Vulkan ([ADR-0106](docs/adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)).
 - Everything runs headless; the DRM backend is one backend among others.
-- An agent's seat never reaches the owner's seat ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
+- An agent's seat never reaches the owner's seat ([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
 - One client's protocol error ends that client alone; a panic of Yuna's state is fatal, and Yuna
   comes back by its keeper; a configuration error never stops it
-  ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), [ADR-0008](docs/adr/0008-configuration-in-kdl.md)).
+  ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), [ADR-0129](docs/adr/0129-configuration-in-kdl-its-includes-and-variants.md)).
 - Stage 2's core meets
   [ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
   from its first commit: owned state, crates whose dependencies `scripts/check.sh` checks,
@@ -89,10 +89,10 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 ## Rules the code depends on
 
 - Yuna writes its own code. niri and jay are read, never copied; jay's code is GPL-3.0-only and
-  would change Yuna's licence ([ADR-0013](docs/adr/0013-our-own-code-niri-and-jay-as-references.md)).
+  would change Yuna's licence ([ADR-0113](docs/adr/0113-our-own-code-niri-jay-and-smithay-as-references.md)).
 - Smithay is pinned to one revision. A patch to it lives in Yuna's fork, listed with its reason in
   `docs/smithay-patches.md`; Yuna never contributes upstream
-  ([ADR-0011](docs/adr/0011-built-on-smithay.md)).
+  ([ADR-0112](docs/adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)).
 - In Yuna, games and films come first: no effect or animation may cost a game a frame or a film
   its cadence.
 - At rest, nothing runs, polls or draws.

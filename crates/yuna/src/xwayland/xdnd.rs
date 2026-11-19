@@ -80,7 +80,7 @@ const OLDEST_VERSION: u8 = 3;
 const X11_DRAG_TIMEOUT: Duration = X11_TRANSFER_TIMEOUT;
 
 /// The most types read of a source's `XdndTypeList`: the bound on every list of atoms the
-/// manager reads (ADR-0070).
+/// manager reads (ADR-0131).
 const MAX_TYPES: u32 = 64;
 
 /// How many drags each way the manager follows: the one in the hand, and one ending.

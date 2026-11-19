@@ -2,7 +2,7 @@
 
 What the owner runs by hand, on the owner's own machines, after the owner's go
 ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md),
-[ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)). Agents never run
+[ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)). Agents never run
 these: they take a display. Each run's files go back to the agent, which puts their figures in
 [`measurements.md`](measurements.md).
 

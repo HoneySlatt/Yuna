@@ -1,22 +1,22 @@
-//! `linux-dmabuf`: clients' buffers in GPU memory, imported where the renderer can import them
-//! ([ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)).
+//! `linux-dmabuf`: clients' buffers in GPU memory, imported where the renderer can import them.
+//! Mesa's EGL and Vulkan on the processor, llvmpipe and lavapipe, fall back on `wl_shm` when the
+//! compositor names no GPU: on llvmpipe, Mesa's clients on the processor never send a dmabuf.
 //!
 //! The global offers the formats the renderer imports (`ImportDma::dmabuf_formats`), each a
 //! fourcc code and a modifier, with default feedback, which Smithay offers as version 6: one
 //! tranche of the formats, for the feedback's main device. With `--gpu`, that device is the
 //! render node. On the software device, llvmpipe, it is no device, `dev_t` 0: llvmpipe reads a
 //! buffer with the processor, through a mapping of its file, and no GPU's video memory is its
-//! own ([ADR-0098](../../../docs/adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)).
+//! own ([ADR-0123](../../../docs/adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
 //! A client on a GPU then finds another device than its own, and shares buffers outside its
-//! video memory: Mesa's Vulkan copies each frame into a linear buffer there, which llvmpipe maps
-//! ([Buffers](../../../docs/ARCHITECTURE.md#buffers)). That holds for clients that compare the
-//! device's number with their GPU's, as Mesa does, which the protocol tells clients not to rely
-//! on; any other may still share a buffer the processor cannot map, which Yuna refuses. Without
-//! feedback, Mesa's Vulkan takes the compositor to be on its own GPU, and shares buffers in video
-//! memory the processor cannot map. On llvmpipe, only formats of one plane whose pixels Yuna
-//! knows the size of are offered. If the feedback cannot be made, the global is version 3, the
-//! formats alone. A renderer that imports no format gets no global, and Mesa's clients use
-//! `wl_shm`.
+//! video memory: Mesa's Vulkan copies each frame into a linear buffer there, which llvmpipe maps.
+//! That holds for clients that compare the device's number with their GPU's, as Mesa does, which
+//! the protocol tells clients not to rely on; any other may still share a buffer the processor
+//! cannot map, which Yuna refuses. Without feedback, Mesa's Vulkan takes the compositor to be on
+//! its own GPU, and shares buffers in video memory the processor cannot map. On llvmpipe, only
+//! formats of one plane whose pixels Yuna knows the size of are offered. If the feedback cannot
+//! be made, the global is version 3, the formats alone. A renderer that imports no format gets
+//! no global, and Mesa's clients use `wl_shm`.
 //!
 //! Each buffer a client creates is imported at once, so that the client learns at `create`
 //! whether it can be used (`created` or `failed`; with `create_immed`, a failure is the

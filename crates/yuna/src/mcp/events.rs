@@ -3,7 +3,7 @@
 //! compositor describes ([`Observer`]).
 //!
 //! The server keeps no state of a request: the cursor is the agent's, the `seq` of an event or a
-//! reply's `next` ([ADR-0033](../../../../docs/adr/0033-the-mcp-server.md)). An event's `seq`
+//! reply's `next` ([ADR-0120](../../../../docs/adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)). An event's `seq`
 //! grows across the whole Yuna and is never reused, so that one cursor reads any seat; between
 //! two events of one seat, other seats' take numbers too. Past its bound a seat's log drops its
 //! oldest event and counts it, so that a cursor older than the log learns how many it missed.
@@ -11,8 +11,9 @@
 //! The observer compares what the compositor describes with what it saw last: a window's title
 //! changed a thousand times between two looks is one `window_changed`, and its place is told once
 //! the layout is arranged, never while an arrangement is pending. The server looks once a round,
-//! and before it answers an `events` call; a window that opens and closes between two looks is
-//! not seen.
+//! and before it answers an `events` call, but only when the compositor's description
+//! generation has moved since the last look (`Server::record_events`): a round in which clients
+//! only drew costs no look. A window that opens and closes between two looks is not seen.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 

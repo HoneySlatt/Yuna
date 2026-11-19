@@ -10,16 +10,18 @@ tests drive it.
 
 ## State
 
-Designed on 2026-11-11. The first stage builds the headless core. Today Yuna runs without a screen:
-virtual outputs drawn offscreen, `xdg-shell` windows placed by its layout model, frames that
-follow damage and report when they could show; popups, the clipboard, dmabufs and fractional
-scale; real applications (Alacritty, GTK 4, Qt 6, Vulkan) run in it in CI, and it rests when
-they do. `yuna mcp` serves agents through MCP: each creates a seat of its own, with its outputs,
-its Wayland socket, its pointer and its keyboard, starts programs on it, finds their windows,
-clicks and types, as an input method too, captures what they show, and steps the clock. Emulated
-VRR and HDR, animations and X11 programs through Xwayland are done. Other projects drive their
-programs in `yuna --headless --agent-seat` as in a headless sway, through a virtual keyboard and
-pointer and `wlr-screencopy`. The desktop session does not exist yet.
+Stage 1, the headless core, is in its audit before release 0.1 ([ROADMAP](docs/ROADMAP.md)).
+Yuna runs without a screen: virtual outputs drawn offscreen, windows placed by its layout model,
+frames that follow damage, animations, emulated VRR and HDR outputs, and X11 programs through
+Xwayland. Real applications (Alacritty, GTK 4, Qt 6, Vulkan, mpv, Wine) run in it in CI, and it
+rests when they do; SlimeEngine's examples and Opium, the owner's music player, run in it every
+week, Opium driven by an agent.
+
+`yuna mcp` is an agent's toolbox: each agent gets a seat of its own, starts programs there on a
+throwaway home, finds their windows and their accessibility trees, clicks, types and drags,
+between X11 and Wayland programs too, captures what they show, reads and sets the clipboard,
+waits for events, and asks what woke Yuna. Other projects drive their programs in
+`yuna --headless --agent-seat` as in a headless sway. The desktop session comes at Stage 2.
 
 ## Build
 
@@ -43,7 +45,24 @@ nix run github:HoneySlatt/Yuna -- --headless --agent-seat
 
 Issues are welcome: bugs, protocols an application needs, ideas. Pull requests are taken from
 0.1 on, as [`CONTRIBUTING.md`](CONTRIBUTING.md#from-outside-the-project) says
-([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md)).
+([ADR-0085](docs/adr/0085-outside-contributions-issues-now-pull-requests-from-0-1.md)). A
+vulnerability is reported privately, as [`SECURITY.md`](SECURITY.md) says, never in an issue.
+
+## Where to read
+
+Each part, its folder, and the section of [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) that
+tells how it fits:
+
+| Part | Folder | In ARCHITECTURE |
+|---|---|---|
+| The layout model | [`crates/yuna-layout`](crates/yuna-layout/src/lib.rs) | [The layout model](docs/ARCHITECTURE.md#the-layout-model) |
+| Motion | [`crates/yuna-motion`](crates/yuna-motion/src/lib.rs) | [Motion](docs/ARCHITECTURE.md#motion) |
+| The headless compositor | [`crates/yuna/src`](crates/yuna/src/lib.rs) | [The headless compositor](docs/ARCHITECTURE.md#the-headless-compositor) |
+| XWayland | [`crates/yuna/src/xwayland`](crates/yuna/src/xwayland/mod.rs) | [XWayland](docs/ARCHITECTURE.md#xwayland) |
+| The MCP server | [`crates/yuna/src/mcp`](crates/yuna/src/mcp/mod.rs) | [The MCP server](docs/ARCHITECTURE.md#the-mcp-server) |
+| Accessibility | [`crates/yuna/src/mcp/accessibility`](crates/yuna/src/mcp/accessibility/mod.rs), [`crates/yuna/src/dbus`](crates/yuna/src/dbus/mod.rs) | [Accessibility](docs/ARCHITECTURE.md#accessibility) |
+| The rivals' bench | [`crates/yuna-bench`](crates/yuna-bench/src/lib.rs) | [The rivals' bench](docs/ARCHITECTURE.md#the-rivals-bench) |
+| The tests | `crates/*/tests`, and each module's own | [Tests](docs/ARCHITECTURE.md#tests) |
 
 ## Read next
 

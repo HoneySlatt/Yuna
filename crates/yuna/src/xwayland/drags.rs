@@ -1,6 +1,7 @@
 //! Drag and drop between a seat's X11 programs and its Wayland programs, on Yuna's side: the thin
 //! glue between each seat's drags, whose decisions are `drag_session.rs`'s, Smithay's data device
-//! and the seat's X11 manager, which speaks XDND (`xdnd.rs`). ARCHITECTURE tells the flow.
+//! and the seat's X11 manager, which speaks XDND (`xdnd.rs`): three parts, so that each rule is
+//! tested alone. The flow of a drag, each way, is `drag_session.rs`'s.
 //!
 //! What it feeds the decisions: what a drag is over at each motion of the pointer
 //! ([`State::drag_moved`], from `input.rs`), the pointer's release, the manager's events, and

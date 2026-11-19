@@ -1,4 +1,4 @@
-//! Hostile and broken X11 clients (ADR-0080, ADR-0028,
+//! Hostile and broken X11 clients (ADR-0080, ADR-0131,
 //! [ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md)): huge and
 //! malformed properties, messages naming atoms never interned, nonsense sizes, cycles of
 //! parents, floods of windows, windows gone before they pair, a client that dies in the middle of

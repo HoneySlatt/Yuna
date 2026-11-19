@@ -1445,7 +1445,7 @@ const MOST_X11_ENTERS: usize = 2;
 /// time, faster than the Wayland program reads, then `XdndLeave`: the Wayland window is entered
 /// once and given one offer, not one for each `XdndEnter`, and its program, which reads nothing
 /// meanwhile, is not cut off
-/// ([ADR-0070](../../../../docs/adr/0070-bounds-on-what-one-x11-client-may-ask.md)).
+/// ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 #[test]
 fn an_x11_source_repeating_xdnd_enter_makes_one_wayland_offer() {
     let (drag, since, offers) = hostile_enters("dnd-x-enter-again", false);
@@ -1462,7 +1462,7 @@ fn an_x11_source_repeating_xdnd_enter_makes_one_wayland_offer() {
 /// The hostile source of the story above, but leaving the proxy before each `XdndEnter`: each
 /// enter is a new one, and the Wayland window is entered again for it, up to Yuna's bound of
 /// enters while the proxy stays shown, then no more; its program, which reads nothing meanwhile, is not cut off
-/// ([ADR-0070](../../../../docs/adr/0070-bounds-on-what-one-x11-client-may-ask.md)).
+/// ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 #[test]
 fn an_x11_source_leaving_and_entering_without_end_makes_a_bounded_number_of_offers() {
     let (drag, since, offers) = hostile_enters("dnd-x-enter-leave", true);

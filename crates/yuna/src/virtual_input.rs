@@ -51,7 +51,7 @@ use crate::state::{ClientState, OWNER_SEAT, State};
 
 /// The most virtual devices, keyboards and pointers together, one client keeps acting: a test
 /// driver holds one of each
-/// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)).
+/// ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 pub const MAX_VIRTUAL_DEVICES_PER_CLIENT: usize = 8;
 
 /// The two protocols' globals, and the seat of each device that acts.

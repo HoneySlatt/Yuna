@@ -352,7 +352,7 @@ Read on 2026-11-14 from wayland.app's compositor tables and the compositors' own
 26.04, KWin 6.8.3, Hyprland 0.57.2, Sway 1.12, Mutter 51 (Mutter from wayland.app and its `main`
 file list only). `Y` offered, `Yn` at version n, `N` not found, `?` unknown, `c` behind an option,
 `*` from wayland.app alone. Private protocols of KDE, Hyprland and GTK, and experimental `xx-`
-drafts, are left out. [ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)
+drafts, are left out. [ADR-0126](adr/0126-yuna-and-the-owners-other-projects.md)
 makes `docs/protocols.md` the list Yuna keeps from this.
 
 | Protocol | Status | What it does | niri | KWin | Hyprland | Sway | Mutter |

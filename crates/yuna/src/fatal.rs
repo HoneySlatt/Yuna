@@ -4,15 +4,20 @@
 //! through a state the panic may have left half changed.
 //!
 //! The panic hook keeps the standard library's: its message, the crash report for now, comes
-//! first. On any other thread, the X11 managers' or the captures' encoders', a panic then
-//! unwinds as before. On the state thread, `yuna mcp` first ends every process under it and
-//! removes its folder ([`yuna::mcp::end_after_panic`]), at most `END_GRACE` + `KILL_WAIT`; then
-//! Yuna exits with [`PANIC_STATUS`]. `yuna --headless` starts no program and has no such folder:
-//! it exits at once. Both first remove their X displays' files in `/tmp`
-//! ([`yuna::remove_displays_after_panic`]), which no drop removes then. The hook touches neither the compositor nor the server.
+//! first. On any other thread a panic then unwinds that thread alone: an encoder's fails its
+//! capture, an X11 window manager's ends its Xwayland. On the state thread, `yuna mcp` first ends
+//! every process under it and removes its seats' homes and its folder
+//! ([`yuna::mcp::end_after_panic`]), at most `END_GRACE` + `KILL_WAIT`; then Yuna exits with
+//! [`PANIC_STATUS`]. `yuna --headless` starts no program and has no such folder: it exits at
+//! once. Both first remove their X displays' files in `/tmp`
+//! ([`yuna::remove_displays_after_panic`]), which no drop removes then. The hook touches neither
+//! the compositor nor the server.
 //!
 //! The hook runs before any unwinding, so that a panic a dependency catches on the state thread
 //! is fatal too: Smithay catches those of its EGL and GL debug callbacks, which only log.
+//!
+//! Nothing starts Yuna again yet: ADR-0080's keeper, which restarts it within a second, comes
+//! with the desktop at Stage 2b.
 
 use std::cell::Cell;
 use std::ffi::c_int;

@@ -15,6 +15,22 @@
 //!
 //! Each recipe names its backend's pace ([`Pace`]): the rivals on wlroots' headless backend
 //! (sway, dwl, mango, Umbriel) draw a frame 4 ms after each commit, not on a 240 Hz grid.
+//!
+//! Each runs on the render node at [`OUTPUT`] ([`RECIPES`]):
+//!
+//! | Recipe | Backend | Its pace | Frames counted by ([`Frames`]) | `motion` driven by |
+//! |---|---|---|---|---|
+//! | sway, sway-vulkan | wlroots headless, GLES2 or Vulkan | wlroots' timer | capture | `swaymsg` |
+//! | KWin | its virtual backend | the mode's rate | its frame log | its D-Bus |
+//! | Yuna | its headless backend, `--gpu` | the mode's rate | capture | none |
+//! | dwl | wlroots headless | wlroots' timer | capture | the bench's virtual keyboard |
+//! | mango | wlroots headless, SceneFX | wlroots' timer | capture | `mmsg` |
+//! | Umbriel | wlroots headless, its SceneFX fork | wlroots' timer | its commits | `umbriel msg` |
+//! | Hyprland | Aquamarine's headless, inside a dwl, its parent | the mode's rate | capture | `hyprctl` |
+//! | Mutter | its headless backend | the mode's rate | mpv, in `game` alone | none |
+//!
+//! Yuna and Mutter take no command for `motion` from outside; each recipe's `no_actions` says
+//! why. `hyprland` says why its parent is dwl, not sway.
 
 use std::collections::BTreeMap;
 use std::fs;

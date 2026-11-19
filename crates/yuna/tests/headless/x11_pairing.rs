@@ -494,7 +494,7 @@ fn map_tooltip(seat: &mut X11Seat) -> (X11Client, Window) {
     })
 }
 
-/// ADR-0070 counts menus per X11 client, so that one program cannot take every menu of its seat;
+/// ADR-0131 counts menus per X11 client, so that one program cannot take every menu of its seat;
 /// but an X11 client is a connection. One program opens five connections and maps
 /// [`MAX_MENUS_PER_CLIENT`] menus on each: Yuna shows [`MAX_MENUS_PER_XWAYLAND`] of them, the menus
 /// one Xwayland shows at once, and no more. Once one connection leaves, the menus that waited

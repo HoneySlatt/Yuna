@@ -1,8 +1,25 @@
 //! The `yuna` program: reads its command line, and runs the headless compositor until SIGTERM or
 //! SIGINT, or, as `yuna mcp`, an MCP server of its own until its client closes its input
-//! ([ADR-0033](../../../docs/adr/0033-the-mcp-server.md)). A panic of the thread that runs
-//! either stops it at once (`fatal.rs`). The desktop session does not exist yet (Stage 2); the
-//! work in progress is in `docs/PLAN.md`.
+//! ([ADR-0120](../../../docs/adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)). A panic of
+//! the thread that runs either stops it at once (`fatal.rs`). The desktop session does not exist
+//! yet (Stage 2); the work in progress is in `docs/PLAN.md`.
+//!
+//! Both modes raise their soft limit of open files to the hard one at start
+//! ([`yuna::raise_open_files_limit`]), since each client may make Yuna hold descriptors; the
+//! programs Yuna starts get back the limit it started with.
+//!
+//! The log goes to standard error, at `YUNA_LOG`'s level. At `debug`, tests and measures read
+//! these lines, by their message and their fields:
+//!
+//! - `window opened` (`shell.rs`), when a window maps;
+//! - `frame drawn` (`frames.rs`), for each frame: `took_us`, its drawing's time; `lead_us`, how
+//!   long before the boundary it aimed at its refresh was due; `at_once`, whether its output was
+//!   idle; `boundary`, the boundary it aimed at; `presented` and `presented_at_us`, the one it
+//!   was presented at;
+//! - `counters` (`compositor.rs`), after each round that woke: frames drawn, frame callbacks,
+//!   configures, commits and wake-ups so far;
+//! - `capture copied` (`capture.rs`) and `capture encoded` (`mcp/captures.rs`), each with its
+//!   `took_us`.
 
 mod fatal;
 mod stop_signal;

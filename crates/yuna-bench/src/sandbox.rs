@@ -15,8 +15,15 @@
 //!   listens in the run's runtime folder and activates no service of the machine's.
 //! - **Refusals** ([`check`]): if any process of the scope holds a `/dev/dri/card*` node or an
 //!   input device open ([`FORBIDDEN_NODES`]), is bound or connected to a socket in the owner's
-//!   runtime folder, or was started with a variable naming that folder, the bench stops the
-//!   compositor and measures nothing.
+//!   runtime folder, is connected to an X11 display served outside the sandbox
+//!   ([`X11_SOCKETS`]), or was started with a variable naming the owner's runtime folder, the
+//!   bench stops the compositor and measures nothing.
+//!
+//! The sandbox detects; it does not prevent. The rivals run as the owner's user, without
+//! namespaces, kept off the owner's display, devices, runtime folder and bus by their
+//! configuration and environment alone: what one did between two checks is not undone. Without
+//! the kernel's socket diagnostics, the checks see the sockets bound in the owner's runtime
+//! folder, not those connected to one (`sockets.rs`).
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};

@@ -1,14 +1,14 @@
 //! Colours: what each output announces and each surface declares through `color-management-v1`
 //! ([ADR-0047](../../../../docs/adr/0047-color-management-v1-kwins-list.md),
-//! [ADR-0048](../../../../docs/adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+//! [ADR-0128](../../../../docs/adr/0128-hdr-virtual-outputs-and-when-colour-is-chosen.md)).
 //!
 //! An output announces one description: the monitor's PQ volume when it is HDR, gamma 2.2 and
 //! sRGB otherwise, a new one when its HDR is turned on or off (`State::configure_output`), which
 //! its `wp_color_management_output_v1` objects are told. A surface's preferred description is
 //! its window's workspace's output's, whether the window is scrolled into view or not; before
 //! its window maps, its seat's focused output's. Each surface's own description is recorded at
-//! its commit, for tests and agents to read (`Compositor::window_colours`). Yuna draws as
-//! before: nothing is converted until Stage 5.
+//! its commit, for tests and agents to read (`Compositor::window_colours`). A description
+//! changes nothing Yuna draws: no pixel is converted until the colour pipeline of Stage 5.
 //!
 //! [`description`] holds the descriptions, with no Wayland object; `protocol.rs` the handler.
 

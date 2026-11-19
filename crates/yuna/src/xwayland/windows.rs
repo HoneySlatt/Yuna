@@ -1,10 +1,44 @@
 //! X11 windows on Yuna's side: what each seat's X11 window manager posts (`manager/`) becomes
 //! windows of the layout, as `xdg_toplevel`s are, and the layout's decisions become the manager's
 //! commands ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md),
-//! [ADR-0068](../../../../docs/adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md),
-//! [ADR-0069](../../../../docs/adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
-//! A window's life, from its creation to its end, is told once, in
-//! [ARCHITECTURE](../../../../docs/ARCHITECTURE.md#an-x11-windows-life).
+//! [ADR-0124](../../../../docs/adr/0124-x11-windows-across-outputs-of-different-scales.md)).
+//!
+//! A managed window's life:
+//!
+//! 1. **Created**: the manager tells Yuna of it, its X11 client, its rectangle and its
+//!    properties; it tells nothing of a window past its client's first 1,000 (`manager/mod.rs`).
+//! 2. **Asks to be mapped**: a managed window, neither override-redirect nor a dock or a desktop,
+//!    is configured to the size `Layout::size_on_open` foretells from its size hints, its
+//!    `WM_TRANSIENT_FOR` and its `_NET_WM_STATE`, then mapped. A `_NET_STARTUP_ID` that names an
+//!    activation token Yuna gave its seat, unused, makes its opening an activation
+//!    (`activation.rs`). A dock or a desktop is mapped as it asks, and is never a window of the
+//!    layout.
+//! 3. **Paired**: Xwayland gives its surface the role through `xwayland-shell-v1` (`shell.rs`) and
+//!    a serial, which the manager receives too; the two meet in either order. Xwayland's own
+//!    mistake there is the only protocol error Yuna posts it: nothing one X11 client does ends
+//!    the connection every X11 program of the seat goes through
+//!    ([ADR-0067](../../../../docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
+//! 4. **Opens** in the layout once mapped, paired and with a buffer, as an `xdg_toplevel` does at
+//!    its first buffer: its limits from its size hints, its minimum bounded by its seat's largest
+//!    output; its size from its surface; both less its frame extents and divided by XWayland's
+//!    scale. The caps on windows count the X11 client behind it, never Xwayland.
+//! 5. **Told its place** at each arrangement ([`State::tell_x11`]): an X11 rectangle, its logical
+//!    place times XWayland's scale, and its `_NET_WM_STATE`. A fullscreen window on an output
+//!    whose mode its client emulates gets that mode's rectangle, so that Xwayland scales its
+//!    surface. Only a change is sent. The windows are then restacked, since Xwayland finds the
+//!    window under the pointer through X11's stacking.
+//! 6. **Resized** with a sync request, when it lists `_NET_WM_SYNC_REQUEST`: Xwayland holds its
+//!    commits until its counter answers or `X11_SYNC_TIMEOUT` passes, so that Yuna keeps drawing
+//!    its last whole frame (`answers.rs`).
+//! 7. **Focused**: the seat's keyboard on its surface gives it the X input focus and
+//!    `_NET_ACTIVE_WINDOW`. Its client's own `_NET_ACTIVE_WINDOW` is an activation without a
+//!    token: the window takes the focus when its client has its seat's focus, else it is marked
+//!    urgent.
+//! 8. **Asked to close**: `WM_DELETE_WINDOW`, else its client is ended. One that lists
+//!    `_NET_WM_PING` is pinged too; unanswered within `X11_PING_TIMEOUT`, it is marked
+//!    unresponsive, and never ended on a timer.
+//! 9. **Unmapped**, it leaves the layout and what Yuna waited for from it is let go;
+//!    **destroyed**, Yuna forgets it.
 //!
 //! [`X11Windows`] holds every Xwayland's windows as their manager described them; which surface
 //! each is drawn into is a `Pairing`'s, plain Rust whose every order is tested alone. A managed

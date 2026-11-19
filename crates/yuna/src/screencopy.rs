@@ -38,7 +38,7 @@ use crate::state::State;
 use smithay::reexports::wayland_server::backend::ClientId;
 
 /// The most capture sessions one client keeps; past it, a new one is stopped at once
-/// ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)). A recorder or
+/// ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)). A recorder or
 /// grim keeps one.
 pub const MAX_CAPTURE_SESSIONS_PER_CLIENT: usize = 4;
 

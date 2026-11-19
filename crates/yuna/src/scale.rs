@@ -6,13 +6,15 @@
 //!
 //! A surface is told the scale of the output its window is shown on: when its fractional scale
 //! object is created, at its commits (in practice its first: a new surface, a new subsurface),
-//! when its window enters an output, and, for a popup, when it is created. A popup's surfaces
+//! when its window enters an output, and, for a popup, when it is created. A window that moves to
+//! another output enters it before the configure that gives its size there (`frames.rs`), so
+//! that the buffer that answers that configure is drawn at the new scale. A popup's surfaces
 //! are told what their window is told. Only a change sends anything. A surface whose window is
 //! on no output keeps the last value it was told. One never told anything learns what its
 //! window's surface was last told, so that a subsurface or a popup added to a hidden window
-//! matches its window; else, as a new window, the scale of the owner seat's active output, where
-//! a new window opens, else the first output's, so that a window's first buffer is drawn at the
-//! right scale.
+//! matches its window; else, as a new window, the scale of its client's seat's active output,
+//! where a new window opens, else the first output's, so that a window's first buffer is drawn
+//! at the right scale.
 
 use std::cell::Cell;
 

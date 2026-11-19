@@ -42,36 +42,35 @@ limits are in its code's documentation, linked from here; why each decision was 
 
 **Who owns which state:**
 
-- [`Compositor`](../crates/yuna/src/compositor.rs) owns the event loop, the Wayland display and
-  `State`. `State` holds the rest: the layout, the motion, the clock, the outputs, the seats, the
-  record of windows, the renderer, the selections and the rest auditor.
+- [`Compositor`](../crates/yuna/src/compositor.rs) owns the event loop, the Wayland display,
+  `State`, the seats' sockets and the Xwaylands, which it ends first when it drops. `State` holds
+  the rest: the layout, the motion, the clock, the outputs, the seats, the record of windows, the
+  renderer, the selections and the rest auditor.
 - The layout alone decides where each window goes and which window has each seat's focus. The
   shell's record, `Toplevel`, ties each `WindowId` to its surface.
 - The clock owns every deadline of the frame loop.
 - Each seat owns its branch of the layout, its focus, its selections, its outputs, its socket and
   its X display. Nothing one seat does reaches another's focus or input.
-- The MCP `Server` owns the `Compositor`, the agents' programs, their logs and folder, each
+- The MCP `Server` owns the `Compositor`, the agents' programs, their logs, folder and homes, each
   seat's log of events and each seat's accessibility bus.
 - Each X11 window manager owns its X11 connection and its view of X11's windows. It shares
-  nothing with `State`: it talks to Yuna's loop through two channels.
+  nothing with `State`: it talks to Yuna's loop through its channel of events and what Yuna owes
+  it.
 
-**What runs on which thread:**
-
-- The *state thread* runs the event loop and everything `State` holds: the protocols, the layout,
-  the motion, the frames, the drawing, and in `yuna mcp` the server. While Yuna runs, it never
-  waits on a client, a program's pipe or an X server: their sources note what came, and the loop
-  reads it when it is ready. In tests, the state thread is the test's own.
-- One thread for each running Xwayland, its X11 window manager (`yuna-x11-<seat>`): it waits on
-  X11, so that the loop never does.
-- In `yuna mcp`, up to four encoder threads (`yuna-capture`) make the captures' PNGs.
+**What runs on which thread**
+([`lib.rs`](../crates/yuna/src/lib.rs) gives each): the *state thread* runs the event loop and
+everything `State` holds, and in `yuna mcp` the server, and never waits on a client, a pipe or an
+X server; each running Xwayland's X11 window manager waits on X11 on a thread of its own; in
+`yuna mcp`, encoder threads make the captures' PNGs.
 
 **What survives which failure** ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)):
 
-- A client's protocol error, or a request past a bound, ends or refuses that client alone.
+- A client's protocol error, or a request past a bound, ends or refuses that client alone
+  ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 - A panic of the state thread is fatal: Yuna stops at once ([The program](#the-program)).
-- A panic of an encoder fails its capture alone. A panic or failure of an X11 window manager ends
-  its Xwayland. An Xwayland that ends takes its seat's X11 programs with it; the next X11
-  connection starts another.
+- A panic of an encoder fails its capture alone. A panic, failure or stall of an X11 window
+  manager ends its Xwayland. An Xwayland that ends takes its seat's X11 programs with it; the
+  next X11 connection starts another.
 - A seat's socket that cannot accept a connection pauses, and a seat whose X display cannot be
   made goes without X11: neither stops Yuna.
 
@@ -91,12 +90,12 @@ One Cargo workspace; its crates live in `crates/`.
   licences and advisories; [CONTRIBUTING](../CONTRIBUTING.md#dependencies) says how a new
   dependency is accepted.
 - `yuna` uses Yuna's fork of Smithay at a pinned revision
-  ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0042](adr/0042-main-on-smithays-fork.md), its
+  ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md), its
   [patches](smithay-patches.md)), with only its `wayland_frontend`, `desktop` and `renderer_gl`
-  features, and rustix through Smithay's re-export. Beside them: x11rb for the X11 window
-  manager, zbus's wire format for D-Bus, `serde` and `serde_json` for MCP, `png` for captures,
-  `tracing` for the logs. Its tests and measuring examples add proptest, the Wayland client
-  crates, and `yuna-bench`'s readers of `/proc` and the DRM statistics.
+  features. Beside it: rustix for the system calls, named directly though Smithay re-exports it;
+  x11rb for the X11 window manager; zbus's wire format for D-Bus; `serde` and `serde_json` for
+  MCP; `png` for captures; `tracing` for the logs. Its tests and measuring examples add proptest,
+  the Wayland client crates, and `yuna-bench`'s readers of `/proc` and the DRM statistics.
 - At run time Yuna needs libxkbcommon, linked; libglvnd's EGL and Mesa, loaded; Xwayland, found
   on `PATH`; and `dbus-daemon` for the accessibility buses, named by `YUNA_DBUS_DAEMON`, else
   found on `PATH`. The development shell and Yuna's package give all four (`flake.nix`).
@@ -107,10 +106,12 @@ One Cargo workspace; its crates live in `crates/`.
 ## The layout model
 
 `yuna-layout` decides where every window is: on which seat, output and workspace, at which
-rectangle, and which window each seat focuses ([ADR-0005](adr/0005-the-layouts.md),
-[ADR-0020](adr/0020-the-layout-models-shape.md)). Its crate documentation,
-[`lib.rs`](../crates/yuna-layout/src/lib.rs), explains the tree and the operations; `sizing.rs`,
-`scrolling.rs`, `dwindle.rs`, `floating.rs` and `geometry.rs` hold their own rules.
+rectangle, and which window each seat focuses
+([ADR-0110](adr/0110-the-layouts-and-their-behaviours.md),
+[ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
+Its crate documentation, [`lib.rs`](../crates/yuna-layout/src/lib.rs), explains the tree and the
+operations; `sizing.rs`, `scrolling.rs`, `dwindle.rs`, `floating.rs` and `geometry.rs` hold their
+own rules.
 
 - **Its boundary.** Plain ids in, rectangles out. The caller names seats, outputs and windows;
   the model names the workspaces and columns it creates, never giving an id twice. It holds no
@@ -119,7 +120,8 @@ rectangle, and which window each seat focuses ([ADR-0005](adr/0005-the-layouts.m
 - **Who owns what.** A `Layout` holds seats; a seat holds its outputs, its workspaces left
   without an output, and its hidden special workspaces; an output holds its workspaces, shows one,
   and may show a special workspace over it. An operation reaches only its seat's branch, so an
-  agent's seat never touches the owner's ([ADR-0015](adr/0015-agents-workspaces.md)).
+  agent's seat never touches the owner's
+  ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
 - **An operation** names a seat, for a key binding, which acts on what that seat focuses; or a
   window, for its client's request. The model finds them, applies the change to the workspace's
   tiling, scrolling columns or dwindle, or to its floating windows, then tidies the tree.
@@ -127,10 +129,9 @@ rectangle, and which window each seat focuses ([ADR-0005](adr/0005-the-layouts.m
   top, with the size it is asked, its rectangle on the output's pixel grid, its states, and its
   workspace, layer and column, which motion follows. Nothing in the model runs between
   operations.
-- **Clients' sizes.** A window has the size it is *asked*, for its configure, and the size it is
-  *drawn* at, what its client committed. The compositor passes on each client's limits and
-  committed geometry ([ADR-0026](adr/0026-real-clients-in-the-layout.md)). A dialog opens
-  floating, centred on its parent.
+- **Clients' sizes.** A window has the size it is *asked*, for its configure, and the size its
+  client *committed*, which it is drawn at. The compositor passes on each client's limits and
+  committed geometry. A dialog opens floating, centred on its parent.
 - **Its invariants.** `Layout::check_invariants` checks every rule the model keeps; the tests
   call it after every operation.
 - **How it fails.** Every operation takes ids that may be stale and answers with an error, never
@@ -140,9 +141,9 @@ rectangle, and which window each seat focuses ([ADR-0005](adr/0005-the-layouts.m
 
 `yuna-motion` turns the layout's jumps into what each frame draws
 ([ADR-0052](adr/0052-motion-in-a-pure-crate.md),
-[ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)). Its crate
-documentation, [`lib.rs`](../crates/yuna-motion/src/lib.rs), explains its springs, its curves
-and the motion of an arrangement.
+[ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). Its crate documentation,
+[`lib.rs`](../crates/yuna-motion/src/lib.rs), explains its springs, its curves and the motion of
+an arrangement.
 
 - **Its boundary.** It reads the layout and a time it is given. It holds no Wayland or Smithay
   object and reads no clock.
@@ -156,8 +157,7 @@ and the motion of an arrangement.
   velocity.
 - **Its settings.** Both headless modes run with animations off, each change instant;
   `--animations` and `--reduced-motion` turn them on
-  ([ADR-0055](adr/0055-what-moves-first-and-animations-off-headless.md),
-  [ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)).
+  ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)).
 
 ## The headless compositor
 
@@ -191,7 +191,7 @@ and the motion of an arrangement.
 | [`wlr_screencopy.rs`](../crates/yuna/src/wlr_screencopy.rs) | `wlr-screencopy-unstable-v1`, on captures |
 | [`colour/`](../crates/yuna/src/colour/mod.rs) | `color-management-v1`: what outputs announce and surfaces declare |
 | [`rest.rs`](../crates/yuna/src/rest.rs) | the rest auditor, through which every event source is inserted |
-| [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, and what Yuna reads of a process in `/proc` |
+| [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, what Yuna reads of a process in `/proc`, and its limit of open files |
 | [`xwayland/`](../crates/yuna/src/xwayland/mod.rs) | each seat's X display, its Xwayland and its X11 window manager |
 | [`dbus/`](../crates/yuna/src/dbus/mod.rs) | Yuna's own D-Bus client, for the accessibility buses |
 | [`mcp/`](../crates/yuna/src/mcp/mod.rs) | the MCP server |
@@ -199,42 +199,44 @@ and the motion of an arrangement.
 
 ### A round of the event loop
 
-`Compositor::dispatch` runs one round. `Compositor::run_until` repeats rounds for the program;
+`Compositor::dispatch` runs one round. `yuna --headless` repeats rounds through
+`Compositor::run_until`; in `yuna mcp`, `Server::dispatch` runs each round, then serves what came;
 tests call `dispatch` themselves, and `Compositor::advance` on the manual clock.
 
 1. On the real clock, one calloop timer is armed at the clock's earliest deadline. The loop then
    waits for a source: a client, a new connection, that timer, an X11 window manager's events, or
    in `yuna mcp` the server's pipes and timers. Every source is inserted through the
    [rest auditor](#the-rest-auditor), which counts what woke Yuna.
-2. The X11 window managers' events are handled, in a slice of the round (`MANAGER_SLICE`).
+2. The seats' sockets that paused on a failed `accept` listen again once their pause ends. The
+   X11 window managers' events are handled, in a slice of the round (`MANAGER_SLICE`).
 3. The clients' requests are read: Smithay dispatches them to Yuna's handlers.
 4. The clock's deadlines due by now run.
 5. The round ends (`Compositor::flush`): the clients the display ended are freed, Yuna's writes
    of agents' clipboards go on, the X11 window managers get their commands, what closed windows
    and destroyed surfaces left is freed, and the events written are sent.
 
-In `yuna mcp`, the server then serves what came (`Server::dispatch`).
-
 ### Time and deadlines
 
 The clock ([`clock.rs`](../crates/yuna/src/clock.rs),
-[ADR-0023](adr/0023-frames-presentation-and-the-clock.md)) owns every deadline of the frame loop.
-Its `Deadline` names each kind, each armed once at most:
+[ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)) owns every deadline of the frame
+loop. Its `Deadline` names each kind, each armed once at most:
 
 - two per output: its next refresh, and the boundary its held presentation feedback waits for;
 - the hidden windows' frame callbacks;
 - the X11 windows' sync requests and pings (`xwayland/answers.rs`);
 - the drags between X11 and Wayland (`xwayland/drags.rs`).
 
-In real mode, time is `CLOCK_MONOTONIC`; with no deadline armed, no timer is. In manual mode, for
-tests, time starts at the real monotonic time and moves only through `Compositor::advance`, which
-runs each deadline it passes at its own time, in order. A *draw hook*
+In real mode, time is `CLOCK_MONOTONIC`; with no deadline armed, no timer is. In manual mode,
+for tests and for `yuna mcp --manual-clock`, time starts at the real monotonic time and moves only
+through `Compositor::advance`, a test's call or MCP's `clock` tool, which never moves it past real
+time; each deadline it passes runs at its own time, in order. A *draw hook*
 (`Compositor::set_draw_hook`) may move manual time while a frame draws, to make a drawing late.
 
-Every other timer is an event source of its own, inserted through the rest auditor: MCP's waiting
-calls and captures, the programs' pace, a seat's closing, Xwayland's start and pauses, a seat
-socket's pause, an agent's clipboard reads and writes (`rest::Source`), and the rest log's own
-second.
+Every other timer is an event source of its own, inserted through the rest auditor, which names
+each kind in `rest::Source`: MCP's waiting calls and captures, the programs' pace and throttle, a
+seat's closing, Xwayland's start, end and pauses and its manager's watchdog, a seat socket's
+pause, the accessibility buses' start and walks, an agent's clipboard reads and writes, and the
+rest log's own second, among others.
 
 An output's *refresh boundaries* come at its rate from its creation, each computed from the rate,
 so that errors never add up (`Boundaries`, in `output.rs`). An output under VRR asks its panel
@@ -243,10 +245,9 @@ instead (`vrr.rs`). Both answer the frame loop through `Timing`.
 ### A frame
 
 The frame loop ([`frames.rs`](../crates/yuna/src/frames.rs),
-[ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md),
-[ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)) draws an output
-only at a refresh something armed, and only if something on it is damaged. Its module
-documentation gives each step; in short:
+[ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)) draws an output only at a refresh
+something armed, and only if something on it is damaged. Its module documentation gives each
+step; in short:
 
 - **What arms a refresh**: a commit of a surface shown on the output; a change of the layout; a
   capture; the output's creation or change of mode; a popup or an X11 menu that came, went or
@@ -278,14 +279,14 @@ documentation gives each step; in short:
 ### A window's life
 
 An `xdg_toplevel` ([`shell.rs`](../crates/yuna/src/shell.rs),
-[ADR-0026](adr/0026-real-clients-in-the-layout.md)):
+[ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)):
 
 1. Its initial commit gets a first configure: the size `Layout::size_on_open` foretells, tiled on
    all four edges, decorations on the server's side ([ADR-0024](adr/0024-no-title-bars.md)).
 2. Its first buffer opens it in the layout, with its parent, its limits and its window geometry.
    A window past a cap (`MAX_WINDOWS_PER_CLIENT`, `MAX_WINDOWS`), or that the layout refuses, is
    not shown, and gets frame callbacks at the hidden windows' rate
-   ([ADR-0028](adr/0028-bounds-on-what-one-client-may-ask.md)).
+   ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 3. Each later commit passes on its limits and geometry when they change, and arms its output's
    refresh when the window is shown.
 4. Its configures follow the layout's arrangements, at refreshes. Fullscreen and maximise
@@ -310,11 +311,12 @@ the keyboard moves only within the window it is on. A popup past a bound (`MAX_P
 
 [`activation.rs`](../crates/yuna/src/activation.rs) serves `xdg-activation-v1`. A token is valid
 only when asked with its client's own seat and a serial that seat sent there; it lasts
-`TOKEN_LIFETIME` and is used once. With a valid token, the layout decides
-(`Layout::request_activation`): the window takes the focus at the next refresh, unless a
-fullscreen window holds the screen. Otherwise the window is only marked urgent, so that no
-program takes a game's screen. An X11 window's `_NET_STARTUP_ID` may name a token
-([An X11 window's life](#an-x11-windows-life)).
+`TOKEN_LIFETIME` and is used once, by a window of that seat: another seat's window that names it
+leaves it unused. With a valid token, the layout decides (`Layout::request_activation`): the
+window takes the focus at the next refresh, unless a fullscreen window holds the screen. Otherwise
+the window is only marked urgent, so that no program takes a game's screen. An X11 window's
+`_NET_STARTUP_ID` may name a token, and its client's `_NET_ACTIVE_WINDOW` is an activation without
+one ([An X11 window's life](#an-x11-windows-life)).
 
 [`dialog.rs`](../crates/yuna/src/dialog.rs) offers `xdg-dialog-v1`. Dialogs open on their
 parent through `xdg_toplevel.set_parent`; the modal hint is read, and nothing uses it yet.
@@ -322,9 +324,10 @@ parent through `xdg_toplevel.set_parent`; the modal hint is read, and nothing us
 ### Outputs
 
 Virtual outputs ([`output.rs`](../crates/yuna/src/output.rs),
-[ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) have any size, rate and scale, and no
-monitor. Each belongs to one seat, which keeps one at least while it lives. A compositor keeps
-`MAX_OUTPUTS` at most.
+[ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)) have any size,
+rate and scale, and no monitor. Each belongs to one seat. A compositor keeps `MAX_OUTPUTS` at
+most; through MCP, an output's side and all outputs' pixels
+are bounded too (`mcp/outputs.rs`).
 
 - **Added** (`Compositor::add_output`): to the right of every output. Its first frame is armed,
   and its global announced at the round's end.
@@ -334,14 +337,13 @@ monitor. Each belongs to one seat, which keeps one at least while it lives. A co
   [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
   item 7). `State::configure_output` lists what follows: the layout's places, the buffer, the
   refresh timing, the colours, what clients and surfaces are told, the captures.
-- **Removed** (`Compositor::remove_output`): its workspaces go to another output of its seat. Its
-  surfaces leave it, its held feedback is discarded, its deadlines are disarmed, and its captures
-  fail (`State::drop_output`). Its global is disabled at once and destroyed
-  `RETIRED_GLOBAL_LIFETIME` later, so that a client that bound it late is not ended for it. A
-  closed seat's `wl_seat` goes the same way.
+- **Removed** (`Compositor::remove_output`), unless it is its seat's last: its workspaces go to
+  another output of its seat. Its surfaces leave it, its held feedback is discarded, its deadlines
+  are disarmed, and its captures fail (`State::drop_output`). Its global is disabled at once and
+  destroyed `RETIRED_GLOBAL_LIFETIME` later, so that a client that bound it late is not ended for
+  it. A closed seat's `wl_seat` goes the same way.
 - **Under VRR**, an output emulates amdgpu driving the owner's DisplayPort Adaptive-Sync monitor
-  ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md),
-  [ADR-0051](adr/0051-emulated-vrr-as-the-monitors-traces-showed.md)). Its panel
+  ([ADR-0119](adr/0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md)). Its panel
   ([`vrr.rs`](../crates/yuna/src/vrr.rs)) computes when a frame ready at a given time would show,
   when asked, never on a timer. A test in `vrr.rs` replays the monitor's traces
   (`crates/yuna/tests/fixtures/`); what the emulation does not reproduce is in the
@@ -352,16 +354,15 @@ monitor. Each belongs to one seat, which keeps one at least while it lives. A co
 
 Each surface is told the scale of the output its window is shown on: `wp_fractional_scale_v1`'s
 preferred scale, and `wl_surface.preferred_buffer_scale`
-([`scale.rs`](../crates/yuna/src/scale.rs)). A client that follows the fractional scale draws
-its buffer at its window's physical size and sets its viewport to its logical size. Drawn at a
-rectangle the layout put on the physical grid, its window is then exact: one buffer pixel to one
-physical pixel. A window that moves to another output is told the new scale before the configure
-that gives its size there, so that the buffer that answers it has that scale. A client that draws
-at an integer buffer scale is scaled when drawn ([debt](debt.md)).
+([`scale.rs`](../crates/yuna/src/scale.rs), which says when). A client that follows the
+fractional scale draws its buffer at its window's physical size and sets its viewport to its
+logical size. Drawn at a rectangle the layout put on the physical grid, its window is then exact:
+one buffer pixel to one physical pixel. A client that draws at an integer buffer scale is scaled
+when drawn ([debt](debt.md)).
 
 X11 windows are drawn by an element of Yuna's own
 ([`render/x11_surface.rs`](../crates/yuna/src/render/x11_surface.rs),
-[ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)). Xwayland draws every
+[ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)). Xwayland draws every
 window of its seat at one scale, *XWayland's scale* S: the largest of the seat's outputs when it
 started, fixed for its life. On an output of scale s, an X11 pixel covers s / S physical pixels:
 copied texel for texel at s = S, averaged by the *area filter* below S, scaled up bilinearly
@@ -370,18 +371,13 @@ above S. The pointer on an X11 window is measured from where this element draws 
 ### Buffers
 
 Clients' buffers come through `wl_shm` or `linux-dmabuf`
-([`dmabuf.rs`](../crates/yuna/src/dmabuf.rs), [ADR-0022](adr/0022-the-headless-backend-in-yuna.md),
-[ADR-0098](adr/0098-on-llvmpipe-dmabufs-offered-for-no-device-and-checked-as-llvmpipe-maps-them.md)).
+([`dmabuf.rs`](../crates/yuna/src/dmabuf.rs),
+[ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
 `linux-dmabuf` is offered only when the renderer imports a format, with feedback that names one
 main device: the render node with `--gpu`; on llvmpipe, no device (`dev_t` 0), since llvmpipe
-reads a buffer with the processor, through a mapping of its file. On llvmpipe, then:
-
-- Mesa's EGL and Vulkan on the processor, llvmpipe and lavapipe, draw through `wl_shm`
-  ([ADR-0029](adr/0029-the-rest-of-animated-applications.md)).
-- Mesa's Vulkan on a GPU sees another device than its own. It draws in its video memory, then
-  copies each frame into a linear buffer outside it, shared as a dmabuf, which llvmpipe maps.
-- A GPU client that does not compare device numbers, as Mesa does, may still share a buffer the
-  processor cannot map: Yuna refuses it.
+reads a buffer with the processor, through a mapping of its file. Mesa's clients on the processor
+then draw through `wl_shm`, and a GPU client shares buffers llvmpipe can map, or has its buffer
+refused.
 
 Each dmabuf is checked and imported when its client creates its buffer, so that the client
 learns at once whether it can be used. Yuna takes only buffers that cannot make it fault when it
@@ -393,11 +389,12 @@ exists.
 ### Seats and input
 
 A seat ([`seats.rs`](../crates/yuna/src/seats.rs),
-[ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md),
-[ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md))
+[ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+[ADR-0117](adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md))
 is a Smithay seat with a keyboard and, for an agent's, a pointer. Each has its own focus, popup
 grab, selections, cursor, clients, outputs, socket, X display and branch of the layout. Seats
-isolate focus and input, not processes: any program of the user may reach any seat's socket.
+isolate focus and input, not processes: any program of the user may reach any seat's socket or
+bus.
 
 - **The owner's seat**, `OWNER_SEAT`, exists from the start and takes no input headless; in
   `yuna mcp` it has no `wl_seat` global, output or socket. **An agent's seat** gets the next id,
@@ -406,8 +403,7 @@ isolate focus and input, not processes: any program of the user may reach any se
 - **A client belongs** to the seat whose socket it came through, recorded in its `ClientState`
   with its process (`ClientProcess`), read once when Yuna accepts it. Its windows open on that
   seat's workspaces, and every focus of a seat is on its own clients' surfaces. Yuna's fork of
-  Smithay shows each client only its own seat's `wl_seat` and outputs
-  ([ADR-0042](adr/0042-main-on-smithays-fork.md)).
+  Smithay shows each client only its own seat's `wl_seat` and outputs.
 - **Input** reaches an agent's seat through the compositor's calls, which MCP makes
   ([`input.rs`](../crates/yuna/src/input.rs)), and through its clients' virtual keyboards and
   pointers ([`virtual_input.rs`](../crates/yuna/src/virtual_input.rs)). A pointer finds what is
@@ -416,49 +412,39 @@ isolate focus and input, not processes: any program of the user may reach any se
   ([`keymap.rs`](../crates/yuna/src/keymap.rs)), which its agent may change. Text that no key
   types goes to the focused text field through `text-input-v3`, Yuna being the input method
   ([`text_input.rs`](../crates/yuna/src/text_input.rs)), or else through a keymap Smithay injects
-  for it.
+  for it. A seat holds `MAX_HELD_KEYS` keys and `MAX_HELD_BUTTONS` buttons at once, whoever
+  presses them.
 - **Removing a seat** (`Compositor::remove_seat`): its keys and buttons are released and its
   focus leaves first; then its socket and X display go, its clients are ended and freed, and last
   its outputs, its place in the layout and its `wl_seat` global. A seat's outputs coming and going,
   or its removal, never end another seat's motion.
 - **How it fails.** A seat's socket that fails to `accept`, most often out of descriptors, pauses
-  `SOCKET_PAUSE` rather than stop Yuna.
+  `SOCKET_PAUSE` rather than stop Yuna, the owner's in `yuna --headless` too. The program raises
+  its limit of open files at start ([The program](#the-program)).
 
 ### Selections
 
-Each seat has its own clipboard and primary selection
-([`selection.rs`](../crates/yuna/src/selection.rs)), which follow its keyboard focus. A seat's
-focus is only on its own clients, so a selection never crosses seats.
+Each seat has its own clipboard and primary selection, which follow its keyboard focus, so a
+selection never crosses seats. Between Wayland clients, Smithay's handlers carry them and Yuna
+never touches the data ([`selection.rs`](../crates/yuna/src/selection.rs)). Yuna holds a seat's
+selection itself for two kinds of owner: an X11 program of the seat, and an agent through MCP.
 
-- **Between Wayland clients**, on Smithay's handlers. When the keyboard moves to another
-  client's window, that client is offered the selections just before its `enter`. Only the
-  client with the focus may set them; Smithay does not check the serial ([debt](debt.md)). A
-  reader's pipe goes to the source's client: Yuna never reads, writes or waits on it. A selection
-  lasts as long as its source. `ext-data-control-v1` reaches every seat's selections, so only the
-  owner's seat's clients see it.
-- **Yuna holds a selection itself** for two kinds of owner: an X11 program of the seat, and an
-  agent through MCP.
 - **Between X11 and Wayland**, both ways
   ([ADR-0091](adr/0091-the-clipboard-between-x11-and-wayland-who-reads-and-its-bounds.md)). The
   seat's X11 window manager speaks X11's side on its thread
   ([`xwayland/bridge.rs`](../crates/yuna/src/xwayland/bridge.rs), which tells the flow step by
   step). Yuna's loop decides what the seat's Wayland selections are
   ([`xwayland/selections.rs`](../crates/yuna/src/xwayland/selections.rs)) and never touches X11's
-  data.
-  - An X11 client's selection becomes the seat's Wayland selection, held by Yuna. A Wayland
-    reader's pipe goes to the manager, which converts the selection and writes into the pipe.
-  - A Wayland client's or an agent's selection is told to the manager at the round's end; the
-    manager takes the X11 selection and serves each request from a pipe the source writes into.
-  - X11 reads the seat's Wayland selections only while one of the seat's X11 windows has the
-    keyboard, as a Wayland client reads them only with the focus.
-  - Transfers are bounded in time, size and number (`X11_TRANSFER_TIMEOUT`,
-    `MAX_X11_TRANSFER_BYTES`, `MAX_X11_TRANSFERS`). Each failure ends its own transfer alone.
+  data. X11 reads the seat's Wayland selections only while one of the seat's X11 windows has the
+  keyboard. Transfers are bounded in time, size and number (`X11_TRANSFER_TIMEOUT`,
+  `MAX_X11_TRANSFER_BYTES`, `MAX_X11_TRANSFERS`); each failure ends its own transfer alone.
 - **An agent's clipboard**, MCP's `clipboard` tool
-  ([ADR-0101](adr/0101-an-agents-clipboard-through-mcp.md)). `get` reads the selection as a
-  client's paste would; the server watches the pipe on the loop and never waits. `set` makes text
-  the seat's selection, held by Yuna, which writes it into each reader's pipe at the reader's pace
-  (`MAX_CLIPBOARD_WRITES`, `CLIPBOARD_TIMEOUT`). `clear` empties the selection; an X11 owner's
-  stays its own in X11 ([debt](debt.md#xwayland)).
+  ([ADR-0101](adr/0101-an-agents-clipboard-through-mcp.md),
+  [ADR-0132](adr/0132-an-agents-clipboard-data-with-control-characters-in-base64.md)). `get`
+  reads the selection as a client's paste would; the server watches the pipe on the loop and never
+  waits. `set` makes text the seat's selection, held by Yuna, which writes it into each reader's
+  pipe at the reader's pace (`MAX_CLIPBOARD_WRITES`, `CLIPBOARD_TIMEOUT`). `clear` empties the
+  selection; an X11 owner's stays its own in X11 ([debt](debt.md#xwayland)).
 
 #### Drag and drop
 
@@ -473,13 +459,16 @@ Between X11 and Wayland, drags go both ways in XDND
 Three parts share the work, so that each rule is tested alone:
 
 - [`xwayland/drag_session.rs`](../crates/yuna/src/xwayland/drag_session.rs), each seat's *drag
-  session*, decides. It is plain Rust, with no Smithay, Wayland or X11 type.
+  session*, decides. It is plain Rust, with no Smithay, Wayland or X11 type, and tells each
+  drag's flow.
 - [`xwayland/drags.rs`](../crates/yuna/src/xwayland/drags.rs) carries out its decisions, with
   Smithay's data device and the manager's commands.
 - [`xwayland/xdnd.rs`](../crates/yuna/src/xwayland/xdnd.rs), on the manager's thread, speaks
   XDND. It answers each X11 peer at once from what Yuna last told it. An X11 source finds a
   Wayland target through a proxy window over the root, shown while the drag is over a Wayland
-  window or over nothing.
+  window or over nothing. After the release, the proxy stays until the source drops or leaves,
+  the drag ends, or the pointer comes over an X11 window. Yuna never waits for the manager, so
+  two races are left ([debt](debt.md#xwayland)).
 
 A drag's data moves through the clipboard's transfers, in their count and bounds. A seat holds
 two drags at most, the one in the hand and one ending. The clock's drags deadline is armed only
@@ -493,7 +482,8 @@ started by the seat's first X11 connection, ended when idle, behind a cookie of 
 [ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)). It is on in
 `yuna --headless` and `yuna mcp`, and off in tests unless one asks (`Config::xwayland`).
 [`xwayland/mod.rs`](../crates/yuna/src/xwayland/mod.rs) gives the whole; `display.rs` the
-display's files; `server.rs` the process; `manager/` the X11 window manager.
+display's files; `server.rs` the process, whose environment holds only the variables Yuna keeps
+for it; `manager/` the X11 window manager.
 
 - **A seat's display** comes with its Wayland socket: a number, an abstract and a file socket, a
   lock in `/tmp`, and a cookie in an Xauthority file in a folder of the seat's own. At rest it
@@ -507,94 +497,52 @@ display's files; `server.rs` the process; `manager/` the X11 window manager.
   do through a bounded channel; Yuna handles those events in a slice of each round, so that a
   burst of thousands of windows never holds another window's frames long
   ([measured](measurements.md#m18--a-flood-of-x11-windows-and-menus-2026-11-15)). Yuna's commands
-  go back at the round's end.
+  go back at the round's end, through what Yuna owes the manager, bounded
+  (`manager/owed.rs`). A watchdog is armed only while a manager owes commands from an earlier
+  round.
 - **On llvmpipe**, Xwayland draws in shared memory and has no GLX, so that it touches no GPU.
 - **How it fails.** Xwayland may crash or be killed. Yuna ends it, with SIGKILL through its
-  pidfd, when its start fails, when its manager fails or panics, and when it outlives its
-  manager's connection by `MANAGER_GRACE`. Its seat's X11 programs end with it, and the display
-  is watched again. Its pidfd reaps it; in `yuna mcp`, whose reaping of every child may take it first,
-  `Compositor::child_reaped` hands its status over. When the compositor drops, it ends its
-  Xwaylands, waits until each is reaped, and removes the displays' files.
+  pidfd, when its start fails, when its manager fails, panics or stalls, when what Yuna owes the
+  manager passes its bound, and when it outlives its manager's connection by `MANAGER_GRACE`. Its
+  seat's X11 programs end with it, and the display is watched again. Its pidfd reaps it; in
+  `yuna mcp`, whose reaping of every child may take it first, `Compositor::child_reaped` hands its
+  status over. When the compositor drops, it ends its Xwaylands, waits until each is reaped, and
+  removes the displays' files.
 
 ### An X11 window's life
 
 An X11 window joins the same record, `Toplevel`, and the same layout as an `xdg_toplevel`
-([`xwayland/windows.rs`](../crates/yuna/src/xwayland/windows.rs),
-[ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). The manager posts what it learns
-(`ManagerEvent`, in `manager/messages.rs`), and does itself what ICCCM and EWMH settle alone;
-Yuna decides, and its `Command`s go back at the round's end.
+([`xwayland/windows.rs`](../crates/yuna/src/xwayland/windows.rs), which gives its life step by
+step). The manager posts what it learns (`ManagerEvent`, in `manager/messages.rs`), and does
+itself what ICCCM and EWMH settle alone; Yuna decides, and its `Command`s go back at the round's
+end.
 
 - The manager never reparents: Yuna draws no title bars ([ADR-0024](adr/0024-no-title-bars.md)).
   Java's AWT then needs `_JAVA_AWT_WM_NONREPARENTING=1` ([debt](debt.md#xwayland)).
-- Every property it reads is bounded, and a malformed value is taken as unset
-  (`properties.rs`, [ADR-0070](adr/0070-bounds-on-what-one-x11-client-may-ask.md)).
+- What one X11 client may ask is bounded per client, never per Xwayland alone: the windows it
+  opens, the properties it is read for, the menus it shows
+  ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)). A malformed property is
+  taken as unset (`properties.rs`).
 - It takes no event another X11 client sent with `SendEvent` but client messages and selection
-  answers, so that a made-up event of another program's window changes nothing. Only Xwayland's
-  own `WL_SURFACE_SERIAL` pairs a window with its surface.
-
-The life of a window:
-
-1. **Created**: Yuna records it, its X11 client, its rectangle and its properties.
-2. **Asks to be mapped**: a managed window, neither override-redirect nor a dock or a desktop, is
-   configured to the size `Layout::size_on_open` foretells from its size hints, its
-   `WM_TRANSIENT_FOR` and its `_NET_WM_STATE`, then mapped. A `_NET_STARTUP_ID` that names an
-   unused activation token Yuna gave makes its opening an activation. A dock or a desktop is
-   mapped as it asks, and is never a window of the layout.
-3. **Paired**: Xwayland gives its surface the role through `xwayland-shell-v1`
-   ([`xwayland/shell.rs`](../crates/yuna/src/xwayland/shell.rs)) and a serial, which the manager
-   receives too; the two meet in either order. Xwayland's own mistake there is the only protocol
-   error Yuna posts it: nothing one X11 client does ends the connection every X11 program of the
-   seat goes through ([ADR-0067](adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
-4. **Opens** in the layout once mapped, paired and with a buffer, as an `xdg_toplevel` does at its
-   first buffer: its limits from its size hints, its size from its surface, both less its frame
-   extents and divided by XWayland's scale. The caps on windows count the X11 client behind it,
-   never Xwayland.
-5. **Told its place** at each arrangement (`tell_x11`): an X11 rectangle, its logical place times
-   XWayland's scale, and its `_NET_WM_STATE`. A fullscreen window on an output whose mode its
-   client emulates gets that mode's rectangle, so that Xwayland scales its surface
-   ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
-   Only a change is sent. The windows are then restacked, since Xwayland finds the window under
-   the pointer through X11's stacking.
-6. **Resized** with a sync request, when it lists `_NET_WM_SYNC_REQUEST`: Xwayland holds its
-   commits until its counter answers or `X11_SYNC_TIMEOUT` passes, so that Yuna keeps drawing
-   its last whole frame ([`xwayland/answers.rs`](../crates/yuna/src/xwayland/answers.rs)).
-7. **Focused**: the seat's keyboard on its surface gives it the X input focus and
-   `_NET_ACTIVE_WINDOW`. A client's own `_NET_ACTIVE_WINDOW` is an activation without a token.
-8. **Asked to close**: `WM_DELETE_WINDOW`, else its client is ended. One that lists
-   `_NET_WM_PING` is pinged too; unanswered within `X11_PING_TIMEOUT`, it is marked
-   unresponsive, and never ended on a timer.
-9. **Unmapped**, it leaves the layout and what Yuna waited for from it is let go; **destroyed**,
-   Yuna forgets it.
-
-The sync requests and pings of every X11 window share one clock deadline, armed only while one
-waits.
+  answers, so that a made-up event of another program's window changes nothing; its connection's
+  stream keeps a made-up `KeymapNotify` from making x11rb lose its place (`manager/stream.rs`).
+  Only Xwayland's own `WL_SURFACE_SERIAL` pairs a window with its surface.
+- Its sync requests and pings share one clock deadline, armed only while one waits.
 
 **Menus.** An override-redirect window, a menu, a tooltip or a drag's icon, is placed and mapped
-by its client alone ([`xwayland/menus.rs`](../crates/yuna/src/xwayland/menus.rs)). It is shown
-once mapped and paired with a buffer; it is never in the layout and never focused by Yuna, since
-X11 menus grab the input within Xwayland. When it is shown, moved, or names another window in
-`WM_TRANSIENT_FOR`, it is given a window, by the first of these rules that finds one:
-
-1. the managed window its `WM_TRANSIENT_FOR` names, if that window is open;
-2. among its own client's managed windows shown on an output, topmost first, the one shown on the
-   output under the menu's corner whose told X11 rectangle holds that corner;
-3. the topmost of them.
-
-With a window, a menu keeps its offset from that window's X11 corner as it was placed. It is
-drawn just above the window, at the window's drawn corner plus that offset × s / S, cut to the
-output, so that it slides with the window as a popup does. A window that leaves the layout gives
-its menus to the rules again. A menu with no window is drawn at its X11 position, over every
-window of the outputs of its seat it lies on. A client shows `MAX_MENUS_PER_CLIENT` menus at
-most. The frame loop and the pointer walk only the menus shown, never every override-redirect
-window, which a client may have by the thousand.
+by its client alone. It is shown once mapped and paired with a buffer, drawn just above the window
+of the layout its rules give it, sliding with it as a popup does, or alone at its X11 position;
+it is never in the layout and never focused by Yuna, since X11 menus grab the input within
+Xwayland ([`xwayland/menus.rs`](../crates/yuna/src/xwayland/menus.rs) gives the rules and the
+bounds).
 
 ### Colours
 
 [`colour/`](../crates/yuna/src/colour/mod.rs) serves `color-management-v1` on wayland-server,
 Yuna's own handler rather than Smithay's
-([ADR-0039](adr/0039-leaving-smithay-step-by-step.md),
+([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md),
 [ADR-0047](adr/0047-color-management-v1-kwins-list.md),
-[ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)). Each output announces
+[ADR-0128](adr/0128-hdr-virtual-outputs-and-when-colour-is-chosen.md)). Each output announces
 one description: the owner's monitor's PQ volume when it is HDR, gamma 2.2 and sRGB otherwise. A
 surface's preferred description is its window's workspace's output's. Each surface's own
 description is recorded at its commit, for tests and agents to read
@@ -605,11 +553,11 @@ before the request returns.
 
 ### Captures
 
-A capture copies an output's *newest frame* ([ADR-0034](adr/0034-captures.md),
-[ADR-0038](adr/0038-captures-coordinates-windows-and-wayland.md)): the frame its armed refresh
+A capture copies an output's *newest frame*
+([ADR-0121](adr/0121-captures-what-is-seen-at-the-logical-size.md)): the frame its armed refresh
 draws, if one is armed, else the frame its buffer holds. Nothing is drawn for a capture.
 [`capture.rs`](../crates/yuna/src/capture.rs) holds the rules; `render::read_pixels` is the only
-place pixels are read back.
+place pixels are read back, on the state thread ([debt](debt.md#captures)).
 
 - **An agent's capture**, MCP's `capture`: the pixels of the whole output, a region in logical
   units, or the rectangle a window was drawn at, are read on the state thread when their frame is
@@ -619,12 +567,11 @@ place pixels are read back.
   reached the frame's boundary.
 - **A client's capture**, through `ext-image-copy-capture-v1`
   ([`screencopy.rs`](../crates/yuna/src/screencopy.rs)) or `wlr-screencopy-unstable-v1`
-  ([`wlr_screencopy.rs`](../crates/yuna/src/wlr_screencopy.rs),
-  [ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)). Every client sees the globals, and
-  captures only its own seat's outputs. A frame is copied at a refresh, once for all the frames
-  waiting, so that a client asking again and again costs one copy a refresh at most. A later
-  frame waits for a refresh that draws something, so that a recorder costs nothing at rest. Each
-  client, and all of them together, keep a bounded number of captures waiting
+  ([`wlr_screencopy.rs`](../crates/yuna/src/wlr_screencopy.rs)). Every client sees the globals,
+  and captures only its own seat's outputs. A frame is copied at a refresh, once for all the
+  frames waiting, so that a client asking again and again costs one copy a refresh at most. A
+  later frame waits for a refresh that draws something, so that a recorder costs nothing at rest.
+  Each client, and all of them together, keep a bounded number of captures waiting
   (`MAX_CAPTURE_SESSIONS_PER_CLIENT`, `MAX_CAPTURE_SESSIONS`).
 - **How it fails.** A frame that could not be drawn or read fails its captures, which the client
   may ask again; a removed output stops them.
@@ -644,7 +591,8 @@ that rest: each wake of the loop, by source, seat and client, and each frame dra
 ## The MCP server
 
 `yuna mcp` is a headless Yuna of one MCP client's own: JSON-RPC on its standard input and output,
-one message per line, nothing else there ([ADR-0033](adr/0033-the-mcp-server.md)).
+one message per line, nothing else there
+([ADR-0120](adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)).
 [`mcp/mod.rs`](../crates/yuna/src/mcp/mod.rs) gives the server's parts, one module for each group
 of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas, which
 `tests/contracts/tools-list.json` holds as a contract
@@ -657,7 +605,7 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   seats' events and writes the replies.
 - **Seats.** Everything an agent does is on a seat of its own, which `seat create` makes with its
   outputs, its Wayland socket and its X display
-  ([ADR-0095](adr/0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md)).
+  ([ADR-0117](adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md)).
   Every tool but `clock` names it, `rest` when it is to name only that seat's; another seat's
   output, window or program is unknown there. The owner's seat has no output, socket or
   `wl_seat`. A Yuna on the manual clock holds one seat at a time.
@@ -671,12 +619,14 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   ([`mcp/waits.rs`](../crates/yuna/src/mcp/waits.rs)). A capture waits for its frame, its encoder
   and its frame's boundary.
 - **Programs** ([`mcp/programs/`](../crates/yuna/src/mcp/programs/mod.rs)). Each program `spawn`
-  starts gets an environment of its own (`environment.rs`), a log of its output (`log.rs`), and a
-  process group of its own, which `stop`, `freeze`, `thaw` and `slow` signal (`pace.rs`). Yuna is
-  its programs' subreaper, so that their whole tree stays Yuna's to reap and to end
-  (`processes.rs`). Their folder, `yuna-mcp-<pid>` in `XDG_RUNTIME_DIR`, holds the seats'
-  sockets, the logs and the programs' runtime folders; it is locked while Yuna lives
-  (`folder.rs`). `MAX_RUNNING` programs run at once, and `MAX_KEPT` are remembered.
+  starts gets an environment of its own (`environment.rs`), its seat's *throwaway home*
+  (`homes.rs`, [ADR-0105](adr/0105-an-agents-programs-on-a-throwaway-home.md)), a log of its
+  output (`log.rs`), and a process group of its own, which `stop`, `freeze`, `thaw` and `slow`
+  signal (`pace.rs`). Yuna is its programs' subreaper, so that their whole tree stays Yuna's to
+  reap and to end (`processes.rs`). Their folder, `yuna-mcp-<pid>` in `XDG_RUNTIME_DIR`, holds the
+  seats' sockets, the logs and the programs' runtime folders; the homes' folder is in `TMPDIR`.
+  Each is locked while Yuna lives (`folder.rs`). `MAX_RUNNING` programs run at once, and
+  `MAX_KEPT` are remembered.
 - **Events** ([`mcp/events.rs`](../crates/yuna/src/mcp/events.rs),
   [ADR-0093](adr/0093-a-call-that-waits-for-the-seats-events.md)). Each agent seat keeps a log of
   its last `MAX_EVENTS` events. Once a round, when the compositor's description generation has
@@ -686,14 +636,17 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
 - **Closing a seat** (`seat close`, [`mcp/seats.rs`](../crates/yuna/src/mcp/seats.rs)). The
   compositor removes the seat at once ([Seats and input](#seats-and-input)) and the calls waiting
   on it fail. Then every process that belongs to the seat gets SIGTERM and SIGCONT, and SIGKILL
-  `END_GRACE` later; the call is answered once they are gone. A process that empties its
-  environment and leaves its group and its parents is not found
-  ([debt](debt.md#the-mcp-server)).
+  `END_GRACE` later: one under its running programs whatever its environment names, and others
+  as `Programs::seat_processes` says. The call is answered once they are gone, and the seat's
+  home goes. A process that empties its environment and leaves its group and its parents is not
+  found ([debt](debt.md#the-mcp-server)).
 - **Bounds.** A line over `MAX_LINE` ends the connection. While `MAX_QUEUED_OUTPUT` of replies
-  wait, no further request is read.
+  wait, no further request is read, and a waiting call's answer is held until the client reads.
+  What an agent may ask is bounded ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 - **Stopping.** When its input closes, or at SIGTERM or SIGINT, Yuna ends every process under it
-  while it still serves their clients, then removes its folder. The folder a Yuna killed by
-  SIGKILL left is removed by the next `yuna mcp`, once its lock is free.
+  while it still serves their clients, then removes its folder and the seats' homes. The folders
+  a Yuna killed by SIGKILL left are removed by the next `yuna mcp` that finds them, once their
+  lock is free.
 - **How it fails.** A panic of the server's thread, the state thread, is fatal
   ([The program](#the-program)).
 
@@ -704,6 +657,7 @@ and the one reader ([ADR-0094](adr/0094-the-accessibility-tree-yuna-as-the-regis
 An agent reads the trees of the programs it started with `accessibility: true` through the
 `accessibility` tool. [`mcp/accessibility/mod.rs`](../crates/yuna/src/mcp/accessibility/mod.rs)
 gives the call and its bounds; `bus.rs` the bus's start; `registry.rs` the registry's answers;
+`reader.rs` a walk, bounded in what it keeps of each reply;
 [`dbus/`](../crates/yuna/src/dbus/mod.rs) Yuna's own D-Bus client.
 
 - The seat's first `spawn` with `accessibility: true` starts `dbus-daemon`, never before. Yuna
@@ -719,8 +673,6 @@ gives the call and its bounds; `bus.rs` the bus's start; `registry.rs` the regis
   another. The daemon is one of its seat's processes, ended with the seat.
 - At rest, nothing runs: no timer and no call
   ([measured](measurements.md#m111-accessibility-at-rest-2026-11-18)).
-- Seats are no security boundary: any process of the user reaches any seat's bus, as it reaches
-  any seat's socket ([ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
 
 ## The program
 
@@ -731,12 +683,13 @@ gives the call and its bounds; `bus.rs` the bus's start; `registry.rs` the regis
   `XDG_RUNTIME_DIR`. It prints `WAYLAND_DISPLAY`, then `DISPLAY` and `XAUTHORITY` when Xwayland
   is found, and runs until SIGTERM or SIGINT. With `--agent-seat`, an agent's seat takes the
   outputs and the socket: what the owner's other projects drive
-  ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)).
+  ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
 - `yuna mcp` starts the same compositor without an output or a socket, and serves MCP until its
   input closes, or SIGTERM or SIGINT comes.
 
-Both turn XWayland on and animations off. A usage error prints why and the help, and exits with
-2. The signal handlers write to a pipe the loop watches
+Both turn XWayland on, and animations off unless asked. Both raise their limit of open files at
+start, and give the programs they start the limit they started with. A usage error prints why
+and the help, and exits with 2. The signal handlers write to a pipe the loop watches
 ([`stop_signal.rs`](../crates/yuna/src/stop_signal.rs)), so that the loop returns and the socket
 is removed. In `yuna mcp`, SIGCHLD wakes the loop only when a child ends, never when one is
 stopped or continued.
@@ -744,18 +697,14 @@ stopped or continued.
 **The fatal path** ([`fatal.rs`](../crates/yuna/src/fatal.rs),
 [ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). The panic hook, installed
 first, keeps the standard library's message. On the state thread, it then removes the X
-displays' files in `/tmp`; `yuna mcp` ends every process under it and removes its folder; and
-Yuna exits with status 101 through `_exit`, so that no destructor runs on a state left half
-changed. `yuna --headless` leaves its Wayland socket and its lock, which the next server takes as
-stale, and its Xauthority folder beside them ([debt](debt.md#the-headless-compositor)). A panic on
-another thread unwinds that thread alone: an encoder's fails its capture, and an X11 window
-manager's ends its Xwayland. Nothing starts Yuna again yet: ADR-0080's keeper comes with the
-desktop.
+displays' files in `/tmp`; `yuna mcp` ends every process under it and removes its seats' homes and
+its folder; and Yuna exits with status 101 through `_exit`, so that no destructor runs on a state
+left half changed. `yuna --headless` leaves its Wayland socket and its lock, which the next server
+takes as stale, and its Xauthority folder beside them ([debt](debt.md#the-headless-compositor)). A
+panic on another thread unwinds that thread alone. Nothing starts Yuna again yet.
 
-**The log** goes to standard error, at `YUNA_LOG`'s level. At `debug`, tests and measures read
-these lines: `window opened` when a window maps; `frame drawn` for each frame, with its drawing
-time `took_us`, the boundary it aimed at and the one it was presented at; `counters` after each
-round that woke; `capture copied` and `capture encoded`, each with `took_us`.
+**The log** goes to standard error, at `YUNA_LOG`'s level; `main.rs` lists the `debug` lines
+tests and measures read.
 
 ## Tests
 
@@ -767,8 +716,8 @@ and each test file's documentation says what the file covers.
 - **The layout model**: `crates/yuna-layout/tests/scenarios/`, one test per behaviour, through a
   harness that checks every invariant after each operation (`harness.rs`); a test that rewrites
   a behaviour of niri or Hyprland names its source
-  ([ADR-0019](adr/0019-the-layouts-behaviours.md)). `tests/properties.rs` runs random sequences
-  of operations.
+  ([ADR-0110](adr/0110-the-layouts-and-their-behaviours.md)). `tests/properties.rs` runs random
+  sequences of operations.
 - **Motion**: `crates/yuna-motion/tests/`, against numerical integration and known values,
   scenarios, and random sequences.
 - **The headless compositor**: `crates/yuna/tests/headless/`, one test binary. The compositor
@@ -781,19 +730,22 @@ and each test file's documentation says what the file covers.
 - **Robustness**: `misbehaving.rs` and `x11_misbehaving.rs` run hostile clients beside a
   well-behaved *sentinel*. Each story checks that Yuna's state stays sound
   (`Compositor::check_windows`, `Compositor::check_popups_and_keyboard`), that the sentinel is
-  still served, and that Yuna rests. `random_requests.rs` runs random sequences of requests from
-  up to three clients, in four tests of 80 cases each, with animations off and on: a count that
-  fitted about 10 s of the check in a debug build at M1.4
+  still served, and that Yuna rests. `input_bounds.rs` and `x11_bounds.rs` push clients past
+  their bounds; `core_costs.rs` counts the work of paths whose cost must follow the work asked.
+  `random_requests.rs` runs random
+  sequences of requests from up to three clients, in four tests of 80 cases each, with
+  animations off and on: a count that fitted about 10 s of the check in a debug build at M1.4
   ([measurements](measurements.md#m14-phase-b2--the-protocols-and-the-robustness-tests-2026-11-12)).
   `PROPTEST_CASES=<n>` runs more. A sequence found failing goes into `sequences_found_before`,
   since a seed replays its case only while the generator stays the same.
 - **The program**, run as a process, in `crates/yuna/tests/`: `command_line.rs`; `contracts.rs`,
   which compares `--help` and `tools/list` with `tests/contracts/`; `mcp.rs`, `yuna mcp` with its
   programs; `applications.rs`, real applications, with Yuna's rest read from its log and `/proc`
-  ([ADR-0025](adr/0025-applications-in-ci.md)); `consumers.rs`, the owner's other projects'
-  drivers ([ADR-0089](adr/0089-yuna-for-the-owners-other-projects.md)). They share
-  `tests/common/`. SlimeEngine's examples run in ignored tests, which a weekly job runs
-  (`.github/workflows/slimeengine.yml`).
+  ([ADR-0122](adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md));
+  `consumers.rs`, the owner's other projects' drivers
+  ([ADR-0126](adr/0126-yuna-and-the-owners-other-projects.md)); `opium.rs`, Opium's window, which
+  an agent opens, clicks and checks by capture through `yuna mcp` alone. They share
+  `tests/common/`. SlimeEngine's examples and Opium run in ignored tests, which weekly jobs run.
 - **Documents as tests**: `headless/protocols.rs` checks that the rows `Offered` of
   [`protocols.md`](protocols.md) are the globals each seat's clients are shown.
 
@@ -813,16 +765,19 @@ To add a test:
   the caller's own `PATH`, `LD_LIBRARY_PATH` and `__EGL_VENDOR_LIBRARY_FILENAMES` are kept in
   `YUNA_CALLER_*`, which `yuna mcp`'s programs get back (`mcp/programs/environment.rs`). Its
   `bench` shell holds what the rivals' bench runs. `rust-toolchain.toml` pins the toolchain
-  ([ADR-0016](adr/0016-the-rust-toolchain.md)).
+  ([ADR-0125](adr/0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md)).
 - `scripts/check.sh`: every automated check, which CI runs (`.github/workflows/ci.yml`);
-  `docs.yml` runs its document checks alone, and `slimeengine.yml` SlimeEngine's examples.
+  `docs.yml` runs its document checks alone. `slimeengine.yml` runs SlimeEngine's examples, and
+  `opium.yml` Opium's window, each weekly and on a push that changes what its test builds or
+  reads (`scripts/test_workflows.py` checks their filters), Opium built from its Nix package at a
+  pinned revision, uncached ([ADR-0122](adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)).
 - `deny.toml`: the dependency policy. `clippy.toml`: the rule that every event source goes
   through the rest auditor.
 - The measuring examples, each documented in its file, their figures in
   [`measurements.md`](measurements.md):
   - in `crates/yuna/examples/`: `frame_time.rs`, a frame's cost while `vkcube` draws;
     `agent_time.rs`, an agent's calls and captures; `motion_time.rs`, motion's budget
-    ([ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md));
+    ([ADR-0127](adr/0127-motions-budget-no-frame-lost-to-motion.md));
     `xwayland_time.rs`, XWayland's start and cost; `instances.rs`, N `yuna mcp` against one with N
     seats; `layout_time.rs`, a keyboard layout's change; `rest_cost.rs`, the rest auditor's cost;
     `events_look.rs`, the events' look. What they share is in `examples/common/`, whose
@@ -840,15 +795,16 @@ run it is in [CONTRIBUTING](../CONTRIBUTING.md). It depends on nothing of `yuna`
 
 A *case* is one compositor, one configuration and one scenario. A run of a case:
 
-1. **The sandbox** (`sandbox.rs`): a transient systemd scope, an environment built from nothing,
-   a private session bus. The compositor moves itself into a child group, `core`. The scope is
-   the *stack*, `core` the *core*.
-2. **The recipe** (`recipes.rs`): the compositor's program, environment and configuration, *as
-   shipped* or at *equal work* ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
+1. **The sandbox** ([`sandbox.rs`](../crates/yuna-bench/src/sandbox.rs)): a transient systemd
+   scope, an environment built from nothing, a private session bus. The compositor moves itself
+   into a child group, `core`. The scope is the *stack*, `core` the *core*.
+2. **The recipe** ([`recipes.rs`](../crates/yuna-bench/src/recipes.rs), whose table gives each
+   compositor's backend, pace, frame count and driver): the compositor's program, environment
+   and configuration, *as shipped* or at *equal work*
+   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
 3. **Ready, then checked**: once the compositor is ready, and again once a scenario's clients are
-   up, the case is *refused* if a process holds a display device or an input device, reaches the
-   owner's runtime folder or names it in its environment, or is connected to an X11 display
-   served outside the sandbox.
+   up, the case is *refused* if a process breaks the sandbox's rules. The sandbox detects; it
+   does not prevent.
 4. **The windows** (`scenarios.rs`): exact CPU times from the control groups' `cpu.stat`; each
    thread's time and wake-ups and each DRM client's engine times from readers every 250 ms
    (`sampler.rs`); the machine's state each second (`machine.rs`); memory once ready and after
@@ -864,39 +820,11 @@ case it ran.
 
 `yuna-bench report` ([`report.rs`](../crates/yuna-bench/src/report.rs)) ranks only the runs of one
 day and one machine state, only where the runs' spreads do not overlap, and never a lower bound;
-its documentation gives the rules for each scenario.
-
-Each recipe runs on the render node at 3840 × 2160, 240 Hz and scale 1.5 (`recipes::RECIPES`):
-
-| Recipe | Backend | Its pace | Frames counted by | `motion` driven by |
-|---|---|---|---|---|
-| sway, sway-vulkan | wlroots headless, GLES2 or Vulkan | wlroots' timer | capture | `swaymsg` |
-| KWin | its virtual backend | the mode's rate | its frame log | its D-Bus |
-| Yuna | its headless backend, `--gpu` | the mode's rate | capture | none |
-| dwl | wlroots headless | wlroots' timer | capture | the bench's virtual keyboard |
-| mango | wlroots headless, SceneFX | wlroots' timer | capture | `mmsg` |
-| Umbriel | wlroots headless, its SceneFX fork | wlroots' timer | its commits | `umbriel msg` |
-| Hyprland | Aquamarine's headless, inside a dwl | the mode's rate | capture | `hyprctl` |
-| Mutter | its headless backend | the mode's rate | mpv, in `game` alone | none |
-
-niri and cosmic-comp have no recipe that runs, and are measured on the owner's tour alone
-(`recipes::TOUR_ONLY`).
-
-Known limits:
-
-- The sandbox detects; it does not prevent. The rivals run as the owner's user, kept off the
-  owner's display, devices, runtime folder and bus by their configuration and environment alone;
-  what one did between two checks is not undone. Without the kernel's socket diagnostics, the
-  checks see sockets bound in the owner's runtime folder, not those connected to one
-  (`sockets.rs`).
-- wlroots' headless backend sends a frame event 4 ms after each commit, so sway, dwl, mango and
-  Umbriel draw up to 250 frames a second for a 240 Hz mode; their costs a second rank apart from
-  the others' (`recipes::Pace`).
-- Yuna and Mutter take no command for `motion` from outside.
-- Hyprland runs inside dwl, since Aquamarine binds `xdg_wm_base` at version 6, which sway 1.12
-  offers at 5. Its stack holds its parent, and its figures of the stack rank apart.
-- mpv can stay at its first frames on Mutter: the bench then fails the case rather than measure
-  an empty scene.
+its documentation gives the rules for each scenario. The rivals on wlroots' headless backend draw
+up to 250 frames a second for a 240 Hz mode, so their costs a second rank apart from the others'
+(`recipes::Pace`). niri and cosmic-comp have no recipe that runs, and are measured on the owner's
+tour alone (`recipes::TOUR_ONLY`). mpv can stay at its first frames on Mutter: the bench then
+fails the case rather than measure an empty scene.
 
 ## Where to start reading
 

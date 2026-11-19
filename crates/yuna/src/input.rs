@@ -28,7 +28,7 @@
 //! A seat holds [`MAX_HELD_KEYS`] keys and [`MAX_HELD_BUTTONS`] buttons at most, from every
 //! source together: a press past them, or of a keycode the keyboard's keymap names no key for, is
 //! refused, and a virtual device's is dropped
-//! ([ADR-0028](../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)).
+//! ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 
 use std::any::Any;
 use std::collections::HashSet;

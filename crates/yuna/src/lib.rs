@@ -1,7 +1,7 @@
 //! Yuna, a Wayland compositor for Linux: its headless mode, as a library that the `yuna`
 //! program runs and that tests drive in their own process
 //! ([ADR-0002](../../../docs/adr/0002-the-headless-mode-first.md),
-//! [ADR-0022](../../../docs/adr/0022-the-headless-backend-in-yuna.md)).
+//! [ADR-0123](../../../docs/adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
 //!
 //! A [`Compositor`] holds Smithay's protocol state, the layout model ([`yuna_layout`]), the
 //! motion that turns the layout's jumps into frames ([`yuna_motion`]), virtual outputs drawn
@@ -9,26 +9,19 @@
 //! follow damage: a commit of a shown surface, or a change of the layout, arms its output's next
 //! refresh, drawn ahead of its boundary; while a motion runs, each frame arms the next; at rest
 //! nothing is armed
-//! ([ADR-0023](../../../docs/adr/0023-frames-presentation-and-the-clock.md),
-//! [ADR-0031](../../../docs/adr/0031-frames-drawn-ahead-of-their-boundary.md),
-//! [ADR-0054](../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+//! ([ADR-0118](../../../docs/adr/0118-frames-presentation-times-and-the-clock.md)).
 //!
-//! The parts, each in its module: the clock (`clock.rs`); the virtual outputs and their refresh
-//! boundaries (`output.rs`), and the VRR panel some emulate (`vrr.rs`); the renderer
-//! (`render.rs`), whose GLES types `state.rs`, `output.rs` and `dmabuf.rs` hold too; the
-//! surfaces and the other protocol handlers (`state.rs`); the seats (`seats.rs`), their
-//! pointer and keyboard input (`input.rs`), and their clients' virtual keyboards and pointers
-//! (`virtual_input.rs`); `xdg-shell` and `xdg-decoration` in front of the
-//! layout (`shell.rs`), with popups (`popups.rs`),
-//! `xdg-activation` (`activation.rs`) and `xdg-dialog` (`dialog.rs`); the clipboard and the
-//! primary selection (`selection.rs`); the frame loop (`frames.rs`); captures (`capture.rs`),
-//! and `ext-image-copy-capture-v1` (`screencopy.rs`) and `wlr-screencopy-unstable-v1`
-//! (`wlr_screencopy.rs`) on them; clients' dmabufs (`dmabuf.rs`);
-//! the scale each surface is told (`scale.rs`); `color-management-v1` and what outputs and
-//! surfaces declare of their colours (`colour/`); each seat's X display, its Xwayland and its
-//! X11 window manager (`xwayland/`); the rest auditor, which names what woke Yuna and what made it
-//! draw, and through which every source of the event loop is inserted (`rest.rs`); the public
-//! face (`compositor.rs`). `docs/ARCHITECTURE.md` gives the flow across them.
+//! **Threads.** Everything the compositor holds runs on one thread, the *state thread*: the
+//! thread that made it, which runs its event loop, and in `yuna mcp` the server. It never waits
+//! on a client, a program's pipe or an X server: each source only notes what came, and the loop
+//! reads it when it is ready. Beside it run one X11 window manager for each running Xwayland, on
+//! a thread of its own (`yuna-x11-<seat>`, `xwayland/manager/`), which waits on X11 so that the
+//! loop never does; and, in `yuna mcp`, up to `MAX_ENCODERS` threads that encode captures
+//! (`yuna-capture`, `mcp/captures.rs`). A panic of the state thread is fatal; one of another
+//! thread ends that thread's work alone (`fatal.rs`).
+//!
+//! Each module has one job; `docs/ARCHITECTURE.md` lists them (*Modules*) and gives the flows
+//! across them.
 
 mod activation;
 mod capture;

@@ -15,16 +15,17 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ranking: the *pace* does.
 - **Activation token**: a string a client asks Yuna for and hands on, a launcher to the program
   it starts, so that a window can be activated with it (`xdg-activation-v1`); valid only when
-  asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s.
+  asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s,
+  and used once, by a window of the seat it was asked on.
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
-  at full rate ([ADR-0015](adr/0015-agents-workspaces.md)).
+  at full rate ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
 - **Area filter**: how Yuna draws an X11 window on an output below XWayland's scale: each
   physical pixel the average of the X11 pixels it covers, weighted by how much of each, in a
-  texture shader of Yuna's ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+  texture shader of Yuna's ([ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)).
 - **As shipped**: a rival run with its own defaults in the rivals' bench, beside *equal work*
   ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
 - **Asked size**: the size a window's client is told in a configure, in whole logical units; 0 on
-  an axis lets the client choose it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
+  an axis lets the client choose it ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
 - **AT-SPI**: the accessibility interface of Linux desktops, over D-Bus: GTK, Qt, the ATK bridge
   of Firefox and Chromium, and AccessKit speak it; screen readers and Yuna's `accessibility` tool
   read it.
@@ -32,18 +33,21 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the rivals' bench runs, which CI's shell leaves out.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
-  ([ADR-0046](adr/0046-emulated-vrr-amdgpus-rule-checked-on-the-monitor.md)).
+  ([ADR-0119](adr/0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md)).
 - **Camera**: the position of a scrolling workspace's view on its strip, `view_x`; it moves on a
-  spring while windows keep their places ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
+  spring while windows keep their places
+  ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
 - **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
   logical point of its top-left corner, and the logical units one pixel covers.
+- **Case** (bench): one compositor, one configuration and one scenario, the unit the rivals'
+  bench runs, measures and refuses.
 - **Column**: in scrolling columns, windows stacked from top to bottom that are asked one width;
   the column is as wide as the widest of them as drawn.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
-  it, and places scrolling columns by it ([ADR-0026](adr/0026-real-clients-in-the-layout.md)).
-- **Core** (bench): a compositor's own process and its descendants, in the `core` control group of
-  its sandbox; its **stack** is every process of the sandbox, its session bus included, the
-  bench's clients left out.
+  it, and places scrolling columns by it ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
+- **Core** and **stack** (bench): a compositor's core is its own process and its descendants, in
+  the `core` control group of its sandbox; its stack is every process of the sandbox, its session
+  bus included, the bench's clients left out.
 - **Cost window** (bench): a measured window whose costs the bench reads; for a compositor whose
   frames are counted by capture, the **frames window** after it runs the same scenario again with
   the frame counter, whose copies would weigh on the costs.
@@ -67,9 +71,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   Wayland programs, in plain Rust with no Smithay, Wayland or X11 type
   (`xwayland/drag_session.rs`); a seat holds two, three for an instant when a client starts a
   second drag in one grab ([ADR-0102](adr/0102-drag-and-drop-between-x11-and-wayland-a-drag-session-beside-smithays-grabs.md)).
+- **Draw hook**: a test's function that the compositor runs each time a frame's drawing ends
+  (`Compositor::set_draw_hook`); on the manual clock, one that passes time makes the drawing take
+  that long, to test a late frame.
 - **Drawn rectangle**: where a frame draws a window during motion, rounded once to the physical
   grid; pointer, clicks and captures use it. Its client is told from its **place**, the
-  rectangle the layout gives it ([ADR-0054](adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)).
+  rectangle the layout gives it ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)).
 - **DRM usage statistics**: what the kernel counts for each client of a GPU, read in the
   `fdinfo` of its render node: each engine's busy time in nanoseconds (`drm-engine-gfx`), the
   measure of a frame's GPU time ([ADR-0030](adr/0030-a-frames-gpu-time-from-the-kernel.md)).
@@ -86,6 +93,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Fatal path**: what Yuna does when its state thread panics: it stops at once, never unwinding
   through a state left half changed; `yuna mcp` first ends its programs and removes its folder
+  and its seats' throwaway homes
   ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - **Floor** (bench): the figures of the rivals that draw least, sway and dwl, recorded beside
   the budgets, never a budget ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
@@ -96,31 +104,39 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   maximised over the working area. Umbriel calls it "maximize".
 - **Fullscreen state**: what Yuna tells the shell is fullscreen: a game, a film, plain fullscreen
   or nothing; the shell decides what follows, such as holding notifications back
-  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
-- **Game mode**: the state Yuna enters when a game is fullscreen: effects and animations off,
-  notifications silent, VRR in its band.
+  ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
+- **Game mode**: what Yuna does for a fullscreen game, from Stage 4: VRR in its band, the
+  fullscreen state telling the shell a game is shown, and what the settings say a game turns
+  off, blur, glass or animations, each on its own; effects stay on by default
+  ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)). The
+  shell decides what follows, such as holding notifications back
+  ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - **The games' band**: the high, narrow range of refresh rates Yuna keeps a game's VRR in, by
   showing frames several times ([ADR-0014](adr/0014-vrr-without-flicker.md)).
 - **Greeter mode**: Yuna running under greetd as the login screen's compositor, without command
-  socket, MCP, global shortcuts, portals or XWayland ([ADR-0065](adr/0065-what-hollow-asks-of-yuna.md)).
+  socket, MCP, global shortcuts, portals or XWayland ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - **HDR10**: high dynamic range output as monitors take it: the PQ curve, BT.2020 primaries, at
   least 10 bits per channel, and static metadata sent with the picture (`HDR_OUTPUT_METADATA`).
 - **Headless mode**: Yuna running without a physical screen, on virtual outputs.
+- **Hidden window**: a window on a workspace not shown, or in a column scrolled out of view; it gets
+  at most one frame callback a second ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)).
+- **Home output**: the output a workspace goes back to when that output returns after being
+  unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **Image description**: in `color-management-v1`, what a surface's pixel values mean or what an
   output expects: a transfer function, primaries, luminances and a target colour volume. Each
   has an **identity**, a number no other ever has, so that a client tells a copy from a new one
   ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)).
-- **Hidden window**: a window on a workspace not shown, or in a column scrolled out of view; it gets
-  at most one frame callback a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
-- **Home output**: the output a workspace goes back to when that output returns after being
-  unplugged ([ADR-0018](adr/0018-workspaces.md)).
 - **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
   every Vulkan client.
 - **Layer**: the part of a workspace a window is placed in: the strip of scrolling columns, the
   tiles of dwindle, the floating windows, or the pinned ones above them
-  ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
+  ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
+- **Lead**: how long before a refresh boundary an output starts drawing its frame: its longest
+  drawing of the last half second, at least 2 ms, plus 1 ms, at most one period
+  ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). An output is **idle** when the
+  boundary after its last refresh has passed; it then draws a commit at once.
 - **llvmpipe**: Mesa's OpenGL driver that draws on the CPU; the headless mode's default
-  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
+  ([ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
@@ -130,16 +146,17 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Managed window**: an X11 window its manager places, as Yuna's layout does an `xdg_toplevel`:
   one that asks to be mapped, neither override-redirect nor a dock or a desktop
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).
-- **Manager's slice**: the part of a round of Yuna's loop in which it handles its X11 managers'
-  events: until shortly before the next deadline, 8 ms at most; the rest wait for the next
-  rounds, which come at once.
+- **Managers' slice**: the part of a round of Yuna's loop in which it handles its X11 managers'
+  events: until 1 ms before the earliest deadline armed when the round began, 8 ms at most
+  (`MANAGER_SLICE`), one event at least; the rest wait, in order, for the next rounds, which come
+  at once.
 - **Manual clock**: the compositor's clock in tests, and in `yuna mcp --manual-clock`: it starts at
   the real monotonic time and moves only when a test, or an agent through the `clock` tool,
   advances it, running each deadline it passes, in order
-  ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)). An agent never moves it past real
+  ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). An agent never moves it past real
   time.
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
-  `yuna mcp` is one, on its standard input and output ([ADR-0033](adr/0033-the-mcp-server.md)).
+  `yuna mcp` is one, on its standard input and output ([ADR-0120](adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)).
 - **Menu** (X11): an override-redirect window Yuna shows, a menu, a tooltip or a list: drawn with
   the window the rules give it, just above it and sliding with it as a popup does, or, with none,
   **alone**, at its own X11 position over every window
@@ -153,6 +170,11 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   decays to 0 on a spring ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
 - **Override-redirect**: said of an X11 window its client places itself, past its manager:
   menus, tooltips, a drag's icon.
+- **Owed commands** (X11): the commands Yuna sent a seat's X11 window manager that its thread
+  has not taken yet, held in a bound (`manager/owed.rs`); the latest focus, stacking and
+  selection replace the one owed. While a manager owes commands from an earlier round, its
+  **watchdog** is armed: a manager that takes none for `MANAGER_STALL`, and still none
+  `STALL_RECHECK` later, is stalled, and its Xwayland is ended, as one owed past the bound is.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
   stack, not the core: Hyprland's headless dwl, which lends it a render node.
 - **Pace** (bench): how a backend times the frames of a compositor whose client draws as fast as
@@ -172,24 +194,22 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   click outside the client's surfaces dismisses it.
 - **Portal**: a D-Bus service an application calls to ask the desktop for something, such as
   sharing the screen; those that need the compositor are served by `yuna-portal`, a program of
-  its own beside Yuna ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
-- **Lead**: how long before a refresh boundary an output starts drawing its frame: its longest
-  drawing of the last half second, at least 2 ms, plus 1 ms, at most one period
-  ([ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)). An output is **idle** when the
-  boundary after its last refresh has passed; it then draws a commit at once.
+  its own beside Yuna ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - **PQ**: SMPTE ST 2084, the perceptual quantizer: the curve that turns an absolute luminance, up
   to 10,000 cd/m², into an HDR signal. A **PQ code** is that signal as a 10-bit integer, 0 to
   1,023.
 - **Preferred description**: the image description Yuna tells a surface to draw in, its
-  window's workspace's output's ([ADR-0048](adr/0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)).
+  window's workspace's output's ([ADR-0128](adr/0128-hdr-virtual-outputs-and-when-colour-is-chosen.md)).
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
   turn stays under Yuna, its **subreaper**, and ends with it.
 - **Proxy window** (drags): the X11 manager's own InputOnly window over the whole root,
   `XdndAware` 5, mapped while an X11 program's drag is over a Wayland window or over nothing, so
-  that the X11 source finds a target in X11 there and talks to Yuna through it. It is not an
-  `XdndProxy`, XDND's property by which a window names another to receive its messages.
+  that the X11 source finds a target in X11 there and talks to Yuna through it. It is kept after
+  the release, until the source drops or leaves, the drag ends or the pointer comes over an X11
+  window, so that a source that looks late still finds it. It is not an `XdndProxy`, XDND's
+  property by which a window names another to receive its messages.
 - **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
   program, environment and configuration, how it is ready, stopped and driven, and how its frames
   are counted.
@@ -197,15 +217,16 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   and knows the applications embedded; on an agent's seat, Yuna itself, without
   `at-spi2-registryd`.
 - **Refresh boundary**: the moment an output could start showing a new frame; a virtual output's
-  come every `1 / rate` seconds of Yuna's clock ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md)).
+  come every `1 / rate` seconds of Yuna's clock ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)).
   A VRR output has none: its panel starts a refresh when a frame is ready, within its range.
 - **Refused** (bench): said of a case whose sandbox broke its rules, or whose scene was not the
   scenario's (mpv not fullscreen): the bench stops it and measures nothing. A refusal is not a
   failure.
 - **Rest auditor**: the part of Yuna that names what woke it and what made it draw, counted
   by source, by client and by a frame's cause (`rest.rs`), which MCP's `rest` and the start
-  option `--rest-audit` read ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md), point
-  7). At rest it names nothing.
+  option `--rest-audit` read
+  ([ADR-0096](adr/0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md)). At rest it
+  names nothing.
 - **Retarget**: giving a running motion a new target; a spring goes on from its value and its
   velocity ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
 - **Run file**: the versioned JSON file a run of the rivals' bench writes, every figure with its
@@ -213,10 +234,11 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Sandbox** (bench): what each compositor and client of the rivals' bench runs in: a systemd
   scope of its own, an environment built from nothing, a runtime folder and session bus of its
   own. It detects a process that reaches the owner's display, devices, runtime folder or bus, and
-  refuses its case; it prevents nothing ([ARCHITECTURE](ARCHITECTURE.md#the-rivals-bench)).
+  refuses its case; it prevents nothing
+  ([`sandbox.rs`](../crates/yuna-bench/src/sandbox.rs)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
-  seat whose socket it came through ([ADR-0035](adr/0035-agents-seats.md)). Its **handle** is
+  seat whose socket it came through ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)). Its **handle** is
   the number `seat create` gives, which every tool but `clock` takes, `rest` when it is to
   name only that seat's.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
@@ -226,7 +248,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   show that the others did not stop its frames.
 - **Share picker**: the selection Yuna draws when an application asks to share the screen, the same
   as for captures; choosing is the consent
-  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+  ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **State thread**: the thread that runs Yuna's event loop and owns its state; a panic there is
   fatal, unlike one on the X11 manager's or an encoder's thread.
@@ -239,7 +261,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   holds its commits, for 100 ms at most, so that its frame shows whole.
 - **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
   includes, reloaded live; its format is a public interface
-  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+  ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)).
+- **Throwaway home** (MCP): the home a seat's programs share, `seat-<id>` in the folder
+  `yuna-mcp-homes-<pid>` in `TMPDIR`, named by `HOME` and the XDG base folders' variables the
+  agent does not give; removed with its seat, so that a program never reads or writes the user's
+  settings, data or caches
+  ([ADR-0105](adr/0105-an-agents-programs-on-a-throwaway-home.md)).
 - **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
   one after another ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
@@ -250,12 +277,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   until it gets the focus or closes. Nothing shows it yet.
 - **Variant**: a named set of settings in the configuration, applied over it and switched on
   command, such as the shell's compact mode
-  ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md)).
+  ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)).
 - **Virtual keyboard** (bench): the bench's client that types key chords through
   `zwp_virtual_keyboard_v1` into one compositor's sandboxed instance, for one driven by its keys
   alone, dwl; its keys reach no other compositor.
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
-  ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)).
+  ([ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed
   rate.
 - **Wake-up**: a round of the compositor's event loop in which something had work for it: a
@@ -269,4 +296,4 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   reserve zones of it.
 - **XWayland's scale**: S, the largest scale among a seat's outputs when its Xwayland started,
   fixed for that Xwayland's life: how many X11 pixels a logical unit is
-  ([ADR-0068](adr/0068-x11-windows-drawn-by-yuna-through-an-area-filter.md)).
+  ([ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)).

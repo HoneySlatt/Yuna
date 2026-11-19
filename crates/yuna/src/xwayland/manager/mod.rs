@@ -133,7 +133,7 @@ pub(crate) use stream::{ManagerConnection, ManagerStream};
 pub(crate) const EVENT_QUEUE: usize = 256;
 
 /// The most windows of one X11 client whose properties the manager reads and Yuna is told of:
-/// ADR-0070's figure for one client's windows in the layout (`MAX_WINDOWS_PER_CLIENT`), which no
+/// ADR-0131's figure for one client's windows in the layout (`MAX_WINDOWS_PER_CLIENT`), which no
 /// program that shows its windows passes. Past it, a window costs the manager its record without
 /// text, and Yuna nothing, where one with its properties costs each up to three texts of
 /// `MAX_KEPT_TEXT_BYTES` (`properties.rs`).

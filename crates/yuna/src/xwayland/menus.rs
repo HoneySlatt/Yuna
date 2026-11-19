@@ -3,17 +3,26 @@
 //! ([ADR-0066](../../../../docs/adr/0066-yunas-own-x11-window-manager-on-x11rb.md)). They are
 //! shown once mapped and paired with a buffer, drawn through the X11 element as any X11 surface
 //! is, never in the layout and never focused by Yuna: X11 menus grab the input within Xwayland.
-//! Where they are drawn, and the rule that gives each its window, are told once, in
-//! [ARCHITECTURE](../../../../docs/ARCHITECTURE.md#an-x11-windows-life).
+//!
+//! A menu shown, moved, or naming another window in `WM_TRANSIENT_FOR` is given a window of the
+//! layout by the first of `State::x11_menu_place`'s rules that finds one: the window it names,
+//! else its own client's window shown under its corner, else its client's topmost. A window that
+//! leaves the layout gives its menus to the rules again. A menu with no window is drawn alone, at
+//! its X11 position, over every window of the outputs of its seat it lies on.
 //!
 //! A menu drawn with a window keeps the offset from that window's X11 corner it had when it was
 //! placed, so that it slides with the window's drawn rectangle as xdg popups do
-//! ([ADR-0054](../../../../docs/adr/0054-motion-sampled-at-presentation-drawn-apart-from-told.md)):
-//! the frame loop draws it at the window's surface's corner plus that offset × s / S, exactly
-//! the offset at s = S, and the pointer is measured from that same corner (`input.rs`). Its
-//! surface is one of its window's surface trees, called back and told presented with them
-//! (`frames.rs`). A menu over no window has its own frame callbacks: from each output that
-//! draws it, else at the hidden windows' rate.
+//! ([ADR-0118](../../../../docs/adr/0118-frames-presentation-times-and-the-clock.md)):
+//! the frame loop draws it just above the window, at the window's surface's corner plus that
+//! offset × s / S, exactly the offset at s = S, cut to the output, and the pointer is measured
+//! from that same corner (`input.rs`). Its surface is one of its window's surface trees, called
+//! back and told presented with them (`frames.rs`). A menu over no window has its own frame
+//! callbacks: from each output that draws it, else at the hidden windows' rate.
+//!
+//! An X11 client shows [`MAX_MENUS_PER_CLIENT`] menus at once, and one Xwayland
+//! [`MAX_MENUS_PER_XWAYLAND`], all its clients together; each constant says what a menu past it
+//! waits for. The frame loop and the pointer walk only the menus shown, never every
+//! override-redirect window, which a client may have by the thousand.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -32,7 +41,7 @@ use crate::shell::has_buffer;
 use crate::state::State;
 
 /// The most override-redirect windows one X11 client may have shown at once, as a window may
-/// have 64 popups ([ADR-0028](../../../../docs/adr/0028-bounds-on-what-one-client-may-ask.md)):
+/// have 64 popups ([ADR-0131](../../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)):
 /// a menu and its submenus, a tooltip and a list are a handful. The frame loop and the pointer
 /// walk the shown ones at each refresh and event. One past it is not shown until it is mapped or
 /// commits again, logged once per X11 client: only the client past its cap waits, and a client

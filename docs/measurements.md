@@ -4,6 +4,108 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M1.13 — Stage 1's audit fixes (2026-11-18/19)
+
+What the fixes of Stage 1's audit changed, from the runs of the tasks that made them, not measured
+again. Machine: the high tier's desktop, Ryzen 7 5800X (16 threads), shared with other sessions'
+builds and tests, the one-minute load average given where a run recorded it. Build: the test
+stories' debug build, unless a row says release. Base: `6ef69e0`, Stage 1's audit's fixes on top.
+No budget of the quality bar is set for these; each is a bound the audit asked, or a cost that
+grew faster than the work.
+
+The X11 window manager (`tests/headless/x11_bounds.rs`, each memory story in a process of its
+own; load not recorded):
+
+| What | Before | After |
+|---|---|---|
+| Yuna's memory for 1,500 clipboard changes while a manager is stopped (SIGSTOP) | 27,524 KiB, 18,789 bytes a change | 428 KiB, 292 bytes a change |
+| A stopped manager's Xwayland ended | never | 10.1 s after the SIGSTOP; about 11.1 s once the 1 s recheck came |
+| Yuna's memory for each unmapped X11 window with long titles | 647 KiB | 35 KiB, the same in five runs; Xwayland's own 194 KiB |
+| Long atom names in a selection's targets | 30,508 KiB kept | 1.0 to 1.3 MiB, seven runs |
+| A window mapped after a client's made-up `KeymapNotify` | never shown within 10 s | shown within 11 ms |
+| Variables in Xwayland's environment | about 200 | 8 |
+| Wakes of a manager's watchdog in 12 s at rest, the manager caught up | 1 (`xwayland_timeout`) | 1, the manager's ping that disarms it |
+| A manager owed past a bound lowered to 4 KiB | still ran after 4,096 changes | ended 118 ms after the stop, 128 changes later; 30 ms under load |
+
+The flood story's longest round, CPU time of Yuna's thread, debug build:
+
+| Code | Load | Longest round |
+|---|---|---|
+| The managers' slice kept | 5 to 9 | 27 ms |
+| The slice ignored | about 7 | 111 ms |
+| The slice ignored, the channel unbounded | about 10 | 308 ms |
+| The whole flood in one round | about 90 | 930 ms |
+| The slice kept, three runs | 85 to 125 | 629 ms, 1.08 s, 361 ms |
+| The slice kept, three runs beside a release build | 89 to 146 | 726, 598, 769 ms |
+
+No bound on a debug round's CPU time tells the slice from one huge round under load: the story
+now checks that at most 2 rounds in a row, each begun when the sentinel's frame was due, end
+without it, and prints the frames a second; the 16 ms a round stays checked in a release build
+alone.
+
+Yuna's side of XWayland, disturbed, load 20 to 190:
+
+| What | Before | After |
+|---|---|---|
+| A window whose minimum size passes every output | configured 32,766 × 32,766, never listed | configured 2880 × 1620, listed |
+| Menus drawn by one program on five X11 connections | 320 | 256, `MAX_MENUS_PER_XWAYLAND` |
+| An X11 drag released onto a Wayland window, the idle story | dropped into the hidden X11 window | 17 passes in 20 at a load of about 30 before the story held its source; then every run, the race left as debt |
+| Pairings over the X11 window and menu stories | | 1,024 with the commit first, 27 with the serial first |
+
+The core's costs (`tests/headless/core_costs.rs`), release builds, before and after run in turn,
+three rounds; disturbed, load 30 to 41, so the ratios hold and the figures are upper bounds:
+
+| What | Before | After |
+|---|---|---|
+| One commit of a synchronised chain of 1,000 subsurfaces | 479, 326, 417 ms | 297, 158, 136 ms |
+| The same, a chain of 2,000 | 2.86, 1.38, 1.52 s | 1.24, 0.99, 1.73 s, most of it Smithay's |
+| One commit of a fan of 4,000 subsurfaces | 841, 629, 582 ms | 39, 35, 47 ms |
+| An arrangement and its frame, 10,000 windows asked, 9,000 refused, 15 each | 12.4 to 41.2 ms | 4.7 to 27.0 ms, 4.7 to 5.8 ms in 12 of 15 |
+| 200 first commits of a new client, 1,000 windows on the seat | 94.7, 168.3, 134.0 ms | 7.8, 6.8, 4.2 ms |
+| The same, 4,000 windows on the seat | 928.8, 454.5, 372.3 ms | 1.9, 3.2, 2.3 ms |
+
+A seat's input and descriptors (`tests/headless/input_bounds.rs`, `tests/command_line.rs`), load
+35 to 41 for the stories run three times:
+
+| What | Before | After |
+|---|---|---|
+| A new client while one client fills Yuna's table of 256 descriptors | Yuna exits with 1, every client lost | Yuna lives, 0 to 2 clock ticks every 200 ms; the client waiting is served once the other leaves |
+| `yuna --headless`'s soft limit of open files, started at 256 under a hard 524,288 | 256 | 524,288; its program is given 256 |
+
+The MCP server (`tests/mcp.rs`, `tests/headless/mcp.rs`), load 20 to 49 for the stories run three
+times:
+
+| What | Before | After |
+|---|---|---|
+| An accessibility walk's names, 21 nodes | 66,060,288 bytes | 21,063 bytes |
+| A reply to `clipboard get` of 1 MiB of control characters | 13,632,031 bytes | 2,796,749 bytes |
+| The replies queued while calls that waited were answered | 16,802,706 growing to 16,863,634 bytes, past the 16 MiB bound | past it by one reply at most, the other answers held until the client reads |
+| Peak memory of the story of an 8,192 × 8,192 output | | 356,332 kB, against 134,548 kB for another MCP story |
+
+Opium, `crates/yuna/tests/opium.rs` against Opium's package at `d5b0b3d`, on 2026-11-18, not yet
+run on GitHub:
+
+| What | Figure |
+|---|---|
+| Opium's build from its Nix package, its dependencies from the binary cache, load 24 to 38 | 14 min 11 s |
+| The test, three runs in a row, load 13 to 20 | 21.17, 23.88, 19.32 s |
+| Opium's window shown after `spawn` | 0.9, 2.1, 1.0 s |
+| Frames Yuna drew after the click, until quiet | 15, 14, 24 |
+| `seat close` answered | 127, 114, 82 ms |
+| Then 10 s of rest | 0 context switches in Yuna's 36 to 39 threads; 0 frames, callbacks, configures, commits and wake-ups |
+
+Mutation testing of the models, cargo-mutants 27.1.0, `--jobs 4 --timeout-multiplier 3`, load 8
+to 40: the mutants that survived the audit in the functions the new tests cover, then those still
+missed; a timeout is a mutant that hung the tests.
+
+| Where | Before | After: missed | After: timeouts |
+|---|---|---|---|
+| `yuna-layout/src/geometry.rs` | 37 | 0 | 0 |
+| the rest of `yuna-layout` | 103 | 12, argued equivalent | 25 |
+| `yuna-motion` | 63 | 30 | 1 |
+| `yuna/src/keymap.rs` | 18 | 0 | 0 |
+| `yuna/src/xwayland/drag_session.rs` | 8 | 0 | 1 |
+
 ## M1.12 — Drags between X11 and Wayland (2026-11-18)
 
 `qml_drags_text_and_a_uri_between_x11_and_wayland` (`crates/yuna/tests/applications.rs`), on
