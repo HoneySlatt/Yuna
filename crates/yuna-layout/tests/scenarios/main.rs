@@ -16,6 +16,7 @@ mod peek;
 mod robustness;
 mod scrolling;
 mod seats;
+mod size_on_open;
 mod special_and_pinned;
 mod umbriel;
 mod workspaces;

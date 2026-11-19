@@ -68,7 +68,7 @@
 //! A window's popups go with it: drawn just above it, at its rectangle and alpha, called back,
 //! reported presented or discarded, and entering or leaving outputs with its own surfaces.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
@@ -214,6 +214,9 @@ impl State {
     /// when the window is shown; when no output shows it, its content update is discarded and
     /// its frame callbacks wait for the hidden windows' deadline. While the layout waits to be
     /// arranged, every output is armed already, and the arrangement decides for mapped windows.
+    /// A synchronised subsurface applied ahead of the surface committed only enters the window's
+    /// output: the call for the surface committed arms what the whole commit needs
+    /// ([`Committing`](crate::state::Committing)).
     pub(crate) fn schedule_for_commit(&mut self, root: &WlSurface, surface: &WlSurface) {
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
             return;
@@ -228,6 +231,9 @@ impl State {
             // A subsurface committed for the first time enters its window's output, even when
             // the layout waits: an arrangement that keeps the window there sends no `enter`.
             self.outputs[index].output.enter(surface);
+        }
+        if self.ahead_of_committed_surface(surface) {
+            return;
         }
         let cause = DrawCause::Commit(self.committing_client);
         if mapped && self.layout_dirty {
@@ -247,8 +253,39 @@ impl State {
             let trees = self.window_trees(root);
             discard_presentation_feedback(&trees);
             if waits_for_frame(&trees) {
+                if !mapped {
+                    self.refused_window_waits(root);
+                }
                 self.arm_hidden_frame(last_frame_sent);
             }
+        }
+    }
+
+    /// The refused toplevel of `root` waits for frame callbacks: it counts among the refused
+    /// windows waiting ([`RefusedFrames`]), at the time they are due, unless it counts already,
+    /// at a time no later.
+    fn refused_window_waits(&mut self, root: &WlSurface) {
+        let now = self.clock.now();
+        let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
+            return;
+        };
+        if toplevel.refused_frames_due.is_some() {
+            return;
+        }
+        let due = hidden_frame_due(toplevel.last_frame_sent, now);
+        toplevel.refused_frames_due = Some(due);
+        self.refused_frames.add(due);
+    }
+
+    /// The toplevel of `root` no longer counts among the refused windows waiting for frame
+    /// callbacks: they were sent, or it is no longer refused, or it is gone.
+    pub(crate) fn refused_window_stops_waiting(&mut self, root: &WlSurface) {
+        let due = self
+            .toplevels
+            .get_mut(&root.id())
+            .and_then(|toplevel| toplevel.refused_frames_due.take());
+        if let Some(due) = due {
+            self.refused_frames.remove(due);
         }
     }
 
@@ -817,12 +854,15 @@ impl State {
 
     /// Arms the hidden windows' deadline at the earliest time one of them may next get its frame
     /// callbacks; disarms it when none waits. A window the layout refused counts as hidden, so
-    /// that its client does not wait for ever.
+    /// that its client does not wait for ever. Only the windows in the layout are looked at: a
+    /// refused window counts by the time its callbacks are due ([`RefusedFrames`]), which nothing
+    /// here changes, so that thousands of refused windows cost an arrangement nothing.
     pub(crate) fn arm_hidden_frames(&mut self) {
         let now = self.clock.now();
         let windows = self
-            .toplevels
+            .windows
             .values()
+            .filter_map(|surface| self.toplevels.get(surface))
             .filter(|t| t.is_unseen())
             .filter(|t| waits_for_frame(&self.window_trees(t.wl_surface())))
             .map(|t| hidden_frame_due(t.last_frame_sent, now));
@@ -831,7 +871,15 @@ impl State {
             .into_iter()
             .filter(|(surface, _)| waits_for_frame(std::slice::from_ref(surface)))
             .map(|(_, last)| hidden_frame_due(last, now));
-        let due = windows.chain(menus).min();
+        let due = windows
+            .chain(menus)
+            .chain(self.refused_frames.earliest())
+            .min();
+        // The windows looked at, which an arrangement's cost follows: the stories count them.
+        tracing::trace!(
+            windows = self.windows.len(),
+            "hidden windows' frame callbacks armed"
+        );
         self.clock.disarm(Deadline::HiddenFrames);
         if let Some(at) = due {
             self.clock.arm(Deadline::HiddenFrames, at);
@@ -854,6 +902,7 @@ impl State {
             if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                 toplevel.last_frame_sent = Some(now);
             }
+            self.refused_window_stops_waiting(&root);
         }
         let menus: Vec<WlSurface> = self
             .x11_unseen_menus()
@@ -867,6 +916,49 @@ impl State {
             self.x11_menu_called_back(&menu, now);
         }
         self.arm_hidden_frames();
+    }
+}
+
+/// The refused windows waiting for frame callbacks, counted by the time their callbacks are due:
+/// a refused window that commits asking one counts here until its callbacks are sent, it is no
+/// longer refused, or it goes ([`Toplevel::refused_frames_due`](crate::shell::Toplevel)). The
+/// hidden windows' deadline reads the earliest time here rather than walking the refused windows:
+/// the caps on windows bound those in the layout, not those refused, which are as many as their
+/// clients make.
+#[derive(Debug, Default)]
+pub(crate) struct RefusedFrames {
+    /// How many refused windows' callbacks are due at each time.
+    waiting: BTreeMap<Duration, usize>,
+}
+
+impl RefusedFrames {
+    /// One more refused window's callbacks are due at `due`.
+    fn add(&mut self, due: Duration) {
+        *self.waiting.entry(due).or_default() += 1;
+    }
+
+    /// One refused window counted at `due` waits no longer.
+    fn remove(&mut self, due: Duration) {
+        if let Some(count) = self.waiting.get_mut(&due) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.waiting.remove(&due);
+            }
+        }
+    }
+
+    /// When the first refused window's callbacks are due; none when none waits.
+    fn earliest(&self) -> Option<Duration> {
+        self.waiting.keys().next().copied()
+    }
+
+    /// Whether it counts exactly the windows due at `dues`, for tests (`State::check_windows`).
+    pub(crate) fn counts(&self, dues: impl Iterator<Item = Duration>) -> bool {
+        let mut counted: BTreeMap<Duration, usize> = BTreeMap::new();
+        for due in dues {
+            *counted.entry(due).or_default() += 1;
+        }
+        counted == self.waiting
     }
 }
 

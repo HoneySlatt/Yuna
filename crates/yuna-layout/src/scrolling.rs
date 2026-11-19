@@ -121,22 +121,10 @@ impl Column {
         out.extend(self.windows.iter().map(|&window| area.sizing(window)));
     }
 
-    /// The width its windows are asked: its set width within the largest of its windows'
-    /// minimum widths and the smallest of their maximum ones, a minimum winning over a smaller
-    /// maximum (niri: `src/layout/scrolling.rs:4634-4665`); floored to whole logical units, so
-    /// that proportional columns fit the screen exactly (`src/layout/tile.rs:955-959`). Limits
-    /// count in whole units, as Wayland carries them. `sizings` are its windows'. Not for a
-    /// fullscreen column, whose window is asked the output's size.
+    /// The width its windows are asked: [`asked_width`] of its given width. `sizings` are its
+    /// windows'. Not for a fullscreen column, whose window is asked the output's size.
     fn asked_width(&self, area: &Area, sizings: &[Sizing]) -> f64 {
-        let mut min = 1.0_f64;
-        let mut max = f64::INFINITY;
-        for sizing in sizings {
-            min = min.max(whole(sizing.min.w));
-            if sizing.max.w > 0.0 {
-                max = max.min(whole(sizing.max.w));
-            }
-        }
-        whole_floor(self.given_width(area).min(max.max(min)).max(min))
+        asked_width(self.given_width(area), sizings)
     }
 
     /// The height each of its windows is asked, top to bottom, into `out`, in whole logical units
@@ -148,7 +136,7 @@ impl Column {
     ///
     /// Linear in the column's windows, times one more pass for each window whose minimum exceeds
     /// its share: quadratic at worst, in a column whose minimums overflow it.
-    fn asked_heights(&self, area: &Area, sizings: &[Sizing], out: &mut Vec<f64>) {
+    fn asked_heights(area: &Area, sizings: &[Sizing], out: &mut Vec<f64>) {
         // 0 marks a window that still shares the rest: every height given is at least 1.
         out.clear();
         out.extend(sizings.iter().map(|sizing| {
@@ -217,7 +205,7 @@ impl Column {
         }
         let mins: Vec<f64> = sizings.iter().map(|sizing| whole(sizing.min.h)).collect();
         let mut heights = Vec::new();
-        self.asked_heights(area, &sizings, &mut heights);
+        Column::asked_heights(area, &sizings, &mut heights);
         if heights.iter().zip(&mins).any(|(height, min)| height < min) {
             return Err("a window is asked less than its minimum height".to_owned());
         }
@@ -232,6 +220,23 @@ impl Column {
         }
         Ok(())
     }
+}
+
+/// The width a column given `given` units asks its windows: within the largest of their minimum
+/// widths and the smallest of their maximum ones, a minimum winning over a smaller maximum (niri:
+/// `src/layout/scrolling.rs:4634-4665`); floored to whole logical units, so that proportional
+/// columns fit the screen exactly (`src/layout/tile.rs:955-959`). Limits count in whole units,
+/// as Wayland carries them. `sizings` are its windows'.
+fn asked_width(given: f64, sizings: &[Sizing]) -> f64 {
+    let mut min = 1.0_f64;
+    let mut max = f64::INFINITY;
+    for sizing in sizings {
+        min = min.max(whole(sizing.min.w));
+        if sizing.max.w > 0.0 {
+            max = max.min(whole(sizing.max.w));
+        }
+    }
+    whole_floor(given.min(max.max(min)).max(min))
 }
 
 /// The columns of one workspace and the view onto them.
@@ -415,6 +420,21 @@ impl Scrolling {
         });
         self.focused = index;
         self.fit_view(area);
+    }
+
+    /// The size a window opening on a strip is asked, `sizing` being its own: [`Scrolling::add_window`]
+    /// gives it a new column of `width`, alone in it, and [`Scrolling::arrange`] asks it that
+    /// column's width and the working area's height, within its limits. Its cost does not depend
+    /// on the strip's windows.
+    pub fn opening_size(width: ColumnWidth, sizing: Sizing, area: &Area) -> Size {
+        let sizings = [sizing];
+        let mut heights = Vec::with_capacity(sizings.len());
+        Column::asked_heights(area, &sizings, &mut heights);
+        Size {
+            w: asked_width(width.resolve(area), &sizings),
+            // One window, one height.
+            h: heights[0],
+        }
     }
 
     /// Removes `window`; returns whether it was here. When its column empties, the column goes.
@@ -842,7 +862,7 @@ impl Scrolling {
                 area.output.w
             } else {
                 let width = column.asked_width(area, &sizings);
-                column.asked_heights(area, &sizings, &mut heights);
+                Column::asked_heights(area, &sizings, &mut heights);
                 let mut y = area.working.y + area.gap;
                 // The widest window as drawn: `Column::width_on_strip`, from the sizes at hand.
                 let mut widest = 0.0_f64;

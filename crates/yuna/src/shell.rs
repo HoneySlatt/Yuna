@@ -86,6 +86,9 @@ pub(crate) struct Toplevel {
     pub last_frame_sent: Option<Duration>,
     /// The layout refused to open it: it has a buffer, but no output shows it.
     pub refused: bool,
+    /// While it is refused and waits for frame callbacks, when they are due: the time it counts
+    /// at among the refused windows waiting ([`RefusedFrames`](crate::frames::RefusedFrames)).
+    pub refused_frames_due: Option<Duration>,
     /// A request it made is owed a configure, even if nothing changes (xdg-shell); for an X11
     /// window, its rectangle and its states are set again.
     pub configure_owed: bool,
@@ -132,6 +135,7 @@ impl Toplevel {
             shown_on: None,
             last_frame_sent: None,
             refused: false,
+            refused_frames_due: None,
             configure_owed: false,
             urgent: false,
             waiting_activation: None,
@@ -295,8 +299,15 @@ pub(crate) fn has_buffer(surface: &WlSurface) -> bool {
 }
 
 impl State {
-    /// A commit of `surface`, part of the toplevel whose surface is `root`.
+    /// A commit of `surface`, part of the toplevel whose surface is `root`. A synchronised
+    /// subsurface applied ahead of the surface committed only enters its window's output: the
+    /// call for the surface committed, which follows, reads the window's state once for the
+    /// whole tree ([`Committing`](crate::state::Committing)).
     pub(crate) fn toplevel_committed(&mut self, root: &WlSurface, surface: &WlSurface) {
+        if self.ahead_of_committed_surface(surface) {
+            self.schedule_for_commit(root, surface);
+            return;
+        }
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
             return;
         };
@@ -317,6 +328,7 @@ impl State {
                 if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                     toplevel.refused = false;
                 }
+                self.refused_window_stops_waiting(root);
                 if opening {
                     self.send_opening_configure(root);
                 }
@@ -414,6 +426,7 @@ impl State {
         if let Some(owner) = &owner {
             *self.window_counts.entry(owner.clone()).or_default() += 1;
         }
+        self.refused_window_stops_waiting(root);
         let Some(toplevel) = self.toplevels.get_mut(&root.id()) else {
             return;
         };
@@ -586,6 +599,7 @@ impl State {
     /// The toplevel of `root` is gone, or its surface is: its window closes and Yuna forgets it.
     pub(crate) fn toplevel_gone(&mut self, root: &WlSurface) {
         self.close(root);
+        self.refused_window_stops_waiting(root);
         self.toplevels.remove(&root.id());
     }
 
@@ -843,8 +857,9 @@ impl State {
     /// only such windows; each toplevel Yuna keeps is alive and belongs to a client the display
     /// still serves; a toplevel with a window has a buffer the layout did not refuse, and a
     /// configured toplevel, or an X11 window X11 maps, with such a buffer has a window; the windows
-    /// counted per client for the caps are those mapped; what is kept of X11 menus agrees with
-    /// them (`xwayland/menus.rs`). Says which rule is broken.
+    /// counted per client for the caps are those mapped; the refused windows counted waiting for
+    /// frame callbacks are refused toplevels, at the times they hold; what is kept of X11 menus
+    /// agrees with them (`xwayland/menus.rs`). Says which rule is broken.
     pub(crate) fn check_windows(&self) -> Result<(), String> {
         let mut served = HashSet::new();
         self.display_handle
@@ -916,6 +931,27 @@ impl State {
                 "the windows counted per client, {:?}, are not those mapped, {counted:?}",
                 self.window_counts
             ));
+        }
+        let waiting = self
+            .toplevels
+            .values()
+            .filter_map(|toplevel| Some((toplevel, toplevel.refused_frames_due?)));
+        if let Some((toplevel, _)) = waiting
+            .clone()
+            .find(|(toplevel, _)| toplevel.window.is_some() || !toplevel.refused)
+        {
+            return Err(format!(
+                "{} counts among the refused windows waiting, but its window is {:?}, refused: {}",
+                toplevel.wl_surface().id(),
+                toplevel.window,
+                toplevel.refused
+            ));
+        }
+        if !self.refused_frames.counts(waiting.map(|(_, due)| due)) {
+            return Err(
+                "the refused windows counted waiting are not the toplevels that hold a time"
+                    .to_owned(),
+            );
         }
         self.x11.check_menus()?;
         let given = (1..self.next_window_id).map(WindowId);

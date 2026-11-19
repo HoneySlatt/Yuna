@@ -16,6 +16,7 @@
 //!
 //! The only part that reads pixels from the renderer is `render::read_pixels`.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use smithay::utils::{Physical, Rectangle};
@@ -659,15 +660,18 @@ impl State {
                 Destination::Client(frame) => {
                     let read = self.client_read(index, whole, &mut client_reads);
                     match &client_reads[read].1 {
-                        Ok(pixels) => self.finish_client_frame(
-                            frame,
-                            pixels,
-                            (mode.width(), mode.height()),
-                            presented_at,
-                            drawn_frames,
-                        ),
+                        Ok(pixels) => {
+                            self.client_copy_read(id);
+                            self.finish_client_frame(
+                                frame,
+                                pixels,
+                                (mode.width(), mode.height()),
+                                presented_at,
+                                drawn_frames,
+                            );
+                        }
                         Err(error) => {
-                            tracing::warn!(%error, output = id.0, "a client's capture failed");
+                            self.client_copy_failed(id, error);
                             frame.fail(Failure::ForNow);
                         }
                     }
@@ -676,15 +680,38 @@ impl State {
                     let read = self.client_read(index, frame.read(), &mut client_reads);
                     match &client_reads[read].1 {
                         Ok(pixels) => {
+                            self.client_copy_read(id);
                             self.finish_wlr_frame(frame, pixels, presented_at, drawn_frames);
                         }
                         Err(error) => {
-                            tracing::warn!(%error, output = id.0, "a client's capture failed");
+                            self.client_copy_failed(id, error);
                             frame.fail();
                         }
                     }
                 }
             }
+        }
+    }
+
+    /// A client's capture of output `id` could not be read, for `error`: a warning for the first
+    /// failure of a run on that output, the run's others at debug level ([`FailedCopies`]).
+    fn client_copy_failed(&mut self, id: OutputId, error: &str) {
+        let outputs: Vec<OutputId> = self.outputs.iter().map(|output| output.id).collect();
+        if self.failed_client_copies.failed(id, &outputs) {
+            tracing::warn!(
+                %error,
+                output = id.0,
+                "a client's capture failed; its output's next failures are logged at debug level"
+            );
+        } else {
+            tracing::debug!(%error, output = id.0, "a client's capture failed");
+        }
+    }
+
+    /// A client's capture of output `id` was read: a run of failures on it, if any, ends.
+    fn client_copy_read(&mut self, id: OutputId) {
+        if let Some(failed) = self.failed_client_copies.read(id) {
+            tracing::debug!(output = id.0, failed, "clients' captures are read again");
         }
     }
 
@@ -758,6 +785,36 @@ impl State {
 /// An area of an output read for clients' frames, and its pixels or why they could not be read.
 type ClientRead = (Rectangle<i32, Physical>, Result<Vec<u8>, String>);
 
+/// The outputs whose clients' captures cannot be read, each with how many failed since the
+/// first. A read fails for every capture of its output at that refresh, and a renderer that keeps
+/// failing to read an output would otherwise log a warning a refresh for each of its 16 capture
+/// sessions at most: only the first failure of a run on an output is a warning, the others are
+/// logged at debug level, until a capture of that output is read again.
+#[derive(Debug, Default)]
+pub(crate) struct FailedCopies {
+    failed: HashMap<OutputId, u64>,
+}
+
+impl FailedCopies {
+    /// A client's capture of `output` failed, `outputs` being those that exist: whether it is the
+    /// first of a run, logged as a warning. A run begun on an output removed since is forgotten
+    /// then, so that this holds no more runs than there are outputs.
+    fn failed(&mut self, output: OutputId, outputs: &[OutputId]) -> bool {
+        if let Some(failed) = self.failed.get_mut(&output) {
+            *failed = failed.saturating_add(1);
+            return false;
+        }
+        self.failed.retain(|id, _| outputs.contains(id));
+        self.failed.insert(output, 1);
+        true
+    }
+
+    /// A client's capture of `output` was read: how many failed in the run it ends, if one does.
+    fn read(&mut self, output: OutputId) -> Option<u64> {
+        self.failed.remove(&output)
+    }
+}
+
 /// Fails a capture that will not be copied: an agent's with `why`, a client's as `failure`
 /// says.
 fn fail(
@@ -790,6 +847,31 @@ mod tests {
     use super::*;
 
     const OUTPUT: OutputId = OutputId(1);
+
+    /// The 16 capture sessions of two outputs, 12 on the first and 4 on the second, fail at each
+    /// of 1,000 refreshes: one warning for each output, not one a session and a refresh. Once a
+    /// capture of the first is read again, its next failure warns again, while the second's run
+    /// goes on; a run on an output removed since is forgotten.
+    #[test]
+    fn a_run_of_failed_captures_warns_once_for_its_output() {
+        let (first, second) = (OutputId(1), OutputId(2));
+        let both = [first, second];
+        let mut copies = FailedCopies::default();
+        let mut warnings = 0;
+        for _refresh in 0..1_000 {
+            for output in [[first; 12].as_slice(), [second; 4].as_slice()].concat() {
+                warnings += usize::from(copies.failed(output, &both));
+            }
+        }
+        assert_eq!(warnings, 2);
+        assert_eq!(copies.read(first), Some(12_000));
+        assert_eq!(copies.read(first), None);
+        assert!(copies.failed(first, &both));
+        assert!(!copies.failed(second, &both));
+        assert!(copies.failed(OutputId(3), &[first, OutputId(3)]));
+        assert_eq!(copies.read(second), None);
+        assert_eq!(copies.read(first), Some(1));
+    }
 
     fn default_mode() -> OutputMode {
         OutputMode::default()

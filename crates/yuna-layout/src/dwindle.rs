@@ -29,6 +29,9 @@ fn distance_to_rect(point: crate::geometry::Point, rect: &Rect) -> f64 {
 /// The index of a node in its [`Tree`]'s vector.
 type NodeIndex = usize;
 
+/// The share of its space a window keeps when a new window splits it: half, as in Hyprland.
+const NEW_SPLIT_RATIO: f64 = 0.5;
+
 /// A node of the tree.
 #[derive(Debug, Clone)]
 enum Node {
@@ -114,11 +117,12 @@ impl Tree {
         self.free.push(index);
     }
 
-    /// A new split of `first` and `second`, at half; they must have no parent yet.
+    /// A new split of `first` and `second`, at [`NEW_SPLIT_RATIO`], as if `second` had split
+    /// `first`; they must have no parent yet.
     fn join(&mut self, first: NodeIndex, second: NodeIndex) -> NodeIndex {
         let split = self.insert(
             Node::Split {
-                ratio: 0.5,
+                ratio: NEW_SPLIT_RATIO,
                 first,
                 second,
             },
@@ -174,8 +178,8 @@ impl Tree {
         self.root = Some(leaf);
     }
 
-    /// Replaces the leaf of `target` by a split of it and `new`, `new` second. Returns whether
-    /// the leaf was found.
+    /// Replaces the leaf of `target` by a split of it and `new`, `new` second, at
+    /// [`NEW_SPLIT_RATIO`]. Returns whether the leaf was found.
     fn split_leaf(&mut self, target: WindowId, new: WindowId) -> bool {
         let Some(leaf) = self.leaf(target) else {
             return false;
@@ -184,7 +188,7 @@ impl Tree {
         let first = self.insert(Node::Leaf(target), Some(leaf));
         let second = self.insert(Node::Leaf(new), Some(leaf));
         self.slot_mut(leaf).node = Node::Split {
-            ratio: 0.5,
+            ratio: NEW_SPLIT_RATIO,
             first,
             second,
         };
@@ -247,6 +251,28 @@ impl Tree {
         };
         self.slot_mut(leaf_a).node = Node::Leaf(b);
         self.slot_mut(leaf_b).node = Node::Leaf(a);
+    }
+
+    /// The rectangle of `window`'s leaf when the tree fills `rect`, before the grid: as
+    /// [`Tree::arrange`] splits it, down the path from the root alone; none when no leaf holds the
+    /// window. Its cost is a scan for the leaf and the leaf's depth.
+    fn leaf_rect(&self, window: WindowId, rect: Rect, area: &Area) -> Option<Rect> {
+        let mut node = self.leaf(window)?;
+        // Each split on the way up, with whether the path takes its first part.
+        let mut splits = Vec::new();
+        while let Some(parent) = self.slot(node).parent {
+            let Node::Split { ratio, first, .. } = self.slot(parent).node else {
+                return None;
+            };
+            splits.push((ratio, first == node));
+            node = parent;
+        }
+        let mut rect = rect;
+        for (ratio, takes_first) in splits.into_iter().rev() {
+            let (first, second) = split_rect(rect, ratio, area);
+            rect = if takes_first { first } else { second };
+        }
+        Some(rect)
     }
 
     /// Every window with its rectangle inside `rect`, left or top first.
@@ -572,19 +598,40 @@ impl Dwindle {
         self.tree.arrange(area.working.shrunk(area.gap), area, out);
     }
 
-    /// The slot a new window would split: the focused window's, or the last window's when none
-    /// is focused, as [`Dwindle::add_window`] chooses; none when the tree is empty.
-    pub fn opening_slot(&self, area: &Area) -> Option<Rect> {
+    /// The window a new window splits, as [`Dwindle::add_window`] chooses: the focused one, or
+    /// the last one when none is focused; none when the tree is empty.
+    fn opening_target(&self) -> Option<WindowId> {
         let root = self.tree.root?;
-        let target = self
-            .focused
-            .unwrap_or_else(|| self.tree.edge_leaf(root, false));
-        let mut slots = Vec::new();
-        self.arrange_tree(area, &mut slots);
-        slots
-            .into_iter()
-            .find(|&(window, _)| window == target)
-            .map(|(_, slot)| slot)
+        Some(
+            self.focused
+                .unwrap_or_else(|| self.tree.edge_leaf(root, false)),
+        )
+    }
+
+    /// The slot a new window would split, the [`Dwindle::opening_target`]'s, as
+    /// [`Dwindle::arrange`] draws it; none when the tree is empty.
+    pub fn opening_slot(&self, area: &Area) -> Option<Rect> {
+        let target = self.opening_target()?;
+        let rect = self
+            .tree
+            .leaf_rect(target, area.working.shrunk(area.gap), area)?;
+        Some(area.scale.snap_rect(rect))
+    }
+
+    /// The slot a window opening now gets, as [`Dwindle::add_window`] places it and
+    /// [`Dwindle::arrange`] draws it: the second half of the slot it splits, or the whole working
+    /// area, gaps aside, in an empty tree. Its cost is a scan for the leaf it splits and that
+    /// leaf's depth, not an arrangement of the tree.
+    pub fn new_window_slot(&self, area: &Area) -> Rect {
+        let whole = area.working.shrunk(area.gap);
+        let split = self
+            .opening_target()
+            .and_then(|target| self.tree.leaf_rect(target, whole, area));
+        let rect = match split {
+            Some(rect) => split_rect(rect, NEW_SPLIT_RATIO, area).1,
+            None => whole,
+        };
+        area.scale.snap_rect(rect)
     }
 
     /// Every window's slot, as [`Dwindle::arrange`] draws it: the tree's, the maximised window's

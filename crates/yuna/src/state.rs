@@ -27,7 +27,7 @@ use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
-    get_parent, get_role, with_surface_tree_downward,
+    add_pre_commit_hook, get_parent, get_role, is_sync_subsurface, with_surface_tree_downward,
 };
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufState, get_dmabuf};
@@ -45,7 +45,7 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Motion, Settings};
 
-use crate::capture::{CaptureTicket, CapturedFrame, PendingCapture};
+use crate::capture::{CaptureTicket, CapturedFrame, FailedCopies, PendingCapture};
 use crate::clock::{Clock, ClockMode};
 use crate::compositor::Counters;
 use crate::output::VirtualOutput;
@@ -99,6 +99,9 @@ pub(crate) struct State {
     pub toplevels: HashMap<ObjectId, Toplevel>,
     /// The surface of each window the layout holds.
     pub windows: HashMap<WindowId, ObjectId>,
+    /// The windows refused by the layout or a cap that wait for frame callbacks, by when they are
+    /// due (`frames.rs`).
+    pub refused_frames: crate::frames::RefusedFrames,
     /// How many windows the layout holds of each client, for its cap (`shell.rs`).
     pub window_counts: HashMap<crate::shell::WindowOwner, usize>,
     /// The next window's id: ids increase and are never reused.
@@ -166,10 +169,15 @@ pub(crate) struct State {
     pub(crate) virtual_input: crate::virtual_input::VirtualInputState,
     /// The captures waiting for their output's refresh (`capture.rs`).
     pub pending_captures: Vec<PendingCapture>,
+    /// The outputs whose clients' captures cannot be read, for what is logged of them.
+    pub failed_client_copies: FailedCopies,
     /// The agents' captures copied or failed, until the compositor's user takes them.
     pub captured: Vec<(CaptureTicket, Result<CapturedFrame, String>)>,
     /// The next agent's capture's ticket: tickets increase and are never reused.
     pub next_capture_ticket: u64,
+    /// The surface whose commit request is being handled, from its pre-commit hook until the
+    /// commit handler's call for it ([`Committing`]); none between commit requests.
+    pub committing: Option<Committing>,
     /// Whether the commit being handled attached or removed a buffer: something new to draw.
     pub committed_content: bool,
     /// The number of the client whose commit is being handled, while it is: a frame it arms
@@ -222,6 +230,7 @@ impl State {
             retired_globals: Vec::new(),
             toplevels: HashMap::new(),
             windows: HashMap::new(),
+            refused_frames: crate::frames::RefusedFrames::default(),
             window_counts: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
@@ -265,8 +274,10 @@ impl State {
             _text_input_state: crate::text_input::text_input_global(dh),
             virtual_input: crate::virtual_input::VirtualInputState::new(dh),
             pending_captures: Vec::new(),
+            failed_client_copies: FailedCopies::default(),
             captured: Vec::new(),
             next_capture_ticket: 1,
+            committing: None,
             committed_content: false,
             committing_client: None,
             colour: {
@@ -298,6 +309,15 @@ impl State {
         self.outputs.iter().position(|o| o.id == id)
     }
 
+    /// Whether the commit handler's call for `surface` comes before the call for the surface its
+    /// client is committing, in the same commit ([`Committing`]): `surface` is a synchronised
+    /// subsurface under it, and that later call reads the whole tree.
+    pub(crate) fn ahead_of_committed_surface(&self, surface: &WlSurface) -> bool {
+        self.committing
+            .as_ref()
+            .is_some_and(|committing| committing.surface != *surface)
+    }
+
     /// Frees the renderer's textures of the surfaces and dmabufs that went since the last round,
     /// without drawing. A frame frees them too, but nothing draws for a hidden window that closes,
     /// and its textures would stay in memory at rest.
@@ -308,6 +328,33 @@ impl State {
             tracing::warn!(%error, "the textures of closed windows could not be freed");
         }
     }
+}
+
+/// The surface whose `wl_surface.commit` request is being handled, and the root of its tree.
+///
+/// Smithay applies a commit as one transaction: the surface committed and the synchronised
+/// subsurfaces under it whose state waited for that commit. It calls the commit handler once for
+/// each of them, in the transaction's order, which puts the surface committed last
+/// (`Transaction::apply`; `PrivateSurfaceData::commit` inserts it after the subsurfaces it takes).
+/// The calls before it are for synchronised subsurfaces under it: each does only what is its own
+/// surface's, such as entering its window's output, and the call for the surface committed reads
+/// the whole tree once: its buffers, its window's geometry, what its commit arms. One commit of a
+/// window costs Yuna one walk of its tree, not one a surface.
+///
+/// A surface that committed while it was synchronised keeps its first place in its next
+/// transaction: made desynchronised, it may then come before subsurfaces its commit applies too.
+/// The calls after its own find no surface committing, and do everything, as for a commit of
+/// their own.
+///
+/// A synchronised subsurface's own commit applies nothing yet: it is not noted. This holds while
+/// each transaction applies within the commit request that made it: Yuna adds no blocker to a
+/// transaction, as a `fifo` or a `drm_syncobj` barrier would.
+#[derive(Debug)]
+pub(crate) struct Committing {
+    /// The surface committed, noted by the pre-commit hook every surface has.
+    pub surface: WlSurface,
+    /// The root of its tree, found once for every call of its commit.
+    pub root: WlSurface,
 }
 
 /// What Yuna keeps for each client.
@@ -392,6 +439,20 @@ impl CompositorHandler for State {
             .map_or(&NO_CLIENT_STATE, |state| &state.compositor)
     }
 
+    /// Each commit request starts with its surface's pre-commit hook, before Smithay applies the
+    /// commit: it notes the surface committed, unless its commit waits for its parent's
+    /// ([`Committing`]).
+    fn new_surface(&mut self, surface: &WlSurface) {
+        add_pre_commit_hook::<State, _>(surface, |state, _, surface| {
+            state.committing = (!is_sync_subsurface(surface)).then(|| Committing {
+                surface: surface.clone(),
+                root: tree_root(surface),
+            });
+        });
+    }
+
+    /// A surface's state applied, once for each surface of a commit, the surface committed last
+    /// ([`Committing`]).
     fn commit(&mut self, surface: &WlSurface) {
         self.counters.commits += 1;
         // One lookup of its client: its seat counts the commit, and the rest auditor too.
@@ -410,27 +471,38 @@ impl CompositorHandler for State {
             self.rest.client_committed(number);
         }
         self.committing_client = number;
+        let ahead = self.ahead_of_committed_surface(surface);
+        let root = match &self.committing {
+            Some(committing) => committing.root.clone(),
+            None => tree_root(surface),
+        };
+        if !ahead {
+            self.committing = None;
+        }
         // Read before the buffer handler takes them: a buffer attached or removed anywhere in the
         // tree this commit applies is something new to draw. Damage alone is not: Smithay keeps
-        // it until a buffer comes, and draws nothing new for it.
+        // it until a buffer comes, and draws nothing new for it. A synchronised subsurface's
+        // buffer is read with its tree, at the surface committed, and Smithay's buffer handler
+        // takes it there too: it does nothing for a synchronised subsurface.
         let mut content = false;
-        with_surface_tree_downward(
-            surface,
-            (),
-            |_, _, _| TraversalAction::DoChildren(()),
-            |_, states, _| {
-                content |= states
-                    .cached_state
-                    .get::<SurfaceAttributes>()
-                    .current()
-                    .buffer
-                    .is_some();
-            },
-            |_, _, _| true,
-        );
+        if !ahead {
+            with_surface_tree_downward(
+                surface,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |_, states, _| {
+                    content |= states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .buffer
+                        .is_some();
+                },
+                |_, _, _| true,
+            );
+            on_commit_buffer_handler::<State>(surface);
+        }
         self.committed_content = content;
-        on_commit_buffer_handler::<State>(surface);
-        let root = tree_root(surface);
         self.tell_surface_preferred_scale(&root, surface);
         // Its serial first: it may pair the surface with its X11 window, which then takes this
         // very commit as a window's.

@@ -207,6 +207,29 @@ impl Floating {
             f.rect = fit(f.rect, area);
         }
     }
+
+    /// The size [`Floating::add`] keeps of a new window of `size`, wherever it puts it: at least
+    /// a unit on each axis, and on `area`'s grid when the workspace is on an output ([`fit`]).
+    pub fn opened_size(size: Size, area: Option<&Area>) -> Size {
+        let at_least_a_unit = Size {
+            w: size.w.max(1.0),
+            h: size.h.max(1.0),
+        };
+        match area {
+            Some(area) => fitted_size(at_least_a_unit, area),
+            None => at_least_a_unit,
+        }
+    }
+}
+
+/// The size [`fit`] gives a rectangle of `size`: at least a unit, on the physical grid and at
+/// least a pixel.
+fn fitted_size(size: Size, area: &Area) -> Size {
+    let pixel = 1.0 / area.scale.get();
+    Size {
+        w: area.scale.snap(size.w.max(1.0)).max(pixel),
+        h: area.scale.snap(size.h.max(1.0)).max(pixel),
+    }
 }
 
 /// `rect`, relative to the working area, moved so that enough of it stays on the working area to
@@ -214,9 +237,7 @@ impl Floating {
 /// corner is snapped alone, so that its size does not change with its place. As niri, after
 /// Mutter: on each axis, a quarter of the window stays on, between 10 and 75 units.
 fn fit(rect: Rect, area: &Area) -> Rect {
-    let pixel = 1.0 / area.scale.get();
-    let w = area.scale.snap(rect.w.max(1.0)).max(pixel);
-    let h = area.scale.snap(rect.h.max(1.0)).max(pixel);
+    let Size { w, h } = fitted_size(rect.size(), area);
     let off_x = (w - (w / 4.0).clamp(10.0, 75.0)).max(0.0);
     let off_y = (h - (h / 4.0).clamp(10.0, 75.0)).max(0.0);
     let clamp = |v: f64, low: f64, high: f64| v.max(low).min(high.max(low));

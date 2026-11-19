@@ -13,6 +13,7 @@ mod captures;
 mod client;
 mod colour;
 mod colour_client;
+mod core_costs;
 mod dialogs;
 mod dmabuf;
 mod input_client;
