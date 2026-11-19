@@ -1,6 +1,6 @@
 # 0140. Rust 1.100's features: what Yuna takes
 
-- Status: Accepted
+- Status: Accepted; superseded in part by [0143](0143-allocations-a-frame-counted-by-dhat.md) (how allocations a frame are counted)
 - Date: 2026-11-19
 
 ## Context

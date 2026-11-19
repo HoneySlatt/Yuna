@@ -160,5 +160,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0137](0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md) | Planes: Yuna's own allocator; direct scanout and the cursor plane at Stage 2b | Accepted; supersedes in part 0082 |
 | [0138](0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md) | Agents' seats: each agent in its own Yuna, one seat per Yuna from Stage 2's core | Accepted; supersedes 0116 |
 | [0139](0139-stage-2-in-three-gated-parts-2as-path-revised.md) | Stage 2 in three gated parts; 2a's path off Smithay revised | Accepted; supersedes 0081; supersedes in part 0112 |
-| [0140](0140-rust-1-100s-features-what-yuna-takes.md) | Rust 1.100's features: what Yuna takes | Accepted |
+| [0140](0140-rust-1-100s-features-what-yuna-takes.md) | Rust 1.100's features: what Yuna takes | Accepted; superseded in part by 0143 |
 | [0141](0141-a-dwindle-window-that-does-not-fit-floats.md) | A dwindle window that does not fit floats | Accepted |
+| [0142](0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md) | Parity: a pinned baseline, figures in classes, three verdicts | Accepted |
+| [0143](0143-allocations-a-frame-counted-by-dhat.md) | Allocations a frame, counted by valgrind's DHAT | Accepted; supersedes in part 0140 |
