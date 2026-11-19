@@ -1923,4 +1923,153 @@ mod tests {
         );
         assert!(drags.is_empty());
     }
+
+    /// A seat holds drags while one runs and none once the last ended.
+    #[test]
+    fn a_seat_is_empty_only_while_it_holds_no_drag() {
+        let mut drags = SeatDrags::<u32>::default();
+        assert!(drags.is_empty());
+        drags.wayland_started(4, true);
+        assert!(!drags.is_empty());
+        drags.grab_cancelled(4, true);
+        assert!(drags.is_empty());
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing);
+        assert!(!drags.is_empty());
+    }
+
+    /// A Wayland drag is held while it is in the pointer's hand, and no more once it drops or ends,
+    /// and a drag that never was is not held.
+    #[test]
+    fn a_wayland_drag_is_held_while_it_is_in_the_hand() {
+        let mut drags = SeatDrags::<u32>::default();
+        assert!(!drags.holds_wayland(4));
+        drags.wayland_started(4, true);
+        assert!(drags.holds_wayland(4));
+        assert!(!drags.holds_wayland(5));
+        drags.moved(over_x11(5));
+        drags.grab_dropped(4, true);
+        assert!(!drags.holds_wayland(4), "dropping on X11 is not the hand's");
+    }
+
+    /// The X11 target's status is told to the source only while the drag is over an X11 window or
+    /// dropping on it: once the pointer came back over a Wayland window, the status of the X11
+    /// window it left is no longer the source's concern.
+    #[test]
+    fn a_status_is_told_only_while_the_drag_is_over_an_x11_window_or_dropping() {
+        let mut drags = SeatDrags::<u32>::default();
+        drags.wayland_started(4, true);
+        drags.moved(over_x11(5));
+        drags.moved(Pick::Wayland(31));
+        assert!(
+            drags
+                .wayland_status(SERVER, 4, true, DragAction::Copy)
+                .is_empty()
+        );
+        drags.moved(over_x11(5));
+        assert_eq!(
+            drags.wayland_status(SERVER, 4, true, DragAction::Copy),
+            [Effect::Status {
+                drag: 4,
+                accepted: true,
+                action: DragAction::Copy
+            }]
+        );
+        drags.grab_dropped(4, true);
+        assert_eq!(
+            drags.wayland_status(SERVER, 4, true, DragAction::Move),
+            [Effect::Status {
+                drag: 4,
+                accepted: true,
+                action: DragAction::Move
+            }],
+            "dropping, the source is still told"
+        );
+    }
+
+    /// An Xwayland going ends the drags of its own, whether they are one or several, and leaves the
+    /// drags of another Xwayland of the same seat as they were.
+    #[test]
+    fn an_xwayland_going_ends_its_own_drags_and_no_other() {
+        let other = SERVER + 1;
+        let pressed_on_other = Some(Pressed {
+            server: other,
+            client: CLIENT,
+        });
+        let mut drags = SeatDrags::<u32>::default();
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing);
+        drags.released(SECOND);
+        // The first now ends, so a second, of the other Xwayland, starts beside it.
+        drags
+            .x11_offered(other, 2, CLIENT, pressed_on_other, Pick::Nothing)
+            .expect("it starts");
+        assert_eq!(
+            drags.x11_gone(other),
+            [Effect::Ended(DragKey::FromX11 {
+                server: other,
+                drag: 2
+            })]
+        );
+        assert!(!drags.in_hand());
+        assert_eq!(
+            drags.next_deadline(),
+            Some(SECOND + X11_DROP_TIMEOUT),
+            "the first drag, of the Xwayland that stays, waits on"
+        );
+        assert_eq!(drags.x11_gone(SERVER), [Effect::Ended(x11_key(1))]);
+        assert!(drags.is_empty());
+    }
+
+    /// A Wayland drag that speaks to one Xwayland is cancelled, dropping, by that Xwayland going and
+    /// by no other.
+    #[test]
+    fn an_xwayland_going_cancels_only_the_wayland_drags_dropping_on_it() {
+        let mut drags = SeatDrags::<u32>::default();
+        drags.wayland_started(4, true);
+        drags.moved(over_x11(5));
+        drags.grab_dropped(4, true);
+        assert!(drags.x11_gone(SERVER + 1).is_empty());
+        assert_eq!(
+            drags.x11_gone(SERVER),
+            [
+                Effect::Cancel { drag: 4 },
+                Effect::Ended(DragKey::FromWayland(4))
+            ]
+        );
+    }
+
+    /// A new drag ends the one still in the pointer's hand as refused, whichever side it comes
+    /// from: an X11 drag in the hand is forgotten, a Wayland drag cancelled.
+    #[test]
+    fn a_new_drag_refuses_the_one_still_in_the_hand() {
+        let mut drags = SeatDrags::<u32>::default();
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing);
+        let effects = drags
+            .x11_offered(SERVER, 2, CLIENT, PRESSED, Pick::Nothing)
+            .expect("it starts");
+        assert!(
+            effects.contains(&Effect::Forget {
+                server: SERVER,
+                drag: 1
+            }),
+            "{effects:?}"
+        );
+        assert!(effects.contains(&Effect::Ended(x11_key(1))));
+        assert!(drags.in_hand());
+
+        let mut drags = SeatDrags::<u32>::default();
+        drags.wayland_started(4, true);
+        let effects = drags
+            .x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing)
+            .expect("it starts");
+        assert!(effects.contains(&Effect::Cancel { drag: 4 }), "{effects:?}");
+        assert!(effects.contains(&Effect::Ended(DragKey::FromWayland(4))));
+        assert!(!drags.holds_wayland(4));
+
+        // An X11 drag in the hand when a Wayland one starts is refused too: only a Wayland drag
+        // in the hand is Smithay's to end.
+        let mut drags = SeatDrags::<u32>::default();
+        drags.x11_offered(SERVER, 1, CLIENT, PRESSED, Pick::Nothing);
+        let effects = drags.wayland_started(4, true);
+        assert!(effects.contains(&Effect::Ended(x11_key(1))), "{effects:?}");
+    }
 }

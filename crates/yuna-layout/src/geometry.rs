@@ -286,6 +286,244 @@ mod tests {
     }
 
     #[test]
+    fn the_centre_of_a_rectangle_is_halfway_along_each_side() {
+        let centre = Rect::new(10.0, 20.0, 30.0, 50.0).center();
+        assert_eq!((centre.x, centre.y), (25.0, 45.0));
+    }
+
+    #[test]
+    fn a_side_must_be_longer_than_epsilon_for_a_rectangle_to_have_area() {
+        assert!(Rect::new(0.0, 0.0, 1.0, 1.0).has_area());
+        assert!(!Rect::new(0.0, 0.0, EPSILON, 1.0).has_area());
+        assert!(!Rect::new(0.0, 0.0, 1.0, EPSILON).has_area());
+        assert!(!Rect::new(0.0, 0.0, 0.0, 0.0).has_area());
+    }
+
+    #[test]
+    fn rectangles_apart_or_touching_on_any_side_do_not_overlap() {
+        let middle = Rect::new(100.0, 100.0, 10.0, 10.0);
+        // The same rectangle moved one gap, then exactly touching, on each side.
+        for (dx, dy) in [(-30.0, 0.0), (30.0, 0.0), (0.0, -30.0), (0.0, 30.0)] {
+            let apart = Rect::new(100.0 + dx, 100.0 + dy, 10.0, 10.0);
+            assert!(!middle.overlaps(&apart), "{apart:?} lies apart");
+            assert!(!apart.overlaps(&middle), "{apart:?} lies apart");
+        }
+        for (dx, dy) in [(-10.0, 0.0), (10.0, 0.0), (0.0, -10.0), (0.0, 10.0)] {
+            let touching = Rect::new(100.0 + dx, 100.0 + dy, 10.0, 10.0);
+            assert!(!middle.overlaps(&touching), "{touching:?} only touches");
+            assert!(!touching.overlaps(&middle), "{touching:?} only touches");
+        }
+    }
+
+    #[test]
+    fn rectangles_overlap_only_by_more_than_epsilon() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let by_epsilon = |dx: f64, dy: f64| Rect::new(dx, dy, 10.0, 10.0);
+        assert!(!a.overlaps(&by_epsilon(10.0 - EPSILON, 0.0)));
+        assert!(!a.overlaps(&by_epsilon(0.0, 10.0 - EPSILON)));
+        assert!(!by_epsilon(10.0 - EPSILON, 0.0).overlaps(&a));
+        assert!(!by_epsilon(0.0, 10.0 - EPSILON).overlaps(&a));
+        assert!(a.overlaps(&by_epsilon(10.0 - 2.0 * EPSILON, 0.0)));
+        assert!(a.overlaps(&by_epsilon(0.0, 10.0 - 2.0 * EPSILON)));
+    }
+
+    /// Four candidates around `from`, each at a distance of 10, 20, 30 or 40 on its side.
+    fn around(from: &Rect) -> [(&'static str, Rect); 4] {
+        [
+            ("left", Rect::new(from.x - 20.0, from.y, 10.0, 10.0)),
+            ("right", Rect::new(from.right() + 30.0, from.y, 10.0, 10.0)),
+            ("up", Rect::new(from.x, from.y - 40.0, 10.0, 10.0)),
+            ("down", Rect::new(from.x, from.bottom() + 10.0, 10.0, 10.0)),
+        ]
+    }
+
+    #[test]
+    fn each_direction_picks_the_candidate_on_its_own_side() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        let candidates = around(&from);
+        for (direction, expected) in [
+            (Direction::Left, "left"),
+            (Direction::Right, "right"),
+            (Direction::Up, "up"),
+            (Direction::Down, "down"),
+        ] {
+            assert_eq!(
+                nearest_in_direction(from, direction, &candidates),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn the_closer_candidate_wins_whatever_the_order_and_the_direction() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        for direction in [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            // Distances 10 and 50 along the direction, both beside `from` on the other axis.
+            let place = |distance: f64| match direction {
+                Direction::Left => Rect::new(from.x - distance - 10.0, from.y, 10.0, 10.0),
+                Direction::Right => Rect::new(from.right() + distance, from.y, 10.0, 10.0),
+                Direction::Up => Rect::new(from.x, from.y - distance - 10.0, 10.0, 10.0),
+                Direction::Down => Rect::new(from.x, from.bottom() + distance, 10.0, 10.0),
+            };
+            let (near, far) = ((1, place(10.0)), (2, place(50.0)));
+            assert_eq!(nearest_in_direction(from, direction, &[near, far]), Some(1));
+            assert_eq!(nearest_in_direction(from, direction, &[far, near]), Some(1));
+        }
+    }
+
+    #[test]
+    fn a_candidate_touching_the_focused_rectangle_is_the_nearest_on_its_side() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        let touching = [
+            (Direction::Left, Rect::new(90.0, 100.0, 10.0, 10.0)),
+            (Direction::Right, Rect::new(110.0, 100.0, 10.0, 10.0)),
+            (Direction::Up, Rect::new(100.0, 90.0, 10.0, 10.0)),
+            (Direction::Down, Rect::new(100.0, 110.0, 10.0, 10.0)),
+        ];
+        for (direction, rect) in touching {
+            let far = Rect::new(rect.x * 2.0 - 100.0, rect.y * 2.0 - 100.0, 10.0, 10.0);
+            assert_eq!(
+                nearest_in_direction(from, direction, &[(2, far), (1, rect)]),
+                Some(1),
+                "{direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_candidate_overlapping_or_sharing_no_extent_across_is_never_chosen() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        let candidates = [
+            // Overlaps `from` itself: it lies on no side of it.
+            (1, Rect::new(105.0, 100.0, 10.0, 10.0)),
+            // Beside it but only touching across: no shared extent on the other axis.
+            (2, Rect::new(120.0, 110.0, 10.0, 10.0)),
+            (3, Rect::new(120.0, 90.0, 10.0, 10.0)),
+            (4, Rect::new(110.0, 120.0, 10.0, 10.0)),
+        ];
+        for direction in [Direction::Right, Direction::Down] {
+            assert_eq!(nearest_in_direction(from, direction, &candidates), None);
+        }
+        let candidates = [
+            (1, Rect::new(95.0, 100.0, 10.0, 10.0)),
+            (2, Rect::new(80.0, 110.0, 10.0, 10.0)),
+            (3, Rect::new(80.0, 90.0, 10.0, 10.0)),
+            (4, Rect::new(90.0, 80.0, 10.0, 10.0)),
+        ];
+        for direction in [Direction::Left, Direction::Up] {
+            assert_eq!(nearest_in_direction(from, direction, &candidates), None);
+        }
+    }
+
+    #[test]
+    fn at_the_same_distance_the_candidate_sharing_more_of_the_other_axis_wins() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        // Both 20 away on their side, one sharing 3 units across, the other 8.
+        let cases = [
+            (
+                Direction::Right,
+                Rect::new(130.0, 107.0, 10.0, 10.0),
+                Rect::new(130.0, 102.0, 10.0, 10.0),
+            ),
+            (
+                Direction::Left,
+                Rect::new(70.0, 107.0, 10.0, 10.0),
+                Rect::new(70.0, 102.0, 10.0, 10.0),
+            ),
+            (
+                Direction::Down,
+                Rect::new(107.0, 130.0, 10.0, 10.0),
+                Rect::new(102.0, 130.0, 10.0, 10.0),
+            ),
+            (
+                Direction::Up,
+                Rect::new(107.0, 70.0, 10.0, 10.0),
+                Rect::new(102.0, 70.0, 10.0, 10.0),
+            ),
+        ];
+        for (direction, little, more) in cases {
+            let (little, more) = ((1, little), (2, more));
+            assert_eq!(
+                nearest_in_direction(from, direction, &[little, more]),
+                Some(2),
+                "{direction:?}"
+            );
+            assert_eq!(
+                nearest_in_direction(from, direction, &[more, little]),
+                Some(2),
+                "{direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn at_the_same_distance_and_overlap_the_topmost_or_leftmost_wins_and_a_full_tie_keeps_the_first()
+     {
+        let from = Rect::new(100.0, 100.0, 10.0, 30.0);
+        // Both on the right at 20, sharing 10 units of height: the upper one starts higher.
+        let upper = (1, Rect::new(130.0, 90.0, 10.0, 20.0));
+        let lower = (2, Rect::new(130.0, 120.0, 10.0, 20.0));
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[upper, lower]),
+            Some(1)
+        );
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[lower, upper]),
+            Some(1)
+        );
+        // Below `from`, the leftmost wins.
+        let from = Rect::new(100.0, 100.0, 30.0, 10.0);
+        let left = (1, Rect::new(90.0, 130.0, 20.0, 10.0));
+        let right = (2, Rect::new(120.0, 130.0, 20.0, 10.0));
+        assert_eq!(
+            nearest_in_direction(from, Direction::Down, &[left, right]),
+            Some(1)
+        );
+        assert_eq!(
+            nearest_in_direction(from, Direction::Down, &[right, left]),
+            Some(1)
+        );
+        // The same rectangle twice: the first stays.
+        let same = Rect::new(130.0, 100.0, 10.0, 30.0);
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[(1, same), (2, same)]),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn at_the_same_distance_more_shared_extent_wins_even_from_a_larger_across() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        // Both 20 to the right: one starting above `from` and sharing 5, one sharing all 10.
+        let less = (1, Rect::new(130.0, 90.0, 10.0, 15.0));
+        let more = (2, Rect::new(130.0, 100.0, 10.0, 10.0));
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[less, more]),
+            Some(2)
+        );
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[more, less]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_candidate_closer_but_sharing_less_wins_over_one_farther_sharing_more() {
+        let from = Rect::new(100.0, 100.0, 10.0, 10.0);
+        let near_little = (1, Rect::new(120.0, 108.0, 10.0, 10.0));
+        let far_more = (2, Rect::new(160.0, 100.0, 10.0, 10.0));
+        assert_eq!(
+            nearest_in_direction(from, Direction::Right, &[far_more, near_little]),
+            Some(1)
+        );
+    }
+
+    #[test]
     fn touching_rectangles_do_not_overlap() {
         let a = Rect::new(0.0, 0.0, 10.0, 10.0);
         assert!(!a.overlaps(&Rect::new(10.0, 0.0, 10.0, 10.0)));

@@ -1123,4 +1123,203 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn typing_starts_in_the_group_the_keyboard_is_in() {
+        let four = compiled("us,fr,de,ru", "");
+        let held = HashSet::new();
+        for group in 0..4 {
+            let planner = KeyPlanner::new(&four, KeyboardState::plain(group), &held);
+            assert_eq!(planner.start_group(), group);
+        }
+    }
+
+    /// A field of exactly the longest length is accepted; one byte more is refused, in each field.
+    #[test]
+    fn a_field_may_hold_the_most_bytes_and_no_more() {
+        let longest = "a".repeat(MAX_LAYOUT_NAME);
+        let too_long = "a".repeat(MAX_LAYOUT_NAME + 1);
+        assert!(layout(&longest, "", "").check_names().is_ok());
+        assert!(layout("us", &longest, "").check_names().is_ok());
+        assert!(layout("us", "", &longest).check_names().is_ok());
+        for refused in [
+            layout(&too_long, "", ""),
+            layout("us", &too_long, ""),
+            layout("us", "", &too_long),
+        ] {
+            assert!(
+                matches!(refused.check_names(), Err(Error::Refused(why)) if why.contains("bytes at most")),
+                "{refused:?}"
+            );
+        }
+    }
+
+    /// Only the options hold a colon, such as `grp:alt_shift_toggle`; no field holds another
+    /// character than letters, digits, `_`, `-` and commas.
+    #[test]
+    fn a_colon_belongs_to_the_options_alone() {
+        assert!(
+            layout("us", "", "grp:alt_shift_toggle")
+                .check_names()
+                .is_ok()
+        );
+        assert!(layout("us:x", "", "").check_names().is_err());
+        assert!(layout("us", "a:b", "").check_names().is_err());
+        for wrong in [" ", "/", ".", "\0", "\u{e9}", "="] {
+            let options = format!("grp{wrong}x");
+            assert!(
+                layout("us", "", &options).check_names().is_err(),
+                "{options:?}"
+            );
+        }
+    }
+
+    /// The configuration Smithay compiles an agent's keyboard from names the evdev rules, the pc105
+    /// model and the layout's own fields.
+    #[test]
+    fn the_keyboard_is_made_from_the_layouts_own_names() {
+        let named = layout("fr,us", "azerty,", "grp:alt_shift_toggle");
+        let config = named.xkb_config();
+        assert_eq!(config.rules, "evdev");
+        assert_eq!(config.model, "pc105");
+        assert_eq!(config.layout, "fr,us");
+        assert_eq!(config.variant, "azerty,");
+        assert_eq!(config.options.as_deref(), Some("grp:alt_shift_toggle"));
+    }
+
+    /// The keymap's text is the one clients are sent: it compiles again to the same keys.
+    #[test]
+    fn the_keymap_text_compiles_again_to_the_same_keymap() {
+        let fr = compiled("fr", "");
+        let text = fr.text();
+        assert!(text.contains("xkb_symbols"), "{text:.80}");
+        let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
+        let again = xkb::Keymap::new_from_string(
+            &context,
+            text.clone(),
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the text is a keymap");
+        assert_eq!(again.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1), text);
+        let a = fr.keymap.key_by_name("AD01").expect("a key");
+        let state = state_at(&again, KeyboardState::plain(0));
+        assert_eq!(state.key_get_one_sym(a), Keysym::a);
+    }
+
+    /// A key carries a keysym when it types it at any level of any group, and no other.
+    #[test]
+    fn a_key_carries_every_keysym_it_types_at_some_level_of_some_group() {
+        let both = compiled("us,ru", "");
+        let a = both.keymap.key_by_name("AC01").expect("a's key");
+        for keysym in [
+            Keysym::a,
+            Keysym::A,
+            Keysym::Cyrillic_ef,
+            Keysym::Cyrillic_EF,
+        ] {
+            assert!(both.carries(a, keysym), "{keysym:?}");
+        }
+        for keysym in [Keysym::b, Keysym::Cyrillic_be, Keysym::Shift_L] {
+            assert!(!both.carries(a, keysym), "{keysym:?}");
+        }
+    }
+
+    /// A tap of a keysym that only another group types takes that group's key.
+    #[test]
+    fn a_key_is_named_in_another_group_when_the_group_in_effect_lacks_the_keysym() {
+        let both = compiled("us,ru", "");
+        let key = both.key_named(Keysym::Cyrillic_ef, 0).expect("ru's ef");
+        assert_eq!(both.keymap.key_get_name(key), Some("AC01"));
+        let key = both.key_named(Keysym::a, 1).expect("us's a");
+        assert_eq!(both.keymap.key_get_name(key), Some("AC01"));
+    }
+
+    /// The keys that count are those that type something: evdev's keycodes number about 700, and
+    /// most are empty.
+    #[test]
+    fn only_keys_that_type_something_are_kept() {
+        let us = compiled("us", "");
+        let (min, max) = (us.keymap.min_keycode().raw(), us.keymap.max_keycode().raw());
+        let empty =
+            (min..=max).filter(|&raw| us.keymap.num_layouts_for_key(Keycode::new(raw)) == 0);
+        assert!(
+            empty.count() > 0,
+            "the keymap has keycodes that type nothing"
+        );
+        assert!(!us.keys.is_empty());
+        for &key in &us.keys {
+            assert!(us.keymap.num_layouts_for_key(key) > 0, "{key:?}");
+        }
+    }
+
+    /// The tiers: a PC keyboard's keys, those X11 carries beyond them, evdev's `<LVL3>` among them,
+    /// and the keys past X11's 255.
+    #[test]
+    fn keys_are_ranked_by_what_reaches_a_pc_keyboard_then_x11_then_nothing() {
+        let us = compiled("us", "");
+        let tier_of = |name: &str| tier(&us.keymap, us.keymap.key_by_name(name).expect(name));
+        assert_eq!(tier_of("AC01"), Tier::Pc);
+        assert_eq!(tier_of("LFSH"), Tier::Pc);
+        assert_eq!(tier_of("I187"), Tier::X11, "the keypad's parenthesis");
+        assert_eq!(tier_of("LVL3"), Tier::X11, "a fake key");
+        assert_eq!(tier_of("I443"), Tier::Beyond, "past X11's keycodes");
+        assert_eq!(tier_of("I592"), Tier::Beyond);
+    }
+
+    /// The keys, in tier order, are cut into one slice for each tier, no tier in two.
+    #[test]
+    fn the_keys_are_cut_into_one_slice_for_each_tier() {
+        let us = compiled("us", "");
+        let tiers: Vec<&[Keycode]> = tiers_of(&us.keymap, &us.keys).collect();
+        assert_eq!(tiers.len(), 3, "a PC keyboard's, X11's beyond it, the rest");
+        let kinds: Vec<Tier> = tiers
+            .iter()
+            .map(|slice| {
+                let first = tier(&us.keymap, slice[0]);
+                assert!(slice.iter().all(|&key| tier(&us.keymap, key) == first));
+                first
+            })
+            .collect();
+        assert_eq!(kinds, [Tier::Pc, Tier::X11, Tier::Beyond]);
+        let counted: usize = tiers.iter().map(|slice| slice.len()).sum();
+        assert_eq!(counted, us.keys.len());
+    }
+
+    /// A key whose first level is a modifier's keysym but that depresses nothing when pressed is
+    /// not a modifier key; a key that locks one when pressed is not a held modifier either.
+    #[test]
+    fn only_keys_that_depress_a_modifier_while_held_are_modifier_keys() {
+        let text = "xkb_keymap {\n\
+            xkb_keycodes \"k\" { minimum = 8; maximum = 255; <HELD> = 50; <DEAD> = 51; <LOCK> = 52; };\n\
+            xkb_types \"t\" { virtual_modifiers NumLock;\n\
+              type \"ONE_LEVEL\" { modifiers = none; map[none] = Level1; level_name[Level1] = \"Any\"; }; };\n\
+            xkb_compat \"c\" {\n\
+              interpret Shift_L { action = SetMods(modifiers = Shift); };\n\
+              interpret Shift_R { action = LockMods(modifiers = Shift); };\n\
+            };\n\
+            xkb_symbols \"s\" {\n\
+              key <HELD> { [ Shift_L ] };\n\
+              key <DEAD> { [ Control_L ] };\n\
+              key <LOCK> { [ Shift_R ] };\n\
+              modifier_map Shift { <HELD>, <LOCK> };\n\
+            };\n\
+        };\n";
+        let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
+        let keymap = xkb::Keymap::new_from_string(
+            &context,
+            text.to_owned(),
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("a small keymap");
+        let keys: Vec<Keycode> = [50, 51, 52].into_iter().map(Keycode::new).collect();
+        let found = modifier_keys(&keymap, &keys, 0);
+        let names: Vec<&str> = found
+            .iter()
+            .map(|&(key, _, _)| keymap.key_get_name(key).unwrap_or("?"))
+            .collect();
+        assert_eq!(names, ["HELD"]);
+        assert_eq!(found[0].1, Keysym::Shift_L);
+    }
 }

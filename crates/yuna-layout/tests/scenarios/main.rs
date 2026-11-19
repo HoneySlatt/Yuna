@@ -7,10 +7,13 @@
 
 mod clients;
 mod dwindle;
+mod dwindle_focus;
+mod error_messages;
 mod floating;
 mod fullscreen;
 mod harness;
 mod ids;
+mod output_moves;
 mod outputs;
 mod peek;
 mod robustness;
@@ -18,5 +21,8 @@ mod scrolling;
 mod seats;
 mod size_on_open;
 mod special_and_pinned;
+mod strip_columns;
+mod strip_view;
 mod umbriel;
+mod window_states;
 mod workspaces;
