@@ -4,6 +4,168 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## Stage 2's opening design (2026-11-19)
+
+Five measures taken for the decisions of Stage 2's opening, at `a551df7`, on the high tier's
+desktop (Ryzen 7 5800X, RX 6900 XT, Linux 7.3.1), shared that day with other sessions' work. Each
+says whether the load could touch it. The proofs are the tasks' local `.delegation/` folders
+(`s2d-wire`, `s2d-ch-wire`, `s2d-heaptrack`, `s2d-ch-scene`, `s2d-rust`).
+
+### A client that stops reading ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md))
+
+- **Build and command**: a throwaway headless story, never merged, on the test profile:
+  `S2D_BATCH=<n> cargo test -p yuna --test headless stops_reading_is_ended_by_pointer_motions -- --nocapture`.
+  An agent's seat of 1920 × 1080 at 60 Hz; a test client on a socket pair reads its `enter`, then
+  is never read; each round makes `S2D_BATCH` pointer motions and one dispatch, which ends with the
+  flush, until the client is ended. Five runs a batch, kernel 7.3.1.
+- **Load**: not read. The counts follow the kernel's accounting of sends, not the clock, and the
+  five runs of each batch were identical to the motion.
+- **Wayland-rs's buffer** holds 4,096 bytes; each motion with its frame is 28 bytes, so 146 sit in
+  that buffer when the client is ended (computed, `4096 / 28`; confirmed exactly at batch 1).
+
+| Motions a flush | Motions accepted (min / median / max) | Bytes on the socket | Motions on the socket | Survives at 8,000 Hz |
+|---|---|---|---|---|
+| 1 | 424 / 424 / 424 | 7,784 | 278 | 53.0 ms |
+| 4 | 1,258 / 1,258 / 1,258 | 31,136 | 1,112 | 157.2 ms |
+| 33 (8,000 Hz over a 240 Hz loop) | 3,215 / 3,215 / 3,215 | 85,932 | 3,069 | 401.9 ms |
+
+Each run ended with `ClientDeparture { …, error: None }`: the client was ended for what was
+written to it, not for a protocol error. The first five runs at batch 4 failed on the story's own
+assertion (written for a batch of one), not on the measure, and gave the same 1,258; they were
+run again with the assertion corrected.
+
+- **The socket counts sends, not bytes.** `SO_SNDBUF` is 212,992 on both ends of a socket pair,
+  the same as `/proc/sys/net/core/wmem_default`. An AF_UNIX pair whose reader never reads accepted:
+
+| Send size | Sends accepted | Bytes |
+|---|---|---|
+| 28 | 278 | 7,784 |
+| 112 | 278 | 31,136 |
+| 924 | 93 | 85,932 |
+| 4,088 | 44 | 179,872 |
+
+- **Computed, not measured** (a throwaway script of the design's challenge, from the figures above): survival of a
+  client that stops reading at 8,000 Hz, a flush a motion, by buffer size. The 28-byte motion
+  checks against the measure (424).
+
+| Buffer | Motion and frame, 28 bytes | Motion, relative motion and frame, 60 bytes | Memory one such connection pins, buffer full, socket included |
+|---|---|---|---|
+| 4,096 | 424 motions, 53.0 ms | 346 motions, 43.2 ms | 212 KiB |
+| 65,536 | 2,618, 327.2 ms | 1,370, 171.2 ms | 272 KiB |
+| 262,144 | 9,640, 1,205.0 ms | 4,647, 580.9 ms | 464 KiB |
+| 1,048,576 | 37,727, 4,715.9 ms | 17,754, 2,219.2 ms | 1,232 KiB |
+| 4,194,304 | 150,074, 18,759.2 ms | 70,183, 8,772.9 ms | 4,304 KiB |
+
+  At 1 MiB and 28 bytes, a flush every 33 motions gives 40,518 motions, 7.4 % more than a flush a
+  motion. Five seconds of 60-byte motion at 8,000 Hz is 2.29 MiB (a buffer rounds up to 4 MiB).
+  Ten thousand such connections at 1 MiB pin 11.75 GiB. MCP's `type` of 4,096 characters in one round writes
+  196,608 bytes and grows a healthy client's buffer to 262,144 bytes, which it keeps.
+- **Assumed**: the socket takes 278 sends of 40 and 60 bytes too, as it does of 28 and 112.
+- **Not measured**: a real frozen program (a game also binds objects that cost events); a motion
+  with `relative-pointer`'s 60 bytes (computed only); another kernel or `wmem_default`; libwayland's
+  wake on a writable socket (not read).
+
+### Allocations a frame ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md))
+
+- **Build and command**: release with `line-tables-only` debug information, Mesa 26.3.0, llvmpipe
+  (LLVM 21.1.8), heaptrack 1.5.0-unstable on the `yuna` process itself (`heaptrack --record-only
+  -- yuna mcp --animations`), inside `agent-headless`, driven over MCP. 1920 × 1080 at 240 Hz, scale 1, two
+  `vkcube` windows, still layout; the motion runs add a pointer scroll every 200 ms and a
+  workspace switch every 2 s. Frames are Yuna's `frame drawn` log lines at `debug`.
+- **Method**: heaptrack's merged trace has no timestamps, so a frame's figure is the difference of
+  two runs of one scenario, 10 s and 40 s, over the difference of their frames; start-up and the
+  3 s warm-up cancel.
+- **Load**: a run is marked disturbed when other programs used more than 2 cores on average, or
+  the GPU's highest sample passed 10 %: stricter than the bench's rule, which averages the GPU.
+
+| Run | Frames (rate a second) | Allocations (trace) | Other programs, mean / max cores; GPU busy, highest | Load |
+|---|---|---|---|---|
+| still, 10 s | 2,369 (236.9) | 484,827 | 1.12 / 4.14; 16 % | disturbed (the GPU) |
+| still, 40 s | 9,506 (237.6) | 1,077,718 | 0.68 / 3.38; 21 % | disturbed (the GPU) |
+| still, 10 s, repeat | 1,753 (175.3) | 433,081 | 6.70 / 14.15; 3 % | disturbed (the processor) |
+| still, 40 s, repeat | 6,767 (169.2) | 834,706 | 6.67 / 14.38; 8 % | disturbed (the processor) |
+| motion, 10 s | 1,090 (109.0) | 391,145 | 0.46 / 5.40; 5 % | quiet |
+| motion, 40 s | 5,208 (130.2) | 767,029 | 0.87 / 11.73; 22 % | disturbed (the GPU) |
+
+| Pair | Frames apart | Allocations a frame | Bytes a frame |
+|---|---|---|---|
+| still | 7,137 | 83.1 | 403.8 KiB |
+| still, repeat | 5,014 | 80.1 | 388.2 KiB |
+| motion | 4,118 | 91.3 | 390.0 KiB |
+
+  The repeat moved the figure by 4 % while its frame rate fell by a quarter, so the figure follows
+  the frames, not the clock. No repeat of the motion pair exists (its second run hung on an MCP
+  call and was stopped). Where a run is marked disturbed for the GPU, the load came from other
+  programs; Yuna drew on llvmpipe.
+- **Where they are**, by the difference of the still runs: 14.0 a frame in the `.collect()` of
+  `render::window_elements` (`render.rs:186`) and 2.0 in its vector's growth; 8.0 in Smithay's
+  client dispatch (`compositor.rs:726`); 4.0 in the log line's formatting (a counting artefact: at
+  `info`, about 79 a frame); 4.0 Mesa EGL fences; 4.0 in `FenceSync`; 2.0 each in damage rendering's vector and Smithay's GLES renderer. About
+  half are `Vec` growth in the drawing path; none is a `Box` or `Arc` in Yuna's own state. Motion
+  adds clones of the xdg toplevel state (4.3 a frame), the server state (2.1) and the commit (2.1).
+- **At rest**: `yuna mcp`, no seat, no client: 0 frames and 0 allocations in 60 extra seconds
+  (133,442 allocations in a 10 s run, 133,171 in a 70 s one: start-up alone; one wake-up in the
+  whole 70 s). Quiet (0.26 and 0.40 cores).
+- **Not measured**: the GPU's allocations a frame (`--gpu`), dropped for the machine's load; a
+  frame of a GPU renderer; a repeat of the motion pair.
+
+### The memory kept after an Xwayland (the 22 MiB of M1.13)
+
+`yuna --headless`, 3840 × 2160 at 240 Hz, scale 1.5, one `xeyes` window, `smaps_rollup` before,
+with the window and after Xwayland ended; the heap live at that moment read by cutting the
+trace. The first `xeyes` run was disturbed, its repeat quiet; they agree to 0.3 MiB.
+
+| | Baseline, no X11 client | With the window | After Xwayland ended | Repeat, quiet |
+|---|---|---|---|---|
+| Yuna's `VmRSS` | 164,212 KiB | 215,416 KiB | 184,316 KiB | 163,988 / 215,176 / 184,088 KiB |
+| Anonymous | 74,852 KiB | 93,992 KiB | 93,740 KiB | 74,984 / 94,236 / 93,980 KiB |
+| `[heap]` resident | 32,560 KiB | 35,484 KiB | 35,484 KiB | 32,692 / 35,728 / 35,728 KiB |
+| Heap live at the cut | 875.83 KiB | not taken | 906.29 KiB | 906.29 KiB |
+
+The run grew 50.0 MiB and kept 19.6 MiB (M1.13: 37.0 and 22.0, another window and client). Of the
+kept memory, 15.2 MiB is one anonymous mapping (15,580 KiB), 2.9 MiB the `[heap]` mapping's pages.
+**The verdict**: not live data (30 KB more live heap at the cut). The mapping is likely, by its
+size, the allocation `heaptrack_print` shows of 15.95 MB in one call, Mesa llvmpipe's texture for
+the imported X11 window's shared-memory buffer (`llvmpipe_texture_layout`, through
+`import_shm_buffer`, `render/x11_surface.rs:283-284`), freed and its pages kept; no test proves
+the mapping is that texture's. This sits oddly beside M1.13's run with glibc told to trim at every
+free and keep one arena, which kept the memory too: why it is not returned stays open. Not run: a
+run with Xwayland started and no window; the GPU, where M1.8 measured less than 1 MiB. The path
+leaves with GLES at Stage 2a.
+
+### The scene's latch, a model
+
+- **A latch model** ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md); a throwaway program, `latch.rs` in the local `.delegation/s2d-ch-scene/`, not Yuna's code; synthetic): the desktop, Ryzen 7
+  5800X, rustc 1.99.0 `-C opt-level=3`, pinned to one core, while the machine was loaded (load average 9.07 before
+  and after; a browser and rust-analyzer running); one run, so an order of magnitude only. Time of
+  a latch, median and 99th percentile, with every node drawn:
+
+  | Nodes | Walk | Diff by slot index | Diff through a hash map |
+  |---|---|---|---|
+  | 15 | 140 ns, 270 ns | 110 ns, 170 ns | 350 ns, 521 ns |
+  | 150 | 1,462 ns, 2,394 ns | 942 ns, 1,363 ns | 3,086 ns, 4,418 ns |
+  | 1,500 | 14,969 ns, 19,938 ns | 9,077 ns, 12,764 ns | 33,263 ns, 40,426 ns |
+  | 10,000 | 95,721 ns, 112,933 ns | 65,454 ns, 82,507 ns | 254,031 ns, 288,326 ns |
+
+  With 14 nodes drawn of 10,000 on one strip, the walk takes 65,574 ns and the diff by slot
+  130 ns. A journal of operations (the other way to find damage) takes 191 to 221 ns to map for
+  one changed node; recording 10,000 nodes moved one by one takes 43,513 ns.
+
+### Rust 1.100's features in Yuna's code ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md))
+
+Read, not run: `rustc 1.100.0 (0ef1bc386 2026-11-09)`'s library and a `grep` over the tree at
+`a551df7`. Sites that a feature would change, and whether for the better:
+
+- custom allocators: 9 allocation sites in the drawing and arrangement paths, 0 better (no
+  allocator type or arena crate in the tree; no figure shows allocation costing);
+- `DropGuard`: 24 `Drop` implementations and 1 clean-up by hand: 1 better (the X11 display's lock
+  file), 4 neutral, 20 worse;
+- `bool::toggle`: 3 exact `x = !x`, among 23 assignments from a negation;
+- `trim_prefix` and `trim_suffix`: 55 `strip_*` call lines (46 and 10, one holding both), 0
+  improved, 9 read worse, each needing to know whether the pattern was there;
+- `Vec::from_fn`: 15 replaceable expressions, 0 better, 8 neutral, 7 worse; 4 more it cannot express;
+- `!` and `Infallible`: 0 `Infallible`; 2 functions returning `!`, legal before 1.100.
+
 ## M1.13 — Stage 1's budgets measured again (2026-11-19)
 
 The release candidate, at `e132353`, on the high tier (RX 6900 XT, Ryzen 7 5800X), release builds,
@@ -30,9 +192,11 @@ commands are CONTRIBUTING's; the proofs, `.delegation/m1.13-perf/`.
   `Area::place_in_slot`. A faster hasher for the layout's maps is the first lead ([PLAN](PLAN.md)).
 - **Yuna's memory after an Xwayland on llvmpipe**: it grew 37.0 MiB and kept 22.0 MiB, as at M1.8,
   and the same with glibc told to trim at every free and keep one arena: the memory kept is live,
-  or mappings malloc does not own, not glibc's free lists ([debt](debt.md#xwayland)).
+  or mappings malloc does not own, not glibc's free lists. Heaptrack on Yuna itself read it
+  later: [Stage 2's opening design](#stage-2s-opening-design-2026-11-19).
 - **Allocations a frame**, which a decision on Rust 1.100's custom allocators would rest on: not
-  measured; heaptrack's traces came out empty under the measures' drivers.
+  measured here, heaptrack's traces came out empty under the measures' drivers; measured at
+  [Stage 2's opening design](#stage-2s-opening-design-2026-11-19).
 
 ## M1.13 — Stage 1's audit fixes (2026-11-18/19)
 
@@ -802,7 +966,7 @@ are the kernel's, on the `gfx` engine.
   the processes that map them: an earlier run beside other programs read 48 MiB on the GPU for
   the same resident size. On llvmpipe, Yuna's resident set grows by 37 MiB while
   Xwayland runs and keeps 22 MiB of it after Xwayland ends; on the GPU it grows by less than
-  1 MiB ([debt](debt.md#xwayland)).
+  1 MiB; read again at [Stage 2's opening design](#stage-2s-opening-design-2026-11-19).
 - **On the GPU, the area filter costs about 180 µs a frame more than the plain copy** at 4K:
   422 µs against 246 µs by the median, 319 µs against 138 µs of Yuna's GPU time; 4 % of a
   240 Hz period. Both drew every refresh at 60 Hz. ADR-0068's question, the filter's cost on the

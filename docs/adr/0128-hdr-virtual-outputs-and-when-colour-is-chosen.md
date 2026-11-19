@@ -1,7 +1,8 @@
 # 0128. HDR virtual outputs, and when Yuna's colour pipeline is chosen
 
 - Status: Accepted; supersedes
-  [0048](0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md)
+  [0048](0048-hdr-virtual-outputs-pq-announced-drawn-at-stage-5.md); superseded in part by
+  [0134](0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md) (what Yuna draws, and when its pipeline is chosen)
 - Date: 2026-11-18
 
 ## Context

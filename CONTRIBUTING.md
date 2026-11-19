@@ -141,7 +141,7 @@ nix develop -c cargo run --release -p yuna --example layout_time
 ```
 
 What agents' Yunas cost is measured with `crates/yuna/examples/instances.rs`
-([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)): one `yuna
+([ADR-0138](docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)): one `yuna
 mcp`'s start to its seat's first frame and its memory at rest; N `yuna mcp` with a seat each
 against one with N seats, up to 10, each seat with Alacritty; and ten held at rest for 5 minutes,
 which must grow nothing. It reads the other programs' load beside each phase, as `xwayland_time`
@@ -380,7 +380,7 @@ home. The owner's decisions:
 - `wayland-protocols-misc` and `wayland-protocols-wlr`, already in `Cargo.lock` through Smithay,
   under MIT: the client side of the virtual keyboard, for the rivals' bench (M1.9) and the tests'
   drivers, and of the virtual pointer and `wlr-screencopy`, for the tests (M1.10;
-  [ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+  [ADR-0138](docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md),
   [ADR-0121](docs/adr/0121-captures-what-is-seen-at-the-logical-size.md)).
 - 2026-11-18: `zbus`, its D-Bus wire format alone, without its default features, for the
   accessibility buses

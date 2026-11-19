@@ -531,9 +531,7 @@ sources of wlroots 0.20.2, sway 1.12, Hyprland 0.57.1, aquamarine 0.16.0, niri 2
 - **Captures.** niri renders separate targets for the screen, screencasts and other captures,
   blocking windows per target; KWin re-renders the scene for screenshots and casts, usually in
   sRGB (`doc/color-management.md`).
-- **Frames in flight.** KWin allows a second pending frame when compositing is slow and drops back
-  to one under VRR or tearing (`src/core/renderloop.cpp`); Mutter's frame clock has two dispatched
-  states (`clutter-frame-clock.c`).
+- **Frames in flight**: read again on 2026-11-19, [below](#scenes-damage-and-planes).
 - **Colour.** KWin blends in gamma 2.2 in [0, 1] to avoid float framebuffers, and maps its colour
   steps onto KMS's plane colour operations; wlroots refuses scanout when a buffer's colour
   description differs from the output's.
@@ -546,9 +544,7 @@ sources of wlroots 0.20.2, sway 1.12, Hyprland 0.57.1, aquamarine 0.16.0, niri 2
   forward: `src/input.h`); KWin, Mutter, sway, Hyprland and niri raise libwayland's buffer per
   client to 1 MiB, niri "so that it's harder to crash a frozen client with a 1000 Hz mouse";
   wayland-rs's is 4,096 bytes. Mutter moves the hardware cursor from its input thread.
-- **Priority.** KWin and Mutter ask EGL for a high-priority context; wlroots' Vulkan renderer asks
-  and falls back silently; gamescope asks a realtime queue only with `CAP_SYS_NICE`; KWin's commit
-  thread runs realtime.
+- **Priority**: read again on 2026-11-19, [below](#blending-and-a-compositors-priority).
 - **Tests.** KWin mocks libdrm (`autotests/drm/mock_drm.cpp`, about 1,400 lines).
 - **Commands.** sway runs bindings, IPC and configuration through one `execute_command`; niri
   keeps two action types with a conversion; niri's IPC is not API-stable by its own note.
@@ -582,3 +578,194 @@ servers named below.
 - **D-Bus in Rust.** RustSec marked `zvariant` unmaintained on 2026-10-16
   (RUSTSEC-2026-0370), its code moved into zbus 6 as `zbus::wire`; zbus 6.3 without default
   features adds six crates and no runtime.
+
+## Scenes, damage and planes
+
+Read in their sources on 2026-11-19 for [ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)
+and [ADR-0137](adr/0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md), in
+wlroots 0.20.2, KWin 6.8.2, Mutter 51.0, niri 26.04, Hyprland 0.57.1 with aquamarine 0.16.0, jay
+1.15.0, gamescope 3.17.0, Weston 16.0.0, libliftoff 0.5.0 and Smithay at Yuna's pinned revision
+`4b54d2f`. Paths are inside each source tree.
+
+- **Scenes kept between frames.** wlroots' `wlr_scene` is a tree whose nodes cache a `visible`
+  region (`include/wlr/types/wlr_scene.h:80`). KWin keeps `Item`s (`src/scene/`) that several
+  views draw. Mutter keeps Clutter actors. jay keeps a tree with a live and a rendered timeline
+  (`LiveTL`, `RenderTL`) and latches an immutable `GfxRenderPass` each frame. Weston keeps views
+  with a paint node per output.
+- **Lists rebuilt each frame.** Smithay, so niri and Yuna today, rebuilds its render elements;
+  `OutputDamageTracker` compares them with the last list by id and commit counter and keeps four
+  past states (`MAX_AGE = 4`, `src/backend/renderer/damage/mod.rs:125`). Hyprland and gamescope
+  also rebuild.
+- **Damage and its history.**
+  - wlroots adds damage to a node when it changes and keeps a ring per scene output with one
+    damage per buffer, at most 20 rectangles each (`WLR_DAMAGE_RING_MAX_RECTS`,
+    `types/wlr_damage_ring.c:9`).
+  - KWin adds damage per item and per view; its `DamageJournal` keeps 10 frames
+    (`src/utils/damagejournal.h:85`).
+  - Mutter keeps 16 (`DAMAGE_HISTORY_LENGTH 0x10`, `clutter/clutter/clutter-damage-history.c:23`).
+  - Hyprland keeps 3 previous regions (`src/output/DamageRing.hpp:7`); jay keeps damage per buffer.
+  - wlroots' issue 3187 (open since 2021-09-09) asks for a double-buffered scene state: a surface
+    added at a position is damaged at (0, 0), then at that position.
+- **Occlusion.** wlroots caches each node's visible region. KWin culls per window, not per item:
+  its source says "TODO make occlusion culling per item, rather than per window"
+  (`src/scene/workspacescene.cpp:689`). Smithay culls per element by its opaque regions.
+- **Captures.**
+  - KWin adds a `FilteredSceneView` for each cast (`src/plugins/screencast/filteredsceneview.cpp`):
+    one tree, several views, damage kept per view.
+  - niri renders a list for each `RenderTarget`.
+  - Hyprland renders a capture again; its source says "TODO: add a damage ring for output damage
+    since last shared frame" (`src/managers/screenshare/ScreenshareFrame.cpp:145`).
+  - wlroots uses a second scene output; jay copies the composited texture.
+- **Cost of an idle or one-change frame.** No rival gave a measured figure; the trackers of
+  Smithay, niri and wlroots, searched on 2026-11-19, held none.
+- **Frames in flight.** KWin and Mutter adapt. KWin: each output allows two pending frames
+  (`src/backends/drm/drm_output.cpp:51`), one under VRR or tearing (`src/core/renderloop.cpp:297`),
+  and goes from double to triple buffering when the render journal's time and a safety margin pass
+  a refresh (`renderloop.cpp:60-80`). Mutter keeps a second frame in flight only when its
+  estimated update time reaches a refresh, and not in passive mode or after a direct scanout
+  (`clutter/clutter/clutter-frame-clock.c:983-1005`, `:1381-1395`).
+- **Planes, who uses what.**
+  - Only gamescope uses libliftoff by default. It sets no deadline (`timeout_ns` at its maximum)
+    and refuses any partial composition ("We don't support partial composition yet"), keeping a
+    cache of layouts the kernel refused (`src/Backends/DRMBackend.cpp:3048-3090`). wlroots has an
+    opt-in libliftoff interface, used only when `WLR_DRM_FORCE_LIBLIFTOFF` is set
+    (`backend/drm/drm.c:90-98`; its meson option is `auto`).
+  - KWin decides from what its scene knows, tests once and falls back in three steps. It keeps
+    overlays off but on Intel in a release build, for amdgpu's "really slow atomic tests"
+    (`recommendsOverlayUse`, `src/backends/drm/drm_output.cpp:360-372`).
+  - niri keeps overlay planes off by default, for "weird performance issues" on its author's
+    machine (`src/backend/tty.rs:1898`).
+  - Weston tries `MIXED`, `RENDERER_AND_CURSOR`, `RENDERER_ONLY` and `PLANES_ONLY` modes, places
+    planes top to bottom, tests incrementally and has underlays
+    (`libweston/backend-drm/state-propose.c`).
+  - Smithay's `DrmCompositor` (MIT) assigns per element and tests each assignment.
+  - jay, Mutter and Hyprland (aquamarine) use the primary and cursor planes. jay discards overlay
+    planes (`src/backends/metal/transaction.rs:361`).
+  - wlroots waits 30 frames before it sends a scanout dmabuf feedback tranche
+    (`DMABUF_FEEDBACK_DEBOUNCE_FRAMES`, `types/scene/wlr_scene.c:31`).
+- **libliftoff 0.5.0**: MIT, C, 2,809 lines, libdrm alone. Its default deadline is 1 ms
+  (`alloc.c:112`). Its last release is 2024-05-28; one commit since 2025-11-19 (2026-08-24, a
+  documentation change). Underlays are a draft merge request since 2024-01-16 (!79); kernel
+  colour pipelines are issue 85 (2025-05-15), with MR !100 of 2026-11-18 open beside it; two
+  fixes for several outputs, !85 (2024-11-28) and !86 (2024-12-04), are unmerged. crates.io and
+  GitHub searches found no Rust binding; `drmkit-planes` 0.1.6 is another allocator, in Rust.
+- **KWin's power with overlays** (a Framework 13, 50 % brightness, 15-minute means,
+  [zamundaaa.github.io, 2025-10-23](https://zamundaaa.github.io/wayland/2025/10/23/more-kms-offloading.html)):
+  4K Firefox video 13.3 W without overlays, 11.5 W with; 1080p 11 W and 9.6 W; 4K HDR in mpv
+  13.4 W and 12.4 W; the laptop idle, about 4.5 W.
+
+## Blending and a compositor's priority
+
+Read in their sources on 2026-11-19 for [ADR-0134](adr/0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md)
+and [ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md),
+in Linux 6.18.60, Mesa 26.2.6, rtkit 0.14, wlroots 0.20.2, KWin 6.8.2, Mutter 51.0, Hyprland
+0.57.1, jay 1.15.0, gamescope 3.17.0 and niri 26.04. Paths are inside each source tree. The
+kernel read is 6.18.60, the extracted tree at hand; the desktop runs 7.3.1, not read.
+
+**Blending**
+
+- **KWin** blends in gamma 2.2, values in [0, 1], which "means we don't have to use blending
+  shaders or floating point framebuffers" (`doc/color-management.md:96-106`). Its merge request
+  6050, merged 2024-07-05, moved colour-managed outputs from linear light because gamma 2.2 "is
+  more what users and app developers expect"; the document adds that it "is what applications
+  were designed for". The bug that led to it, KDE 476868 (2023-11-12), reads:
+  semi-transparent windows such as Konsole look more transparent once wide gamut or an ICC profile
+  is on. With accuracy preferred, KWin lists the formats with the most bits per colour first;
+  otherwise the fixed-point ones first, then the fewest bits a pixel
+  (`src/core/outputlayer.cpp:255-285`).
+- **Mutter** blends in gamma 2.2 (`clutter/clutter/clutter-color-state-params.c`) and in linear
+  light for ICC colour states (`clutter-color-state-icc.c`); PQ requires 10 bits, and 16-bit floats
+  are required for linear light or when the blending range passes the display's
+  (`clutter-color-state-params.c:175-190`).
+- **jay**'s blend space defaults to `Srgb` (`src/state.rs:2343`) and can be changed (`jay randr`).
+- **Hyprland**'s FP16 work buffer is in the monitor's transfer function in SDR by default
+  (`render:fp16_sdr_tf`, `src/config/values/ConfigValues.cpp:687`) and linear in HDR
+  (`src/output/Monitor.hpp:408`); without FP16 it draws in the output's own format, 8 bits by default
+  (`src/output/Monitor.cpp:2733`).
+- **wlroots'** Vulkan renderer uses `VK_FORMAT_R16G16B16A16_SFLOAT` (`render/vulkan/renderer.c`).
+  gamescope blends in linear light and **niri** composes into 8-bit formats only
+  (`src/backend/tty.rs:73-78`). Windows composes in FP16 when Advanced Color is on (Microsoft's
+  HDR article, read 2026-11-19).
+- **The laptop's display engine** (DCN 1.0) has no colour step after blending
+  (`drivers/gpu/drm/amd/display/dc/resource/dcn10/dcn10_resource.c`: `post_blend_color_processing
+  = false`). KWin turns on the kernel's plane colour pipelines only when an environment variable
+  asks (`src/backends/drm/drm_gpu.cpp`).
+- **Costs, computed** (4K at 240 Hz, one image): 8 or 10 bits, 31.64 MiB, a full write a frame
+  7.96 GB/s; 16-bit floats, 63.28 MiB, 15.93 GB/s; an encode pass over them adds 23.89 GB/s. GPU
+  times of the prototype are in
+  [measurements](measurements.md#m19--the-vulkan-prototype-on-the-desktop-and-lavapipe-2026-11-16):
+  +33 % on the desktop at 4K, +19 to +25 % on the laptop and the Steam Deck at their sizes.
+- **Quantisation, computed** (a throwaway script, 2026-11-19; not measured). The step between adjacent
+  codes at 0.1 cd/m²: 8-bit gamma 2.2 over 0 to 203 cd/m², 29.58 %; 10-bit over the same range,
+  7.00 %; 10-bit gamma 2.2 over 0 to 1,015 cd/m², 15.26 %; 10-bit PQ in video range (HDR10
+  films), 4.44 %; FP16 in linear light, 0.097 %. Codes below 0.1 cd/m²: 15.4 for 10-bit gamma 2.2
+  over 0 to 1,015; 54.6 for 10-bit video-range PQ. The ratio of the two steps is 5.77 at 0.005
+  cd/m², 3.44 at 0.1, 1.21 at 10, 0.70 at 50 and 0.21 at 1,000.
+- **Scale and primaries, computed.** A blend in a pure gamma 2.2 power law gives the same
+  luminance whichever luminance 1.0 stands for: the largest relative difference in 100,000 cases
+  is 1.1e-15; with the sRGB piecewise curve it is 1.29. A gain on encoded values equals the gain
+  in linear light (0.4222 both ways). The same blend done in BT.709 or in BT.2020 primaries
+  differs by up to 24.1 (ΔE76 in CIELAB) for red over green at alpha 0.5, and by 0 for white over black.
+  In an 8-bit target, dimming to 30 % in a shader leaves 149 distinct codes of 256, to 50 %, 187.
+
+**Priority**
+
+- **amdgpu** (`drivers/gpu/drm/amd/amdgpu/`): a context above normal needs `CAP_SYS_NICE` or the
+  DRM master's own open file (`amdgpu_ctx.c:100-114`). High and very high both take the high
+  graphics pipe and the scheduler's high level (`amdgpu_ctx.c:68-135`). The `AMDGPU_SCHED` ioctl
+  is `DRM_MASTER` alone (`amdgpu_drv.c:3089`); its process override takes a file descriptor and
+  sets every context of that file, with no capability test (`amdgpu_sched.c:34-59`).
+- **Rings.** The high-priority graphics queue is pipe 1, queue 0, when a part has more than one
+  graphics ring (`amdgpu_gfx.c:168-188`). Graphics rings: GFX9 (the laptop's Raven) 1, GFX10.1 1,
+  GFX10.3 (the RX 6900 XT; the Steam Deck) 2, GFX11 1, GFX12 1 (`gfx_v*_0.c`). Where there is one,
+  high priority orders the kernel's software queue only.
+- **RADV** opens the render node (`src/amd/vulkan/radv_physical_device.c:2527`) and makes one
+  context per queue priority (`radv_device.c:1544`), so it is never master.
+- **i915 and Xe** grant priority to `CAP_SYS_NICE` alone (`i915/gem/i915_gem_context.c:188`,
+  `xe/xe_exec_queue.c:429`).
+- **KWin** sets `CAP_SYS_NICE=+ep` on `kwin_wayland` (`src/CMakeLists.txt:705`) and puts its main,
+  KMS commit and libinput threads on `SCHED_RR | SCHED_RESET_ON_FORK`
+  (`src/utils/realtime.cpp:20-23`; callers `main_wayland.cpp:297`,
+  `backends/drm/drm_commit_thread.cpp:35`, `backends/libinput/connection.cpp:144`).
+- **Mutter**'s KMS thread asks rtkit for a high nice by default, realtime when
+  `MUTTER_DEBUG_KMS_SCHEDULING_PRIORITY=realtime` (`src/backends/native/meta-kms.c:436-458`,
+  `meta-thread.c:262-360`); Mutter, niri, Hyprland and wlroots ask EGL for a high-priority context
+  (wlroots falls back to medium, `render/egl.c:416-422`).
+- **jay** builds its device in a thread that holds `CAP_SYS_NICE` (`src/pr_caps.rs`). **gamescope**
+  asks a realtime Vulkan queue (`src/rendervulkan.cpp:548`) and drops capabilities for its
+  children (`src/Utils/Process.cpp:279`). **Hyprland** lowers the ambient `CAP_SYS_NICE`, tries
+  `SCHED_RR`, then rtkit (`src/init/initHelpers.cpp`).
+- **rtkit 0.14** hands out `SCHED_RR` up to 20 under an `RLIMIT_RTTIME` of 200 ms at most, and
+  nice down to -15, for at most 15 processes and 25 threads a user (`rtkit-daemon.c:100-118`);
+  its source holds no GPU code.
+- **What a game gains or loses** from the compositor's priority: no source read nor tracker
+  searched (KWin, gamescope, Mutter, niri) gave a figure.
+
+## A client that stops reading: wayland-rs and the rivals
+
+Read on 2026-11-19 for [ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md),
+in wayland-backend 0.3.17, wayland-server 0.31.14 and wayland-sys 0.31.11 (crates.io), KWin
+6.8.2, Mutter 51.0 and niri 26.04. The measure is in [measurements](measurements.md#stage-2s-opening-design-2026-11-19).
+
+- **wayland-backend's Rust server backend** keeps 4,096 bytes of outgoing data per client
+  (`src/rs/mod.rs:11`, "Matches `WL_BUFFER_DEFAULT_MAX_SIZE` in `libwayland`"). A message that
+  does not fit after one flush fails with `TOOBIG` (`src/rs/socket.rs:251`), and the client is
+  ended as `ConnectionClosed` (`src/rs/server_impl/client.rs:210-211`). The buffer doubles on
+  demand up to its bound and never shrinks (`src/rs/socket.rs:356-357`, `:313`).
+- **Its bound can be raised** by `Display::set_default_max_buffer_size` and
+  `Client::set_max_buffer_size` (wayland-server `src/display.rs:211`, `src/client.rs:123`), behind
+  the feature `libwayland_1_23`, which the Rust backend implements itself
+  (`src/rs/server_impl/handle.rs:77-84`); wayland-sys's version features link nothing (its
+  `build.rs` probes libraries only for `client`, `server`, `cursor` and `egl`).
+- **A congested client** is told by a flush of that client alone, `Handle::flush(Some(id))`,
+  which returns its socket's `WouldBlock`; `flush_clients` drops each client's error
+  (`src/rs/server_impl/handle.rs:63-73`). The Rust backend registers clients for reading only
+  (`EventFlags::IN`, `:371`): nothing wakes it when a full socket drains.
+- **The rivals** raise libwayland's buffer to 1 MiB: KWin (`src/wayland_server.cpp:178`), Mutter
+  (`src/wayland/meta-wayland.c:957-958`), and niri, which runs wayland-rs on libwayland
+  ("so that it's harder to crash a frozen client with a 1000 Hz mouse", `src/main.rs:174`).
+- **Marking a frozen window**: KWin pings a window when it takes the focus and marks it
+  unresponsive after half its 1 s ping timeout (`src/wayland/xdgshell_p.h:39`,
+  `src/wayland/xdgshell.cpp:46`); Mutter offers to end it after 5 s
+  (`src/core/prefs.c:102`). None merges a client's pointer motion; Mutter merges motion for its
+  own interface (`clutter/clutter/clutter-stage.c:813`).

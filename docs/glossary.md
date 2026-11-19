@@ -18,7 +18,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   asked from the surface that has the keyboard focus, a window or its open menu, and for 10 s,
   and used once, by a window of the seat it was asked on.
 - **Agent's output**: a virtual output given to one agent, never shown unless the owner asks, drawn
-  at full rate ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+  at full rate ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - **Area filter**: how Yuna draws an X11 window on an output below XWayland's scale: each
   physical pixel the average of the X11 pixels it covers, weighted by how much of each, in a
   texture shader of Yuna's ([ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)).
@@ -29,8 +29,16 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **AT-SPI**: the accessibility interface of Linux desktops, over D-Bus: GTK, Qt, the ATK bridge
   of Firefox and Chromium, and AccessKit speak it; screen readers and Yuna's `accessibility` tool
   read it.
+- **Baselines** (Stage 2a): the figures taken before 2a changes anything, against which every step
+  is judged: load-insensitive ones at each push (instructions by callgrind, `Pss`, wake-ups, the
+  kernel's DRM memory, allocations a frame), timed runs once a milestone with controls, and start
+  time, GPU memory, a frame with partial damage and a soak. A step that makes one worse is
+  reverted ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
 - **Bench shell**: `nix develop .#bench`, the development shell with the compositors and clients
   the rivals' bench runs, which CI's shell leaves out.
+- **Boundary** (Stage 2a): the temporary contract between the protocols' modules and the surfaces'
+  store, implemented over Smithay first, then over Yuna's own store
+  ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
   ([ADR-0119](adr/0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md)).
@@ -45,6 +53,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the column is as wide as the widest of them as drawn.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
   it, and places scrolling columns by it ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
+- **Congested client**: a client whose last flush returned `WouldBlock`, until a flush completes;
+  Yuna keeps one pending pointer motion for it instead of queuing each
+  ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
 - **Core** and **stack** (bench): a compositor's core is its own process and its descendants, in
   the `core` control group of its sandbox; its stack is every process of the sandbox, its session
   bus included, the bench's clients left out.
@@ -126,6 +137,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   output expects: a transfer function, primaries, luminances and a target colour volume. Each
   has an **identity**, a number no other ever has, so that a client tells a copy from a new one
   ([ADR-0047](adr/0047-color-management-v1-kwins-list.md)).
+- **Latch**: the instant a scene view takes the scene as it is and makes its render list; the
+  view finds its damage there, by comparing the new list with its last
+  ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)).
 - **lavapipe**: Mesa's Vulkan driver that draws on the CPU; the applications' tests give it to
   every Vulkan client.
 - **Layer**: the part of a workspace a window is placed in: the strip of scrolling columns, the
@@ -155,6 +169,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   advances it, running each deadline it passes, in order
   ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). An agent never moves it past real
   time.
+- **Master override** (amdgpu): the kernel's `AMDGPU_SCHED` ioctl, allowed to the DRM master alone,
+  whose process operation raises the priority of every context of an amdgpu file it is given by
+  descriptor, with no capability; the way the session's Yuna can raise its composition from Stage 2b
+  ([ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md)).
 - **MCP**: the Model Context Protocol, through which an agent's client calls a server's tools;
   `yuna mcp` is one, on its standard input and output ([ADR-0120](adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)).
 - **Menu** (X11): an override-redirect window Yuna shows, a menu, a tooltip or a list: drawn with
@@ -177,6 +195,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   `STALL_RECHECK` later, is stalled, and its Xwayland is ended, as one owed past the bound is.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
   stack, not the core: Hyprland's headless dwl, which lends it a render node.
+- **Parity script** (Stage 2a): the script that compares two builds on the baselines' figures, the
+  same day, with its controls ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
 - **Pace** (bench): how a backend times the frames of a compositor whose client draws as fast as
   it can, as each recipe records it: wlroots' headless timer, a frame 4 ms after each commit, or
   the mode's rate. In `game` and `pacing`, costs a second rank only within one pace.
@@ -202,6 +222,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   window's workspace's output's ([ADR-0128](adr/0128-hdr-virtual-outputs-and-when-colour-is-chosen.md)).
 - **Primary selection**: the text last selected, pasted with the middle button; a second selection
   beside the clipboard, from X11.
+- **Processor tier**: the tier of machines that draw on the processor, through lavapipe: CI and
+  an agent's Yuna without a GPU. It has a budget of its own and draws only what changed
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+  item 26).
 - **Program** (MCP): a process an agent started through `spawn`, with its log; what it starts in
   turn stays under Yuna, its **subreaper**, and ends with it.
 - **Proxy window** (drags): the X11 manager's own InputOnly window over the whole root,
@@ -222,6 +246,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Refused** (bench): said of a case whose sandbox broke its rules, or whose scene was not the
   scenario's (mpv not fullscreen): the bench stops it and measures nothing. A refusal is not a
   failure.
+- **Render list**: what a scene view produces at a latch: an immutable list of draw operations,
+  each naming its node, buffer, opacity, visible region and update rate, which goes to the
+  renderer by message ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)).
 - **Rest auditor**: the part of Yuna that names what woke it and what made it draw, counted
   by source, by client and by a frame's cause (`rest.rs`), which MCP's `rest` and the start
   option `--rest-audit` read
@@ -238,7 +265,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([`sandbox.rs`](../crates/yuna-bench/src/sandbox.rs)).
 - **Seat**: a set of input devices, a pointer and a keyboard, with its own focus. Each agent has
   one, apart from the owner's, with its own outputs and Wayland socket; a client belongs to the
-  seat whose socket it came through ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)). Its **handle** is
+  seat whose socket it came through ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)). Its **handle** is
   the number `seat create` gives, which every tool but `clock` takes, `rest` when it is to
   name only that seat's.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
@@ -249,6 +276,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Share picker**: the selection Yuna draws when an application asks to share the screen, the same
   as for captures; choosing is the consent
   ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
+- **Sibling Yuna**: from Stage 2a, the headless Yuna `yuna mcp` starts for each seat an agent
+  creates, one seat per Yuna ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **State thread**: the thread that runs Yuna's event loop and owns its state; a panic there is
   fatal, unlike one on the X11 manager's or an encoder's thread.
@@ -278,6 +307,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Variant**: a named set of settings in the configuration, applied over it and switched on
   command, such as the shell's compact mode
   ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)).
+- **View** (scene): one consumer of the scene, with its own mapping from logical space to its
+  pixels, filter, colour target, priority and frames in flight: an output, a capture, or one
+  window. Each finds its own damage
+  ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)).
 - **Virtual keyboard** (bench): the bench's client that types key chords through
   `zwp_virtual_keyboard_v1` into one compositor's sandboxed instance, for one driven by its keys
   alone, dwl; its keys reach no other compositor.

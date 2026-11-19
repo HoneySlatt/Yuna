@@ -6,7 +6,8 @@
   [0036](0036-yuna-is-public.md) (the fork's visibility),
   [0039](0039-leaving-smithay-step-by-step.md) (Smithay as Yuna's base, and leaving it),
   [0042](0042-main-on-smithays-fork.md) and
-  [0045](0045-the-fork-over-https-a-branch-per-base.md)
+  [0045](0045-the-fork-over-https-a-branch-per-base.md); superseded in part by
+  [0139](0139-stage-2-in-three-gated-parts-2as-path-revised.md) (when WLCS's baseline is recorded)
 - Date: 2026-11-18
 
 ## Context

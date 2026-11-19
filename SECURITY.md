@@ -30,7 +30,7 @@ These are vulnerabilities:
   may ask is bounded ([ADR-0131](docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 - **An agent's seat reaches the owner's seat**, or another agent's: input, captures, selections
   or programs that cross from one seat to another
-  ([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+  ([ADR-0138](docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - **Yuna exposes the user's files or sessions**: it reads or writes outside the folders it uses,
   passes secrets from its environment to its programs, or leaves sockets others can open. Yuna
   uses its runtime folder (`XDG_RUNTIME_DIR`), X11's `/tmp/.X<n>-lock` and `/tmp/.X11-unix/`, and,

@@ -11,7 +11,8 @@ tests drive it.
 ## State
 
 Stage 1, the headless core, is done and released as 0.1 ([ROADMAP](docs/ROADMAP.md),
-[history](docs/history.md)); Stage 2, the desktop, opens with its design.
+[history](docs/history.md)); Stage 2, the desktop, has its design and starts with Yuna's own
+base, headless ([PLAN](docs/PLAN.md)).
 Yuna runs without a screen: virtual outputs drawn offscreen, windows placed by its layout model,
 frames that follow damage, animations, emulated VRR and HDR outputs, and X11 programs through
 Xwayland. Real applications (Alacritty, GTK 4, Qt 6, Vulkan, mpv, Wine) run in it in CI, and it

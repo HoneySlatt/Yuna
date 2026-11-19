@@ -76,7 +76,7 @@ check to make it pass (a skipped test, a raised budget, a silenced lint) without
 - The colour and HDR pipeline, the layout and the animations do not depend on the renderer; only
   the final drawing is Vulkan ([ADR-0106](docs/adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)).
 - Everything runs headless; the DRM backend is one backend among others.
-- An agent's seat never reaches the owner's seat ([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+- An agent's seat never reaches the owner's seat ([ADR-0138](docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - One client's protocol error ends that client alone; a panic of Yuna's state is fatal, and Yuna
   comes back by its keeper; a configuration error never stops it
   ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), [ADR-0129](docs/adr/0129-configuration-in-kdl-its-includes-and-variants.md)).

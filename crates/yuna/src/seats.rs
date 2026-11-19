@@ -1,4 +1,4 @@
-//! Seats ([ADR-0116](../../../docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+//! Seats ([ADR-0138](../../../docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md),
 //! [ADR-0117](../../../docs/adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md)):
 //! the owner's, and one for each agent.
 //!

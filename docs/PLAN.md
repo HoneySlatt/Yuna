@@ -9,33 +9,114 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 ## Current
 
-- Stage 1, the headless core, is done: its milestones, M1.1 to M1.13, are in
-  [`history.md`](history.md); its [audit](audits/2026-11-18-stage-1.md) closed it. 0.1 is tagged
-  `v0.1.0` on 2026-11-19, at `09b96f5`, the owner choosing to tag before the closing review.
-- The closing review's findings, after the tag, are fixed on `main` or written as debt; a 0.1.1
-  on the owner's go.
-- **Next: Stage 2's opening design**, in a new session ([ROADMAP](ROADMAP.md),
-  [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md),
-  [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)):
-  the decisions the ROADMAP leaves to it, 2a's milestones, the parity net first, and the debt
-  items no stage follows yet, which it places, as the owner chose on 2026-11-19
-  ([debt](debt.md)). The rest of Rust 1.100's new features are put to the owner there, each on a
-  measure.
-- The owner works on `main` directly, since 2026-11-17: push only a state where
-  `scripts/check.sh` passes, and follow CI to green after each push.
+- Stage 1 is done, 0.1 tagged `v0.1.0` on 2026-11-19 ([history](history.md)). No 0.1.1: the
+  owner chose on 2026-11-19 to carry `yuna mcp`'s missed start budgets and motion's judgement into
+  M2.1.
+- Stage 2's opening design is done (2026-11-19): ADR-0133 to ADR-0141, 2a's milestones below,
+  the debt placed ([debt](debt.md)).
+- **Next: M2.1, the baselines**, in a new session.
+- The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
+  follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
+
+## Stage 2a — Yuna's own base, headless
+
+Along [ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)'s path. Every
+milestone keeps parity (ADR-0139): the tests unchanged in what they assert, WLCS's passing tests
+kept, traces and captures compared, the baselines' figures no worse; a step that regresses is
+reverted. New code meets [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+from its first commit. Each Smithay behaviour [debt](debt.md) lists becomes a test in the
+milestone that replaces its module. A new dependency is put to the owner at its milestone's start.
+
+- **M2.1 Baselines.** A parity script: at each push in CI, figures the load does not move
+  (callgrind's instructions for a frame and the layout's operations, `Pss`, wakes, heaptrack's
+  allocations a frame); in an agent's runs on the GPU, DRM memory; once per milestone, timed runs
+  interleaved, with a build against itself and an injected slowdown as controls; start time, GPU
+  memory, a partial-damage frame, a soak. Protocol traces of scripted clients, times kept on the
+  manual clock. Captures from a buffer the processor maps. `yuna mcp`'s start at M1.11's commit
+  and main, side by side; motion judged on a quiet machine; the same 4K scene on llvmpipe and on
+  the Vulkan prototype's lavapipe. The tests the debt says are missing. *Done when* the script
+  flags the injected slowdown and passes main against itself.
+- **M2.2 The interface.** `yuna-types`; the `Compositor` interface free of Smithay's types;
+  `yuna-ipc`'s command type in place of `change_layout`; direct dependencies in place of
+  Smithay's re-exports; the tests' helpers made one; `bool::toggle` and the one `DropGuard`
+  (ADR-0140). Then, in its own commit with its story, 1 MiB per client and a bound on the clients
+  a seat connects ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
+  *Done when* no test or example names a Smithay type and M2.1's figures hold.
+- **M2.3 WLCS.** `yuna-wlcs`, WLCS in CI, its passing tests recorded as a list. *Done when* CI
+  fails if a passing test fails.
+- **M2.4 The map, tasks, frames and events.** `scripts/check.sh` checks the crate map's edges,
+  `forbid(unsafe_code)` and no global mutable state; every thread in the table of tasks, with its
+  scheduling class, runnable inline on the manual clock; a frame's identity from input to
+  presentation, each wake named, the GPU priority granted logged; a pidfd at accept; one event
+  stream, bounded per subscriber, with a resync; every public contract listed with its version.
+  *Done when* a wrong edge and an unregistered thread fail the check.
+- **M2.5 The boundary.** Its contract first, an ADR, put to the owner: roles, each module's
+  double-buffered state applied at commit, checks before a commit, notices after, a read-only
+  view and typed requests; the queue's crate placed in the map. Implemented over Smithay's cached
+  state; colour management and the X11 shell moved onto it. The layout's index and a faster
+  hasher, measured. *Done when* both modules keep no state in Smithay's surface data.
+- **M2.6 The queue and the store, alone.** A pure crate: blockers as descriptors, transactions
+  with their timeout, the bounds of what ADR-0131 leaves unbounded; property tests. *Done when*
+  the column of three and the late fence pass as scenarios on the model.
+- **M2.7 The scene, alone.**
+  [ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md) whole: batches,
+  views, latches, the lock, cursors and drag icons, output transforms, the colour steps' shape.
+  *Done when* each requirement is a test and the latch is measured at 15, 150 and 1,500 drawn
+  windows and 10,000 on one strip.
+- **M2.8 The Vulkan renderer, behind a switch.** The binding and the shader compiler put to the
+  owner first. It draws the scene, blends as
+  [ADR-0134](adr/0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md) says,
+  uploads damaged regions, counts GPU memory, names each buffer's device, precompiles its
+  pipelines, takes its queue priority as a parameter and leads its deadline from the GPU's
+  timestamps ([ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md));
+  GLES the default. *Done when* ADR-0133's pixel test and ADR-0134's ramp test pass on lavapipe,
+  an agent's script finds RADV and lavapipe alike, and an `A2B10G10R10` composition is timed per
+  tier.
+- **M2.9 Vulkan the default.** GLES, EGL and their globals removed. *Done when* the processor
+  tier meets its budget, Yuna's own code allocates nothing a frame, and the start budget holds.
+- **M2.10 Captures and the GPU's loss.** Readback off the loop; `wlr-screencopy` with dmabufs and
+  damage; the GPU lost on demand; amdgpu's hang of another device, an owner's run. *Done when* a
+  capturing agent loses no frame against Stage 1's 6 % and a capture fails retryably on a loss.
+- **M2.11 uwui hosted, against a stub.** Yuna's side of ADR-0106. *Done when* a stub client's
+  images, semaphores, timeout, panic, hang and GPU budget are tested.
+- **M2.12 Seats and input.** One seat per Yuna, `seat create` starting a sibling Yuna, its front's
+  ADR put to the owner first
+  ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)); one input chain;
+  a keyboard state per device; keymaps compiled off the state thread; drags and their grabs,
+  X11's included; a congested client's motion merged, its departure named in MCP; fuzz targets.
+  *Done when* the frozen game's scenario passes and ten agents' Yunas meet their budgets.
+- **M2.13 xdg-shell and popups.** Yuna's own, on the boundary; reactive popups; menus across
+  outputs. *Done when* Smithay's popup behaviours the debt lists are tests that pass.
+- **M2.14 Selections and text.** Data devices, data control filtered per client, the X11 bridge,
+  text input bounded. *Done when* their stories and the D-Bus fuzz target run.
+- **M2.15 The other protocols.** `linux-dmabuf` with a scanout tranche, presentation, viewporter,
+  fractional scale, activation, the captures' protocols; per-client budgets. *Done when* the
+  damage flood scenario passes.
+- **M2.16 The store, wired behind a switch.** Both stores built and tested in CI. *Done when*
+  recorded request streams give the same results in both and memory a window meets its budget.
+- **M2.17 The X11 manager, a task.** Its watchdog, bounds and restacking. *Done when* its debt's
+  stories pass on the own core.
+- **M2.18 The agents' runtime.** In `yuna-process`: a spawner that clears ambient capabilities,
+  programs ended with their Yuna, pidfds, folders swept, replies bounded in bytes, accessibility
+  for AccessKit, corrected coordinates. *Done when* a killed `yuna mcp` leaves no program and
+  Codex and OpenCode run its story.
+- **M2.19 The switch, and Smithay removed.** Yuna's store the default a week under agents' use;
+  Smithay, its fork and `smithay-patches.md` removed. *Done when* no `State` shared by handlers
+  remains, ADR-0139's gate scenarios pass, and 2a's gate review is done.
+
+M2.18 may run any time after M2.4. A milestone that turns out too large is split with the owner.
 
 ## Status
 
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2 | The desktop, in three gated parts ([ROADMAP](ROADMAP.md)) | Opening design next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 next |
+| 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
 
-- The layout's maps hashed by a faster hasher than the standard library's SipHash: 22.8 % of a
-  "float, then tile" at 100 windows hashes `WindowId`s (measured at M1.13).
 - Scripts inside Yuna, on events only, bounded in time; an effect governor that lightens the
   costliest effect near a frame's deadline; a replay capsule for agents, after M1.11
   ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).

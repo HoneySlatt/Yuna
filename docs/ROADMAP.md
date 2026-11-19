@@ -109,7 +109,7 @@ audit.
 
 | Scenario | Acceptance criterion | Checked by |
 |---|---|---|
-| A game frozen 50 ms while an 8,000 Hz pointer moves | the game is not disconnected | a headless test, an agent's pointer |
+| A game frozen 10 s while an 8,000 Hz pointer moves | the game is not disconnected and then gets the right last position; with `relative-pointer`, from 2c, the summed motion ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)) | a headless test, a flush a motion |
 | One client sends 100,000 damage requests a second | the other clients' commits make their boundary | a headless test |
 | A client's GPU work is late at the deadline | its previous buffer is shown; Yuna never waits | a test with a fence held |
 | A column with three windows changes width | all three show their new size in one frame, or after the timeout | a headless test |
@@ -156,12 +156,12 @@ audit.
 | Configuration | KDL, reloaded live ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)) |
 | Licence | GPL-3.0-or-later, public ([ADR-0114](adr/0114-gpl-3-0-or-later-public-the-logo-apart.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
 | Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)) |
-| Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)) |
+| Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
 | Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws, on its own task, commands and images ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)) |
 | Code | Our own; niri, jay and Smithay as references ([ADR-0113](adr/0113-our-own-code-niri-jay-and-smithay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
-| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; several seats in one Yuna frozen until Stage 2's core ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md), [ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)) |
+| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; one seat per Yuna from Stage 2's core ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md)) |
 | Contracts | The command line, the environment, MCP and the Nix package; in 0.x they may change, every change announced in the changelog ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)) |
 | Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0125](adr/0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md)) |
 | Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)) |
@@ -177,6 +177,12 @@ audit.
 | XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)) |
 | The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)) |
 | Stage 2's core | A queue of pending commits, one owner of the state, crates with checked dependencies, a table of tasks, output changes tested whole, one path for pause and loss, the lock kept through a restart, one input chain, a frame's identity, every public contract versioned, client identity from the connection ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)) |
+| Scene | Retained in a pure crate, changed by batches; each view finds its damage at each latch by comparing render lists; the lock a state of the scene ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)) |
+| Blending | Gamma 2.2 everywhere; SDR in 10 or 8 bits straight into the output's buffer, HDR in 16-bit floats with a final pass; the shader's final pass the reference ([ADR-0134](adr/0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md)) |
+| Priority against a game | Agents at normal priority; no privilege by default; on AMD the DRM master's override, turned on at 2b on a measure; the KMS thread at a high nice ([ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md)) |
+| A client that stops reading | 1 MiB of buffer; its pointer motion merged while congested; never ended by motion ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)) |
+| Planes | Yuna's own allocator at Stage 4; direct scanout of a fullscreen surface and the cursor plane at 2b ([ADR-0137](adr/0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md)) |
+| Rust 1.100 | No custom allocator, no allocation a frame in Yuna's own code as the target; `bool::toggle`, `DropGuard` where it fits, `!` in new code ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md)) |
 
 ### Open
 
@@ -185,8 +191,11 @@ audit.
 | The KDL reader | the milestone that reads the configuration |
 | The games' band: its floor and smoothing | Stage 4, on the light sensor's figures |
 | How a film's rate is known | Stage 5 |
-| Yuna's scene and damage tracking | the opening of Stage 2 ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
-| The blending space and precision; Yuna's priority against a game; wayland-rs's buffer per client; the plane allocator | the opening of Stage 2, each on a measure ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)) |
+| The session's Yuna's priority turned on or not | Stage 2b, on its measure ([ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md)) |
+| Stage 2a's new dependencies: WLCS, the Vulkan binding, the shader compiler | the milestone that needs each ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)) |
+| The boundary's contract over the surfaces | Stage 2a's boundary milestone ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)) |
+| `yuna mcp` as a front for one Yuna per seat | Stage 2a's seats and input milestone ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)) |
+| The blend primaries in SDR on a wide-gamut profile | Stage 5 ([ADR-0134](adr/0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md)) |
 | Public release | the owner's go |
 
 ## 5. Stages
@@ -227,34 +236,48 @@ in it as they drive them in sway, but for sway's IPC, which Yuna does not offer.
 
 **Goal.** Yuna replaces niri as the owner's daily compositor, without HDR yet, on a base of its
 own ([ADR-0039](adr/0039-leaving-smithay-step-by-step.md)). In three parts, each closed by a
-review at its gate ([ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)).
+review at its gate ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
 
 #### 2a — Yuna's own base, headless
 
-- First, the parity net on today's core: the `Compositor` interface free of Smithay's types,
-  typed commands in place of `change_layout`, direct dependencies in place of Smithay's
-  re-exports, WLCS's baseline recorded.
-- Then Yuna's own core, along [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)'s path: a temporary boundary over Smithay; the scene and
-  damage tracking, the Vulkan renderer hosting uwui
-  ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md));
-  seats and input, xdg-shell and popups, the other protocols; the surfaces and the queue of
-  commits last, on wayland-rs; in crates with checked dependencies, meeting the core's
+- First, the baselines, before any change: figures the machine's load does not move at each
+  push, timed comparisons with their controls once per milestone, start time, GPU memory, frames
+  with partial damage, a soak, protocol traces and captures; tests that pin today's behaviour.
+- Then the parity net on today's core: the `Compositor` interface free of Smithay's types, typed
+  commands in place of `change_layout`, direct dependencies in place of Smithay's re-exports,
+  WLCS's passing tests recorded.
+- Then Yuna's own core, along [ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)'s
+  path: the crate map's checks, the table of tasks, a frame's identity and one event stream; a
+  boundary whose contract carries each protocol's double-buffered state; the queue of commits and
+  the surfaces' store, and the scene
+  ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)), each a pure crate
+  tested alone; the Vulkan renderer behind a switch, hosting uwui
+  ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md),
+  [ADR-0134](adr/0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md));
+  seats and input, xdg-shell and popups, selections and text, the other protocols; the store wired
+  behind a switch, then the default; in crates with checked dependencies, meeting the core's
   requirements from its first commit ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
-  XWayland, crisp at 1.5 and the right size on every output, carried across.
-- Parity at every step: the tests unchanged, WLCS at or above its baseline, the real
-  applications, protocol traces and captures compared between the cores, rest, memory and a
-  frame's cost no worse; a step that regresses is reverted.
+  XWayland, crisp at 1.5 and the right size on every output, carried across step by step. One
+  seat per Yuna ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
+- Parity at every step: the tests unchanged, WLCS's passing tests kept, the real
+  applications, protocol traces and captures compared between the cores, the baselines' figures
+  no worse; the processor tier judged on its own budget; a step that regresses is reverted.
 - Captures read back without holding the loop: an agent that captures without pause costs its
   output no frame, measured against Stage 1's figures ([debt](debt.md#captures)).
-- The clients' messages fuzzed weekly; the GPU's loss on demand for agents.
+- A client that stops reading kept, its motion merged
+  ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)); the clients'
+  messages fuzzed weekly; the GPU's loss on demand for agents.
 
 **Gate.** Smithay is no longer in `Cargo.lock`; parity holds; the headless scenarios of the bar
-pass.
+that ADR-0139 lists pass.
 
 #### 2b — A desktop the owner can log in to
 
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; VKMS studied first; one
-  output at a fixed rate, with no VRR flicker.
+  output at a fixed rate, with no VRR flicker; a fullscreen surface scanned out on the primary
+  plane and the cursor plane ([ADR-0137](adr/0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md));
+  Yuna's priority against a game measured, turned on if it must be
+  ([ADR-0135](adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md)).
 - The lock, begun by Yuna and relieved by the locker, logind's `Unlock` when no locker lives
   ([ADR-0108](adr/0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md)), a
   locker that stops answering counted dead
@@ -310,7 +333,8 @@ stages keep their numbers.
 **Goal.** Games are better on Yuna than on any other compositor.
 
 - VRR in a high band with smoothed changes, its prototype measured with a light sensor.
-- Tearing on request, direct scanout and overlay planes, game mode; games told apart in the
+- Tearing on request, overlay planes and underlays by Yuna's own allocator
+  ([ADR-0137](adr/0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md)), game mode; games told apart in the
   fullscreen state; settings for what a game turns off ([ADR-0061](adr/0061-yunas-uses.md)).
 - gamescope nested in Yuna, tested; a smaller game scaled by the display hardware where it can;
   virtual outputs for streaming; a capture that costs a game no frame; the Steam Deck's touch

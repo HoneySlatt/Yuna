@@ -121,7 +121,7 @@ own rules.
   without an output, and its hidden special workspaces; an output holds its workspaces, shows one,
   and may show a special workspace over it. An operation reaches only its seat's branch, so an
   agent's seat never touches the owner's
-  ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+  ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - **An operation** names a seat, for a key binding, which acts on what that seat focuses; or a
   window, for its client's request. The model finds them, applies the change to the workspace's
   tiling, scrolling columns or dwindle, or to its floating windows, then tidies the tree.
@@ -389,7 +389,7 @@ exists.
 ### Seats and input
 
 A seat ([`seats.rs`](../crates/yuna/src/seats.rs),
-[ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md),
+[ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md),
 [ADR-0117](adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md))
 is a Smithay seat with a keyboard and, for an agent's, a pointer. Each has its own focus, popup
 grab, selections, cursor, clients, outputs, socket, X display and branch of the layout. Seats
@@ -547,7 +547,7 @@ one description: the owner's monitor's PQ volume when it is HDR, gamma 2.2 and s
 surface's preferred description is its window's workspace's output's. Each surface's own
 description is recorded at its commit, for tests and agents to read
 (`Compositor::window_colours`, MCP's `windows` with `colour`). Nothing is drawn differently: the
-colour pipeline comes at Stage 5. The answers about a description are sent after the clients'
+colour pipeline's shape comes with Stage 2a's renderer, HDR's conversion at Stage 5. The answers about a description are sent after the clients'
 dispatch, never inside it, since wayland-backend panics when a request's new object is destroyed
 before the request returns.
 
@@ -685,7 +685,7 @@ gives the call and its bounds; `bus.rs` the bus's start; `registry.rs` the regis
   `XDG_RUNTIME_DIR`. It prints `WAYLAND_DISPLAY`, then `DISPLAY` and `XAUTHORITY` when Xwayland
   is found, and runs until SIGTERM or SIGINT. With `--agent-seat`, an agent's seat takes the
   outputs and the socket: what the owner's other projects drive
-  ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+  ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
 - `yuna mcp` starts the same compositor without an output or a socket, and serves MCP until its
   input closes, or SIGTERM or SIGINT comes.
 

@@ -1,6 +1,7 @@
 # 0116. Agents' seats: each agent in its own Yuna, apart from the owner's seat
 
-- Status: Accepted; supersedes [0015](0015-agents-workspaces.md),
+- Status: Superseded by [0138](0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md); supersedes
+  [0015](0015-agents-workspaces.md),
   [0058](0058-what-yuna-takes-from-the-owners-other-projects.md) (virtual input on agents'
   seats), [0060](0060-development-first-agents-in-their-own-yuna.md) (each agent in its own
   Yuna), [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) and

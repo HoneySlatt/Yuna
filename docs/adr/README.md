@@ -101,8 +101,8 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0078](0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md) | Agents' seats in one Yuna, frozen until Stage 2's core | Superseded by 0116; supersedes 0035 |
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
-| [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Accepted; supersedes in part 0039 |
-| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074 |
+| [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Superseded by 0139; supersedes in part 0039 |
+| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074; superseded in part by 0135 and 0137 |
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Superseded by 0106; supersedes in part 0073 |
 | [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |
@@ -132,11 +132,11 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0109](0109-animations-and-effects-what-moves-reduced-motion-and-games.md) | Animations and effects: what moves, reduced motion, games and headless | Accepted; supersedes 0010, 0055, 0058, 0059 and 0099; supersedes in part 0061 and 0062 |
 | [0110](0110-the-layouts-and-their-behaviours.md) | The layouts and their behaviours: niri and Hyprland as references, games first | Accepted; supersedes 0005, 0019 and 0026; supersedes in part 0061, 0062 and 0064 |
 | [0111](0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md) | The layout model's shape: plain ids, a branch per seat, sizes asked and committed | Accepted; supersedes 0005, 0020 and 0026; supersedes in part 0052 |
-| [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md) | Smithay: pinned, patched in Yuna's public fork, left at Stage 2 | Accepted; supersedes 0011, 0017, 0021, 0036, 0039, 0042 and 0045 |
+| [0112](0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md) | Smithay: pinned, patched in Yuna's public fork, left at Stage 2 | Accepted; supersedes 0011, 0017, 0021, 0036, 0039, 0042 and 0045; superseded in part by 0139 |
 | [0113](0113-our-own-code-niri-jay-and-smithay-as-references.md) | Our own code; niri, jay and Smithay as references | Accepted; supersedes 0013 and 0039 |
 | [0114](0114-gpl-3-0-or-later-public-the-logo-apart.md) | GPL-3.0-or-later, public; the logo apart | Accepted; supersedes 0009 and 0036 |
 | [0115](0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md) | Priorities: uwui first, the owner's activity, measures that check their load | Accepted; supersedes 0003 and 0060 |
-| [0116](0116-agents-seats-each-agent-in-its-own-yuna.md) | Agents' seats: each agent in its own Yuna, apart from the owner's seat | Accepted; supersedes 0015, 0058, 0060, 0078 and 0089 |
+| [0116](0116-agents-seats-each-agent-in-its-own-yuna.md) | Agents' seats: each agent in its own Yuna, apart from the owner's seat | Superseded by 0138; supersedes 0015, 0058, 0060, 0078 and 0089 |
 | [0117](0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md) | An agent's seat through MCP: its tools, input, keyboard, text and closing | Accepted; supersedes 0043 and 0095 |
 | [0118](0118-frames-presentation-times-and-the-clock.md) | Frames, presentation times and the clock | Accepted; supersedes 0023, 0031, 0054 and 0058 |
 | [0119](0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md) | Emulated VRR, as amdgpu and the owner's monitor do | Accepted; supersedes 0046, 0051 and 0054 |
@@ -148,8 +148,17 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0125](0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md) | The Rust toolchain: an exact stable version, a pinned nightly for fuzzing alone | Accepted; supersedes 0016 and 0058 |
 | [0126](0126-yuna-and-the-owners-other-projects.md) | Yuna and the owner's other projects: their test compositor, its package, shared practices | Accepted; supersedes 0058 and 0089 |
 | [0127](0127-motions-budget-no-frame-lost-to-motion.md) | Motion's budget: no frame lost to motion, judged against a still baseline | Accepted; supersedes 0056; supersedes in part 0077 |
-| [0128](0128-hdr-virtual-outputs-and-when-colour-is-chosen.md) | HDR virtual outputs, and when Yuna's colour pipeline is chosen | Accepted; supersedes 0048 |
+| [0128](0128-hdr-virtual-outputs-and-when-colour-is-chosen.md) | HDR virtual outputs, and when Yuna's colour pipeline is chosen | Accepted; supersedes 0048; superseded in part by 0134 |
 | [0129](0129-configuration-in-kdl-its-includes-and-variants.md) | Configuration in KDL, its includes and variants | Accepted; supersedes 0008 and 0057; supersedes in part 0064 |
 | [0130](0130-oled-care-chosen-at-stage-5s-design.md) | OLED care chosen at Stage 5's design, from a survey | Accepted; supersedes in part 0062 |
 | [0131](0131-bounds-on-what-a-client-or-an-agent-may-ask.md) | Bounds on what a client or an agent may ask | Accepted; supersedes 0028 and 0070 |
 | [0132](0132-an-agents-clipboard-data-with-control-characters-in-base64.md) | An agent's clipboard: data with control characters in base64 | Accepted; supersedes in part 0101 |
+| [0133](0133-yunas-scene-retained-its-damage-found-at-each-latch.md) | Yuna's scene: retained, changed by batches, its damage found at each latch | Accepted |
+| [0134](0134-blending-gamma-2-2-everywhere-its-precision-set-by-the-content.md) | Blending: gamma 2.2 everywhere, its precision set by the content | Accepted; supersedes in part 0128 |
+| [0135](0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md) | Priority against a game: the mechanism now, turned on at Stage 2b on a measure | Accepted; supersedes in part 0082 |
+| [0136](0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md) | A client that stops reading: 1 MiB of buffer, its pointer motion merged, never ended by motion | Accepted |
+| [0137](0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md) | Planes: Yuna's own allocator; direct scanout and the cursor plane at Stage 2b | Accepted; supersedes in part 0082 |
+| [0138](0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md) | Agents' seats: each agent in its own Yuna, one seat per Yuna from Stage 2's core | Accepted; supersedes 0116 |
+| [0139](0139-stage-2-in-three-gated-parts-2as-path-revised.md) | Stage 2 in three gated parts; 2a's path off Smithay revised | Accepted; supersedes 0081; supersedes in part 0112 |
+| [0140](0140-rust-1-100s-features-what-yuna-takes.md) | Rust 1.100's features: what Yuna takes | Accepted |
+| [0141](0141-a-dwindle-window-that-does-not-fit-floats.md) | A dwindle window that does not fit floats | Accepted |

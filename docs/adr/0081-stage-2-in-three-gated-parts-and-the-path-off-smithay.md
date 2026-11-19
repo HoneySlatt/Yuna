@@ -1,7 +1,7 @@
 # 0081. Stage 2 in three gated parts, and the path off Smithay
 
-- Status: Accepted; supersedes in part [0039](0039-leaving-smithay-step-by-step.md) (how the
-  core moves)
+- Status: Superseded by [0139](0139-stage-2-in-three-gated-parts-2as-path-revised.md); supersedes in part
+  [0039](0039-leaving-smithay-step-by-step.md) (how the core moves)
 - Date: 2026-11-17
 
 ## Context
