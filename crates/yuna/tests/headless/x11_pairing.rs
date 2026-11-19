@@ -8,12 +8,8 @@
 //! The X11 stories run the development shell's Xwayland for an agent's seat, its output at 1.5
 //! (`x11_windows.rs`), on the real clock.
 
-use std::io;
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use tracing::subscriber::DefaultGuard;
-use tracing_subscriber::fmt::MakeWriter;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode, Window};
@@ -27,88 +23,6 @@ use crate::x11_client::{WindowSpec, X11Client, step};
 use crate::x11_drags::RENAMES;
 use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait};
 use crate::{BLUE, RED};
-
-/// What Yuna logs on the story's thread, at every level, kept in memory for the story to read
-/// as it goes: the order in which each X11 window was paired with its surface, which Yuna says
-/// nowhere else.
-#[derive(Clone, Default)]
-struct Log(Arc<Mutex<Vec<u8>>>);
-
-impl io::Write for Log {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Log {
-    type Writer = Log;
-
-    fn make_writer(&'a self) -> Log {
-        self.clone()
-    }
-}
-
-/// A [`Log`] of this thread, while its guards live.
-struct Logging {
-    log: Log,
-    _subscriber: DefaultGuard,
-    _second: tracing::Dispatch,
-}
-
-impl Logging {
-    fn start() -> Logging {
-        let log = Log::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .with_writer(log.clone())
-            .finish();
-        // `tracing` decides whether a log line is wanted when a thread first reaches it. While a
-        // single subscriber exists, it asks that thread's own: another test's thread, which has
-        // none, would turn the line off for this one too. A second subscriber, which takes
-        // nothing, has it ask every subscriber instead, and each line its own thread's
-        // (`tracing_core::callsite::Dispatchers::rebuilder`), as `core_costs.rs` does.
-        let second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-        Logging {
-            log,
-            _subscriber: tracing::subscriber::set_default(subscriber),
-            _second: second,
-        }
-    }
-
-    /// The lines logged so far that hold `message` and name X11 window `window`.
-    fn lines_of(&self, message: &str, window: Window) -> Vec<String> {
-        let bytes = self.log.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let named = format!(" window={window} ");
-        String::from_utf8_lossy(&bytes)
-            .lines()
-            .filter(|line| line.contains(message) && format!("{line} ").contains(&named))
-            .map(str::to_owned)
-            .collect()
-    }
-
-    /// Whether Yuna paired `window` with its surface the commit first, as its log says; none
-    /// before it paired them.
-    fn paired_commit_first(&self, window: Window) -> Option<bool> {
-        let lines = self.lines_of("an X11 window is paired with its surface", window);
-        let line = lines.last()?;
-        if line.contains("commit_first=true") {
-            Some(true)
-        } else if line.contains("commit_first=false") {
-            Some(false)
-        } else {
-            panic!("no order in {line:?}")
-        }
-    }
-}
 
 /// Runs the compositor's loop for `how_long`.
 fn pump_for(compositor: &mut Compositor, how_long: Duration) {
@@ -131,16 +45,16 @@ fn listed(compositor: &Compositor, title: &str) -> bool {
 /// coming through the manager's thread: but a quick manager may win. One X11 program renames a
 /// window of its own [`RENAMES`] times, then maps a menu: X11 queues the menu's serial for the
 /// manager behind every rename, each of which the manager reads, while Xwayland commits the
-/// menu's surface to Yuna at once. Yuna's log says the menu was paired commit first, and the menu
-/// is drawn where its program put it. `xwayland/windows.rs`'s tests force each order alone.
+/// menu's surface to Yuna at once. Yuna's counters say the menu was paired commit first, and the
+/// menu is drawn where its program put it. `xwayland/windows.rs`'s tests force each order alone.
 #[test]
 fn a_surface_committed_before_its_windows_serial_is_paired_with_it() {
-    let logging = Logging::start();
     let mut seat = X11Seat::new("pair-commit", &[at_1_5()], ClockMode::Real, off());
     let output = seat.outputs[0];
     let client = seat.client();
     let (client, renamed, _, _) =
         open_drawn(&mut seat.compositor, client, &WindowSpec::named("renamed"));
+    let before = seat.compositor.counters();
     let (client, menu) = step(&mut seat.compositor, client, move |client| {
         let fail = |e: x11rb::errors::ConnectionError| e.to_string();
         let spec = WindowSpec {
@@ -172,10 +86,14 @@ fn a_surface_committed_before_its_windows_serial_is_paired_with_it() {
     });
     // At S = s = 1.5, an X11 pixel is a physical one, and the output's X11 corner is (0, 0).
     assert_eq!(drawn.rect, (300, 200, 60, 40));
+    let after = seat.compositor.counters();
     assert_eq!(
-        logging.paired_commit_first(menu),
-        Some(true),
-        "the menu's surface committed before the manager named its serial"
+        (
+            after.x11_paired_commit_first - before.x11_paired_commit_first,
+            after.x11_paired_serial_first - before.x11_paired_serial_first,
+        ),
+        (1, 0),
+        "the menu, the one window paired, its surface committed before the manager named its serial"
     );
     seat.compositor
         .check_windows()

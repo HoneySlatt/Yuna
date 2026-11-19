@@ -781,9 +781,10 @@ type ClientRead = (Rectangle<i32, Physical>, Result<Vec<u8>, String>);
 /// (`State::copy`). One area may fail while another succeeds. A refresh at which a read of an
 /// output fails begins that output's run, or continues it; one at which every read of it
 /// succeeds ends it. Only a run's first refresh logs a warning, the others the debug level: a
-/// renderer that keeps failing to read an output, or an area of it, would otherwise log one a
-/// refresh. Runs are kept by output, not by area: clients choose their areas, as many as they
-/// like, and a run for each would warn as often.
+/// renderer that keeps failing to read an output would otherwise log one a refresh. Runs are
+/// kept by output, not by area: clients choose their areas, as many as they like, and a run for
+/// each would warn as often. An area that fails at the refreshes it is read, beside another of
+/// the output read alone at others, begins a run each time, a warning with it.
 #[derive(Debug, Default)]
 pub(crate) struct FailedCopies {
     failed: HashMap<OutputId, u64>,

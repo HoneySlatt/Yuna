@@ -110,6 +110,12 @@ pub struct Counters {
     /// the layout or a cap refused, so that an arrangement's cost follows the windows the layout
     /// holds (`frames.rs`).
     pub windows_looked_at_for_hidden_frames: u64,
+    /// X11 windows paired with their surface once the manager named their serial, the surface
+    /// having committed it first (`xwayland/windows.rs`).
+    pub x11_paired_commit_first: u64,
+    /// X11 windows paired with their surface once it committed their serial, the manager having
+    /// named it first.
+    pub x11_paired_serial_first: u64,
 }
 
 /// The shell behind a window: what its client speaks.

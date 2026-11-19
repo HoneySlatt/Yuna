@@ -268,9 +268,12 @@ impl State {
     /// (`xwayland/windows.rs`). Nothing else would then send its callbacks, and Xwayland, which
     /// waits for them, would never draw it again.
     pub(crate) fn window_refused(&mut self, root: &WlSurface) {
+        // One counted already has its deadline armed (`arm_hidden_frames`): its trees need no
+        // walk again.
         let Some(last_frame_sent) = self
             .toplevels
             .get(&root.id())
+            .filter(|toplevel| toplevel.refused_frames_due.is_none())
             .map(|toplevel| toplevel.last_frame_sent)
         else {
             return;

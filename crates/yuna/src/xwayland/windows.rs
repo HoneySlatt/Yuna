@@ -724,8 +724,8 @@ impl State {
 
     /// Xwayland `server` says `window`'s surface has `serial`: the window is paired with the
     /// surface that committed it already, or waits for it. A window Yuna does not know takes no
-    /// surface: the one waiting stays for its own window. Each pairing is logged with the order
-    /// it took, `commit_first`, which the stories that force an order read.
+    /// surface: the one waiting stays for its own window. Each pairing is counted by the order it
+    /// took ([`Counters`](crate::Counters)), which the stories that force an order read.
     fn x11_window_serial(&mut self, server: u64, window: Window, serial: u64) {
         let Some(record) = self.x11.servers.get_mut(&server) else {
             return;
@@ -744,6 +744,7 @@ impl State {
                 commit_first = true,
                 "an X11 window is paired with its surface"
             );
+            self.counters.x11_paired_commit_first += 1;
             self.x11_paired(server, window);
         }
     }
@@ -761,6 +762,7 @@ impl State {
                 commit_first = false,
                 "an X11 window is paired with its surface"
             );
+            self.counters.x11_paired_serial_first += 1;
             self.x11_paired(server, window);
         }
     }
