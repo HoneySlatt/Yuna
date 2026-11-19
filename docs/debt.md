@@ -334,8 +334,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 - Every client of `yuna --headless` may capture its seat's outputs without being asked; consent
   comes with the share picker at Stage 2c
   ([ADR-0121](adr/0121-captures-what-is-seen-at-the-logical-size.md)).
-- A capture waiting for its frame times out after 50 s; no test waits that long. Paid at Stage 2a,
-  M2.1 (baselines): a test before the rewrite.
 - A capture waiting on an output whose size or scale changes fails, an agent's with a reason, an
   `ext-image-copy-capture-v1` frame as `unknown` rather than `buffer_constraints`, after its
   session is told its new size. Kept: the client asks again either way. A frame whose buffer is

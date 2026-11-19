@@ -1,12 +1,17 @@
 //! Captures through MCP ([ADR-0034](../../../../docs/adr/0034-captures.md),
 //! [ADR-0038](../../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)): images
 //! of a seat's output, a region and a window, at the logical and the physical size, decoded
-//! from the PNG the reply carries, and `pointer` aimed through a capture's pixels.
+//! from the PNG the reply carries, and `pointer` aimed through a capture's pixels; and the
+//! captures that cannot be, refused or failed with what to do.
 //!
 //! A seat here has one output of 960 × 540 pixels at scale 1.5: 640 × 360 logical units, so that
 //! a window's column is (640 − 3 × 16) / 2 = 296 units wide and 360 − 2 × 16 = 328 tall, at
 //! (16, 16).
+//!
+//! One test waits 50 s of real time, the whole limit of a capture whose frame never comes
+//! (`a_capture_whose_frame_never_comes_fails_after_50_s`); it runs beside the others.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -79,11 +84,16 @@ fn seat_with_a_window(colour: u32) -> (Mcp, u64, Client, u64) {
     (mcp, seat, client, id)
 }
 
+/// A `capture` call with `arguments`, as request `id`.
+fn capture_request(id: u64, arguments: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+           "params": modern(json!({"name": "capture", "arguments": arguments}))})
+}
+
 /// Sends `capture` with `arguments` as request `id` and waits, up to 10 s of real time, for its
 /// reply, without moving the clock.
 fn capture_reply(mcp: &mut Mcp, id: u64, arguments: Value) -> Value {
-    mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-                     "params": modern(json!({"name": "capture", "arguments": arguments}))}));
+    mcp.send(&capture_request(id, arguments));
     wait_for(mcp, id, Duration::from_secs(10)).unwrap_or_else(|| panic!("no reply to capture {id}"))
 }
 
@@ -191,8 +201,7 @@ fn a_capture_shows_the_frame_on_its_way_and_comes_at_its_boundary() {
         refresh > mcp.server.compositor().now(),
         "the output is not idle"
     );
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 901, "method": "tools/call",
-                     "params": modern(json!({"name": "capture", "arguments": {"seat": seat}}))}));
+    mcp.send(&capture_request(901, json!({"seat": seat})));
     assert_eq!(wait_for(&mut mcp, 901, Duration::from_millis(100)), None);
     // The refresh draws the blue frame, which is presented a lead later.
     let now = mcp.server.compositor().now();
@@ -372,8 +381,7 @@ fn captures_that_cannot_be_are_refused_and_one_of_a_seat_is_in_flight() {
     client.attach(0, configure.width, configure.height, BLUE);
     client.commit(0);
     client.roundtrip(mcp.server.compositor());
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 920, "method": "tools/call",
-                     "params": modern(json!({"name": "capture", "arguments": {"seat": seat}}))}));
+    mcp.send(&capture_request(920, json!({"seat": seat})));
     assert_eq!(wait_for(&mut mcp, 920, Duration::from_millis(20)), None);
     assert!(refused(&mut mcp, json!({"seat": seat})).contains("in flight"));
     mcp.send(
@@ -419,8 +427,7 @@ fn a_seat_closed_fails_its_capture_in_flight() {
     client.attach(0, configure.width, configure.height, BLUE);
     client.commit(0);
     client.roundtrip(mcp.server.compositor());
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 931, "method": "tools/call",
-                     "params": modern(json!({"name": "capture", "arguments": {"seat": seat}}))}));
+    mcp.send(&capture_request(931, json!({"seat": seat})));
     assert_eq!(wait_for(&mut mcp, 931, Duration::from_millis(20)), None);
     // Both replies come in the round that closes the seat.
     mcp.send(&json!({"jsonrpc": "2.0", "id": 932, "method": "tools/call",
@@ -589,9 +596,10 @@ fn a_window_shown_by_an_arrangement_to_come_is_captured_there() {
         json!({"action": "move_window", "seat": seat, "window": window, "workspace": "empty"}),
     );
     assert_eq!(moved["isError"], json!(false), "{moved}");
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 990, "method": "tools/call",
-                     "params": modern(json!({"name": "capture",
-                                             "arguments": {"seat": seat, "window": window}}))}));
+    mcp.send(&capture_request(
+        990,
+        json!({"seat": seat, "window": window}),
+    ));
     assert_eq!(wait_for(&mut mcp, 990, Duration::from_millis(20)), None);
     settle(&mut mcp);
     let result = wait_for(&mut mcp, 990, Duration::from_secs(10)).expect("answered");
@@ -606,9 +614,10 @@ fn a_window_shown_by_an_arrangement_to_come_is_captured_there() {
             json!({"action": action, "seat": seat, "name": "other"}),
         );
     }
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 991, "method": "tools/call",
-                     "params": modern(json!({"name": "capture",
-                                             "arguments": {"seat": seat, "window": window}}))}));
+    mcp.send(&capture_request(
+        991,
+        json!({"seat": seat, "window": window}),
+    ));
     settle(&mut mcp);
     let hidden = wait_for(&mut mcp, 991, Duration::from_secs(10)).expect("answered");
     assert_eq!(hidden["isError"], json!(true));
@@ -646,9 +655,10 @@ fn a_capture_waiting_on_a_removed_output_fails() {
         .as_u64()
         .expect("an output");
     // A new output's first frame waits for its first boundary.
-    mcp.send(&json!({"jsonrpc": "2.0", "id": 995, "method": "tools/call",
-                     "params": modern(json!({"name": "capture",
-                                             "arguments": {"seat": seat, "output": output}}))}));
+    mcp.send(&capture_request(
+        995,
+        json!({"seat": seat, "output": output}),
+    ));
     assert_eq!(wait_for(&mut mcp, 995, Duration::from_millis(20)), None);
     mcp.send(&json!({"jsonrpc": "2.0", "id": 996, "method": "tools/call",
                      "params": modern(json!({"name": "outputs",
@@ -662,6 +672,172 @@ fn a_capture_waiting_on_a_removed_output_fails() {
     assert_eq!(failed["isError"], json!(true));
     let reason = failed["content"][0]["text"].as_str().expect("a reason");
     assert!(reason.contains("removed"), "{reason}");
+}
+
+/// How long a capture waits for its frame before it fails: `MAX_WAIT`'s 50 s
+/// (`src/mcp/tools/mod.rs`). Written here rather than read from Yuna, so that `MAX_WAIT` moved
+/// either way fails the test that waits for it; a timer set later than `MAX_WAIT` where the
+/// capture arms it passes if by less than [`LATE_BY_AT_MOST`].
+const CAPTURE_LIMIT: Duration = Duration::from_secs(50);
+
+/// What an agent is told when its capture's frame did not come in [`CAPTURE_LIMIT`].
+const NO_FRAME: &str = "no frame came in 50 s: nothing changed on the output since a refresh \
+                        was armed; on a manual clock, advance it";
+
+/// How long before [`CAPTURE_LIMIT`] the test checks that the capture still waits: room for the
+/// test's thread to be late on a loaded machine.
+const STILL_WAITING_BEFORE: Duration = Duration::from_secs(5);
+
+/// How long after [`CAPTURE_LIMIT`] the failure may come: room for the test's thread to be late,
+/// as much as [`STILL_WAITING_BEFORE`] allows it before.
+const LATE_BY_AT_MOST: Duration = Duration::from_secs(5);
+
+/// Runs the server's rounds, the test's thread asleep in each one's wait, until request `id` is
+/// answered or `until` comes; gathers every reply in `answers` by its request's id, with when it
+/// was read. A request answered twice fails the test.
+fn serve(mcp: &mut Mcp, answers: &mut HashMap<u64, (Instant, Value)>, id: u64, until: Instant) {
+    loop {
+        for reply in mcp.replies() {
+            let Some(request) = reply["id"].as_u64() else {
+                continue;
+            };
+            let first = answers.insert(request, (Instant::now(), reply["result"].clone()));
+            assert!(
+                first.is_none(),
+                "request {request} was answered twice: {reply}"
+            );
+        }
+        let now = Instant::now();
+        if answers.contains_key(&id) || now >= until {
+            return;
+        }
+        // A round ends at the server's next event, its timers' included, or after a second.
+        mcp.server
+            .dispatch(Some((until - now).min(Duration::from_secs(1))))
+            .expect("the server dispatches");
+    }
+}
+
+/// A capture whose frame never comes fails once its [`CAPTURE_LIMIT`] is up, with what to do,
+/// and not before; its seat then captures again, and it is never answered twice. On the manual
+/// clock, the refresh armed for the window's new buffer waits for the clock, which the test does
+/// not move: the frame never comes.
+///
+/// It waits the whole 50 s (`docs/debt.md`, *Captures*): the limit runs on real time whatever
+/// the clock (`mcp/waits.rs`), and nothing shortens it without changing Yuna. It holds no lock
+/// meanwhile, its thread asleep in the server's rounds, and runs beside the rest of the suite.
+/// The wait is timed from before the request is sent, so that a correct Yuna can never answer
+/// earlier, however loaded the machine. [`STILL_WAITING_BEFORE`] the limit, a second capture of
+/// the seat is refused as one in flight: the first still waits, unanswered. That probe assumes
+/// the test's thread is never late by [`STILL_WAITING_BEFORE`] or more; if it is, the test fails
+/// saying so, not that Yuna answered early.
+#[test]
+fn a_capture_whose_frame_never_comes_fails_after_50_s() {
+    let (mut mcp, seat, mut client, _) = seat_with_a_window(RED);
+    let configure = client
+        .window(0)
+        .configures
+        .last()
+        .expect("a configure")
+        .clone();
+    client.attach(0, configure.width, configure.height, BLUE);
+    client.commit(0);
+    client.roundtrip(mcp.server.compositor());
+    let clock = mcp.server.compositor().now();
+    let refresh = mcp
+        .server
+        .compositor()
+        .next_deadline()
+        .expect("a refresh armed");
+    assert!(refresh > clock, "the blue frame is on its way, not drawn");
+
+    let mut answers = HashMap::new();
+    let asked = Instant::now();
+    mcp.send(&capture_request(1000, json!({"seat": seat})));
+    serve(
+        &mut mcp,
+        &mut answers,
+        1000,
+        asked + CAPTURE_LIMIT - STILL_WAITING_BEFORE,
+    );
+    assert_still_waiting(&answers, 1000, asked);
+    mcp.send(&capture_request(1001, json!({"seat": seat})));
+    serve(
+        &mut mcp,
+        &mut answers,
+        1001,
+        Instant::now() + STILL_WAITING_BEFORE,
+    );
+    let (_, in_flight) = answers
+        .get(&1001)
+        .expect("a second capture is refused at once");
+    assert_eq!(in_flight["isError"], json!(true), "{in_flight}");
+    let in_flight_text = format!("a capture of seat {seat} is in flight: wait for its answer");
+    assert_eq!(
+        in_flight["content"],
+        json!([{"type": "text", "text": in_flight_text}])
+    );
+    assert_still_waiting(&answers, 1000, asked);
+
+    serve(
+        &mut mcp,
+        &mut answers,
+        1000,
+        asked + CAPTURE_LIMIT + LATE_BY_AT_MOST,
+    );
+    let (answered_at, failed) = answers.get(&1000).unwrap_or_else(|| {
+        let waited = CAPTURE_LIMIT + LATE_BY_AT_MOST;
+        panic!("no answer {waited:?} after it was asked")
+    });
+    let waited = answered_at.duration_since(asked);
+    assert!(
+        waited >= CAPTURE_LIMIT,
+        "answered {waited:?} after it was asked, before its limit: {failed}"
+    );
+    assert_eq!(failed["isError"], json!(true), "{failed}");
+    assert_eq!(
+        failed["content"],
+        json!([{"type": "text", "text": NO_FRAME}])
+    );
+    assert_eq!(failed.get("structuredContent"), None, "{failed}");
+    // The limit ran on real time: the clock has not moved, and the frame is still on its way.
+    assert_eq!(mcp.server.compositor().now(), clock);
+    assert_eq!(mcp.server.compositor().next_deadline(), Some(refresh));
+
+    // The frame drawn at last answers nothing more; the seat captures again: the blue frame.
+    settle(&mut mcp);
+    mcp.send(&capture_request(1002, json!({"seat": seat})));
+    serve(
+        &mut mcp,
+        &mut answers,
+        1002,
+        Instant::now() + Duration::from_secs(10),
+    );
+    let (_, next) = answers.get(&1002).expect("the seat captures again");
+    let (width, _, pixels) = image_of(next);
+    assert_eq!(at(&pixels, width, 100, 100), BLUE_RGB);
+    let later = mcp.replies();
+    assert!(
+        later.iter().all(|reply| reply["id"] != json!(1000)),
+        "the capture that failed was answered again: {later:?}"
+    );
+}
+
+/// Fails if request `id`, asked at `asked`, was answered: before [`CAPTURE_LIMIT`], as Yuna
+/// answering early; at or after it, as the test's thread late by [`STILL_WAITING_BEFORE`] or more.
+fn assert_still_waiting(answers: &HashMap<u64, (Instant, Value)>, id: u64, asked: Instant) {
+    let Some((answered_at, result)) = answers.get(&id) else {
+        return;
+    };
+    let waited = answered_at.duration_since(asked);
+    assert!(
+        waited >= CAPTURE_LIMIT,
+        "answered {waited:?} after it was asked, before its limit: {result}"
+    );
+    panic!(
+        "the test's thread was late by {STILL_WAITING_BEFORE:?} or more: the capture's answer, \
+         {waited:?} after it was asked, was read when the test meant to probe it still waiting"
+    );
 }
 
 /// Never more than [`MAX_ENCODERS`] captures encode at once, however many a round copies: one
@@ -694,8 +870,7 @@ fn captures_copied_in_one_round_encode_four_at_a_time() {
     // Sent together, read in one round.
     let ids: Vec<u64> = (970..).take(seats.len()).collect();
     for (&id, &seat) in ids.iter().zip(&seats) {
-        mcp.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-                         "params": modern(json!({"name": "capture", "arguments": {"seat": seat}}))}));
+        mcp.send(&capture_request(id, json!({"seat": seat})));
     }
     let mut answers = std::collections::HashMap::new();
     let mut most = 0;
