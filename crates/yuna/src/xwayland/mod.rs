@@ -17,8 +17,8 @@
 //!   that has not reached that point within [`START_TIMEOUT`] is ended. Xwayland ends itself
 //!   [`XwaylandConfig::idle_seconds`] after its last X11 client leaves; it may also crash, be
 //!   killed, or be ended by Yuna when its manager fails or stalls: when it has taken none of the
-//!   commands Yuna owes it for [`MANAGER_STALL`], or when they pass their bound
-//!   (`manager/owed.rs`). Its pidfd reaps it, or, in `yuna mcp`,
+//!   commands Yuna owes it for [`MANAGER_STALL`], and still none [`STALL_RECHECK`] later, or when
+//!   they pass their bound (`manager/owed.rs`). Its pidfd reaps it, or, in `yuna mcp`,
 //!   the reaping of every child gives its status ([`Xwayland::child_reaped`]); its Wayland
 //!   client goes, and the display is watched again.
 //! - **Paused**: after starts that fail in a row, the display waits before it is watched again
@@ -30,12 +30,14 @@
 //! through xwayland-shell-v1 (`shell.rs`), and waits on their sync requests and pings
 //! (`answers.rs`); what the state decides goes back to the manager as commands, at the round's
 //! end ([`Xwayland::send_commands`]). A manager that owes commands from an earlier round, checked
-//! at each round, has its watchdog armed, and only then: a manager that takes them at once, as one
-//! served does, never has one. The manager also carries the seat's clipboard and primary
-//! selection between X11 and Wayland, both ways: on its thread (`bridge.rs`), Yuna's state
-//! deciding what the seat's Wayland selections are (`selections.rs`). And it carries drags
-//! between them, both ways: XDND on its thread (`xdnd.rs`), each seat's drags decided on Yuna's
-//! side (`drag_session.rs`, carried out by `drags.rs`).
+//! at each round, has its watchdog armed, and only until it takes them: it then pings Yuna's
+//! loop, which disarms it, so that no watchdog stays armed at rest. A manager that takes them at
+//! once, as one served does, most often never has one. The manager also carries the seat's
+//! clipboard and primary selection between X11 and Wayland, both ways: on its thread
+//! (`bridge.rs`), Yuna's state deciding what the seat's Wayland selections are
+//! (`selections.rs`). And it carries drags between them, both ways: XDND on its thread
+//! (`xdnd.rs`), each seat's drags decided on Yuna's side (`drag_session.rs`, carried out by
+//! `drags.rs`).
 //!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
 //! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
@@ -64,6 +66,7 @@ use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::channel::{self, Channel};
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::ping::{self, Ping};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::rustix;
@@ -80,7 +83,9 @@ pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
 pub use bridge::{MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
 use display::Display;
 pub use display::{MAX_DISPLAYS, remove_displays_after_panic};
-use manager::{Commands, MAX_OWED_BYTES, ManagerEvent, OverBound, Stop};
+use manager::{Commands, ManagerEvent, OverBound, Stop};
+#[cfg(debug_assertions)]
+pub use manager::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 pub(crate) use menus::ShownMenus;
 pub use menus::{DrawnX11Menu, MAX_MENUS_PER_CLIENT};
 pub(crate) use shell::{SURFACE_ROLE, shell_global};
@@ -101,12 +106,20 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MANAGER_GRACE: Duration = Duration::from_secs(5);
 
 /// How long a manager may go without taking any of the commands Yuna owes it before Yuna takes it
-/// as stalled and ends its Xwayland, as when it fails: its X11 programs then start a new one. A
-/// manager takes them at each wake-up and between X11's events, within milliseconds, within a
-/// second on a machine loaded far past its cores; one that waits on an Xwayland stopped or hung
-/// never does. Its time counts while Yuna reads the managers' events, never while Yuna's own
-/// backlog keeps a manager waiting to post.
-pub(crate) const MANAGER_STALL: Duration = Duration::from_secs(10);
+/// as stalled and, after one more look [`STALL_RECHECK`] later, ends its Xwayland, as when it
+/// fails: its X11 programs then start a new one. A manager takes them at each wake-up and between
+/// X11's events, within milliseconds, within a second on a machine loaded far past its cores;
+/// one that waits on an Xwayland stopped or hung never does. Its time counts while Yuna reads the
+/// managers' events, never while Yuna's own backlog keeps a manager waiting to post.
+pub const MANAGER_STALL: Duration = Duration::from_secs(10);
+
+/// How long after a manager's watchdog first finds it stalled Yuna looks once more before it
+/// ends its Xwayland. When Yuna's whole process was stopped (a debugger, `SIGSTOP`, a machine
+/// swapping hard), the watchdog fires as soon as Yuna runs again, while the manager's thread,
+/// which runs again at the same moment, has not yet taken what it owes: it takes it within
+/// milliseconds, within a second on a machine loaded far past its cores, as [`MANAGER_STALL`]
+/// counts. A manager that is stalled takes nothing in either.
+pub const STALL_RECHECK: Duration = Duration::from_secs(1);
 
 /// How long Yuna handles its managers' events in one round of its loop, at most: a burst of
 /// thousands, a program opening its windows, never keeps its loop from its clients for long.
@@ -136,6 +149,29 @@ fn manager_slice_end(state: &State) -> Instant {
         .saturating_sub(state.clock.now())
         .saturating_sub(SLICE_MARGIN);
     longest.min(started + until)
+}
+
+/// Hands `notes` to `handle_note`, in order, until this round's slice of the managers' events
+/// ends at `slice_end`, and returns those left, in order, for the next rounds: from the first
+/// manager's note met once the slice is over. One manager's note is handled at least, so that a
+/// backlog always moves; the other notes, a few per Xwayland, do not count against the slice.
+fn handle_within_slice(
+    notes: Vec<Note>,
+    slice_end: Instant,
+    mut handle_note: impl FnMut(Note),
+) -> Vec<Note> {
+    let mut handled_one = false;
+    let mut notes = notes.into_iter();
+    while let Some(note) = notes.next() {
+        if matches!(note, Note::Manager { .. }) {
+            if handled_one && Instant::now() >= slice_end {
+                return std::iter::once(note).chain(notes).collect();
+            }
+            handled_one = true;
+        }
+        handle_note(note);
+    }
+    Vec::new()
 }
 
 /// How long a failed start is remembered: the next failure within it is one more in a row.
@@ -215,6 +251,10 @@ pub(crate) enum Note {
     /// An Xwayland's manager's watchdog came due: it may have taken no command for
     /// [`MANAGER_STALL`].
     Stalled { server: u64 },
+    /// An Xwayland's manager took commands its watchdog waited on.
+    CommandsTaken { server: u64 },
+    /// An Xwayland's manager was owed more than its bound, at the last round's end, and let go.
+    OverBound { server: u64 },
     /// An Xwayland has ended, and was reaped.
     Exited { server: u64, end: End },
     /// A seat's pause after failed starts has ended.
@@ -290,6 +330,9 @@ struct XServer {
     /// The timer that checks, while its manager owes commands from an earlier round, that it
     /// takes them within [`MANAGER_STALL`].
     watchdog: Option<RegistrationToken>,
+    /// When the oldest command its manager owed was sent, once its watchdog found it stalled:
+    /// it is ended if it still owes that one [`STALL_RECHECK`] later.
+    stall_suspected: Option<Instant>,
 }
 
 impl XServer {
@@ -313,7 +356,9 @@ impl XServer {
 
     /// Arms its watchdog at `due`, replacing the one armed.
     fn arm_watchdog(&mut self, id: u64, due: Instant, handle: &LoopHandle<'static, State>) {
-        self.disarm_watchdog(handle);
+        if let Some(token) = self.watchdog.take() {
+            handle.remove(token);
+        }
         let armed = insert_source(
             handle,
             Wake::of_seat(Source::XwaylandTimeout, self.seat),
@@ -331,17 +376,13 @@ impl XServer {
         }
     }
 
+    /// Disarms its watchdog, and forgets a stall it suspected: its manager owes nothing it
+    /// waited on.
     fn disarm_watchdog(&mut self, handle: &LoopHandle<'static, State>) {
+        self.stall_suspected = None;
         if let Some(token) = self.watchdog.take() {
             handle.remove(token);
         }
-    }
-
-    /// Ends it at once because its manager stalled, without the loop's handle: its sources go
-    /// when it is reaped, and its manager now, with what Yuna owed it.
-    fn end_stalled(&mut self) {
-        kill(&self.pidfd);
-        self.manager = None;
     }
 
     /// Arms the timer that ends it after `delay`, replacing the one armed.
@@ -494,32 +535,19 @@ impl Xwayland {
     /// and X11's own buffers hold what comes.
     pub(crate) fn handle_notes(&mut self, state: &mut State, handle: &LoopHandle<'static, State>) {
         let slice_end = manager_slice_end(state);
-        let mut handled_one = false;
-        let mut notes = std::mem::take(&mut state.xwayland_notes).into_iter();
-        let mut backlog = Vec::new();
-        while let Some(note) = notes.next() {
-            if matches!(note, Note::Manager { .. }) {
-                // One at least, so that a backlog always moves.
-                if handled_one && Instant::now() >= slice_end {
-                    backlog.push(note);
-                    backlog.extend(notes.by_ref());
-                    break;
-                }
-                handled_one = true;
-            }
-            match note {
-                Note::Connection(seat) => self.start(seat, state, handle),
-                Note::Displayed { server, number } => self.displayed(server, number, handle),
-                Note::Manager { server, event } => {
-                    self.manager_event(server, event, state, handle);
-                }
-                Note::ManagerGone { server } => self.manager_gone(server, handle),
-                Note::Overdue { server } => self.overdue(server, handle),
-                Note::Stalled { server } => self.stalled(server, handle),
-                Note::Exited { server, end } => self.exited(server, end, state, handle),
-                Note::PauseEnded(seat) => self.watch(seat, handle),
-            }
-        }
+        let notes = std::mem::take(&mut state.xwayland_notes);
+        let mut backlog = handle_within_slice(notes, slice_end, |note| match note {
+            Note::Connection(seat) => self.start(seat, state, handle),
+            Note::Displayed { server, number } => self.displayed(server, number, handle),
+            Note::Manager { server, event } => self.manager_event(server, event, state, handle),
+            Note::ManagerGone { server } => self.manager_gone(server, handle),
+            Note::Overdue { server } => self.overdue(server, handle),
+            Note::Stalled { server } => self.stalled(server, handle),
+            Note::CommandsTaken { server } => self.commands_taken(server, handle),
+            Note::OverBound { server } => self.over_bound(server, handle),
+            Note::Exited { server, end } => self.exited(server, end, state, handle),
+            Note::PauseEnded(seat) => self.watch(seat, handle),
+        });
         // Those its sources noted meanwhile come after.
         backlog.append(&mut state.xwayland_notes);
         state.xwayland_notes = backlog;
@@ -529,41 +557,54 @@ impl Xwayland {
 
     /// Arms the watchdog of each manager that owes commands sent at an earlier round's end, and
     /// disarms the others': done before this round's commands are sent, so that a manager that
-    /// takes them at once, as one served does, never has one armed. None is armed while the
-    /// managers' events wait in Yuna's backlog: a manager may be waiting to post then.
+    /// takes them at once, as one served does, most often has none armed; one armed is disarmed
+    /// when the manager says it took them ([`Note::CommandsTaken`]), so that none stays armed at
+    /// rest. None is armed while the managers' events wait in Yuna's backlog: a manager may be
+    /// waiting to post then.
     fn watch_managers(&mut self, handle: &LoopHandle<'static, State>) {
         for (&id, xserver) in &mut self.servers {
-            let owed_since = xserver.manager.as_ref().and_then(Commands::untaken_since);
+            let owed_since = xserver
+                .manager
+                .as_ref()
+                .filter(|_| self.reading_managers)
+                .and_then(Commands::watch);
             match owed_since {
-                Some(since) if self.reading_managers => {
+                Some(since) => {
                     if xserver.watchdog.is_none() {
                         let due = since.max(self.reading_since) + MANAGER_STALL;
                         xserver.arm_watchdog(id, due, handle);
                     }
                 }
-                _ => xserver.disarm_watchdog(handle),
+                None => xserver.disarm_watchdog(handle),
             }
         }
     }
 
     /// Manager `id`'s watchdog came due: if it has taken none of Yuna's commands for
-    /// [`MANAGER_STALL`] while Yuna read its events, it is stalled, and its Xwayland ends as when
-    /// it fails; if it took some since, its watchdog counts from the oldest it owes now.
+    /// [`MANAGER_STALL`] while Yuna read its events, it is stalled; it is looked at once more
+    /// [`STALL_RECHECK`] later, and if it still owes the same oldest command, its Xwayland ends
+    /// as when it fails. If it took some since, its watchdog counts from the oldest it owes now.
     fn stalled(&mut self, id: u64, handle: &LoopHandle<'static, State>) {
         let Some(xserver) = self.servers.get_mut(&id) else {
             return;
         };
         xserver.watchdog = None;
-        let Some(since) = xserver.manager.as_ref().and_then(Commands::untaken_since) else {
-            return;
-        };
         // While Yuna's backlog waits, the next round's check arms it again from its end.
         if !self.reading_managers {
             return;
         }
+        let Some(since) = xserver.manager.as_ref().and_then(Commands::watch) else {
+            return;
+        };
+        let now = Instant::now();
         let due = since.max(self.reading_since) + MANAGER_STALL;
-        if Instant::now() < due {
+        if now < due {
             xserver.arm_watchdog(id, due, handle);
+            return;
+        }
+        if xserver.stall_suspected != Some(since) {
+            xserver.stall_suspected = Some(since);
+            xserver.arm_watchdog(id, now + STALL_RECHECK, handle);
             return;
         }
         tracing::warn!(
@@ -572,6 +613,23 @@ impl Xwayland {
             "Xwayland's manager takes none of Yuna's commands: it is stalled, and Xwayland ends"
         );
         xserver.end(handle);
+    }
+
+    /// Manager `id` took the commands its watchdog waited on: the watchdog is disarmed, and the
+    /// round's check arms it again if the manager owes newer ones.
+    fn commands_taken(&mut self, id: u64, handle: &LoopHandle<'static, State>) {
+        if let Some(xserver) = self.servers.get_mut(&id) {
+            xserver.disarm_watchdog(handle);
+        }
+    }
+
+    /// Manager `id` was owed more than its bound at the last round's end, which let it go with
+    /// what it was owed ([`Xwayland::send_commands`]): it is stalled, and its Xwayland ends as
+    /// when its manager fails.
+    fn over_bound(&mut self, id: u64, handle: &LoopHandle<'static, State>) {
+        if let Some(xserver) = self.servers.get_mut(&id) {
+            xserver.end(handle);
+        }
     }
 
     /// Whether notes wait from an earlier round: the loop must not sleep.
@@ -667,6 +725,7 @@ impl Xwayland {
             manager_events: None,
             overdue: None,
             watchdog: None,
+            stall_suspected: None,
         };
         tracing::info!(
             seat = seat.0,
@@ -718,13 +777,16 @@ impl Xwayland {
         );
         let (events, channel) = channel::sync_channel(manager::EVENT_QUEUE);
         let reading = self.reading_managers;
-        let started = listen_to_manager(channel, id, xserver.seat, handle).and_then(|token| {
+        let seat = xserver.seat;
+        let started = listen_to_manager(channel, id, seat, handle).and_then(|token| {
             xserver.sources.push(token);
             xserver.manager_events = Some(token);
             if !reading && let Err(error) = handle.disable(&token) {
                 tracing::warn!(%error, "a manager's channel cannot be paused");
             }
-            manager::start(xserver.seat, wm, xserver.scale, events)
+            let (taken, taken_source) = listen_for_taken(id, seat, handle)?;
+            xserver.sources.push(taken_source);
+            manager::start(seat, wm, xserver.scale, events, taken)
                 .map_err(|error| format!("its manager's thread cannot start: {error}"))
         });
         match started {
@@ -783,7 +845,10 @@ impl Xwayland {
     /// Passes the commands the state left for the managers to each, in order, then wakes each
     /// manager that got some: at the round's end, so that the state never holds a manager, whose
     /// life is its Xwayland's. A command for an Xwayland whose manager is gone is dropped. A
-    /// manager owed more than its bound is taken as stalled: its Xwayland ends at once.
+    /// manager owed more than its bound is taken as stalled: it is let go at once, with what it
+    /// was owed, and its Xwayland ends as when its manager fails once the notes are handled
+    /// again, the next round, which comes at once ([`Note::OverBound`]): ending it takes the
+    /// loop's handle, which a round's end has not.
     pub(crate) fn send_commands(&mut self, state: &mut State) {
         state.x11_selection_commands();
         state.x11_drag_commands();
@@ -798,14 +863,15 @@ impl Xwayland {
             match manager.send(command) {
                 Ok(()) if !woken.contains(&id) => woken.push(id),
                 Ok(()) => {}
-                Err(OverBound) => {
+                Err(OverBound { bound }) => {
                     tracing::warn!(
                         seat = xserver.seat.0,
-                        bound = MAX_OWED_BYTES,
+                        bound,
                         "Xwayland's manager is owed more commands than its bound: it is \
                          stalled, and Xwayland ends"
                     );
-                    xserver.end_stalled();
+                    xserver.manager = None;
+                    state.xwayland_notes.push(Note::OverBound { server: id });
                 }
             }
         }
@@ -1073,6 +1139,29 @@ fn watch_displayfd(
     .map_err(|error| error.error.to_string())
 }
 
+/// The ping manager `id`'s thread, `seat`'s, gives when it takes commands its watchdog waited
+/// on, and the token of its source in Yuna's loop, which notes it. Apart from the events'
+/// channel, which Yuna stops reading while a backlog waits: a watchdog is then disarmed anyway.
+fn listen_for_taken(
+    id: u64,
+    seat: SeatId,
+    handle: &LoopHandle<'static, State>,
+) -> Result<(Ping, RegistrationToken), String> {
+    let (taken, source) = ping::make_ping().map_err(|error| error.to_string())?;
+    let token = insert_source(
+        handle,
+        Wake::of_seat(Source::X11Manager, seat),
+        source,
+        move |(), (), state| {
+            state
+                .xwayland_notes
+                .push(Note::CommandsTaken { server: id });
+        },
+    )
+    .map_err(|error| error.error.to_string())?;
+    Ok((taken, token))
+}
+
 /// Passes manager `id`'s events, `seat`'s, to Yuna's loop.
 fn listen_to_manager(
     channel: Channel<ManagerEvent>,
@@ -1111,6 +1200,71 @@ mod tests {
         assert_eq!(seconds(6), Some(16));
         assert_eq!(seconds(7), Some(30));
         assert_eq!(seconds(u32::MAX), Some(30));
+    }
+
+    /// What a note is, for the slice's tests: a manager's event, by its server, or another note.
+    fn named(note: &Note) -> String {
+        match note {
+            Note::Manager { server, .. } => format!("manager {server}"),
+            other => format!("{other:?}"),
+        }
+    }
+
+    fn manager_note(server: u64) -> Note {
+        Note::Manager {
+            server,
+            event: ManagerEvent::Ready,
+        }
+    }
+
+    #[test]
+    fn a_slice_over_handles_one_managers_note_and_leaves_the_rest_in_order() {
+        let notes = vec![
+            Note::PauseEnded(SeatId(1)),
+            manager_note(1),
+            Note::Overdue { server: 7 },
+            manager_note(2),
+            Note::Stalled { server: 7 },
+            manager_note(3),
+        ];
+        let mut handled = Vec::new();
+        let left = handle_within_slice(notes, Instant::now(), |note| handled.push(named(&note)));
+        assert_eq!(
+            handled,
+            [
+                "PauseEnded(SeatId(1))",
+                "manager 1",
+                "Overdue { server: 7 }"
+            ]
+        );
+        let left: Vec<String> = left.iter().map(named).collect();
+        assert_eq!(left, ["manager 2", "Stalled { server: 7 }", "manager 3"]);
+    }
+
+    #[test]
+    fn the_managers_notes_past_the_slices_end_wait() {
+        // Each note takes a millisecond or more: a slice of 20 ms handles a few dozen at most,
+        // however slow the machine, and one at least.
+        let slice_end = Instant::now() + Duration::from_millis(20);
+        let notes = (0..1_000).map(manager_note).collect();
+        let mut handled = 0;
+        let left = handle_within_slice(notes, slice_end, |_| {
+            handled += 1;
+            std::thread::sleep(Duration::from_millis(1));
+        });
+        assert!((1..=21).contains(&handled), "{handled} handled");
+        assert_eq!(handled + left.len(), 1_000);
+        assert_eq!(left.first().map(named), Some(format!("manager {handled}")));
+    }
+
+    #[test]
+    fn a_slice_not_over_handles_every_note() {
+        let slice_end = Instant::now() + Duration::from_secs(3600);
+        let notes = (0..1_000).map(manager_note).collect();
+        let mut handled = 0;
+        let left = handle_within_slice(notes, slice_end, |_| handled += 1);
+        assert_eq!(handled, 1_000);
+        assert!(left.is_empty());
     }
 
     #[test]

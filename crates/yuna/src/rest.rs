@@ -96,7 +96,8 @@ pub enum Source {
     CaptureTimeout,
     /// An encoded capture's frame reached its boundary.
     CaptureBoundary,
-    /// An Xwayland did not start, or did not end, in time.
+    /// An Xwayland did not start, or did not end, in time; or its manager took none of Yuna's
+    /// commands in time, its watchdog.
     XwaylandTimeout,
     /// A seat's Xwayland may start again, after a pause that followed its failures.
     XwaylandPause,
@@ -106,7 +107,8 @@ pub enum Source {
     XwaylandDisplay,
     /// Xwayland exited: stopped idle, crashed or ended.
     XwaylandExited,
-    /// A seat's X11 window manager sent an event, or ended.
+    /// A seat's X11 window manager sent an event, took the commands a watchdog waited on, or
+    /// ended.
     X11Manager,
     /// Yuna's connection to a seat's accessibility bus can be read, or written again.
     AccessibilityBus,

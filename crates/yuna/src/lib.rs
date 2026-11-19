@@ -94,6 +94,9 @@ pub use xwayland::{
     START_TIMEOUT, X11_PING_TIMEOUT, X11_SYNC_TIMEOUT, X11_TRANSFER_TIMEOUT, X11Display,
     XwaylandConfig, remove_displays_after_panic,
 };
+pub use xwayland::{MANAGER_STALL, STALL_RECHECK};
+#[cfg(debug_assertions)]
+pub use xwayland::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 pub use yuna_layout;
 pub use yuna_motion;
 

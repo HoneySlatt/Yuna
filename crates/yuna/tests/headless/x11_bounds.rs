@@ -21,13 +21,18 @@ use x11rb::protocol::xproto::{
     Atom, AtomEnum, ConnectionExt as _, EventMask, KEYMAP_NOTIFY_EVENT, PropMode, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::{ClockMode, Compositor, MAX_WINDOWS_PER_CLIENT};
+use yuna::rest::{RestCounts, Source};
+use yuna::{ClockMode, Compositor, MANAGER_STALL, MAX_WINDOWS_PER_CLIENT, STALL_RECHECK};
+#[cfg(debug_assertions)]
+use yuna::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 
 use crate::selection_client::SelectionClient;
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step};
 use crate::x11_misbehaving::assert_rests_real;
 use crate::x11_selections::{atoms_of, notify, open_wayland_window, take_selection};
-use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait, window_titled};
+use crate::x11_windows::{
+    TILE, X11Seat, at_1_5, button_press_at, click_at, off, open_drawn, pump, wait, window_titled,
+};
 
 /// The variable that marks the process a story runs alone in.
 const ALONE: &str = "YUNA_STORY_ALONE";
@@ -187,15 +192,23 @@ fn many_mime_types() -> Vec<String> {
         .collect()
 }
 
-/// Sets the Wayland client's clipboard `rounds` times, one round of Yuna's loop each, freeing
-/// what the client and Smithay keep of each: the previous source and the offers it is given.
+/// Sets the Wayland client's clipboard `rounds` times, one round of Yuna's loop each, to
+/// [`many_mime_types`]: [`churn_clipboard_as`].
 fn churn_clipboard(seat: &mut X11Seat, wl: &mut SelectionClient, rounds: usize) {
     let types = many_mime_types();
     let types: Vec<&str> = types.iter().map(String::as_str).collect();
+    churn_clipboard_as(seat, wl, rounds, &types);
+}
+
+/// Sets the Wayland client's clipboard `rounds` times, one round of Yuna's loop each, offering
+/// `types`, freeing what the client and Smithay keep of each: the previous source and the offers
+/// it is given. Each is one command Yuna owes the seat's manager, which takes it, or which
+/// replaces the one it owes.
+fn churn_clipboard_as(seat: &mut X11Seat, wl: &mut SelectionClient, rounds: usize, types: &[&str]) {
     let mut previous: Option<usize> = None;
     for _ in 0..rounds {
         let serial = wl.enter_serial();
-        let source = wl.set_clipboard(&types, serial);
+        let source = wl.set_clipboard(types, serial);
         wl.roundtrip(&mut seat.compositor);
         if let Some(previous) = previous.replace(source) {
             wl.destroy_source(previous);
@@ -240,6 +253,13 @@ fn commands_to_a_stalled_manager_are_bounded() {
     let stalled_before = own_anon_kib();
     churn_clipboard(&mut seat, &mut wl, ROUNDS);
     pump_for(&mut seat.compositor, Duration::from_secs(2));
+    // Measured while the stalled manager lives: its end, which a machine slow enough would
+    // bring past `MANAGER_STALL`, frees what it was owed, and the figure would prove nothing.
+    assert_eq!(
+        xwayland_of(&seat),
+        Some(xwayland),
+        "the stalled manager's Xwayland was ended before its memory was read"
+    );
     let stalled_after = own_anon_kib();
     let served = served_after.saturating_sub(served_before);
     let stalled = stalled_after.saturating_sub(stalled_before);
@@ -256,15 +276,11 @@ fn commands_to_a_stalled_manager_are_bounded() {
     );
 }
 
-/// How long a manager may owe Yuna's commands before its Xwayland is ended:
-/// `xwayland::MANAGER_STALL`, which the library does not export.
-const MANAGER_STALL: Duration = Duration::from_secs(10);
-
 /// A manager that stops taking Yuna's commands, its Xwayland stopped (SIGSTOP), is ended with
-/// its Xwayland once it owed them [`MANAGER_STALL`], as a manager that fails is: the seat's next
-/// X11 program then starts a new Xwayland, which serves it. The seat's Wayland client changes its
-/// clipboard meanwhile, every tenth of a second: the manager waits for Xwayland's answer to one,
-/// and owes Yuna those that follow.
+/// its Xwayland once it owed them [`MANAGER_STALL`], and still did [`STALL_RECHECK`] later, as a
+/// manager that fails is: the seat's next X11 program then starts a new Xwayland, which serves
+/// it. The seat's Wayland client changes its clipboard meanwhile, every tenth of a second: the
+/// manager waits for Xwayland's answer to one, and owes Yuna those that follow.
 #[test]
 fn a_stalled_managers_xwayland_ends_and_the_next_program_gets_a_new_one() {
     let mut seat = X11Seat::new("stall-end", &[at_1_5()], ClockMode::Real, off());
@@ -292,8 +308,152 @@ fn a_stalled_managers_xwayland_ends_and_the_next_program_gets_a_new_one() {
     let ended_in = stopped.elapsed();
     println!("the stalled manager's Xwayland ended {ended_in:?} after it stopped");
     assert!(
-        ended_in >= MANAGER_STALL,
-        "ended after {ended_in:?}, before the manager owed its commands {MANAGER_STALL:?}"
+        ended_in >= MANAGER_STALL + STALL_RECHECK,
+        "ended after {ended_in:?}, before the manager owed its commands {MANAGER_STALL:?} and \
+         was looked at again {STALL_RECHECK:?} later"
+    );
+    drop(client);
+    let again = seat.client();
+    let (again, _, _, _) = open_drawn(&mut seat.compositor, again, &WindowSpec::named("again"));
+    let second = xwayland_of(&seat).expect("a new Xwayland serves");
+    assert_ne!(second, first, "the next X11 program gets a new Xwayland");
+    drop(again);
+}
+
+/// A seat whose manager owes Yuna commands, its watchdog armed: its Xwayland is stopped
+/// (SIGSTOP), and the seat's Wayland client sets its clipboard five times, a tenth of a second
+/// apart. The manager waits for Xwayland's answer to the first it took, and owes Yuna those that
+/// follow. Returns the seat, its Wayland client, the X11 program that keeps Xwayland serving,
+/// and Xwayland's process id.
+fn manager_owing_commands(story: &str) -> (X11Seat, SelectionClient, X11Client, i32) {
+    let mut seat = X11Seat::new(story, &[at_1_5()], ClockMode::Real, off());
+    let mut wl = SelectionClient::connect_to(&mut seat.compositor, seat.seat);
+    open_wayland_window(&mut seat, &mut wl);
+    let client = seat.client();
+    let (client, ()) = step(&mut seat.compositor, client, |client| client.sync());
+    let xwayland = xwayland_of(&seat).expect("Xwayland runs");
+    signal(xwayland, Signal::STOP);
+    for _ in 0..5 {
+        churn_clipboard(&mut seat, &mut wl, 1);
+        pump_for(&mut seat.compositor, Duration::from_millis(100));
+    }
+    (seat, wl, client, xwayland)
+}
+
+/// Each source that woke Yuna in `woke`, with its count.
+fn wakes_by_source(woke: &RestCounts) -> Vec<(&'static str, u64)> {
+    Source::ALL
+        .into_iter()
+        .map(|source| (source.name(), woke.whole.wakes_by(source)))
+        .filter(|&(_, wakes)| wakes > 0)
+        .collect()
+}
+
+/// A manager that owes Yuna commands at a round's start has its watchdog armed; once it takes
+/// them, it says so, and the watchdog is disarmed: Yuna, sleeping as its loop does until
+/// something comes, is woken by no watchdog [`MANAGER_STALL`] later, and rests. The manager owes
+/// them while its Xwayland is stopped (SIGSTOP), and takes them once Xwayland runs again.
+#[test]
+fn a_manager_that_took_what_it_owed_leaves_no_watchdog_armed() {
+    let (mut seat, wl, client, xwayland) = manager_owing_commands("watchdog-rest");
+    signal(xwayland, Signal::CONT);
+    // Yuna's loop as it runs, asleep until something comes, rather than `pump`, whose rounds
+    // every few milliseconds would each look again at what the manager owes.
+    let before = seat.compositor.rest_counts();
+    let until = Instant::now() + MANAGER_STALL + Duration::from_secs(2);
+    while let Some(left) = until.checked_duration_since(Instant::now()) {
+        seat.compositor
+            .dispatch(Some(left))
+            .expect("Yuna dispatches");
+    }
+    let woke = seat.compositor.rest_counts().since(&before);
+    println!(
+        "once the manager could take what it owed, Yuna woke {} times in {:?}: {:?}",
+        woke.woke,
+        MANAGER_STALL + Duration::from_secs(2),
+        wakes_by_source(&woke)
+    );
+    assert_eq!(
+        woke.whole.wakes_by(Source::XwaylandTimeout),
+        0,
+        "a watchdog stayed armed once its manager took what it owed, and woke Yuna"
+    );
+    assert_eq!(
+        xwayland_of(&seat),
+        Some(xwayland),
+        "the same Xwayland serves"
+    );
+    assert_rests_real(&mut seat.compositor);
+    drop(client);
+    drop(wl);
+}
+
+/// When Yuna's whole process is stopped while a manager owes it commands (a debugger, SIGSTOP,
+/// a machine swapping hard), the manager's watchdog fires as soon as Yuna runs again, before the
+/// manager's thread, which runs again at the same moment, has taken them: Yuna looks once more
+/// [`STALL_RECHECK`] later, and the same Xwayland serves on. Here Yuna's loop does not run for
+/// longer than [`MANAGER_STALL`] while the manager waits on its stopped Xwayland; Yuna then runs
+/// a round, and Xwayland runs again just after.
+#[test]
+fn a_manager_that_runs_again_with_yuna_is_not_taken_as_stalled() {
+    let (mut seat, wl, client, xwayland) = manager_owing_commands("watchdog-resume");
+    std::thread::sleep(MANAGER_STALL + Duration::from_secs(1));
+    pump(&mut seat.compositor);
+    signal(xwayland, Signal::CONT);
+    pump_for(&mut seat.compositor, 3 * STALL_RECHECK);
+    assert_eq!(
+        xwayland_of(&seat),
+        Some(xwayland),
+        "a manager that ran again with Yuna was taken as stalled, and its Xwayland ended"
+    );
+    drop(client);
+    drop(wl);
+}
+
+/// What a manager is owed past its bound ends its Xwayland at once, as a manager that fails is,
+/// before its watchdog would: the seat's next X11 program then starts a new Xwayland, which
+/// serves it. The bound is lowered to 4 KiB for the story ([`X11_OWED_BOUND`], a debug build's
+/// alone), so that a stalled manager reaches it in a few dozen clipboard changes, each of which
+/// leaves its place in what is owed; the manager is stalled as in
+/// [`a_stalled_managers_xwayland_ends_and_the_next_program_gets_a_new_one`]. The switch holds
+/// for every manager of the process it is given to: the story runs in a process of its own.
+#[cfg(debug_assertions)]
+#[test]
+fn a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_new_one() {
+    const BOUND: usize = 4 * 1024;
+    let bound = BOUND.to_string();
+    if !in_its_own_process(
+        "a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_new_one",
+        &[(X11_OWED_BOUND, bound.as_str())],
+    ) {
+        return;
+    }
+    let mut seat = X11Seat::new("owed-bound", &[at_1_5()], ClockMode::Real, off());
+    let mut wl = SelectionClient::connect_to(&mut seat.compositor, seat.seat);
+    open_wayland_window(&mut seat, &mut wl);
+    let client = seat.client();
+    let (client, ()) = step(&mut seat.compositor, client, |client| client.sync());
+    let first = xwayland_of(&seat).expect("Xwayland runs");
+    signal(first, Signal::STOP);
+    let stopped = Instant::now();
+    // A change leaves tens of bytes owed: far fewer than `BOUND` changes reach the bound.
+    let mut changes = 0;
+    while xwayland_of(&seat) == Some(first) {
+        assert!(
+            changes < BOUND,
+            "the stalled manager's Xwayland still runs after {changes} clipboard changes"
+        );
+        churn_clipboard_as(&mut seat, &mut wl, 1, &["text/plain"]);
+        changes += 1;
+    }
+    let ended_in = stopped.elapsed();
+    println!(
+        "a manager owed past {BOUND} bytes: its Xwayland ended {ended_in:?} after it stopped, \
+         {changes} clipboard changes later"
+    );
+    assert!(
+        ended_in < MANAGER_STALL,
+        "ended after {ended_in:?}: by its watchdog, not by its bound"
     );
     drop(client);
     let again = seat.client();
@@ -442,6 +602,89 @@ fn a_window_past_its_clients_thousand_followed_never_shows() {
     );
 }
 
+/// A window past its client's thousand, which the manager maps itself and Yuna is never told
+/// of, lies below every window Yuna stacks, as a window past its client's limit in the layout
+/// does, and is not in `_NET_CLIENT_LIST`: a click where it lies reaches the X11 window Yuna
+/// shows there, another program's. Two such windows cover the whole output: one mapped before
+/// that window opens, which Yuna then stacks, and one made and mapped after Yuna stacked it.
+#[test]
+fn a_window_past_its_clients_thousand_takes_no_click_from_a_window_shown() {
+    let mut seat = X11Seat::new("past-click", &[at_1_5()], ClockMode::Real, off());
+    let output = seat.outputs[0];
+    // The whole output, 2880 × 1620 X11 pixels at 1.5.
+    let covering = |title: &str| WindowSpec {
+        background: Some(0x0080_4040),
+        rect: (0, 0, 2880, 1620),
+        ..WindowSpec::named(title)
+    };
+    let hostile = seat.client();
+    let mapped_before = covering("past-before");
+    let (hostile, (first_within, before)) = step(&mut seat.compositor, hostile, move |client| {
+        let fail = |e: x11rb::errors::ConnectionError| e.to_string();
+        let mut first = None;
+        for index in 0..MAX_WINDOWS_PER_CLIENT {
+            let window = client.create(&WindowSpec::named(&format!("within-{index}")))?;
+            first.get_or_insert(window);
+            if index % 64 == 0 {
+                client.connection.flush().map_err(fail)?;
+            }
+        }
+        let before = client.open(&mapped_before)?;
+        Ok((first.ok_or("no window made")?, before))
+    });
+    let shown = seat.client();
+    let (shown, window, _, _) =
+        open_drawn(&mut seat.compositor, shown, &WindowSpec::named("shown"));
+    // Yuna stacks the window it shows from the bottom up, below the windows it does not list,
+    // which a window made earlier, its client's first, shows in X11's own stacking.
+    let (hostile, ()) = step(&mut seat.compositor, hostile, move |client| {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let children = client
+                .connection
+                .query_tree(client.root)
+                .map_err(|e| e.to_string())?
+                .reply()
+                .map_err(|e| e.to_string())?
+                .children;
+            let place = |of: Window| children.iter().position(|&child| child == of);
+            if matches!((place(window), place(first_within)), (Some(a), Some(b)) if a < b) {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err("Yuna never stacked the window it shows".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let mapped_after = covering("past-after");
+    let (hostile, after) = step(&mut seat.compositor, hostile, move |client| {
+        client.open(&mapped_after)
+    });
+    click_at(&mut seat, output, TILE.x + 100.25, TILE.y + 50.25);
+    let (shown, _) = button_press_at(&mut seat.compositor, shown, window);
+    let (hostile, events) = step(&mut seat.compositor, hostile, |client| client.take_events());
+    let pressed: Vec<Window> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ButtonPress(press) => Some(press.event),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        pressed.is_empty(),
+        "windows past the limit, {before} and {after}, got clicks: {pressed:?}"
+    );
+    let (shown, listed) = step(&mut seat.compositor, shown, |client| client.client_list());
+    assert_eq!(
+        listed,
+        vec![window],
+        "_NET_CLIENT_LIST lists the window shown alone"
+    );
+    drop(shown);
+    drop(hostile);
+}
+
 /// The atom named `index`th of a batch, `length` bytes long.
 fn long_name(batch: usize, index: usize, length: usize) -> Vec<u8> {
     let mut name = format!("yuna-bounds-{batch}-{index}-").into_bytes();
@@ -585,12 +828,6 @@ fn xwaylands_environment_holds_only_what_it_reads() {
         "Xwayland got no Wayland connection: {names:?}"
     );
 }
-
-/// The variable that makes a debug build's X11 manager panic when Yuna asks it to close a
-/// window: `PANIC_ON_X11_CLOSE` (`xwayland/manager/commands.rs`), which the library does not
-/// export.
-#[cfg(debug_assertions)]
-const PANIC_ON_X11_CLOSE: &str = "YUNA_PANIC_ON_X11_CLOSE";
 
 /// A panic of a seat's manager's thread is contained (ADR-0080): Yuna's loop goes on, the
 /// manager's Xwayland ends, the seat's next X11 program gets a new Xwayland, which serves it,

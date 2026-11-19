@@ -33,18 +33,21 @@
 //! `_NET_ACTIVE_WINDOW`, a ping's answer. It reads the properties of
 //! [`MAX_PROPERTIES_PER_CLIENT`] windows of one X11 client at most: a window made past them is
 //! followed without them, and Yuna is never told of it. The manager maps it when it asks, as
-//! Yuna maps a window past its client's limit in the layout, and it never shows. Yuna decides,
-//! and its [`Command`]s come back through what Yuna owes the manager (`owed.rs`), bounded, which
-//! the thread takes when its wake-up socket says so and between X11's events: map, configure with
-//! or without a sync request, let commits go, set the states, focus, close, ping, restack. A
-//! manager that stops taking them is ended with its Xwayland (`xwayland/mod.rs`). What follows
-//! from a decision by ICCCM and EWMH alone, the manager does itself: `WM_STATE`,
-//! `_NET_FRAME_EXTENTS`, `_NET_CLIENT_LIST`, set once per batch of events and commands, the
-//! synthetic `ConfigureNotify` after a configure (ICCCM 4.1.5), the focus model (ICCCM 4.1.7),
-//! whether a window is asked to close or its client is ended, and at a withdrawal the deletion of
-//! `_NET_WM_STATE`, and of `_XWAYLAND_ALLOW_COMMITS` if a sync request held it.
-//! `_NET_WM_MOVERESIZE` and `WM_CHANGE_STATE` are taken and logged: Yuna has no interactive move,
-//! and minimises nothing.
+//! Yuna maps a window past its client's limit in the layout, and it never shows: like that
+//! window, it lies below every window Yuna stacks, where it takes no click from one Yuna shows,
+//! and it is not in `_NET_CLIENT_LIST`. An override-redirect window past them maps itself, never
+//! asking, and is not lowered: it may lie above windows Yuna shows. Yuna decides, and its [`Command`]s come back through
+//! what Yuna owes the manager (`owed.rs`), bounded, which the thread takes when its wake-up
+//! socket says so and between X11's events: map, configure with or without a sync request, let
+//! commits go, set the states, focus, close, ping, restack. When Yuna's watchdog waits on them,
+//! the thread pings Yuna's loop once it takes them. A manager that stops taking them is ended
+//! with its Xwayland (`xwayland/mod.rs`). What follows from a decision by ICCCM and EWMH alone,
+//! the manager does itself: `WM_STATE`, `_NET_FRAME_EXTENTS`, `_NET_CLIENT_LIST`, set once per
+//! batch of events and commands, the synthetic `ConfigureNotify` after a configure (ICCCM
+//! 4.1.5), the focus model (ICCCM 4.1.7), whether a window is asked to close or its client is
+//! ended, and at a withdrawal the deletion of `_NET_WM_STATE`, and of `_XWAYLAND_ALLOW_COMMITS`
+//! if a sync request held it. `_NET_WM_MOVERESIZE` and `WM_CHANGE_STATE` are taken and logged:
+//! Yuna has no interactive move, and minimises nothing.
 //!
 //! It also carries the seat's clipboard and primary selection between X11 and Wayland, both ways
 //! (`bridge.rs`): it posts what X11 clients copy and ask, and takes Yuna's word of what Wayland
@@ -97,6 +100,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use smithay::reexports::calloop::channel::SyncSender;
+use smithay::reexports::calloop::ping::Ping;
 use smithay::reexports::rustix;
 use smithay::reexports::rustix::net::SendFlags;
 use x11rb::connection::{Connection, RequestConnection};
@@ -116,9 +120,13 @@ use yuna_layout::SeatId;
 use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};
 use super::xdnd::{self, Xdnd};
+#[cfg(debug_assertions)]
+pub use commands::PANIC_ON_X11_CLOSE;
 pub(crate) use messages::{Command, ManagerEvent, NetState, StateAction, StateChange, Stop};
+pub(crate) use owed::OverBound;
 use owed::Owed;
-pub(crate) use owed::{MAX_OWED_BYTES, OverBound};
+#[cfg(debug_assertions)]
+pub use owed::X11_OWED_BOUND;
 pub(crate) use stream::{ManagerConnection, ManagerStream};
 
 /// How many of the manager's events wait for Yuna's loop before the thread waits in turn: X11's
@@ -150,9 +158,9 @@ pub(crate) struct Commands {
 
 impl Commands {
     /// Adds `command` to what Yuna owes the manager's thread, which [`Commands::wake`] wakes for
-    /// it. Never waits. Refused past [`MAX_OWED_BYTES`]: the manager is that far behind, stalled.
-    /// A thread that has ended never takes it, and Yuna learns of its end through the events'
-    /// channel.
+    /// it. Never waits. Refused past its bound, [`MAX_OWED_BYTES`](owed::MAX_OWED_BYTES): the
+    /// manager is that far behind, stalled. A thread that has ended never takes it, and Yuna
+    /// learns of its end through the events' channel.
     pub(crate) fn send(&self, command: Command) -> Result<(), OverBound> {
         lock(&self.owed).push(command, Instant::now())
     }
@@ -164,9 +172,10 @@ impl Commands {
     }
 
     /// When the oldest command the manager's thread has not taken was sent; none when it owes
-    /// none.
-    pub(crate) fn untaken_since(&self) -> Option<Instant> {
-        lock(&self.owed).untaken_since()
+    /// none. While it owes some, Yuna's watchdog waits on them, and the thread pings Yuna's loop
+    /// when it takes them ([`start`]'s `taken`).
+    pub(crate) fn watch(&self) -> Option<Instant> {
+        lock(&self.owed).watch()
     }
 }
 
@@ -268,22 +277,24 @@ x11rb::atom_manager! {
 }
 
 /// Starts the manager of seat `seat`'s Xwayland on a thread of its own, on `wm`, Xwayland's
-/// `-wm` socket, for a scale of `scale`. Its events go to `events`.
+/// `-wm` socket, for a scale of `scale`. Its events go to `events`; `taken` pings Yuna's loop
+/// when it takes commands a watchdog waited on ([`Commands::watch`]).
 pub(crate) fn start(
     seat: SeatId,
     wm: UnixStream,
     scale: f64,
     events: SyncSender<ManagerEvent>,
+    taken: Ping,
 ) -> io::Result<Commands> {
-    let owed = Arc::new(Mutex::new(Owed::default()));
+    let owed = Arc::new(Mutex::new(Owed::bounded_at(owed::owed_bound())));
     let (wake, woken) = UnixStream::pair()?;
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
-    let taken = Arc::clone(&owed);
+    let shared = Arc::clone(&owed);
     std::thread::Builder::new()
         .name(format!("yuna-x11-{}", seat.0))
         .spawn(move || {
-            let stop = match run(wm, scale, &events, &taken, &woken) {
+            let stop = match run(wm, scale, &events, &shared, taken, &woken) {
                 Ok(()) => Stop::Released,
                 Err(failure) if is_closed(&*failure) => Stop::Closed,
                 Err(failure) => Stop::Failed(failure.to_string()),
@@ -313,6 +324,7 @@ fn run(
     scale: f64,
     events: &SyncSender<ManagerEvent>,
     owed: &Mutex<Owed>,
+    taken: Ping,
     woken: &UnixStream,
 ) -> Result<(), Failure> {
     let (stream, _) = DefaultStream::from_unix_stream(wm)?;
@@ -322,7 +334,7 @@ fn run(
     if events.send(ManagerEvent::Ready).is_err() {
         return Ok(());
     }
-    let mut manager = Manager::new(&connection, atoms, own, proxy, events, owed)?;
+    let mut manager = Manager::new(&connection, atoms, own, proxy, events, owed, taken)?;
     manager.serve(woken)
 }
 
@@ -511,7 +523,8 @@ struct Tracked {
     override_redirect: bool,
     /// Whether it is mapped, as the last map or unmap notification said.
     mapped: bool,
-    /// Whether Yuna mapped it after it asked: a managed window, in `_NET_CLIENT_LIST`.
+    /// Whether the manager mapped it after it asked, as Yuna said or, past its client's limit, on
+    /// its own: a managed window; in `_NET_CLIENT_LIST` unless past the limit.
     managed: bool,
     /// Whether a malformed property of it, or a title read as Latin-1 from `COMPOUND_TEXT`, was
     /// logged: once per window.
@@ -522,7 +535,8 @@ struct Tracked {
     /// Whether its `_XWAYLAND_ALLOW_COMMITS` is 0: a sync request waits.
     commits_held: bool,
     /// Whether it was made past its client's [`MAX_PROPERTIES_PER_CLIENT`]: its properties not
-    /// read, nothing of it posted to Yuna, and mapped by the manager when it asks.
+    /// read, nothing of it posted to Yuna, and mapped by the manager when it asks, below every
+    /// window Yuna stacks, out of `_NET_CLIENT_LIST`.
     past_limit: bool,
 }
 
@@ -560,6 +574,9 @@ struct Manager<'a> {
     events: &'a SyncSender<ManagerEvent>,
     /// What Yuna owes it.
     owed: &'a Mutex<Owed>,
+    /// Pings Yuna's loop when it takes commands Yuna's watchdog waited on, which Yuna then
+    /// disarms. Apart from `events`, whose kinds Yuna's state reads.
+    taken: Ping,
     /// The seat's selections on X11's side.
     bridge: Bridge<'a>,
     /// The seat's drags on X11's side.
@@ -577,6 +594,7 @@ impl<'a> Manager<'a> {
         proxy: Window,
         events: &'a SyncSender<ManagerEvent>,
         owed: &'a Mutex<Owed>,
+        taken: Ping,
     ) -> Result<Manager<'a>, Failure> {
         let setup = connection.setup();
         let root = setup
@@ -615,6 +633,7 @@ impl<'a> Manager<'a> {
             lists_changed: false,
             events,
             owed,
+            taken,
             bridge: Bridge::new(connection, events, atoms, root, own),
             xdnd: Xdnd::new(connection, events, atoms, own, proxy),
         })

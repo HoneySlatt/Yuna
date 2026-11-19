@@ -212,7 +212,9 @@ pub(crate) enum Command {
     /// Asks a window to close, through `WM_DELETE_WINDOW` when it takes it, else ends its client.
     Close(Window),
     /// Stacks these windows in this order, bottom to top: Xwayland finds the window under the
-    /// pointer through X11's stacking, so the windows Yuna shows lie above those it hides.
+    /// pointer through X11's stacking, so the windows Yuna shows lie above those it hides. The
+    /// windows Yuna is not told of, past their client's limit, that the manager mapped stay below
+    /// them all.
     Restack(Vec<Window>),
     /// The seat's Wayland `selection`, its `serial`-th, is a Wayland client's offering these MIME
     /// types, for which the manager takes the X11 selection; or none, and the manager releases

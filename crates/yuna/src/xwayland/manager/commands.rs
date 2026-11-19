@@ -25,7 +25,7 @@ use crate::xwayland::properties::X11Rect;
 /// It is read once, at the first close a manager of the process is asked, and holds for every
 /// manager of the process. A release build has neither the variable nor the panic.
 #[cfg(debug_assertions)]
-pub(crate) const PANIC_ON_X11_CLOSE: &str = "YUNA_PANIC_ON_X11_CLOSE";
+pub const PANIC_ON_X11_CLOSE: &str = "YUNA_PANIC_ON_X11_CLOSE";
 
 /// Panics when [`PANIC_ON_X11_CLOSE`] is set: the manager's panic its test asks for, in a debug
 /// build alone.
@@ -39,7 +39,7 @@ fn panic_if_asked() {
 
 impl Manager<'_> {
     /// Carries out every command Yuna's loop sent so far, in the order sent; false once Yuna let
-    /// them go.
+    /// them go. When Yuna's watchdog waited on them, Yuna is told they are taken.
     pub(super) fn take_commands(&mut self) -> Result<GoOn, Failure> {
         let taken = {
             let mut owed = lock(self.owed);
@@ -48,7 +48,10 @@ impl Manager<'_> {
             }
             owed.take()
         };
-        for command in taken {
+        if taken.watched {
+            self.taken.ping();
+        }
+        for command in taken.commands {
             if !self.command(command)? {
                 return Ok(false);
             }
@@ -150,13 +153,9 @@ impl Manager<'_> {
                     .zip(&order)
                     .take_while(|(was, is)| was == is)
                     .count();
-                if kept == 0
-                    && let Some(&bottom) = order.first()
-                {
-                    connection.configure_window(
-                        bottom,
-                        &ConfigureWindowAux::new().stack_mode(StackMode::BELOW),
-                    )?;
+                let bottom = order.first().filter(|_| kept == 0);
+                if let Some(&bottom) = bottom {
+                    lower(connection, bottom)?;
                 }
                 for pair in order.windows(2).skip(kept.saturating_sub(1)) {
                     connection.configure_window(
@@ -165,6 +164,12 @@ impl Manager<'_> {
                             .sibling(pair[0])
                             .stack_mode(StackMode::ABOVE),
                     )?;
+                }
+                // The windows past their client's limit, which went below the old bottom, are
+                // above the new one: they go below it again. A restack from a window above the
+                // bottom leaves them where they are.
+                if bottom.is_some() {
+                    self.lower_past_limit()?;
                 }
                 self.restacked.clone_from(&order);
                 let listed: Vec<Window> = order
@@ -232,17 +237,28 @@ impl Manager<'_> {
     }
 
     /// Maps a window that asked to be, its `WM_STATE` Normal, without a frame: when Yuna asks, or
-    /// at once for a window past its client's limit, which Yuna is never told of: Yuna maps a
-    /// window past its client's limit in the layout so too, and never shows it.
+    /// at once for a window past its client's limit, which Yuna is never told of. Yuna maps a
+    /// window past its client's limit in the layout so too, never shows it, and stacks it below
+    /// those it shows: this one goes below every window Yuna stacks, before it is mapped, and
+    /// stays out of `_NET_CLIENT_LIST`.
     pub(super) fn map(&mut self, window: Window) -> Result<(), Failure> {
         let connection = self.connection;
         let atoms = &self.atoms;
+        let past_limit = self
+            .windows
+            .get(&window)
+            .is_some_and(|tracked| tracked.past_limit);
         // Xwayland reads it when it makes the window's surface: a hold left from before would
         // keep the window from ever showing.
         if let Some(tracked) = self.windows.get_mut(&window)
             && std::mem::take(&mut tracked.commits_held)
         {
             connection.delete_property(window, atoms._XWAYLAND_ALLOW_COMMITS)?;
+        }
+        // Xwayland finds the window under the pointer through X11's stacking: one Yuna never
+        // shows must lie below those it does, or it would take their clicks.
+        if past_limit {
+            lower(connection, window)?;
         }
         connection.change_property32(
             PropMode::REPLACE,
@@ -262,11 +278,24 @@ impl Manager<'_> {
         connection.map_window(window)?;
         if let Some(tracked) = self.windows.get_mut(&window) {
             tracked.managed = true;
-            if !self.clients.contains(&window) {
+            if !past_limit && !self.clients.contains(&window) {
                 self.clients.push(window);
                 self.stacking.push(window);
                 self.publish_lists();
             }
+        }
+        Ok(())
+    }
+
+    /// Puts each window past its client's limit that the manager mapped at the bottom of X11's
+    /// stacking, below every window Yuna stacks.
+    fn lower_past_limit(&self) -> Result<(), Failure> {
+        let past_limit = self
+            .windows
+            .iter()
+            .filter(|(_, tracked)| tracked.past_limit && tracked.managed);
+        for (&window, _) in past_limit {
+            lower(self.connection, window)?;
         }
         Ok(())
     }
@@ -382,6 +411,15 @@ impl Manager<'_> {
         )?;
         Ok(())
     }
+}
+
+/// Puts `window` at the bottom of X11's stacking, below every sibling.
+fn lower(connection: &ManagerConnection, window: Window) -> Result<(), Failure> {
+    connection.configure_window(
+        window,
+        &ConfigureWindowAux::new().stack_mode(StackMode::BELOW),
+    )?;
+    Ok(())
 }
 
 /// Moves and sizes `window` to `rect`, without a border, and tells it with a synthetic

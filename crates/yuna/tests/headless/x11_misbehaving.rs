@@ -895,8 +895,12 @@ fn five_thousand_windows_and_menus_hold_the_caps_and_stall_no_frame() {
     // How many frames came in a second, and how long a round took, are the machine's: printed.
     // In a release build no round works a period at 60 Hz, in CPU time of its thread, which other
     // programs lengthen far less than the time between two callbacks: 7 ms measured. An
-    // unoptimised build arranges a thousand windows a frame in tens of milliseconds, 90 ms a round
-    // measured alone, three times that with every test at once: its rounds are not checked.
+    // unoptimised build's rounds are not checked: with the managers' slice kept, its longest
+    // round took 27 ms of CPU alone, and 361 ms to 1.08 s while other builds loaded the machine
+    // past 100 on 16 threads (2026-11-19; what such a round handled beside the managers' events
+    // was not traced). With the slice ignored a round took 111 ms alone, and the whole flood
+    // handled in one round 930 ms under load: no bound tells them apart. The unit tests of
+    // `xwayland/mod.rs` check the slice itself.
     let frames = hostile.sentinel.window(w).frames[first..].to_vec();
     let longest = frames
         .windows(2)
