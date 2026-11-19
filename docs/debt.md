@@ -612,12 +612,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   not build it again when the development shell's libraries change: after a raise of `nixpkgs`, a
   build kept from before drove no key into Yuna until removed. CI builds afresh. To remove at the
   next change of the consumers' tests. Paid at Stage 2a, M2.2 (the interface).
-- Mutation testing (Stage 1's audit) leaves motion's mutants that a comparison over random
-  sequences of changes tells apart, but that no scenario test pins with an independent oracle:
-  `Camera::velocity`, `Camera::follow`'s `focused_column`, `remember_focus`, `follow_cameras`,
-  two `unmoved` operators and `draws` (`yuna-motion/src/arrangement/output.rs`). The others that
-  survive are equivalent or unreachable, each argued in the run's report. Paid at Stage 2a, M2.1
-  (baselines): tests before the rewrite.
 - `motion_time` reads an output's mode with its own parser beside the program's private one. Paid at
   Stage 2a, M2.2 (the interface), the helpers made one.
 - `short_temp_dir` is written twice, in `tests/mcp.rs` and `tests/opium.rs`, and `tests/mcp.rs`
