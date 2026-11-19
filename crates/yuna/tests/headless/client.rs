@@ -4,13 +4,15 @@
 //! It binds the globals a window needs, opens `xdg_toplevel`s with server-side decorations, and
 //! records every event a test checks: configures, decoration modes, frame callbacks and
 //! presentation feedback. Viewports, fractional scale and dmabufs, its popups, its keyboard, its
-//! activation tokens and its dialogs are in the modules below.
+//! activation tokens and its dialogs are in the modules below, and so is its use against Yuna run
+//! as a process (`process.rs`), for the traces on the real clock.
 
 mod activation;
 mod buffers;
 mod dialog;
 mod keyboard;
 mod popups;
+mod process;
 
 pub use buffers::{
     ProtocolError, memory_file, memory_file_sealed_with, sealed_memory_file, write_only,

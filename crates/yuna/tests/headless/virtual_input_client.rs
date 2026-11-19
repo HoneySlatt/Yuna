@@ -8,6 +8,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::path::Path;
 
 use rustix::fs::{MemfdFlags, memfd_create};
 use smithay::input::keyboard::xkb;
@@ -62,7 +63,21 @@ impl VirtualDriver {
         )
     }
 
+    /// As [`VirtualDriver::connect`], to the Yuna process whose socket is at `path`, a driver of
+    /// the seat it serves.
+    pub fn connect_to_process(path: &Path) -> VirtualDriver {
+        VirtualDriver::bind_with(
+            Client::connect_to_process(path),
+            VirtualDriver::roundtrip_with_process,
+        )
+    }
+
     fn bind(client: Client, compositor: &mut Compositor) -> VirtualDriver {
+        VirtualDriver::bind_with(client, |driver| driver.roundtrip(compositor))
+    }
+
+    /// Binds the driver's globals, `roundtrip` waiting for each answer.
+    fn bind_with(client: Client, mut roundtrip: impl FnMut(&mut VirtualDriver)) -> VirtualDriver {
         let queue = client.connection().new_event_queue();
         client
             .connection()
@@ -76,14 +91,22 @@ impl VirtualDriver {
             keyboards: Vec::new(),
         };
         // The globals, then the seats' names.
-        driver.roundtrip(compositor);
-        driver.roundtrip(compositor);
+        roundtrip(&mut driver);
+        roundtrip(&mut driver);
         driver
     }
 
     /// Sends what it wrote, lets the compositor handle it, and reads its events.
     pub fn roundtrip(&mut self, compositor: &mut Compositor) {
         self.client.roundtrip(compositor);
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .expect("the driver's events are read");
+    }
+
+    /// As [`VirtualDriver::roundtrip`], with Yuna run as a process.
+    pub fn roundtrip_with_process(&mut self) {
+        self.client.roundtrip_with_process();
         self.queue
             .dispatch_pending(&mut self.state)
             .expect("the driver's events are read");

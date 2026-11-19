@@ -1,0 +1,191 @@
+# window on the manual clock: each client's objects by interface and rank, each with its own messages in order, and the event
+# of another object that follows one where the protocol requires it; serials named by the event that carried them; times in ms from the earliest frame callback
+client window
+wl_buffer#1 = wl_shm_pool#1.create_buffer
+  <- release()
+wl_buffer#2 = wl_shm_pool#2.create_buffer
+  <- release()
+wl_buffer#3 = wl_shm_pool#3.create_buffer
+  <- release()
+wl_buffer#4 = wl_shm_pool#4.create_buffer
+wl_callback#1 = wl_surface#1.frame
+  <- done(t+0ms)
+  <- delete_id
+wl_callback#2 = wl_surface#1.frame
+  <- done(t+4ms)
+  <- delete_id
+wl_callback#3 = wl_surface#1.frame
+  <- done(t+12ms)
+  <- delete_id
+wl_callback#4 = wl_surface#1.frame
+  <- done(t+21ms)
+  <- delete_id
+wl_callback#5 = wl_surface#1.frame
+  <- done(t+29ms)
+  <- delete_id
+wl_compositor#1 = wl_registry#1.bind
+  -> create_surface(new wl_surface#1)
+wl_display#1
+  -> get_registry(new wl_registry#1)
+wl_output#1 = wl_registry#1.bind
+  <- geometry(0, 0, 0, 0, 0, "Yuna", "Virtual output", 0)
+  <- mode(3, 3840, 2160, 240000)
+  <- name("HEADLESS-1")
+  <- description("Yuna - Virtual output - HEADLESS-1")
+  <- scale(2)
+  <- done()
+wl_registry#1 = wl_display#1.get_registry
+  <- global(name of ext_data_control_manager_v1, "ext_data_control_manager_v1", 1)
+  <- global(name of ext_image_copy_capture_manager_v1, "ext_image_copy_capture_manager_v1", 1)
+  <- global(name of ext_output_image_capture_source_manager_v1, "ext_output_image_capture_source_manager_v1", 1)
+  <- global(name of wl_compositor#1, "wl_compositor", 6)
+  <- global(name of wl_data_device_manager, "wl_data_device_manager", 3)
+  <- global(name of wl_output#1, "wl_output", 4)
+  <- global(name of wl_seat#1, "wl_seat", 9)
+  <- global(name of wl_shm#1, "wl_shm", 2)
+  <- global(name of wl_subcompositor#1, "wl_subcompositor", 1)
+  <- global(name of wp_color_manager_v1, "wp_color_manager_v1", 3)
+  <- global(name of wp_cursor_shape_manager_v1, "wp_cursor_shape_manager_v1", 2)
+  <- global(name of wp_fractional_scale_manager_v1#1, "wp_fractional_scale_manager_v1", 1)
+  <- global(name of wp_presentation#1, "wp_presentation", 2)
+  <- global(name of wp_viewporter#1, "wp_viewporter", 1)
+  <- global(name of xdg_activation_v1#1, "xdg_activation_v1", 1)
+  <- global(name of xdg_wm_base#1, "xdg_wm_base", 7)
+  <- global(name of xdg_wm_dialog_v1#1, "xdg_wm_dialog_v1", 1)
+  <- global(name of zwlr_screencopy_manager_v1, "zwlr_screencopy_manager_v1", 3)
+  <- global(name of zwp_linux_dmabuf_v1#1, "zwp_linux_dmabuf_v1", 6)
+  <- global(name of zwp_primary_selection_device_manager_v1, "zwp_primary_selection_device_manager_v1", 1)
+  <- global(name of zwp_text_input_manager_v3, "zwp_text_input_manager_v3", 1)
+  <- global(name of zxdg_decoration_manager_v1#1, "zxdg_decoration_manager_v1", 2)
+  <- global(name of zxdg_output_manager_v1, "zxdg_output_manager_v1", 3)
+  -> bind(name of wl_compositor#1, "wl_compositor", 6, new wl_compositor#1)
+  -> bind(name of wl_output#1, "wl_output", 4, new wl_output#1)
+  -> bind(name of wl_seat#1, "wl_seat", 1, new wl_seat#1)
+  -> bind(name of wl_shm#1, "wl_shm", 1, new wl_shm#1)
+  -> bind(name of wl_subcompositor#1, "wl_subcompositor", 1, new wl_subcompositor#1)
+  -> bind(name of wp_fractional_scale_manager_v1#1, "wp_fractional_scale_manager_v1", 1, new wp_fractional_scale_manager_v1#1)
+  -> bind(name of wp_presentation#1, "wp_presentation", 1, new wp_presentation#1)
+  -> bind(name of wp_viewporter#1, "wp_viewporter", 1, new wp_viewporter#1)
+  -> bind(name of xdg_activation_v1#1, "xdg_activation_v1", 1, new xdg_activation_v1#1)
+  -> bind(name of xdg_wm_base#1, "xdg_wm_base", 7, new xdg_wm_base#1)
+  -> bind(name of xdg_wm_dialog_v1#1, "xdg_wm_dialog_v1", 1, new xdg_wm_dialog_v1#1)
+  -> bind(name of zwp_linux_dmabuf_v1#1, "zwp_linux_dmabuf_v1", 3, new zwp_linux_dmabuf_v1#1)
+  -> bind(name of zxdg_decoration_manager_v1#1, "zxdg_decoration_manager_v1", 1, new zxdg_decoration_manager_v1#1)
+wl_seat#1 = wl_registry#1.bind
+  <- capabilities(2)
+wl_shm#1 = wl_registry#1.bind
+  <- format(0)
+  <- format(1)
+  -> create_pool(new wl_shm_pool#1, <fd>, 7073792)
+  -> create_pool(new wl_shm_pool#2, <fd>, 14237696)
+  -> create_pool(new wl_shm_pool#3, <fd>, 14745600)
+  -> create_pool(new wl_shm_pool#4, <fd>, 14237696)
+wl_shm_pool#1 = wl_shm#1.create_pool
+  -> create_buffer(new wl_buffer#1, 0, 1256, 1408, 5024, 0)
+  -> destroy()
+  <- delete_id
+wl_shm_pool#2 = wl_shm#1.create_pool
+  -> create_buffer(new wl_buffer#2, 0, 2528, 1408, 10112, 0)
+  -> destroy()
+  <- delete_id
+wl_shm_pool#3 = wl_shm#1.create_pool
+  -> create_buffer(new wl_buffer#3, 0, 2560, 1440, 10240, 0)
+  -> destroy()
+  <- delete_id
+wl_shm_pool#4 = wl_shm#1.create_pool
+  -> create_buffer(new wl_buffer#4, 0, 2528, 1408, 10112, 0)
+  -> destroy()
+  <- delete_id
+wl_subcompositor#1 = wl_registry#1.bind
+wl_surface#1 = wl_compositor#1.create_surface
+  -> commit()
+  <- preferred_buffer_scale(2)
+  -> attach(wl_buffer#1, 0, 0)
+  -> damage_buffer(0, 0, 1256, 1408)
+  -> frame(new wl_callback#1)
+  -> commit()
+  <- enter(wl_output#1)
+  -> damage_buffer(0, 0, 64, 32)
+  -> frame(new wl_callback#2)
+  -> commit()
+  -> attach(wl_buffer#2, 0, 0)
+  -> damage_buffer(0, 0, 2528, 1408)
+  -> frame(new wl_callback#3)
+  -> commit()
+  -> attach(wl_buffer#3, 0, 0)
+  -> damage_buffer(0, 0, 2560, 1440)
+  -> frame(new wl_callback#4)
+  -> commit()
+  -> attach(wl_buffer#4, 0, 0)
+  -> damage_buffer(0, 0, 2528, 1408)
+  -> frame(new wl_callback#5)
+  -> commit()
+  <- leave(wl_output#1)
+wp_fractional_scale_manager_v1#1 = wl_registry#1.bind
+wp_presentation#1 = wl_registry#1.bind
+  <- clock_id(1)
+  -> feedback(wl_surface#1, new wp_presentation_feedback#1)
+  -> feedback(wl_surface#1, new wp_presentation_feedback#2)
+  -> feedback(wl_surface#1, new wp_presentation_feedback#3)
+  -> feedback(wl_surface#1, new wp_presentation_feedback#4)
+  -> feedback(wl_surface#1, new wp_presentation_feedback#5)
+wp_presentation_feedback#1 = wp_presentation#1.feedback
+  <- sync_output(wl_output#1)
+  <- presented(t+3.166666ms, 4166666, 1, 1)
+  <- delete_id
+wp_presentation_feedback#2 = wp_presentation#1.feedback
+  <- sync_output(wl_output#1)
+  <- presented(t+7.333333ms, 4166666, 2, 1)
+  <- delete_id
+wp_presentation_feedback#3 = wp_presentation#1.feedback
+  <- sync_output(wl_output#1)
+  <- presented(t+15.666666ms, 4166666, 4, 1)
+  <- delete_id
+wp_presentation_feedback#4 = wp_presentation#1.feedback
+  <- sync_output(wl_output#1)
+  <- presented(t+24.000000ms, 4166666, 6, 1)
+  <- delete_id
+wp_presentation_feedback#5 = wp_presentation#1.feedback
+  <- sync_output(wl_output#1)
+  <- presented(t+32.333333ms, 4166666, 8, 1)
+  <- delete_id
+wp_viewporter#1 = wl_registry#1.bind
+xdg_activation_v1#1 = wl_registry#1.bind
+xdg_surface#1 = xdg_wm_base#1.get_xdg_surface
+  -> get_toplevel(new xdg_toplevel#1)
+  <- configure(serial)
+  -> ack_configure(serial of xdg_surface#1.configure[1])
+  <- configure(serial)
+  -> ack_configure(serial of xdg_surface#1.configure[2])
+  <- configure(serial)
+  -> ack_configure(serial of xdg_surface#1.configure[3])
+  <- configure(serial)
+  -> ack_configure(serial of xdg_surface#1.configure[4])
+  <- configure(serial)
+  -> ack_configure(serial of xdg_surface#1.configure[5])
+  -> destroy()
+  <- delete_id
+xdg_toplevel#1 = xdg_surface#1.get_toplevel
+  <- configure_bounds(0, 0), before xdg_surface#1.configure[1]
+  <- wm_capabilities([1, 2, 3, 4]), before xdg_surface#1.configure[1]
+  <- configure(1256, 1408, [5, 6, 7, 8]), before xdg_surface#1.configure[1]
+  <- configure(1256, 1408, [4, 5, 6, 7, 8]), before xdg_surface#1.configure[2]
+  -> set_maximized()
+  <- configure(2528, 1408, [4, 5, 6, 7, 8]), before xdg_surface#1.configure[3]
+  -> set_fullscreen(null)
+  <- configure(2560, 1440, [2, 4, 5, 6, 7, 8]), before xdg_surface#1.configure[4]
+  -> unset_fullscreen()
+  <- configure(2528, 1408, [4, 5, 6, 7, 8]), before xdg_surface#1.configure[5]
+  -> destroy()
+  <- delete_id
+xdg_wm_base#1 = wl_registry#1.bind
+  -> get_xdg_surface(new xdg_surface#1, wl_surface#1)
+xdg_wm_dialog_v1#1 = wl_registry#1.bind
+zwp_linux_dmabuf_v1#1 = wl_registry#1.bind
+  <- modifier(<the renderer's formats>)
+zxdg_decoration_manager_v1#1 = wl_registry#1.bind
+  -> get_toplevel_decoration(new zxdg_toplevel_decoration_v1#1, xdg_toplevel#1)
+zxdg_toplevel_decoration_v1#1 = zxdg_decoration_manager_v1#1.get_toplevel_decoration
+  <- configure(2), before xdg_surface#1.configure[1]
+  -> destroy()
+  <- delete_id

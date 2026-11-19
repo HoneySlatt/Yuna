@@ -750,6 +750,22 @@ and each test file's documentation says what the file covers.
   `tests/common/`. SlimeEngine's examples and Opium run in ignored tests, which weekly jobs run.
 - **Documents as tests**: `headless/protocols.rs` checks that the rows `Offered` of
   [`protocols.md`](protocols.md) are the globals each seat's clients are shown.
+- **Protocol traces held for parity**
+  ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)):
+  `headless/traces.rs` runs eight scripted scenarios, each in a process of its own (the headless
+  binary run again on `traces::traced_process`, with `WAYLAND_DEBUG=client`), and records what the
+  test clients send and receive. `traces/normalise.rs` reads `wayland-backend`'s printout into
+  typed messages by the generated descriptions, then writes, for each client, its objects by
+  interface and rank, each with its own messages in order, and only the orders between objects
+  the protocol requires. What the server chooses where the protocol gives no order is not held:
+  the interleaving of objects, the order of globals, its numbers for serials and globals. Serials
+  are named by the event that carried them, registry names by the object bound from them;
+  descriptors, keymap sizes and error texts are masked, the renderer's dmabuf formats collapsed,
+  sets sorted, the harness's own round trips left out. Times are kept from the first frame
+  callback on the manual clock and masked on the real one. Each result is compared with
+  `crates/yuna/tests/traces/<scenario>.<manual|real>.trace`; all eight run on the manual clock,
+  the window, input and outputs scenarios also against `yuna --headless`, and
+  `every_trace_is_the_same_five_times_in_a_row` keeps them deterministic.
 - **Captures held for parity**
   ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)):
   `headless/captures_held.rs` builds eight scenes (`captures_held/scenes.rs`) and captures each
@@ -766,6 +782,8 @@ To add a test:
 - a layout behaviour: a scenario in `crates/yuna-layout/tests/scenarios/`, always;
 - a compositor behaviour: a story in its subject's file in `crates/yuna/tests/headless/`, driving
   the manual clock, its figures exact; a new request goes into its test client;
+- a protocol behaviour Stage 2a must keep: a step in a scenario of `headless/traces/manual.rs`
+  (and `traces/real.rs`), its trace rewritten and its diff read;
 - a change to what Yuna draws: a scene in `headless/captures_held/scenes.rs` and its test in
   `captures_held.rs`;
 - a bug: the story that fails first, then the fix;

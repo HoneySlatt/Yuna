@@ -58,7 +58,7 @@ pub(crate) fn windows_of(compositor: &Compositor, seat: SeatId) -> Vec<WindowId>
 
 /// A point 10 units inside `window`'s top-left corner, on the output that shows it, in that
 /// output's coordinates.
-fn inside(compositor: &Compositor, window: WindowId) -> (OutputId, f64, f64) {
+pub(crate) fn inside(compositor: &Compositor, window: WindowId) -> (OutputId, f64, f64) {
     let description = compositor
         .windows()
         .into_iter()

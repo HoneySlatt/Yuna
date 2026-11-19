@@ -37,7 +37,7 @@ fn hd_output(scale: f64) -> OutputMode {
 }
 
 /// Refresh boundary `k` of an output created at `start`, at 60 Hz.
-fn boundary_at_60_hz(start: Duration, k: u64) -> Duration {
+pub(crate) fn boundary_at_60_hz(start: Duration, k: u64) -> Duration {
     start + Duration::from_nanos(k * 1_000_000_000 / 60)
 }
 

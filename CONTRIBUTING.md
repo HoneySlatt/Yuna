@@ -433,8 +433,14 @@ Stage 2a's parity net holds files the same way, though they are not contracts
 how many changed and by how much, and writing the image captured and a difference image to a
 temporary folder it names. A change made on purpose, a Mesa update or a blending an ADR decided,
 is looked at in those images, then rewritten with `YUNA_WRITE_CAPTURES=1 cargo test -p yuna --test
-headless captures_held`, the new PNGs in the diff. During Stage 2a a step that fails it is
-reverted, not rewritten.
+headless captures_held`, the new PNGs in the diff. The protocol traces in
+`crates/yuna/tests/traces/` work the same way: a change of protocol behaviour fails
+`cargo test -p yuna --test headless traces::` with a diff whose hunks name their client and
+object, and a change made on purpose is rewritten with `YUNA_WRITE_TRACES=1` and read in the diff.
+A trace that varies between runs fails the five-times test: either its scenario must wait for an
+answer it does not wait for yet, or `traces/normalise.rs` needs a table entry, citing the
+protocol's XML, for the value that changes. During Stage 2a a step that fails either is reverted,
+not rewritten.
 
 ## From outside the project
 

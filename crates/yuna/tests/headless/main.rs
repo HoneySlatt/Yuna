@@ -36,6 +36,7 @@ mod selection;
 mod selection_client;
 mod selection_mcp;
 mod text_input;
+mod traces;
 mod virtual_input;
 mod virtual_input_client;
 mod vrr;

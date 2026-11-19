@@ -12,6 +12,7 @@
 
 use std::fs::File;
 use std::os::unix::fs::FileExt;
+use std::path::Path;
 
 use smithay::input::keyboard::xkb;
 use wayland_client::protocol::{
@@ -177,7 +178,23 @@ impl InputClient {
         InputClient::bind_input(client, compositor, seat_name)
     }
 
+    /// As [`InputClient::connect`], to the Yuna process whose socket is at `path`, for the seat
+    /// it serves.
+    pub fn connect_to_process(path: &Path, seat_name: &str) -> InputClient {
+        let client = Client::connect_to_process(path);
+        InputClient::bind_input_with(client, seat_name, InputClient::roundtrip_with_process)
+    }
+
     fn bind_input(client: Client, compositor: &mut Compositor, seat_name: &str) -> InputClient {
+        InputClient::bind_input_with(client, seat_name, |input| input.roundtrip(compositor))
+    }
+
+    /// Takes the seat's input objects, `roundtrip` waiting for each answer.
+    fn bind_input_with(
+        client: Client,
+        seat_name: &str,
+        mut roundtrip: impl FnMut(&mut InputClient),
+    ) -> InputClient {
         let queue = client.connection().new_event_queue();
         client
             .connection()
@@ -189,8 +206,8 @@ impl InputClient {
             state: InputState::default(),
         };
         // The seats, then their names.
-        input.roundtrip(compositor);
-        input.roundtrip(compositor);
+        roundtrip(&mut input);
+        roundtrip(&mut input);
         let qh = input.queue.handle();
         let state = &mut input.state;
         let (wl_seat, has_pointer) = state
@@ -217,13 +234,30 @@ impl InputClient {
             .data_device_manager
             .as_ref()
             .map(|manager| manager.get_data_device(&wl_seat, &qh, ()));
-        input.roundtrip(compositor);
+        roundtrip(&mut input);
         input
     }
 
     /// A roundtrip of the client, then the input events it read.
     pub fn roundtrip(&mut self, compositor: &mut Compositor) {
         self.client.roundtrip(compositor);
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .expect("the input events are read");
+    }
+
+    /// As [`InputClient::roundtrip`], with Yuna run as a process.
+    pub fn roundtrip_with_process(&mut self) {
+        self.client.roundtrip_with_process();
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .expect("the input events are read");
+    }
+
+    /// Waits for the next events the Yuna process sends, and handles them
+    /// (`Client::wait_for_process`).
+    pub fn wait_for_process(&mut self) {
+        self.client.wait_for_process();
         self.queue
             .dispatch_pending(&mut self.state)
             .expect("the input events are read");

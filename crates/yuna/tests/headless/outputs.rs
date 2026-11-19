@@ -18,7 +18,7 @@ use crate::{
 /// 1 s / 60, to the nanosecond below.
 const PERIOD_AT_60: Duration = Duration::from_nanos(16_666_666);
 
-fn full_hd() -> OutputMode {
+pub(crate) fn full_hd() -> OutputMode {
     OutputMode::new(1920, 1080, 60.0, 1.0).expect("a valid mode")
 }
 
