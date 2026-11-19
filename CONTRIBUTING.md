@@ -245,6 +245,19 @@ SlimeEngine's checkout at the revision it pins: the `window`, `interface` and `e
 slime-cook -- cook examples/assets <folder>/cooked`), and `assets/`, a copy of
 `examples/assets`.
 
+Opium's desktop window runs in an ignored test, `crates/yuna/tests/opium.rs`, given Opium's
+`bin/opium`, as the weekly Opium job runs it (ADR-0104): an agent, through `yuna mcp` alone,
+starts Opium on a throwaway profile, in a network namespace of its own, checks its window by
+capture, clicks Songs in it, checks the new page by capture, and Yuna must rest once Opium is
+idle. Opium's Nix package is built at the revision `.github/workflows/opium.yml` pins, from
+Opium's own flake; the namespace needs `unshare` on the `PATH` and unprivileged user namespaces.
+The test takes about 20 s; Opium's build, about 15 minutes the first time:
+
+```sh
+nix build --out-link /tmp/opium github:HoneySlatt/Opium/<revision>
+YUNA_OPIUM=/tmp/opium/bin/opium nix develop -c cargo test -p yuna --test opium -- --ignored
+```
+
 The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
 compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
 to the shortest sequence that still fails, and keep its seed in a `.proptest-regressions` file
@@ -281,7 +294,8 @@ only <step>` runs one:
 8. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
    session;
 9. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
-10. `script-tests`: the tests of those scripts, and of SlimeEngine's job's path filter.
+10. `script-tests`: the tests of those scripts, and of the path filters of SlimeEngine's and
+    Opium's jobs.
 
 `scripts/test-check.sh` proves that each step stops what it guards against
 ([ADR-0058](docs/adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): it clones the last
@@ -314,6 +328,11 @@ data once per pinned revision and keeps the folder in GitHub's cache
 ([ADR-0029](docs/adr/0029-the-rest-of-animated-applications.md),
 [ADR-0043](docs/adr/0043-text-input-and-the-rest-of-slimeengines-examples.md)). Its
 times are in [`docs/measurements.md`](docs/measurements.md).
+[`.github/workflows/opium.yml`](.github/workflows/opium.yml) runs Opium's desktop window in Yuna
+every Saturday, on demand, and on a push that changes anything its test builds or reads, its
+path filter checked the same way (ADR-0104). It builds Opium's Nix package at the revision it
+pins, uncached, and turns off the AppArmor rule of GitHub's Ubuntu 24.04 that keeps an
+unprivileged user from the network namespace the test runs Opium in.
 
 ## Dependencies
 

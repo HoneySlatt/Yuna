@@ -1,0 +1,86 @@
+# Runs Opium, the owner's music player, in Yuna (ADR-0104): an agent, through `yuna mcp` alone,
+# opens its desktop window on a throwaway profile, checks it by capture, clicks in it, and Yuna
+# rests once Opium is idle. A workflow of its own, as SlimeEngine's is (ADR-0029): weekly, on
+# demand, and on a push that changes anything its test builds or reads. Opium is built from its
+# own Nix package at the revision below, with the nixpkgs its own flake.lock pins; the test runs
+# in Yuna's development shell. Actions are pinned to commit SHAs, their release in a comment.
+name: Opium
+
+on:
+  push:
+    branches: [main]
+    # Every push to main runs it but one that changes only what its test can neither build nor
+    # read: documents, other workflows and scripts, the other tests and the examples. What is
+    # left out is named, so that a new file runs the job until someone says it cannot matter;
+    # scripts/test_workflows.py checks that nothing the test builds or reads is left out.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "changelog.d/**"
+      - "logo/**"
+      - "LICENSE"
+      - "deny.toml"
+      - ".gitignore"
+      - "scripts/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/slimeengine.yml"
+      - "crates/yuna/examples/**"
+      - "crates/yuna/tests/headless/**"
+      - "crates/yuna/tests/fixtures/**"
+      - "crates/yuna/tests/applications/**"
+      - "crates/yuna/tests/contracts/**"
+      - "crates/yuna/tests/applications.rs"
+      - "crates/yuna/tests/command_line.rs"
+      - "crates/yuna/tests/consumers.rs"
+      - "crates/yuna/tests/contracts.rs"
+      - "crates/yuna/tests/mcp.rs"
+  # Every Saturday at 06:29 UTC, apart from CI's Monday run and SlimeEngine's Thursday one. Off
+  # the hour, when GitHub delays scheduled runs.
+  schedule:
+    - cron: "29 6 * * 6"
+  workflow_dispatch:
+
+# A new push to the same branch cancels the run in progress.
+concurrency:
+  group: opium-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Opium's revision, raised by hand in a commit of its own: main on 2026-11-18, read with
+  # `git ls-remote https://github.com/HoneySlatt/Opium refs/heads/main`. Opium's window is frozen
+  # until it moves to uwui (ADR-0104): the revision changes rarely.
+  OPIUM_REVISION: d5b0b3de9b36c00246d17496afcef55bd1f9a405
+
+jobs:
+  opium:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No later step pushes: the token need not stay in the checkout's configuration.
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      # Opium's package, its `bin/opium` wrapped to find its own Wayland, xkbcommon, Vulkan loader
+      # and libglvnd. Without --no-update-lock-file, an incomplete flake.lock of Opium's would be
+      # completed with an unpinned revision.
+      - name: Build Opium
+        run: |
+          nix build --no-update-lock-file --print-build-logs --out-link opium \
+            "github:HoneySlatt/Opium/${OPIUM_REVISION}#packages.x86_64-linux.default"
+      # The test runs Opium in a network namespace of its own, which `unshare` makes inside a
+      # user namespace, as an unprivileged user. Ubuntu 24.04's AppArmor refuses such a user the
+      # capabilities that takes, until this setting is off (actions/runner-images#10443).
+      - name: Let an unprivileged user make a network namespace
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Opium in Yuna
+        run: |
+          nix develop --no-update-lock-file --command \
+            env YUNA_OPIUM="$PWD/opium/bin/opium" \
+            cargo test --locked -p yuna --test opium -- --ignored --nocapture
