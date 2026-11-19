@@ -20,7 +20,7 @@ commands are CONTRIBUTING's; the proofs, `.delegation/m1.13-perf/`.
 | At rest, 10 s, an idle Alacritty | 0 frames, 0 wakes, 0 % of a core | 0 | met |
 | `yuna mcp`, first frame: GPU 1080p ≤ 100 ms | 110.3 ms, quiet | M1.11: 58.7 ms | missed, cause not isolated ([debt](debt.md#the-mcp-server)) |
 | `yuna mcp`, `seat create` on llvmpipe 4K ≤ 100 ms | 128.8 ms, quiet | M1.11: 80.6 ms | missed, cause not isolated |
-| `yuna mcp`, memory on llvmpipe 4K ≤ 125 MiB | 142.2 MiB, anonymous 64.2 | M1.11: 93.7, anonymous 64.8 | missed: the file-backed part doubled |
+| `yuna mcp`, memory on llvmpipe 4K: anonymous ≤ 70 MiB (ADR-0100) | 142.2 MiB, anonymous 64.2, alone on its Mesa | M1.11: 93.7, anonymous 64.8, its Mesa shared | met; the file-backed part, 78.0 MiB, as M1.11's 75.9 alone on its Mesa at 1080p |
 | `yuna mcp`, every other start and memory phase; ten together for 5 minutes | within their budgets; ten together grew 0.0 MiB | M1.11 | met; the llvmpipe 1080p times disturbed, not judged |
 | XWayland's start (no budget) | 30.79 ms cold, Xwayland's PSS 35.3 MiB | M1.8: 28.63 ms, 35.5 MiB | as before |
 
@@ -112,8 +112,9 @@ times:
 | The replies queued while calls that waited were answered | 16,802,706 growing to 16,863,634 bytes, past the 16 MiB bound | past it by one reply at most, the other answers held until the client reads |
 | Peak memory of the story of an 8,192 × 8,192 output | | 356,332 kB, against 134,548 kB for another MCP story |
 
-Opium, `crates/yuna/tests/opium.rs` against Opium's package at `d5b0b3d`, on 2026-11-18, not yet
-run on GitHub:
+Opium, `crates/yuna/tests/opium.rs` against Opium's package at `d5b0b3d`, on 2026-11-18 by hand;
+on GitHub's runner on 2026-11-19, its first run, the build took 29 minutes and the test's step 12,
+its build included, the story 16.4 s:
 
 | What | Figure |
 |---|---|

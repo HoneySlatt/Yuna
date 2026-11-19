@@ -23,23 +23,30 @@ agents and tests; the desktop session comes at Stage 2 ([ROADMAP](docs/ROADMAP.m
 
 These are vulnerabilities:
 
-- **A client harms another client or Yuna.** A Wayland or X11 client that crashes or stalls Yuna,
-  reads another client's data (a buffer, a selection, its input), or grows Yuna's memory without
-  bound. A client's own protocol error ends that client alone
+- **A client harms another client or Yuna** beyond what 0.1 accepts: crashes or stalls Yuna,
+  reads another client's data (a buffer, a selection, its input), or grows Yuna's memory past a
+  bound Yuna sets. A client's own protocol error ends that client alone
   ([ADR-0080](docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)); what one client
-  may ask is bounded ([ADR-0028](docs/adr/0028-bounds-on-what-one-client-may-ask.md),
-  [ADR-0070](docs/adr/0070-bounds-on-what-one-x11-client-may-ask.md)).
+  may ask is bounded ([ADR-0131](docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 - **An agent's seat reaches the owner's seat**, or another agent's: input, captures, selections
   or programs that cross from one seat to another
-  ([ADR-0015](docs/adr/0015-agents-workspaces.md)).
-- **Yuna exposes the user's files or sessions**: it reads or writes outside its runtime folder,
-  passes secrets from its environment to its programs, or leaves sockets others can open.
+  ([ADR-0116](docs/adr/0116-agents-seats-each-agent-in-its-own-yuna.md)).
+- **Yuna exposes the user's files or sessions**: it reads or writes outside the folders it uses,
+  passes secrets from its environment to its programs, or leaves sockets others can open. Yuna
+  uses its runtime folder (`XDG_RUNTIME_DIR`), X11's `/tmp/.X<n>-lock` and `/tmp/.X11-unix/`, and,
+  for `yuna mcp`'s agents, their throwaway homes in `TMPDIR` or `/tmp`
+  ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)).
 
 These are not, today:
 
 - Another process of the same user: it can open Yuna's sockets and read its cookies, as it can
   read the user's files ([ADR-0067](docs/adr/0067-one-xwayland-per-seat-on-demand-behind-a-cookie.md)).
 - An MCP client of `yuna mcp`: it is the agent that started that Yuna, and it may do anything its
-  seats allow, starting programs included ([ADR-0033](docs/adr/0033-the-mcp-server.md)).
+  seats allow, starting programs included
+  ([ADR-0120](docs/adr/0120-the-mcp-server-a-private-yuna-on-stdio.md)).
 - X11 programs on one seat reading one another's windows and input: X11 isolates nothing within a
   display. Each seat has its own Xwayland.
+- What 0.1 leaves unbounded on purpose, until Stage 2's core: a window's subsurfaces, a client's
+  shared-memory pools and the descriptors they hold, its buffers' memory, and its windows not yet
+  mapped. A client can still stall or exhaust Yuna through them
+  ([ADR-0131](docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md), [debt](docs/debt.md)).

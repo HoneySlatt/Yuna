@@ -29,7 +29,7 @@ Its uses, and the owner's programs that stand for them ([ADR-0061](adr/0061-yuna
 | Creation | Kdenlive, Resolve, GIMP, Krita, Inkscape, Blender, Wine plugins, Magnolia, Unreal, SlimeEngine | colour measured, Wine and plugin windows placed, pointer warp |
 
 It is made for its owner first, a heavy gamer and a cinephile. It is public, under
-GPL-3.0-or-later ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)).
+GPL-3.0-or-later ([ADR-0114](adr/0114-gpl-3-0-or-later-public-the-logo-apart.md), [ADR-0036](adr/0036-yuna-is-public.md)).
 
 ## 2. Principles
 
@@ -56,7 +56,7 @@ On each criterion, the best rival measured is the bar, and Yuna beats it
 | Animations | Hyprland |
 | Power at rest and in motion | dwl, mango |
 | HDR and colour | KWin |
-| XWayland at a fractional scale | none: sharp at the largest scale and the right size on every output ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
+| XWayland at a fractional scale | none: sharp at the largest scale and the right size on every output ([ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)) |
 | Games: latency, VRR | gamescope, KWin |
 | Capture and streaming: a game's frames and latency during a capture | gamescope, KWin [ADR-0061](adr/0061-yunas-uses.md) |
 | Creation: colour accuracy, a tablet's latency and pressure | KWin [ADR-0061](adr/0061-yunas-uses.md) |
@@ -148,34 +148,34 @@ audit.
 | Topic | Decision |
 |---|---|
 | What Yuna is | One compositor, two modes ([ADR-0001](adr/0001-what-yuna-is.md)) |
-| Order | Headless first ([ADR-0002](adr/0002-the-headless-mode-first.md)); a parallel project, uwui first ([ADR-0003](adr/0003-a-parallel-project-uwui-first.md)) |
-| Scope | The compositor alone, a shell on top ([ADR-0004](adr/0004-the-compositor-alone-under-a-shell.md)) |
+| Order | Headless first ([ADR-0002](adr/0002-the-headless-mode-first.md)); a parallel project, uwui first ([ADR-0115](adr/0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md)) |
+| Scope | The compositor alone, a shell on top ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)) |
 | Layouts | Scrolling columns, dwindle, floating, special workspaces ([ADR-0005](adr/0005-the-layouts.md)) |
 | Machines | Linux; AMD and Intel first ([ADR-0006](adr/0006-machines-and-gpus.md)) |
 | Failures | A promise for each kind: a client's error ends it alone; a crash restarts Yuna within 1 s by its keeper; a GPU reset keeps every window; a panic of Yuna's state is fatal, of uwui's contained ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)) |
-| Configuration | KDL, reloaded live ([ADR-0008](adr/0008-configuration-in-kdl.md)) |
-| Licence | GPL-3.0-or-later, public ([ADR-0009](adr/0009-gpl-private-until-ready.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
-| Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0010](adr/0010-animations-and-effects.md)) |
-| Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0011](adr/0011-built-on-smithay.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)) |
+| Configuration | KDL, reloaded live ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)) |
+| Licence | GPL-3.0-or-later, public ([ADR-0114](adr/0114-gpl-3-0-or-later-public-the-logo-apart.md), [ADR-0036](adr/0036-yuna-is-public.md)) |
+| Look | Springs and curves; blur, glass, corners, shadows, borders; built-in effects ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)) |
+| Base | Smithay, left step by step along a written path, gone at Stage 2a's gate ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md), [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)) |
 | Wire protocol | wayland-rs, calloop and drm-rs kept; Yuna's own wire only on a measure ([ADR-0040](adr/0040-the-wire-protocol-stays-wayland-rs.md)) |
-| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws, on its own task, commands and images ([ADR-0012](adr/0012-opengl-first.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md), [ADR-0084](adr/0084-uwui-hosted-on-its-own-task-commands-and-images.md)) |
-| Code | Our own; niri, jay and Smithay as references ([ADR-0013](adr/0013-our-own-code-niri-and-jay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
+| Renderer | Vulkan alone, Yuna's own from Stage 2; uwui hosted for what Yuna draws, on its own task, commands and images ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)) |
+| Code | Our own; niri, jay and Smithay as references ([ADR-0113](adr/0113-our-own-code-niri-jay-and-smithay-as-references.md), [ADR-0039](adr/0039-leaving-smithay-step-by-step.md)) |
 | VRR | Fixed-rate desktop; films at exact multiples; games in a high band ([ADR-0014](adr/0014-vrr-without-flicker.md)) |
-| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; several seats in one Yuna frozen until Stage 2's core ([ADR-0015](adr/0015-agents-workspaces.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md), [ADR-0078](adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)) |
+| Agents | Their own outputs and seats, at full rate, each in its own headless Yuna; several seats in one Yuna frozen until Stage 2's core ([ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md), [ADR-0060](adr/0060-development-first-agents-in-their-own-yuna.md), [ADR-0116](adr/0116-agents-seats-each-agent-in-its-own-yuna.md)) |
 | Contracts | The command line, the environment, MCP and the Nix package; in 0.x they may change, every change announced in the changelog ([ADR-0079](adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)) |
-| Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0016](adr/0016-the-rust-toolchain.md)) |
-| Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0017](adr/0017-smithays-revision.md)) |
-| Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md`; main on it from M1.6 ([ADR-0021](adr/0021-smithays-fork.md), [ADR-0042](adr/0042-main-on-smithays-fork.md)) |
-| Headless backend | Yuna's own code on Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0022](adr/0022-the-headless-backend-in-yuna.md)) |
-| Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0023](adr/0023-frames-presentation-and-the-clock.md), [ADR-0031](adr/0031-frames-drawn-ahead-of-their-boundary.md)) |
-| Motion | The layout jumps; a pure crate, `yuna-motion`, turns its jumps into springs that keep their velocity, sampled at each frame's presentation; off headless unless asked ([ADR-0052](adr/0052-motion-in-a-pure-crate.md) to [ADR-0056](adr/0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md), [ADR-0059](adr/0059-reduced-motion-nothing-slides-fades-stay.md)) |
+| Toolchain | An exact stable Rust, pinned in `rust-toolchain.toml` ([ADR-0125](adr/0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md)) |
+| Smithay's revision | Upstream git, one revision pinned, raised at each stage's end ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)) |
+| Smithay's fork | A repository of its own, generic patches, listed in `smithay-patches.md`; main on it from M1.6 ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)) |
+| Headless backend | Yuna's own code on Smithay, drawn on llvmpipe unless the GPU is asked ([ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)) |
+| Frames and clock | Drawn on damage, ahead of their boundary, presented honestly, deadlines owned by a clock tests step; hidden windows once a second ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)) |
+| Motion | The layout jumps; a pure crate, `yuna-motion`, turns its jumps into springs that keep their velocity, sampled at each frame's presentation; off headless unless asked ([ADR-0052](adr/0052-motion-in-a-pure-crate.md) to [ADR-0127](adr/0127-motions-budget-no-frame-lost-to-motion.md), [ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)) |
 | Decorations | Server side: no title bars ([ADR-0024](adr/0024-no-title-bars.md)) |
 | The other projects | Every protocol listed and tested; hidden games paced; Yuna 0.1 the owner's projects' test compositor; GPU resets survived; Nix modules in Yuna; fuzzing and crash reports ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)) |
-| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
-| Applications in CI | Real applications at each push, rest checked on the program ([ADR-0025](adr/0025-applications-in-ci.md)) |
-| XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0044](adr/0044-xwayland-across-outputs-of-different-scales.md)) |
-| XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)) |
-| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)) |
+| Yuna and the shell | Wallpaper, idle, captures, the share picker and a night light in Yuna; portals in `yuna-portal`; the theme a file Yuna includes; the shell told what is fullscreen; the owner's shell is Hollow, on uwui, on Yuna alone ([ADR-0057](adr/0057-what-yuna-does-and-what-the-shell-does.md), [ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)) |
+| Applications in CI | Real applications at each push, rest checked on the program ([ADR-0122](adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)) |
+| XWayland's scale | The largest output's, scaled down on smaller ones ([ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)) |
+| XWayland | Yuna's own X11 window manager on x11rb; one Xwayland per seat, on demand, behind a cookie; X11 surfaces drawn by Yuna through an area filter; games through gamescope ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md) to [ADR-0124](adr/0124-x11-windows-across-outputs-of-different-scales.md)) |
+| The rivals measured | One bench outside the compositor: costs headless by agents, frames, latency and watts in the owner's tours on real displays ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)); budgets against the peers in features, a comparison the same day and its figure ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)); the Vulkan prototype on what no rival measures ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)) |
 | Stage 2's core | A queue of pending commits, one owner of the state, crates with checked dependencies, a table of tasks, output changes tested whole, one path for pause and loss, the lock kept through a restart, one input chain, a frame's identity, every public contract versioned, client identity from the connection ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)) |
 
 ### Open
@@ -208,7 +208,7 @@ audit.
 - A throwaway prototype of HDR through Smithay's DRM backend on the owner's monitor.
 - The rivals measured at rest and in motion; the bar's figures set.
 - A throwaway Vulkan prototype, measured on every tier, the laptop's driver checked, to set the
-  frame's budgets ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md)).
+  frame's budgets ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md)).
 - Yuna for the owner's other projects
   ([ADR-0058](adr/0058-what-yuna-takes-from-the-owners-other-projects.md)): a Nix package, the
   virtual keyboard and pointer on agents' seats, what each project needs in
@@ -216,7 +216,7 @@ audit.
   `scripts/test-check.sh`.
 
 **Exit.** SlimeEngine's windowed examples and Opium's window, and uwui's once it has some
-([ADR-0025](adr/0025-applications-in-ci.md), [ADR-0104](adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)),
+([ADR-0122](adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md), [ADR-0104](adr/0104-stage-1s-exit-opium-in-aeriths-place-and-its-exceptions-written.md)),
 run in Yuna headless in CI, driven by an agent through MCP; every layout behaviour of ADR-0005
 has its tests, except terminal swallowing, per-application rules and tabbed columns, which come at
 Stage 2; the HDR prototype has its verdict; the rivals' figures and the Vulkan prototype's are in
@@ -236,7 +236,7 @@ review at its gate ([ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-pat
   re-exports, WLCS's baseline recorded.
 - Then Yuna's own core, along [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md)'s path: a temporary boundary over Smithay; the scene and
   damage tracking, the Vulkan renderer hosting uwui
-  ([ADR-0073](adr/0073-vulkan-alone-uwui-for-what-yuna-draws-and-a-prototype-of-what-no-rival-measures.md));
+  ([ADR-0106](adr/0106-vulkan-alone-and-uwui-hosted-for-what-yuna-draws.md));
   seats and input, xdg-shell and popups, the other protocols; the surfaces and the queue of
   commits last, on wayland-rs; in crates with checked dependencies, meeting the core's
   requirements from its first commit ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
@@ -256,9 +256,9 @@ pass.
 - DRM and KMS on drm-rs, libinput and the session, written by Yuna; VKMS studied first; one
   output at a fixed rate, with no VRR flicker.
 - The lock, begun by Yuna and relieved by the locker, logind's `Unlock` when no locker lives
-  ([ADR-0086](adr/0086-the-lock-begun-by-yuna-relieved-by-the-locker-and-loginds-unlock.md)), a
+  ([ADR-0108](adr/0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md)), a
   locker that stops answering counted dead
-  ([ADR-0088](adr/0088-a-locker-that-stops-answering-counts-as-dead-its-answer-from-the-thread-that-draws-it.md)); the crash restart by
+  ([ADR-0108](adr/0108-the-lock-begun-by-yuna-a-dead-or-frozen-locker-relieved.md)); the crash restart by
   the keeper; a crash report kept on the machine; recovery from a GPU reset without a restart ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
 - The configuration read; the package's NixOS and home-manager modules; Amane on top through
   standard protocols.
@@ -341,7 +341,7 @@ latency and frames at least as good as gamescope's.
 
 - Blur and glass, over the wallpaper too, animated borders, the built-in effects, exotic open and
   close animations; the wallpaper's animated transitions.
-- The overview, Umbriel's, itself niri's improved ([ADR-0019](adr/0019-the-layouts-behaviours.md));
+- The overview, Umbriel's, itself niri's improved ([ADR-0110](adr/0110-the-layouts-and-their-behaviours.md));
   Alt-Tab with previews, the capture tool's polish, a colour picker; snap zones for floating
   windows; shapes that morph ([ADR-0062](adr/0062-the-compositors-comfort-and-look.md)).
 - Sandboxed applications kept from sensitive protocols; capture and new keyboards asked, allowed

@@ -11,9 +11,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 
 - Stage 1, the headless core, is done: its milestones, M1.1 to M1.13, are in
   [`history.md`](history.md); its [audit](audits/2026-11-18-stage-1.md) closed it. 0.1 is tagged
-  `v0.1.0` on 2026-11-19, the owner choosing to tag before two of the audit's last steps.
-- **Still open from M1.13**, after the tag: the budgets measured again on the release candidate,
-  and the closing review by a fresh reviewer. What they find goes to a 0.1.1, or to the debt.
+  `v0.1.0` on 2026-11-19, at `09b96f5`, the owner choosing to tag before the closing review.
+- The closing review's findings, after the tag, are fixed on `main` or written as debt; a 0.1.1
+  on the owner's go.
 - **Next: Stage 2's opening design**, in a new session ([ROADMAP](ROADMAP.md),
   [ADR-0081](adr/0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md),
   [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)):

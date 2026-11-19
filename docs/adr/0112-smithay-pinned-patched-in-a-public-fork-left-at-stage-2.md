@@ -1,6 +1,7 @@
 # 0112. Smithay: pinned, patched in Yuna's public fork, left at Stage 2
 
-- Status: Accepted; supersedes [0011](0011-built-on-smithay.md),
+- Status: Accepted, its upstream base raised on 2026-11-18 to `7ff0ede4`, as
+  [`smithay-patches.md`](../smithay-patches.md) records; supersedes [0011](0011-built-on-smithay.md),
   [0017](0017-smithays-revision.md), [0021](0021-smithays-fork.md),
   [0036](0036-yuna-is-public.md) (the fork's visibility),
   [0039](0039-leaving-smithay-step-by-step.md) (Smithay as Yuna's base, and leaving it),

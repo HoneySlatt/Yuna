@@ -5,13 +5,14 @@ decisions. [`PLAN.md`](PLAN.md) holds the stage in progress.
 
 - What each release changed for users: [`CHANGELOG.md`](../CHANGELOG.md).
 - A stage's milestones in full, how each was checked and what it measured: the plan as it stood
-  at the release, `git show v<version>:docs/PLAN.md`, and the commits that made them.
+  before it moved here, for Stage 1 `git show 20f0b7e:docs/PLAN.md`, and the commits that made
+  them.
 - The measurements behind a decision: its ADR, and [`measurements.md`](measurements.md).
 
 ## Stage 1 — The headless core → 0.1
 
-- Released as 0.1 on 2026-11-19, tag `v0.1.0`; the budgets measured again and the closing review
-  of M1.13 followed the tag, at the owner's choice.
+- Released as 0.1 on 2026-11-19, tag `v0.1.0` at `09b96f5`; M1.13's closing review followed the
+  tag, at the owner's choice.
 - Decisions: [ADR-0001](adr/0001-what-yuna-is.md) to
   [ADR-0132](adr/0132-an-agents-clipboard-data-with-control-characters-in-base64.md), the
   chains among them consolidated by ADR-0106 to ADR-0131 at the stage's audit.

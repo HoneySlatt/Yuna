@@ -531,19 +531,18 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   CI. Kept: it takes about as long as the check twice.
 - Most rows of [`protocols.md`](protocols.md) not yet offered or planned say `Not decided`; Stage
   2's opening settles each that an application needs.
-- Opium's weekly job builds Opium from its Nix package uncached, about 15 minutes locally; its
-  time on GitHub's runners is not measured yet. It turns off the AppArmor rule of the runner's
+- Opium's weekly job builds Opium from its Nix package uncached: 29 minutes on GitHub's runner
+  at its first run, 2026-11-19, and the test's step 12 minutes, its build included. It turns off the AppArmor rule of the runner's
   Ubuntu that keeps an unprivileged user from a network namespace, on that throwaway machine
   alone. Opium, built from its own nixpkgs, loads the development shell's Mesa, which holds while
   that Mesa needs no newer glibc than Opium's nixpkgs gives (`tests/opium.rs`).
 
 ## Tests and examples
 
-- `yuna mcp`'s start missed three budgets on 2026-11-19, the machine quiet but the session's page
-  cache unknown: its first frame on the GPU at 1080p, 110.3 ms against 100 (58.7 at M1.11); its
-  `seat create` on llvmpipe at 4K, 128.8 ms against 100; its memory on llvmpipe at 4K, 142.2 MiB
-  against 125, the file-backed part doubled since M1.11, after `nixpkgs` (Mesa) was raised. Measured
-  again on a fresh boot, then fixed or decided, in 0.1.1 ([measurements](measurements.md)).
+- `yuna mcp`'s start missed two budgets on 2026-11-19, the machine quiet but the session's page
+  cache unknown: its first frame on the GPU at 1080p, 110.3 ms against 100 (58.7 at M1.11), and
+  its `seat create` on llvmpipe at 4K, 128.8 ms against 100. Measured again on a fresh boot, then
+  fixed or decided ([measurements](measurements.md)).
 - Motion's budget was not judged at M1.13's release: the machine never gave the still baseline its
   rate. Judged again on a quiet machine with the measures above.
 - The allocations a frame, for Rust 1.100's custom allocators, are not measured: heaptrack's
