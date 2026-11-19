@@ -10,10 +10,14 @@
 //! drag within one Wayland client; a second drag in one press; an X11-to-X11 drag Yuna leaves
 //! alone; a second drag before the first is finished; Xwayland killed or the seat removed
 //! mid-drag; a release in the round of the move, over an X11 window hidden under a Wayland one,
-//! the source held until the proxy is mapped.
+//! the source held until the proxy is mapped; a source at an XDND version outside 3 to 5; Ask
+//! and Link, both ways; a point past X11's 16-bit coordinates; the point of a fullscreen window
+//! that moves or is centred; one position kept for a target that answers slowly; a third drag
+//! while two end.
 //!
 //! Each story runs the development shell's Xwayland for an agent's seat at 1.5
-//! (`x11_windows.rs`), on the real clock but for one on the manual clock. The X11 programs are
+//! (`x11_windows.rs`), on the real clock but for three on the manual clock, two of which hold it
+//! while a window is drawn away from where X11 has it. The X11 programs are
 //! the X11 test client (`x11_client.rs`) as an XDND source or target (`xdnd_client.rs`): each
 //! runs on a thread of its own for the whole story, reads its events as they come, as a
 //! toolkit does, and logs every message it sends and gets. The Wayland program is a selection
@@ -31,15 +35,17 @@ use rustix::process::{Pid, Signal, kill_process};
 use wayland_client::protocol::wl_data_device_manager::DndAction;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
+use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_layout::{OutputId, WindowId};
-use yuna::{BUTTON_LEFT, ClockMode};
+use yuna::yuna_motion::Settings;
+use yuna::{BUTTON_LEFT, ClockMode, Compositor, OutputMode, X11_SYNC_TIMEOUT};
 
 use crate::selection_client::{DragEvent, SelectionClient, SourceDragEvent};
-use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step};
+use crate::x11_client::{Geometry, Image, PATIENCE, WindowSpec, X11Client, step, step_pumping};
 use crate::x11_selections::{
     MEBIBYTE, TEXT, open_wayland_window, owner_of, paste, pattern, take_selection,
 };
-use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait};
+use crate::x11_windows::{X11Seat, at_1, at_1_5, geometry_becomes, off, open_drawn, pump, wait};
 use crate::xdnd_client::{
     Answer, Finish, Logged, Peer, SourceOrder, SourceSpec, TargetOrder, TargetSpec, Xdnd,
     XdndAtoms, XdndSource, XdndTarget, named_window_at, send_xdnd, set_proxy, target_at,
@@ -76,6 +82,10 @@ struct DragSeat {
     /// The bytes each drag source of `wl`'s writes into each pipe it is sent, by source, each
     /// on a thread of its own, as a program writes into its pipe.
     answers: Vec<(usize, Vec<u8>)>,
+    /// Whether the manual clock is held where it is: a round dispatches and moves no time, so
+    /// that a motion stays where it is drawn and no deadline of Yuna's clock comes; the X11
+    /// side's limits, on the real clock, still do.
+    clock_held: bool,
 }
 
 impl DragSeat {
@@ -91,13 +101,18 @@ impl DragSeat {
             seat,
             wl,
             answers: Vec::new(),
+            clock_held: false,
         }
     }
 
     /// One round: the compositor's loop, then the Wayland program's events, each pipe its
     /// sources were sent given a writer.
     fn round(&mut self) {
-        pump(&mut self.seat.compositor);
+        if self.clock_held {
+            pump_held(&mut self.seat.compositor);
+        } else {
+            pump(&mut self.seat.compositor);
+        }
         self.wl.read_events();
         for (source, data) in &self.answers {
             for fd in self.wl.take_sent(*source) {
@@ -146,10 +161,11 @@ impl DragSeat {
         }
     }
 
-    /// The place at `fraction` of `window`'s width and height, as it is drawn now.
-    fn point_in(&self, window: WindowId, (fx, fy): (f64, f64)) -> Spot {
-        let compositor = &self.seat.compositor;
-        let description = compositor
+    /// `window`'s output and its rectangle as it is drawn now, from the output's corner.
+    fn drawn(&self, window: WindowId) -> (OutputId, Rect) {
+        let description = self
+            .seat
+            .compositor
             .windows()
             .into_iter()
             .find(|description| description.id == window)
@@ -157,11 +173,32 @@ impl DragSeat {
         let output = description.output.expect("shown");
         let rect = description.rect.expect("drawn");
         let output_rect = self.seat.output_rect(output);
-        (
-            output,
-            rect.x - output_rect.x + fx * rect.w,
-            rect.y - output_rect.y + fy * rect.h,
-        )
+        let from_corner = Rect {
+            x: rect.x - output_rect.x,
+            y: rect.y - output_rect.y,
+            ..rect
+        };
+        (output, from_corner)
+    }
+
+    /// The place at `fraction` of `window`'s width and height, as it is drawn now.
+    fn point_in(&self, window: WindowId, (fx, fy): (f64, f64)) -> Spot {
+        let (output, rect) = self.drawn(window);
+        (output, rect.x + fx * rect.w, rect.y + fy * rect.h)
+    }
+
+    /// The place `(dx, dy)` units into `window` from its corner, as it is drawn now.
+    fn point_from_corner(&self, window: WindowId, (dx, dy): (f64, f64)) -> Spot {
+        let (output, rect) = self.drawn(window);
+        (output, rect.x + dx, rect.y + dy)
+    }
+
+    /// Holds the manual clock where it is from now on: what is drawn stays so, and no deadline
+    /// of Yuna's clock comes, while the rounds go on; the X11 side's limits, on the real clock,
+    /// still do.
+    fn hold_clock(&mut self) {
+        assert_eq!(self.seat.compositor.clock_mode(), ClockMode::Manual);
+        self.clock_held = true;
     }
 
     fn move_to(&mut self, (output, x, y): Spot) {
@@ -201,9 +238,14 @@ impl DragSeat {
     /// Opens a drawn X11 window titled `title` of a new X11 program; returns the program, its
     /// window and the window's id.
     fn open_x11(&mut self, title: &str) -> (X11Client, Window, WindowId) {
+        self.open_x11_as(&WindowSpec::named(title))
+    }
+
+    /// Opens a drawn X11 window as `spec` says, of a new X11 program; returns the program, its
+    /// window and the window's id.
+    fn open_x11_as(&mut self, spec: &WindowSpec) -> (X11Client, Window, WindowId) {
         let client = self.seat.client();
-        let (client, window, described, _) =
-            open_drawn(&mut self.seat.compositor, client, &WindowSpec::named(title));
+        let (client, window, described, _) = open_drawn(&mut self.seat.compositor, client, spec);
         (client, window, described.id)
     }
 
@@ -216,6 +258,14 @@ impl DragSeat {
     fn source_events(&self, source: usize) -> &[SourceDragEvent] {
         &self.wl.source(source).drag
     }
+}
+
+/// One round of the compositor's loop, a short wait for its sources, the manual clock held
+/// where it is: only the deadlines due by now run.
+fn pump_held(compositor: &mut Compositor) {
+    compositor
+        .dispatch(Some(Duration::from_millis(2)))
+        .expect("Yuna dispatches");
 }
 
 // What an X11 drag onto a Wayland window takes, in steps.
@@ -428,6 +478,36 @@ fn positions_sent(source: &XdndSource) -> usize {
         .iter()
         .filter(|message| matches!(message, Xdnd::Position { .. }))
         .count()
+}
+
+/// The root points of the `XdndPosition`s `target` got, in order.
+fn positions_got(target: &XdndTarget) -> Vec<(i16, i16)> {
+    target
+        .got()
+        .into_iter()
+        .filter_map(|message| match message {
+            Xdnd::Position { root, .. } => Some(root),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Waits until `target` got `count` `XdndPosition`s, the last at `root`.
+#[track_caller]
+fn x11_positioned_at(drag: &mut DragSeat, target: &XdndTarget, count: usize, root: (i16, i16)) {
+    drag.until(
+        &format!("the X11 target's XdndPosition {count} at {root:?}"),
+        |_| {
+            let got = positions_got(target);
+            (got.len() >= count).then_some(())
+        },
+    );
+    let got = positions_got(target);
+    assert_eq!(
+        (got.len(), got.last()),
+        (count, Some(&root)),
+        "the positions: {got:?}"
+    );
 }
 
 // What a Wayland drag onto an X11 window takes, in steps.
@@ -1580,6 +1660,121 @@ fn finish_hostile_enters(mut drag: DragSeat) {
         .expect("the Wayland program is still connected");
 }
 
+/// An X11 program whose `XdndEnter` names `version`, outside the 3 to 5 Yuna takes, drags over
+/// a Wayland window. XDND's floor is version 3, and it asks a target to ignore a newer version
+/// than its own: Yuna ignores the enter, and so the positions of a source that never entered.
+/// The program finds Yuna's window over the Wayland one, enters it and sends one position, then
+/// waits for the status that never comes; the Wayland window is offered nothing.
+#[track_caller]
+fn an_x11_source_at_an_xdnd_version_yuna_does_not_take_is_offered_nothing(
+    story: &str,
+    version: u32,
+) {
+    let (mut drag, source, from, onto) = x11_source_and_wayland_window(story, |atoms| SourceSpec {
+        version: Some(version),
+        ..SourceSpec::offering(
+            vec![(atoms.UTF8_STRING, b"unspoken".to_vec())],
+            atoms.XdndActionCopy,
+        )
+    });
+    let since = drag.wl.state.drags.len();
+    press_on_source(&mut drag, &source, from);
+    move_into(&mut drag, onto);
+    let enters_at_its_version =
+        |message: &Xdnd| matches!(message, Xdnd::Enter { version: named, .. } if *named == version);
+    drag.until(
+        "the source enters Yuna's window and sends a position",
+        |_| {
+            let entered = source.sent().iter().any(enters_at_its_version);
+            (entered && positions_sent(&source) > 0).then_some(())
+        },
+    );
+    drag.never(
+        "Yuna answers the source or offers the Wayland window its drag",
+        QUIET,
+        |drag| !source.got().is_empty() || !drag.drags_since(since).is_empty(),
+    );
+    assert_eq!(
+        positions_sent(&source),
+        1,
+        "the source waits for its first status"
+    );
+    source.order(SourceOrder::Leave);
+    drag.release();
+}
+
+/// Version 6, newer than the 5 Yuna speaks: ignored.
+#[test]
+fn an_x11_source_at_xdnd_6_is_offered_nothing() {
+    an_x11_source_at_an_xdnd_version_yuna_does_not_take_is_offered_nothing("dnd-x-v6", 6);
+}
+
+/// Version 2, below XDND's floor of 3: ignored.
+#[test]
+fn an_x11_source_at_xdnd_2_is_offered_nothing() {
+    an_x11_source_at_an_xdnd_version_yuna_does_not_take_is_offered_nothing("dnd-x-v2", 2);
+}
+
+/// An X11 program drags asking `XdndActionAsk`, the user to choose: the Wayland window is
+/// offered Ask with Copy, which XDND lets any target fall back on, and chooses Ask, which the
+/// program's status names. After the drop it settles on Copy, as Wayland asks of a target that
+/// chose Ask, and the program is told a copy.
+#[test]
+fn an_x11_drag_asking_ask_offers_a_wayland_window_ask_with_copy() {
+    let (mut drag, source, from, onto) = x11_source_and_wayland_window("dnd-x-ask", |atoms| {
+        SourceSpec::offering(
+            vec![(atoms.UTF8_STRING, b"asked".to_vec())],
+            atoms.XdndActionAsk,
+        )
+    });
+    let since = drag.wl.state.drags.len();
+    press_on_source(&mut drag, &source, from);
+    move_into(&mut drag, onto);
+    let entered = wayland_entered(&mut drag, since);
+    // An offer's actions come as it is made, before the drag enters.
+    assert_eq!(
+        drag.wl.state.offers[entered.0].source_actions,
+        Some((DndAction::Ask | DndAction::Copy).bits())
+    );
+    wayland_accepts(&mut drag, entered, TEXT, DndAction::Ask);
+    move_until_accepted(&mut drag, &source, onto);
+    assert_eq!(
+        source.last_status(),
+        Some((true, source.atoms.XdndActionAsk))
+    );
+    drag.release();
+    wayland_dropped(&mut drag, since);
+    assert_eq!(wayland_reads(&mut drag, entered.0, TEXT), b"asked");
+    drag.wl
+        .set_actions(entered.0, DndAction::Copy, DndAction::Copy);
+    drag.wl.finish(entered.0);
+    drag.wl.client.send();
+    assert_eq!(
+        x11_finished(&mut drag, &source),
+        (true, source.atoms.XdndActionCopy)
+    );
+}
+
+/// An X11 program drags asking `XdndActionLink`, an action only cooperating programs share and
+/// Wayland has no name for: the Wayland window is offered a copy alone, takes it, and the
+/// program is told a copy.
+#[test]
+fn an_x11_drag_asking_link_offers_a_wayland_window_a_copy() {
+    let (mut drag, source, from, onto) = x11_source_and_wayland_window("dnd-x-link", |atoms| {
+        SourceSpec::offering(
+            vec![(atoms.UTF8_STRING, b"linked".to_vec())],
+            atoms.XdndActionLink,
+        )
+    });
+    let dropped = x11_drag_onto_wayland(&mut drag, &source, (from, onto), TEXT, DndAction::Copy);
+    assert_eq!(
+        drag.wl.state.offers[dropped.offer].source_actions,
+        Some(DndAction::Copy.bits())
+    );
+    assert_eq!(dropped.data, b"linked");
+    assert_eq!(dropped.finished, (true, source.atoms.XdndActionCopy));
+}
+
 // Wayland to X11.
 
 /// A Wayland program drags UTF-8 text onto an X11 window: Yuna enters it at version 5 with the
@@ -1764,6 +1959,99 @@ fn an_x11_windows_private_action_reads_as_a_copy() {
     );
 }
 
+/// An X11 window accepts with `XdndActionLink` a Wayland drag that offers Copy and Move: Link,
+/// which only cooperating programs share and Wayland has no name for, reads as a copy. The
+/// source is told a copy, never a move, which would have it delete what it meant to share, and
+/// the drop completes as a copy.
+#[test]
+fn an_x11_windows_link_action_reads_as_a_copy() {
+    let mut drag = DragSeat::new("dnd-w-link");
+    let (target, onto, from) = x11_target_and_wayland_window(&mut drag, |atoms| TargetSpec {
+        answer: Answer::Accept(atoms.XdndActionLink),
+        ..TargetSpec::copying(atoms, atoms.UTF8_STRING)
+    });
+    let text = b"linked";
+    let source = wayland_drag_starts(
+        &mut drag,
+        from,
+        &[TEXT],
+        DndAction::Copy | DndAction::Move,
+        text,
+    );
+    move_into(&mut drag, onto);
+    // Yuna tells the source the type accepted, then the action.
+    let told = drag.until(
+        "the Wayland source is told the X11 window accepts",
+        |drag| {
+            let events = drag.source_events(source);
+            let accepted = events
+                .iter()
+                .rposition(|event| matches!(event, SourceDragEvent::Target(Some(_))))?;
+            events[accepted..].iter().find_map(|event| match event {
+                SourceDragEvent::Action(action) => Some(*action),
+                _ => None,
+            })
+        },
+    );
+    assert_eq!(told, DndAction::Copy.bits(), "a copy");
+    drag.release();
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Copy);
+    assert!(
+        !events.contains(&SourceDragEvent::Action(DndAction::Move.bits())),
+        "never told a move: {events:?}"
+    );
+    let utf8_string = target.atoms.UTF8_STRING;
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((utf8_string, text.to_vec()))]
+    );
+}
+
+/// A Wayland program drags offering Ask alone, the user to choose, onto an X11 window that
+/// accepts with Ask: each `XdndPosition` proposes Ask, the one action the source offers, and
+/// Yuna's window lists it in `XdndActionList`, described in `XdndActionDescription`, as XDND
+/// asks of a source that proposes Ask. The source is told Ask, and the drop completes as Ask.
+#[test]
+fn a_wayland_drag_offering_ask_alone_asks_an_x11_window() {
+    let mut drag = DragSeat::new("dnd-w-ask");
+    let (target, onto, from) = x11_target_and_wayland_window(&mut drag, |atoms| TargetSpec {
+        answer: Answer::Accept(atoms.XdndActionAsk),
+        ..TargetSpec::copying(atoms, atoms.UTF8_STRING)
+    });
+    let text = b"ask me";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Ask, text);
+    move_into(&mut drag, onto);
+    let (yuna_window, action) = x11_got(
+        &mut drag,
+        &target,
+        "the X11 target's XdndPosition",
+        |message| match *message {
+            Xdnd::Position { source, action, .. } => Some((source, action)),
+            _ => None,
+        },
+    );
+    let atoms = target.atoms;
+    assert_eq!(action, atoms.XdndActionAsk);
+    let reader = drag.seat.client();
+    let (_, (listed, described)) = step(&mut drag.seat.compositor, reader, move |client| {
+        Ok((
+            client.property32(yuna_window, atoms.XdndActionList)?,
+            client.property8(yuna_window, atoms.XdndActionDescription)?,
+        ))
+    });
+    assert_eq!(listed, Some(vec![atoms.XdndActionAsk]));
+    assert_eq!(described.as_deref(), Some(&b"Ask\0"[..]));
+    wayland_source_told(&mut drag, source, DndAction::Ask);
+    drag.release();
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Ask);
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((atoms.UTF8_STRING, text.to_vec()))]
+    );
+}
+
 /// Over an X11 window, the root point each `XdndPosition` names is, to a pixel, the point
 /// Xwayland itself gives the pointer at the same place, at places between X11 pixels.
 #[test]
@@ -1847,6 +2135,313 @@ fn xdnd_positions_name_the_root_point_xwayland_gives_the_pointer() {
         }
     }
     drag.release();
+}
+
+/// An X11 window in part past X11's 16-bit coordinates. Three outputs: one at 1.5, one
+/// 4,875 × 4 pixels at 0.25, 19,500 units wide, and one at 1.5 from 21,420 units, X11's x
+/// 32,130. The X11 window, shown on the first and moved to the third, is told (32,154, 24) and
+/// is 1,404 pixels wide: its right part lies past 32,767, the largest X11 coordinate, where
+/// Xwayland draws nothing new but its last frame shows. A Wayland drag over it: each
+/// `XdndPosition` names the root point under the pointer up to 32,767, which X11 can still say;
+/// past it, a point X11 cannot hold, none is sent, and the window keeps the last; the release
+/// drops there, and the drop completes.
+#[test]
+fn a_wayland_drag_past_x11s_16_bit_coordinates_keeps_the_last_point() {
+    let wide = OutputMode::new(4_875, 4, 60.0, 0.25).expect("a valid mode");
+    let seat = X11Seat::new(
+        "dnd-w-16-bits",
+        &[at_1_5(), wide, at_1_5()],
+        ClockMode::Real,
+        off(),
+    );
+    let mut drag = DragSeat::on(seat);
+    let (near, far) = (drag.seat.outputs[0], drag.seat.outputs[2]);
+    drag.seat.open_on(near);
+    let (client, window, onto) = drag.open_x11("target");
+    // Opened across 32,767, an X11 window never shows: Xwayland never commits its first frame.
+    drag.seat.move_to(far);
+    drag.until("the X11 window moves to the far output", |drag| {
+        let (output, rect) = drag.drawn(onto);
+        (output == far && (rect.x, rect.y) == (16.0, 16.0)).then_some(())
+    });
+    let across = Geometry {
+        x: 32_154,
+        y: 24,
+        width: 1_404,
+        height: 1_572,
+    };
+    let client = geometry_becomes(&mut drag.seat.compositor, client, window, across);
+    let atoms = xdnd_atoms(&client).expect("the XDND atoms");
+    let target = XdndTarget::start(
+        &mut drag.seat.compositor,
+        client,
+        window,
+        TargetSpec::copying(&atoms, atoms.UTF8_STRING),
+    );
+    drag.seat.open_on(near);
+    let from = drag.open_wayland();
+    let text = b"near the edge";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Copy, text);
+
+    // 100 units in: 32,154 + 150.
+    let inside = drag.point_from_corner(onto, (100.0, 100.0));
+    drag.move_to(inside);
+    x11_positioned_at(&mut drag, &target, 1, (32_304, 174));
+    wayland_source_told(&mut drag, source, DndAction::Copy);
+    // 408 2/3 units in: 32,154 + 613, the last X11 coordinate.
+    let edge = drag.point_from_corner(onto, (408.0 + 2.0 / 3.0, 100.0));
+    drag.move_to(edge);
+    x11_positioned_at(&mut drag, &target, 2, (32_767, 174));
+    // 409 1/3 units in, 32,768, then 600, 33,054: past it.
+    for dx in [409.0 + 1.0 / 3.0, 600.0] {
+        let past = drag.point_from_corner(onto, (dx, 100.0));
+        drag.move_to(past);
+    }
+    drag.never("an XdndPosition past 32,767", QUIET, |_| {
+        positions_got(&target).len() > 2
+    });
+    assert_eq!(positions_got(&target), [(32_304, 174), (32_767, 174)]);
+
+    drag.release();
+    x11_got(&mut drag, &target, "the X11 target's XdndDrop", |message| {
+        is_drop(message).then_some(())
+    });
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Copy);
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((atoms.UTF8_STRING, text.to_vec()))]
+    );
+}
+
+/// The place of the output at 1.5 as X11 has it, which a fullscreen X11 window there is given:
+/// 2880 × 1620 pixels at its corner.
+const WHOLE_OUTPUT: Geometry = Geometry {
+    x: 0,
+    y: 0,
+    width: 2880,
+    height: 1620,
+};
+
+/// A fullscreen X11 window slides back into view: a neighbour's column had the focus, the
+/// camera showing it and the fullscreen window drawn 968 units left of the output's corner, and
+/// the window takes the focus again. X11 has it at the output's corner, 2880 × 1620, while Yuna
+/// draws it moving, the clock held mid-way. A Wayland drag over it, 1,200 × 200 units into the
+/// window as drawn: the `XdndPosition` names (1800, 300), the root point of that place in the
+/// window, as Xwayland reads the pointer there, not the point under the pointer were the window
+/// where X11 has it.
+#[test]
+fn a_moving_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
+    let seat = X11Seat::new(
+        "dnd-w-moving",
+        &[at_1_5(), at_1()],
+        ClockMode::Manual,
+        Settings::default(),
+    );
+    let mut drag = DragSeat::on(seat);
+    let (at_one_and_a_half, at_one) = (drag.seat.outputs[0], drag.seat.outputs[1]);
+    drag.seat.open_on(at_one);
+    let from = drag.open_wayland();
+    drag.seat.open_on(at_one_and_a_half);
+    let (client, window, onto) = drag.open_x11("target");
+    let (_neighbour_client, _, neighbour) = drag.open_x11("neighbour");
+    let watcher = drag.seat.client();
+    drag.seat
+        .compositor
+        .change_layout(|layout| {
+            layout.focus_window(onto)?;
+            layout.set_fullscreen(onto, true)
+        })
+        .expect("the window goes fullscreen");
+    let client = geometry_becomes(&mut drag.seat.compositor, client, window, WHOLE_OUTPUT);
+    let (client, ()) = step(&mut drag.seat.compositor, client, move |client| {
+        client.draw(window, &Image::sharp(2880, 1620))
+    });
+    let whole = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+    drag.until("the fullscreen window is drawn whole", |drag| {
+        (drag.drawn(onto).1 == whole).then_some(())
+    });
+    drag.seat
+        .compositor
+        .change_layout(|layout| layout.focus_window(neighbour))
+        .expect("the neighbour takes the focus");
+    drag.until("the camera shows the neighbour", |drag| {
+        (drag.drawn(onto).1.x == -968.0).then_some(())
+    });
+    let atoms = xdnd_atoms(&client).expect("the XDND atoms");
+    let target = XdndTarget::start(
+        &mut drag.seat.compositor,
+        client,
+        window,
+        TargetSpec::copying(&atoms, atoms.UTF8_STRING),
+    );
+    let text = b"onto a moving window";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Copy, text);
+
+    drag.seat
+        .compositor
+        .change_layout(|layout| layout.focus_window(onto))
+        .expect("the fullscreen window takes the focus");
+    drag.until("the fullscreen window is mid-way", |drag| {
+        (drag.drawn(onto).1.x > -700.0).then_some(())
+    });
+    drag.hold_clock();
+    let moving = drag.drawn(onto).1;
+    assert!(
+        -968.0 < moving.x && moving.x < 0.0,
+        "neither where it was nor where it goes: {moving:?}"
+    );
+    let (_, told) = step_pumping(
+        &mut drag.seat.compositor,
+        watcher,
+        pump_held,
+        move |watcher| watcher.geometry(window),
+    );
+    assert_eq!(told, WHOLE_OUTPUT, "X11 has it at the output's corner");
+
+    let spot = drag.point_from_corner(onto, (1_200.0, 200.0));
+    drag.move_to(spot);
+    x11_positioned_at(&mut drag, &target, 1, (1_800, 300));
+    assert_eq!(drag.drawn(onto).1, moving, "still mid-way");
+    wayland_source_told(&mut drag, source, DndAction::Copy);
+    drag.release();
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Copy);
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((atoms.UTF8_STRING, text.to_vec()))]
+    );
+}
+
+/// A fullscreen X11 window whose program has not drawn at the output's size yet, as a slow
+/// game's, its commits held by its sync request: X11 has it at the output's corner, 2880 × 1620,
+/// while Yuna draws it at the size it last committed, 936 × 1048 units, centred at (492, 16).
+/// A Wayland drag over it, 300 × 500 units into the window as drawn: the `XdndPosition` names
+/// (450, 750), the root point of that place in the window, as Xwayland reads the pointer there,
+/// not the point under the pointer were the window where X11 has it.
+#[test]
+fn a_centred_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
+    let seat = X11Seat::new(
+        "dnd-w-centred",
+        &[at_1_5(), at_1()],
+        ClockMode::Manual,
+        off(),
+    );
+    let mut drag = DragSeat::on(seat);
+    let (at_one_and_a_half, at_one) = (drag.seat.outputs[0], drag.seat.outputs[1]);
+    drag.seat.open_on(at_one);
+    let from = drag.open_wayland();
+    drag.seat.open_on(at_one_and_a_half);
+    let (client, window, onto) = drag.open_x11_as(&WindowSpec {
+        syncs: true,
+        ..WindowSpec::named("target")
+    });
+    let watcher = drag.seat.client();
+    let atoms = xdnd_atoms(&client).expect("the XDND atoms");
+    let target = XdndTarget::start(
+        &mut drag.seat.compositor,
+        client,
+        window,
+        TargetSpec::copying(&atoms, atoms.UTF8_STRING),
+    );
+
+    let changed = drag.seat.compositor.now();
+    drag.seat
+        .compositor
+        .change_layout(|layout| layout.set_fullscreen(onto, true))
+        .expect("the window goes fullscreen");
+    let centred = Rect::new(492.0, 16.0, 936.0, 1048.0);
+    drag.until("the fullscreen window is drawn centred", |drag| {
+        (drag.drawn(onto).1 == centred).then_some(())
+    });
+    // Held before the sync request's deadline: Xwayland holds the window's commits.
+    assert!(drag.seat.compositor.now() < changed + X11_SYNC_TIMEOUT);
+    drag.hold_clock();
+    let (_, held) = step_pumping(
+        &mut drag.seat.compositor,
+        watcher,
+        pump_held,
+        move |watcher| {
+            let deadline = Instant::now() + PATIENCE;
+            loop {
+                let told = watcher.geometry(window)?;
+                let commits = watcher.allow_commits(window)?;
+                if told == WHOLE_OUTPUT && commits == Some(0) {
+                    return Ok(commits);
+                }
+                if Instant::now() > deadline {
+                    return Err(format!("told {told:?}, its commits {commits:?}"));
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+        },
+    );
+    assert_eq!(held, Some(0), "Xwayland holds its commits");
+
+    let text = b"onto a centred window";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Copy, text);
+    let spot = drag.point_from_corner(onto, (300.0, 500.0));
+    drag.move_to(spot);
+    x11_positioned_at(&mut drag, &target, 1, (450, 750));
+    wayland_source_told(&mut drag, source, DndAction::Copy);
+    drag.release();
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Copy);
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((atoms.UTF8_STRING, text.to_vec()))]
+    );
+    assert_eq!(drag.drawn(onto).1, centred, "still centred");
+}
+
+/// A Wayland drag over an X11 window that answers slowly. XDND has one `XdndPosition` await its
+/// status at a time, and Yuna keeps one point at most meanwhile, replaced, never queued: a slow
+/// window costs Yuna nothing, and gets the latest point, not a backlog. The
+/// window answers the drag's first position, at (174, 174), then reads nothing while the
+/// pointer moves four times: the first move's position, (204, 174), is sent and awaits; the
+/// next three replace one another. Once the window reads and answers, the last alone is sent,
+/// (324, 234): it gets three positions in all, never the two points between.
+#[test]
+fn a_wayland_drag_keeps_one_position_waiting_for_a_slow_x11_window() {
+    let mut drag = DragSeat::new("dnd-w-kept");
+    let (target, onto, from) = x11_target_and_wayland_window(&mut drag, |atoms| {
+        TargetSpec::copying(atoms, atoms.UTF8_STRING)
+    });
+    let text = b"kept";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Copy, text);
+    // The window's corner is at X11's (24, 24): 100 units in is 150 pixels.
+    let first = drag.point_from_corner(onto, (100.0, 100.0));
+    drag.move_to(first);
+    x11_positioned_at(&mut drag, &target, 1, (174, 174));
+    wayland_source_told(&mut drag, source, DndAction::Copy);
+
+    target.order(TargetOrder::Hold);
+    drag.until("the X11 window holds", |_| target.held().then_some(()));
+    for place in [
+        (120.0, 100.0),
+        (140.0, 100.0),
+        (160.0, 100.0),
+        (200.0, 140.0),
+    ] {
+        let spot = drag.point_from_corner(onto, place);
+        drag.move_to(spot);
+    }
+    // Yuna's window manager has every point by now, hundreds of rounds later.
+    drag.settle(QUIET);
+    target.order(TargetOrder::Go);
+    x11_positioned_at(&mut drag, &target, 3, (324, 234));
+    drag.never("another XdndPosition", QUIET, |_| {
+        positions_got(&target).len() > 3
+    });
+    assert_eq!(positions_got(&target), [(174, 174), (204, 174), (324, 234)]);
+
+    drag.release();
+    let events = wayland_source_ends(&mut drag, source);
+    assert_completed(&events, DndAction::Copy);
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((target.atoms.UTF8_STRING, text.to_vec()))]
+    );
 }
 
 /// An X11 window refuses a Wayland drag in every status: the Wayland source is never told a
@@ -2599,6 +3194,130 @@ fn a_second_x11_drag_before_the_firsts_finish_ends_both_right() {
         .filter(|message| matches!(message, Xdnd::Finished { .. }))
         .count();
     assert_eq!(first_finishes, 1, "the first is finished once");
+}
+
+/// A seat holds two drags, the one in the pointer's hand and one ending, whose data or answer
+/// still runs, so that what a seat keeps for its drags stays bounded. Two end at once: a Wayland
+/// drag dropped on an X11 window that holds its `XdndFinished`, then an X11 drag dropped on the
+/// Wayland window, which holds its finish. A third drag, an X11 program's, pressed, ends the
+/// oldest ending one as refused: the first Wayland source is cancelled at once, before Yuna's
+/// own time limit for it, and the X11 window's late `XdndFinished` performs nothing. The second
+/// still ends as its target says, a copy performed; the third is in the hand, and offers the
+/// Wayland window its data. Yuna's limit runs on the real clock: the second drag and the third
+/// press must come within its 5 s of the first's transfer, which a machine slowed that much
+/// would miss, the failure saying so.
+#[test]
+fn a_third_drag_refuses_the_oldest_of_the_two_ending() {
+    let mut drag = DragSeat::on(X11Seat::at_both("dnd-three"));
+    let (at_one_and_a_half, at_one) = (drag.seat.outputs[0], drag.seat.outputs[1]);
+    drag.seat.open_on(at_one);
+    let (wayland, index) = drag.open_wayland();
+    let (third_client, third_window, third_from) = drag.open_x11("third");
+    drag.seat.open_on(at_one_and_a_half);
+    let (first_client, first_window, first_onto) = drag.open_x11("first target");
+    let (second_client, second_window, second_from) = drag.open_x11("second source");
+    let atoms = xdnd_atoms(&first_client).expect("the XDND atoms");
+    let first_target = XdndTarget::start(
+        &mut drag.seat.compositor,
+        first_client,
+        first_window,
+        TargetSpec {
+            finish: Finish::OnOrder,
+            ..TargetSpec::copying(&atoms, atoms.UTF8_STRING)
+        },
+    );
+    let offering = |text: &[u8]| {
+        SourceSpec::offering(
+            vec![(atoms.UTF8_STRING, text.to_vec())],
+            atoms.XdndActionCopy,
+        )
+    };
+    let second = XdndSource::start(
+        &mut drag.seat.compositor,
+        second_client,
+        second_window,
+        offering(b"second"),
+    );
+    let third = XdndSource::start(
+        &mut drag.seat.compositor,
+        third_client,
+        third_window,
+        offering(b"third"),
+    );
+
+    // The first, from Wayland, dropped and read, its XdndFinished held.
+    let first = wayland_drag_onto_x11(
+        &mut drag,
+        &first_target,
+        ((wayland, index), first_onto),
+        &[TEXT],
+        b"first",
+    );
+    let first_dropped = Instant::now();
+    assert_eq!(
+        x11_reads(&mut drag, &first_target),
+        [Some((atoms.UTF8_STRING, b"first".to_vec()))]
+    );
+    // The second, from X11, dropped and read, its finish held.
+    let since = drag.wl.state.drags.len();
+    press_on_source(&mut drag, &second, second_from);
+    move_into(&mut drag, wayland);
+    let second_entered = wayland_entered(&mut drag, since);
+    wayland_accepts(&mut drag, second_entered, TEXT, DndAction::Copy);
+    move_until_accepted(&mut drag, &second, wayland);
+    drag.release();
+    wayland_dropped(&mut drag, since);
+    assert_eq!(wayland_reads(&mut drag, second_entered.0, TEXT), b"second");
+    let ended = |events: &[SourceDragEvent]| {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                SourceDragEvent::Finished | SourceDragEvent::Cancelled
+            )
+        })
+    };
+    assert!(
+        !ended(drag.source_events(first)),
+        "the first waits for its XdndFinished: {:?}",
+        drag.source_events(first)
+    );
+
+    // The third pressed: the first, the oldest ending, is refused at once.
+    press_on_source(&mut drag, &third, third_from);
+    drag.until("the first Wayland source is cancelled", |drag| {
+        ended(drag.source_events(first)).then_some(())
+    });
+    let held = first_dropped.elapsed();
+    assert!(
+        held < DRAG_TIME_LIMIT,
+        "cancelled {held:?} after its drop, past the {DRAG_TIME_LIMIT:?} limit, which ends it \
+         as well: the third drag did not, or a loaded machine raced the limit"
+    );
+    first_target.order(TargetOrder::Finish);
+    drag.until("the first X11 window sends its late XdndFinished", |_| {
+        first_target
+            .sent()
+            .iter()
+            .any(|message| matches!(message, Xdnd::Finished { .. }))
+            .then_some(())
+    });
+    drag.settle(QUIET);
+    assert_cancelled(drag.source_events(first));
+
+    // The second ends as its Wayland target says.
+    drag.wl.finish(second_entered.0);
+    drag.wl.client.send();
+    assert_eq!(
+        x11_finished(&mut drag, &second),
+        (true, atoms.XdndActionCopy)
+    );
+    // The third is in the hand: over the Wayland window, it offers its data.
+    let since = drag.wl.state.drags.len();
+    move_into(&mut drag, wayland);
+    let third_entered = wayland_entered(&mut drag, since);
+    assert_ne!(third_entered.0, second_entered.0, "a new offer");
+    third.order(SourceOrder::Leave);
+    drag.release();
 }
 
 /// Kills the seat's Xwayland, as a crash would end it.

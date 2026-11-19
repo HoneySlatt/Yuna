@@ -605,6 +605,18 @@ impl X11Client {
         Ok(reply.value32().map(Iterator::collect))
     }
 
+    /// The bytes of `window`'s property `atom` in format 8, whatever its type; none when it is
+    /// not set or of another format.
+    pub(crate) fn property8(&self, window: Window, atom: u32) -> Result<Option<Vec<u8>>, String> {
+        let reply = self
+            .connection
+            .get_property(false, window, atom, AtomEnum::ANY, 0, 1024)
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())?;
+        Ok((reply.format == 8).then_some(reply.value))
+    }
+
     /// `window`'s `_XWAYLAND_ALLOW_COMMITS` as its manager set it: 0 while Xwayland holds its
     /// commits, none when never set.
     pub(crate) fn allow_commits(&self, window: Window) -> Result<Option<u32>, String> {

@@ -633,10 +633,10 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   target only a window with a `WM_NAME` and `XdndAware` 5 or more (its `window_cache.cc` and
   `x11_drag_drop_client.cc`, read on 2026-11-18): the proxy window has both. Kept: checked when one
   of them is first needed.
-- Some of the drags' rules are tested on the drag session and the XDND messages alone, not by a
-  story with Xwayland: a source naming a version outside 3 to 5, a point outside X11's 16 bits, a
-  moving or centred fullscreen window's point, Ask, Link, a third drag, and the one position kept
-  waiting. Paid at Stage 2a, M2.1 (baselines): stories before the rewrite.
+- An X11 drag's time limits run on the real clock, also in the headless stories on the manual
+  clock: `a_third_drag_refuses_the_oldest_of_the_two_ending` must reach its third drag within
+  5 s of the first's transfer, which a machine slowed that much would miss. Paid at Stage 2a,
+  M2.4 (the map, tasks, frames and events), where every task runs inline on the manual clock.
 - Three races of an X11 drag are left, Yuna's loop never waiting for the manager's thread; the
   owner kept them, the second on 2026-11-18 and all three on 2026-11-19, against holding the
   release until the manager confirms
@@ -796,7 +796,8 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   from the root's origin, many outputs side by side at a large scale, a window there is told a
   place its pointer and Xwayland's emulated modes miss. An output whose logical position is not a
   whole unit is told to Xwayland rounded, so that its windows' X11 places may be a pixel off its
-  own. Kept: no output layout so large is planned.
+  own. An X11 window whose extent crosses X11's 32,767 never shows: Xwayland never commits its
+  first frame (seen in M2.1's drag stories). Kept: no output layout so large is planned.
 - Commands to a manager go at the end of the round that made them; the X11 focus and a window's
   place reach Xwayland on its manager's connection, the keyboard's `enter` on its Wayland one, in
   no set order between them. Kept: no client found that depends on the order.

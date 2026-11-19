@@ -62,7 +62,11 @@ x11rb::atom_manager! {
         XdndFinished,
         XdndActionCopy,
         XdndActionMove,
+        XdndActionLink,
+        XdndActionAsk,
         XdndActionPrivate,
+        XdndActionList,
+        XdndActionDescription,
         TARGETS,
         DELETE,
         INCR,
@@ -203,7 +207,8 @@ pub(crate) enum Logged {
     Pressed { time: Timestamp },
     /// The pointer's button was released, at `time`.
     Released { time: Timestamp },
-    /// The source took [`SourceOrder::Hold`]: it reads no event until [`SourceOrder::Go`].
+    /// The peer took its order to hold ([`SourceOrder::Hold`], [`TargetOrder::Hold`]): it reads
+    /// no event until its order to go.
     Held,
     /// A button was pressed on the target's window, which takes clicks as any program's.
     Clicked { window: Window },
@@ -348,6 +353,11 @@ impl<Order> Peer<Order> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Whether the peer took its order to hold: it reads no event since.
+    pub(crate) fn held(&self) -> bool {
+        self.log().contains(&Logged::Held)
     }
 }
 
@@ -512,11 +522,14 @@ pub(crate) struct SourceSpec {
     /// Whether the pressed window itself owns `XdndSelection` and names the source in each
     /// message; else a hidden window of the program's does, as Qt's and GTK 4's.
     pub owned_by_pressed_window: bool,
+    /// The version its `XdndEnter` names whatever the target's, as a program that speaks a
+    /// version of its own; none, the lower of the target's and [`VERSION`], as XDND asks.
+    pub version: Option<u32>,
 }
 
 impl SourceSpec {
     /// A source of `offers`, which asks `action`, from a hidden window of its program, with no
-    /// icon.
+    /// icon, at the version XDND asks.
     pub(crate) fn offering(offers: Vec<(Atom, Vec<u8>)>, action: Atom) -> SourceSpec {
         SourceSpec {
             offers,
@@ -524,6 +537,7 @@ impl SourceSpec {
             icon: None,
             drops_anyway: false,
             owned_by_pressed_window: false,
+            version: None,
         }
     }
 }
@@ -680,11 +694,6 @@ impl Peer<SourceOrder> {
         self.log()
             .iter()
             .any(|logged| matches!(logged, Logged::Pressed { .. }))
-    }
-
-    /// Whether the source took [`SourceOrder::Hold`]: it reads no event since.
-    pub(crate) fn held(&self) -> bool {
-        self.log().contains(&Logged::Held)
     }
 }
 
@@ -882,6 +891,7 @@ impl Source {
         let found = target_at(&side.client, &side.atoms, root, self.spec.icon);
         let types: Vec<Atom> = self.spec.offers.iter().map(|(target, _)| *target).collect();
         let owner = self.owner;
+        let named_version = self.spec.version;
         let Some(drag) = &mut self.drag else {
             return Ok(());
         };
@@ -899,7 +909,7 @@ impl Source {
             if let Some(entered) = found {
                 let enter = Xdnd::Enter {
                     source: owner,
-                    version: entered.version,
+                    version: named_version.unwrap_or(entered.version),
                     listed: types.len() > 3,
                     types,
                 };
@@ -1343,6 +1353,12 @@ pub(crate) enum TargetOrder {
     Read,
     /// Send the `XdndFinished` it holds ([`Finish::OnOrder`]).
     Finish,
+    /// Read no event until [`TargetOrder::Go`], logged [`Logged::Held`] once taken, as a
+    /// program busy elsewhere: what its source sends meanwhile waits in its connection, and the
+    /// source waits for the status it has not sent.
+    Hold,
+    /// Read the events again, those that waited first.
+    Go,
 }
 
 impl Peer<TargetOrder> {
@@ -1386,6 +1402,7 @@ impl Peer<TargetOrder> {
             current: None,
             unread: None,
             held: None,
+            holding: false,
         };
         Peer::spawn(client, window, atoms, target)
     }
@@ -1439,6 +1456,8 @@ struct Target {
     unread: Option<Taken>,
     /// The `XdndFinished` held for the story's order: the source's window, and the message.
     held: Option<(Window, Xdnd)>,
+    /// Whether it reads no event, from [`TargetOrder::Hold`] to [`TargetOrder::Go`].
+    holding: bool,
 }
 
 /// A source that entered a target.
@@ -1502,7 +1521,20 @@ impl Role<TargetOrder> for Target {
                 Some((source, finished)) => side.send(source, source, finished),
                 None => Ok(()),
             },
+            TargetOrder::Hold => {
+                self.holding = true;
+                side.record(Logged::Held);
+                Ok(())
+            }
+            TargetOrder::Go => {
+                self.holding = false;
+                Ok(())
+            }
         }
+    }
+
+    fn holds(&self) -> bool {
+        self.holding
     }
 }
 
