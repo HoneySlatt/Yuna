@@ -594,9 +594,12 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   interface), at the baseline's first move.
 - The parity script's `parity` job takes 18 to 29 minutes on GitHub's runner, over the method's
   bar of 20 for a CI job; its thresholds come from the desktop's spreads alone, and one run on the
-  runner passed ([measurements](measurements.md)). Caching the baseline's build by its commit
-  would halve its builds; a new action is put to the owner first. Paid at Stage 2a, M2.2 (the
-  interface), before its first move of the baseline.
+  runner passed ([measurements](measurements.md)). The runs take most of it: a side's build takes
+  1.4 to 2 minutes, so caching the baseline's build would save about 2. A push that moves the
+  baseline also builds and runs the old baseline, about 13 minutes more: some 42 on the slowest
+  runner seen, past the job's 40-minute timeout. How to keep a move's push inside it is put to the
+  owner before the first move. Paid at Stage 2a, M2.2 (the interface), before its first move of
+  the baseline.
 - The parity script has no scenario for popups, X11 windows, captures or subsurfaces, and the held
   captures take no X11 window: their *filtered* class tests the renderer's bilinear filter, not
   X11's area filter. Paid before the milestones that rewrite them: subsurfaces at M2.5 (the

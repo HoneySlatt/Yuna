@@ -1,7 +1,7 @@
 # 0082. The requirements of Stage 2's core, its bets made rules or deferred
 
 - Status: Accepted; supersedes [0074](0074-the-requirements-of-stage-2s-core.md);
-  superseded in part by [0137](0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md) (item 16, planes) and [0135](0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md) (item 12, priority)
+  superseded in part by [0137](0137-planes-yunas-own-allocator-scanout-and-the-cursor-plane-at-2b.md) (item 16, planes), [0135](0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md) (item 12, priority) and [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) (the crate map)
 - Date: 2026-11-17
 
 ## Context

@@ -102,7 +102,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
 | [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Superseded by 0139; supersedes in part 0039 |
-| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074; superseded in part by 0135 and 0137 |
+| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074; superseded in part by 0135, 0137 and 0145 |
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Superseded by 0106; supersedes in part 0073 |
 | [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |
@@ -165,3 +165,6 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0142](0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md) | Parity: a pinned baseline, figures in classes, three verdicts | Accepted |
 | [0143](0143-allocations-a-frame-counted-by-dhat.md) | Allocations a frame, counted by valgrind's DHAT | Accepted; supersedes in part 0140 |
 | [0144](0144-motions-budget-its-clients-draw-on-the-gpu.md) | Motion's budget: its clients draw on the GPU | Accepted; supersedes in part 0127 |
+| [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | The crate map: motion on the layout, the configuration on the commands | Accepted; supersedes in part 0082 |
+| [0146](0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md) | The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller | Accepted |
+| [0147](0147-a-seat-connects-256-clients-at-most.md) | A seat connects 256 clients at most | Accepted |

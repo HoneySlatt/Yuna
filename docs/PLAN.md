@@ -22,11 +22,14 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   **Left, at the owner's go when the machine is free**: the timed and GPU tiers. Their code is on
   the branch `m2.1-timed` (`073ab79`), unfinished and unreviewed; then its self control, its `spin` and `start` canaries, the GPU tier and the soak are
   run, the code reviewed and merged. Missing scenarios: popups, X11, captures, subsurfaces.
-- **Next: M2.2, the interface**, in a new session. The owner chose on 2026-11-20 to pause the
-  measurements and start M2.2, the timed tier finishing at their go, against ADR-0139's "baselines
+- **M2.2, the interface**, under way since 2026-11-20. The owner chose that day to pause the
+  measurements and start it, the timed tier finishing at their go, against ADR-0139's "baselines
   first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
   the baseline. The timed tier's start scenario takes a full `TMPDIR`, so that it guards
-  `58f2e75`'s fix.
+  `58f2e75`'s fix. Done: direct dependencies, ADR-0140's toggles and guard, the helpers the debt
+  placed here, a test's race on a reaped process. Decided: the crate map amended (ADR-0145), the
+  interface's shape (ADR-0146), 256 clients a seat (ADR-0147). Next: `yuna-types`, the commands,
+  `read_pixels`, the event bounds, the client bound, then 1 MiB.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -124,7 +127,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1's CI tier done; M2.2 next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1's CI tier done; M2.2 under way |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
