@@ -57,13 +57,17 @@ use common::{PATIENCE, Run, field, percentile, shell_variable};
 use rustix::process::{Pid, Signal, kill_process};
 use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
+use yuna::OutputMode;
 
 /// What the command line asks for.
 struct Options {
     gpu: bool,
     client_vulkan: Option<String>,
     windows: u32,
+    /// The `--output` text, passed on to Yuna as it was given.
     output: Option<String>,
+    /// The output measured: what `--output` names, else Yuna's default.
+    mode: OutputMode,
     seconds: u64,
 }
 
@@ -90,6 +94,7 @@ fn read_options(arguments: impl Iterator<Item = String>) -> Result<Options, Stri
         client_vulkan: None,
         windows: 2,
         output: None,
+        mode: OutputMode::default(),
         seconds: 10,
     };
     let mut arguments = arguments;
@@ -102,7 +107,13 @@ fn read_options(arguments: impl Iterator<Item = String>) -> Result<Options, Stri
         match argument.as_str() {
             "--gpu" => options.gpu = true,
             "--client-vulkan" => options.client_vulkan = Some(value()?),
-            "--output" => options.output = Some(value()?),
+            "--output" => {
+                let text = value()?;
+                options.mode = text
+                    .parse()
+                    .map_err(|reason| format!("--output {text}: {reason}"))?;
+                options.output = Some(text);
+            }
             "--windows" => {
                 options.windows = value()?
                     .parse()
@@ -364,15 +375,6 @@ fn frame_timing(log: &str) -> (usize, usize, Vec<u64>) {
     (at_once, missed, leads)
 }
 
-/// The rate of the output measured: the one `--output` names, else Yuna's default, 240 Hz.
-fn output_rate(options: &Options) -> f64 {
-    options
-        .output
-        .as_deref()
-        .and_then(|mode| mode.split_once('@')?.1.split_once(',')?.0.parse().ok())
-        .unwrap_or(240.0)
-}
-
 fn report(
     options: &Options,
     before: &Sample,
@@ -420,7 +422,7 @@ fn report(
             percentile(&sorted, 99.0),
             sorted[sorted.len() - 1],
         );
-        let period_us = 1e6 / output_rate(options);
+        let period_us = 1e6 / options.mode.rate();
         let longer = sorted.iter().filter(|&&us| us as f64 > period_us).count();
         println!("  {longer} frames took longer than the output's period, {period_us:.0} µs");
         let mut sorted_intervals = intervals.to_vec();
@@ -464,6 +466,25 @@ fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rate_measured_is_the_one_the_output_names_and_a_bad_mode_is_refused() {
+        let read = |arguments: &[&str]| read_options(arguments.iter().map(|a| a.to_string()));
+        assert_eq!(read(&[]).unwrap().mode.rate(), 240.0);
+        assert_eq!(
+            read(&["--output", "1920x1080@60,1"]).unwrap().mode.rate(),
+            60.0
+        );
+        assert_eq!(
+            read(&["--output", "1920x1080@144,1,vrr=48"])
+                .unwrap()
+                .mode
+                .rate(),
+            144.0
+        );
+        assert!(read(&["--output", "1920x1080"]).is_err());
+        assert!(read(&["--output", "1920x1080@fast,1"]).is_err());
+    }
 
     #[test]
     fn missed_and_at_once_frames_are_counted() {

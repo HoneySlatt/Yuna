@@ -39,6 +39,8 @@ mod base64;
 mod capture_image;
 #[path = "common/dies_with_test.rs"]
 mod dies_with_test;
+#[path = "common/folders.rs"]
+mod folders;
 #[path = "common/mcp_client.rs"]
 mod mcp_client;
 #[path = "common/rest.rs"]
@@ -58,6 +60,7 @@ use application_environment::{application_environment, shell_variable};
 use base64::decode_base64;
 use capture_image::Image;
 use dies_with_test::dies_with_test;
+use folders::fresh_folder;
 use mcp_client::McpClient;
 use rest::{Activity, Counters};
 use serde_json::{Value, json};
@@ -347,10 +350,11 @@ fn the_shell_names_the_unshare_that_makes_the_network_namespace() {
 /// without Opium, at every check.
 #[test]
 fn a_folder_a_failed_run_kept_is_not_reused() {
-    let folder = short_temp_dir().join(format!("yuna-opium-kept-{}", std::process::id()));
-    let old_profile = folder.join("home/config/opium/instance.lock");
+    let kept = fresh_folder("opium-kept");
+    let old_profile = kept.join("home/config/opium/instance.lock");
     fs::create_dir_all(old_profile.parent().expect("a folder")).expect("an old profile");
     fs::write(&old_profile, "").expect("an old lock");
+    let folder = fresh_folder("opium-kept");
     // Kept until the check: dropping it removes the folder, which would hide one reused.
     let _yuna = Yuna::start_in(folder);
     assert!(!old_profile.exists(), "the old profile is still there");
@@ -373,17 +377,6 @@ fn no_network_but_loopback(pid: i64) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// A folder short enough that the sockets Yuna makes under it, an accessibility bus's the
-/// longest, fit a Unix socket's 107 bytes, as in `tests/mcp.rs`.
-fn short_temp_dir() -> PathBuf {
-    let temp = std::env::temp_dir();
-    if temp.as_os_str().len() <= 16 {
-        temp
-    } else {
-        PathBuf::from("/tmp")
-    }
 }
 
 /// A `yuna mcp` process, its output 1920 × 1080 at 60 Hz, in a folder of its own: its runtime
@@ -412,15 +405,13 @@ struct Captured {
 impl Yuna {
     /// Starts `yuna mcp` in this process's folder.
     fn start() -> Yuna {
-        Yuna::start_in(short_temp_dir().join(format!("yuna-opium-{}", std::process::id())))
+        Yuna::start_in(fresh_folder("opium"))
     }
 
-    /// Starts `yuna mcp` at the `debug` level in `folder`, with an environment of its own: the
-    /// shell's Mesa, Xwayland and `dbus-daemon`, and a throwaway home.
+    /// Starts `yuna mcp` at the `debug` level in `folder`, a [`fresh_folder`], with an
+    /// environment of its own: the shell's Mesa, Xwayland and `dbus-daemon`, and a throwaway
+    /// home.
     fn start_in(folder: PathBuf) -> Yuna {
-        // A folder a failed run kept, whose process id this run now has, would give Opium that
-        // run's profile.
-        let _ = fs::remove_dir_all(&folder);
         // Wayland asks that the runtime folder be the user's alone.
         DirBuilder::new()
             .recursive(true)

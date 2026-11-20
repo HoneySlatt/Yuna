@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,7 +26,7 @@ use crate::Error;
 use crate::capture::Failure;
 use crate::clock::Deadline;
 use crate::colour::Record;
-use crate::colour::description::{Monitor, sdr_description};
+use crate::colour::description::{Monitor, PG32UCDM, sdr_description};
 use crate::compositor::OutputDescription;
 use crate::frames::{Drawings, FailedDrawings};
 use crate::state::State;
@@ -177,6 +178,63 @@ impl OutputMode {
     pub fn period(&self) -> Duration {
         let nanos = NANOS_PER_SECOND_IN_MILLIHERTZ / u128::from(self.refresh_millihertz);
         Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+}
+
+impl FromStr for OutputMode {
+    type Err = InvalidOutput;
+
+    /// Reads `WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` (ADR-0049): the two optional items in
+    /// either order, each once. `hdr` announces the owner's monitor, a PG32UCDM. The mode is
+    /// checked by [`OutputMode::new`] and [`OutputMode::with_vrr`]; the error says what is
+    /// wrong, and leaves the text and the option's name to its caller.
+    fn from_str(text: &str) -> Result<OutputMode, InvalidOutput> {
+        let malformed = || {
+            InvalidOutput(
+                "expected WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr], such as 1920x1080@60,1"
+                    .to_owned(),
+            )
+        };
+        let (size, rest) = text.split_once('@').ok_or_else(malformed)?;
+        let (width, height) = size.split_once('x').ok_or_else(malformed)?;
+        let mut items = rest.split(',');
+        let (Some(rate), Some(scale)) = (items.next(), items.next()) else {
+            return Err(malformed());
+        };
+        let width: u32 = width.parse().map_err(|_| malformed())?;
+        let height: u32 = height.parse().map_err(|_| malformed())?;
+        let rate: f64 = rate.parse().map_err(|_| malformed())?;
+        let scale: f64 = scale.parse().map_err(|_| malformed())?;
+        let mut mode = OutputMode::new(width, height, rate, scale)?;
+        let mut vrr_min = None;
+        let mut hdr = false;
+        for item in items {
+            if item == "hdr" {
+                if hdr {
+                    return Err(InvalidOutput("hdr is given twice".to_owned()));
+                }
+                hdr = true;
+            } else if let Some(min) = item.strip_prefix("vrr=") {
+                if vrr_min.is_some() {
+                    return Err(InvalidOutput("vrr is given twice".to_owned()));
+                }
+                let min: f64 = min
+                    .parse()
+                    .map_err(|_| InvalidOutput(format!("vrr={min} is not a rate in Hz")))?;
+                vrr_min = Some(min);
+            } else {
+                return Err(InvalidOutput(format!(
+                    "unknown item {item:?}: expected vrr=MIN or hdr"
+                )));
+            }
+        }
+        if let Some(min) = vrr_min {
+            mode = mode.with_vrr(min)?;
+        }
+        if hdr {
+            mode = mode.with_hdr(PG32UCDM);
+        }
+        Ok(mode)
     }
 }
 
@@ -884,6 +942,49 @@ mod tests {
         assert!(OutputMode::new(1920, 1080, 60.0, f64::INFINITY).is_err());
         assert!(OutputMode::new(1, 1, 1.0, 0.25).is_ok());
         assert!(OutputMode::new(1920, 1080, 1_000.0, 8.0).is_ok());
+    }
+
+    #[test]
+    fn a_mode_is_read_from_its_text() {
+        let fixed = OutputMode::new(1920, 1080, 240.0, 1.5).expect("a valid mode");
+        let vrr = fixed.with_vrr(48.0).expect("a range twice as wide");
+        let vrr_hdr = vrr.with_hdr(PG32UCDM);
+        for (text, expected) in [
+            ("1920x1080@240,1.5", fixed),
+            ("1920x1080@240,1.5,vrr=48", vrr),
+            ("1920x1080@240,1.5,hdr", fixed.with_hdr(PG32UCDM)),
+            ("1920x1080@240,1.5,vrr=48,hdr", vrr_hdr),
+            ("1920x1080@240,1.5,hdr,vrr=48", vrr_hdr),
+        ] {
+            assert_eq!(text.parse::<OutputMode>(), Ok(expected), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_mode_read_from_text_refuses_what_is_wrong_and_says_what() {
+        let expected_form = "expected WIDTHxHEIGHT@RATE,SCALE";
+        for (text, reason) in [
+            ("1920x1080@240,1,vrr=48,vrr=60", "vrr is given twice"),
+            ("1920x1080@240,1,hdr,hdr", "hdr is given twice"),
+            ("1920x1080@240,1,vrr=fast", "vrr=fast is not a rate in Hz"),
+            ("1920x1080@240,1,vrr=200", "a VRR range"),
+            ("1920x1080@240,1,2", "unknown item"),
+            ("1920x1080@240", expected_form),
+            ("1920x1080@240,", expected_form),
+            ("1920x1080@fast,1", expected_form),
+            ("wide x1080@240,1", expected_form),
+            ("", expected_form),
+            // Checked by `OutputMode::new`.
+            ("0x1080@240,1", "no area"),
+            ("1920x1080@2000,1", "a refresh rate of 2000 Hz"),
+            // `OutputMode::new` sets no upper size: the renderer's limit comes when the output
+            // is created. A width past `u32` does not read as a number.
+            ("99999999999x1080@240,1", expected_form),
+        ] {
+            let error = text.parse::<OutputMode>().expect_err(text);
+            assert!(error.0.contains(reason), "{text:?}: {error}");
+            assert!(!error.0.contains("--output"), "{text:?}: {error}");
+        }
     }
 
     #[test]

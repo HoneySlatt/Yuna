@@ -202,22 +202,16 @@ fn read_options(arguments: impl Iterator<Item = String>) -> Result<Options, Stri
 /// Reads `WIDTHxHEIGHT@RATE,SCALE`, a fixed rate: the missed frames ADR-0056 counts are those of
 /// a fixed rate, so VRR and HDR are refused.
 fn read_mode(text: &str) -> Result<OutputMode, String> {
-    let bad = || {
-        format!(
-            "--output {text:?}: expected WIDTHxHEIGHT@RATE,SCALE at a fixed rate, such as \
-             1920x1080@240,1"
-        )
-    };
-    let (size, rest) = text.split_once('@').ok_or_else(bad)?;
-    let (width, height) = size.split_once('x').ok_or_else(bad)?;
-    let (rate, scale) = rest.split_once(',').ok_or_else(bad)?;
-    let (Ok(width), Ok(height), Ok(rate), Ok(scale)) =
-        (width.parse(), height.parse(), rate.parse(), scale.parse())
-    else {
-        return Err(bad());
-    };
-    OutputMode::new(width, height, rate, scale)
-        .map_err(|reason| format!("--output {text}: {reason}"))
+    let mode: OutputMode = text
+        .parse()
+        .map_err(|reason| format!("--output {text}: {reason}"))?;
+    if mode.vrr_min().is_some() || mode.hdr().is_some() {
+        return Err(format!(
+            "--output {text}: this measure counts the missed frames of a fixed rate, so it \
+             takes no vrr or hdr"
+        ));
+    }
+    Ok(mode)
 }
 
 fn measure(run: &Run, options: &Options) -> Result<(), String> {

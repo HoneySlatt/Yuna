@@ -9,6 +9,8 @@
 
 #[path = "common/application_environment.rs"]
 mod application_environment;
+#[path = "common/folders.rs"]
+mod folders;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -20,23 +22,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
+use folders::fresh_folder;
 use rustix::process::{Pid, Signal, kill_process};
 use serde_json::{Value, json};
+use yuna_bench::procfs::Proc;
 
-/// A folder for the tests' runtime folders short enough that the sockets Yuna makes under it,
-/// an accessibility bus's the longest, fit a Unix socket's 107 bytes: CI's `TMPDIR` is too long.
-fn short_temp_dir() -> PathBuf {
-    let temp = std::env::temp_dir();
-    if temp.as_os_str().len() <= 16 {
-        temp
-    } else {
-        PathBuf::from("/tmp")
-    }
-}
-
-/// The folder of test `name`'s `yuna mcp`: its runtime folder, its `TMPDIR` and its log.
+/// The empty folder of test `name`'s `yuna mcp`: its runtime folder, its `TMPDIR` and its log.
 fn test_folder(name: &str) -> PathBuf {
-    short_temp_dir().join(format!("yuna-mcp-test-{name}-{}", std::process::id()))
+    fresh_folder(&format!("mcp-test-{name}"))
 }
 
 /// The longest a step may take: a debug build of Yuna starts llvmpipe, and CI's runners are slow.
@@ -58,7 +51,13 @@ impl Yuna {
     /// Starts `yuna mcp`, with a `DISPLAY` and a session bus of its own environment that its
     /// programs must not see, and creates a seat, [`SEAT`].
     fn start(name: &str) -> Yuna {
-        let mut yuna = Yuna::start_without_seat(name);
+        Yuna::start_in(test_folder(name))
+    }
+
+    /// Starts `yuna mcp` as [`Yuna::start`] does, in `folder`, a [`test_folder`] the test filled
+    /// before the start: it is not emptied.
+    fn start_in(folder: PathBuf) -> Yuna {
+        let mut yuna = Yuna::launch_in(folder, None, &[], &[]);
         let created = yuna.call("seat", json!({"action": "create"}));
         assert_eq!(
             created["structuredContent"]["seat"],
@@ -91,7 +90,17 @@ impl Yuna {
         variables: &[(&str, &str)],
         options: &[&str],
     ) -> Yuna {
-        let folder = test_folder(name);
+        Yuna::launch_in(test_folder(name), descriptors, variables, options)
+    }
+
+    /// Starts `yuna mcp` as [`Yuna::launch`] does, with `options` after its own, in `folder`, a
+    /// [`test_folder`] that is not emptied.
+    fn launch_in(
+        folder: PathBuf,
+        descriptors: Option<u32>,
+        variables: &[(&str, &str)],
+        options: &[&str],
+    ) -> Yuna {
         for inner in ["runtime", "tmp"] {
             fs::DirBuilder::new()
                 .recursive(true)
@@ -603,14 +612,25 @@ fn programs_running_and_remembered_are_bounded() {
 
 /// `yuna mcp` refuses a standard input that is not a pipe or a socket, rather than spinning on a
 /// file it cannot watch.
+/// A run that failed, or was killed, keeps its folder; a process id that comes round again gives
+/// the next run its name. The next `yuna mcp` must not start on what it left.
+#[test]
+fn a_folder_a_failed_run_kept_is_emptied_before_yuna_starts() {
+    let kept = test_folder("kept");
+    let left = kept.join("left-by-a-failed-run");
+    fs::write(&left, "").expect("a file of the failed run");
+    let mut yuna = Yuna::start("kept");
+    assert!(
+        !left.exists(),
+        "the folder a failed run kept is used as it was"
+    );
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
 #[test]
 fn a_file_as_input_is_refused() {
-    let folder = std::env::temp_dir().join(format!("yuna-mcp-file-{}", std::process::id()));
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&folder)
-        .expect("a runtime folder");
+    let folder = fresh_folder("mcp-file");
     let requests = folder.join("requests");
     fs::write(&requests, "{}\n").expect("a file of requests");
     let output = Command::new(env!("CARGO_BIN_EXE_yuna"))
@@ -1669,7 +1689,7 @@ fn staging_folders(parent: &std::path::Path, prefix: &str) -> Vec<String> {
 #[test]
 fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
     use yuna::mcp::LOCK_FILE;
-    let top = short_temp_dir().join(format!("yuna-mcp-test-stale-{}", std::process::id()));
+    let top = test_folder("stale");
     let runtime = top.join("runtime");
     // Above any pid Linux gives (`pid_max` is 2²² at most), and the test's own, which lives:
     // neither decides.
@@ -1704,7 +1724,7 @@ fn an_old_yunas_folder_is_removed_at_start_and_a_living_ones_kept() {
     let held = fs::File::open(locked.join(LOCK_FILE)).expect("the lock file");
     held.try_lock().expect("the lock, as a live Yuna holds it");
 
-    let mut yuna = Yuna::start("stale");
+    let mut yuna = Yuna::start_in(top);
     assert_eq!(yuna.runtime_dir(), runtime);
     for removed in [&gone, &gone_retry, &gone_living_pid] {
         assert!(
@@ -1953,21 +1973,16 @@ fn a_program_that_stops_answering_costs_its_deadline_alone() {
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
-/// The context switches of every thread of process `pid`, from `/proc/<pid>/task/*/status`.
+/// The context switches of every thread of process `pid`, voluntary and not. Panics when no
+/// thread could be read, the process gone or `schedstat` missing: a reading of none would make
+/// any two readings equal.
 fn context_switches(pid: i32) -> u64 {
-    let Ok(tasks) = fs::read_dir(format!("/proc/{pid}/task")) else {
-        return 0;
-    };
-    tasks
-        .flatten()
-        .filter_map(|task| fs::read_to_string(task.path().join("status")).ok())
-        .flat_map(|status| {
-            status
-                .lines()
-                .filter(|line| line.contains("ctxt_switches:"))
-                .filter_map(|line| line.split_whitespace().last()?.parse::<u64>().ok())
-                .collect::<Vec<u64>>()
-        })
+    let pid = u32::try_from(pid).expect("a process id");
+    let threads = Proc::system().threads(pid);
+    assert!(!threads.is_empty(), "the threads of process {pid}");
+    threads
+        .iter()
+        .map(|thread| thread.voluntary + thread.involuntary)
         .sum()
 }
 
@@ -2050,12 +2065,7 @@ fn yuna_and_the_bus_rest_once_a_tree_is_read() {
 /// Yuna and its seat go on.
 #[test]
 fn a_bus_that_never_starts_fails_its_program_at_the_limit() {
-    let scripts = std::env::temp_dir().join(format!("yuna-fake-daemon-{}", std::process::id()));
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&scripts)
-        .expect("a folder");
+    let scripts = fresh_folder("fake-daemon");
     let silent = scripts.join("dbus-daemon");
     fs::write(
         &silent,
@@ -3125,7 +3135,7 @@ fn an_old_yunas_homes_are_removed_at_start_and_a_living_ones_kept() {
     let held = fs::File::open(locked.join(LOCK_FILE)).expect("the lock file");
     held.try_lock().expect("the lock, as a live Yuna holds it");
 
-    let mut yuna = Yuna::start("homes-stale");
+    let mut yuna = Yuna::start_in(top);
     assert_eq!(yuna.temp_dir(), temp);
     for removed in [&gone, &gone_retry] {
         assert!(

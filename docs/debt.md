@@ -620,15 +620,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   in the elements' path ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md)). The target
   is none on a still or a moving frame, checked by DHAT in the parity script (ADR-0143). Paid at Stage 2a,
   M2.9 (Vulkan the default).
-- `tests/consumers.rs` builds Pluto's `pluto-input` once into `target/consumers/`, and Cargo does
-  not build it again when the development shell's libraries change: after a raise of `nixpkgs`, a
-  build kept from before drove no key into Yuna until removed. CI builds afresh. To remove at the
-  next change of the consumers' tests. Paid at Stage 2a, M2.2 (the interface).
-- `motion_time` reads an output's mode with its own parser beside the program's private one. Paid at
-  Stage 2a, M2.2 (the interface), the helpers made one.
-- `short_temp_dir` is written twice, in `tests/mcp.rs` and `tests/opium.rs`, and `tests/mcp.rs`
-  keeps a context-switch reader of its own beside `tests/common/rest.rs`'s; a test folder a
-  failed run left is used again in `tests/mcp.rs`. Paid at Stage 2a, M2.2, the helpers made one.
 
 ## XWayland
 

@@ -31,7 +31,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
 use tracing::level_filters::LevelFilter;
-use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{Server, Stop};
 use yuna::yuna_layout::SeatId;
 use yuna::yuna_motion::Settings;
@@ -274,58 +273,18 @@ fn read_headless(arguments: &[OsString], mcp: bool) -> (Request, Logging) {
     }
 }
 
-/// Reads `WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]`, the two items in any order, each once, and
-/// checks it as an output's mode (ADR-0049).
+/// Reads an output's mode, `WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr]` (ADR-0049), for
+/// `--output`.
 fn read_output(text: &OsStr) -> Result<OutputMode, String> {
-    let bad = || {
+    let text_str = text.to_str().ok_or_else(|| {
         format!(
             "--output {text:?}: expected WIDTHxHEIGHT@RATE,SCALE[,vrr=MIN][,hdr], such as \
              1920x1080@60,1"
         )
-    };
-    let text_str = text.to_str().ok_or_else(bad)?;
-    let refused = |reason: String| format!("--output {text_str}: {reason}");
-    let (size, rest) = text_str.split_once('@').ok_or_else(bad)?;
-    let (width, height) = size.split_once('x').ok_or_else(bad)?;
-    let mut items = rest.split(',');
-    let (Some(rate), Some(scale)) = (items.next(), items.next()) else {
-        return Err(bad());
-    };
-    let width: u32 = width.parse().map_err(|_| bad())?;
-    let height: u32 = height.parse().map_err(|_| bad())?;
-    let rate: f64 = rate.parse().map_err(|_| bad())?;
-    let scale: f64 = scale.parse().map_err(|_| bad())?;
-    let mut mode =
-        OutputMode::new(width, height, rate, scale).map_err(|r| refused(r.to_string()))?;
-    let mut vrr_min = None;
-    let mut hdr = false;
-    for item in items {
-        if item == "hdr" {
-            if hdr {
-                return Err(refused("hdr is given twice".to_owned()));
-            }
-            hdr = true;
-        } else if let Some(min) = item.strip_prefix("vrr=") {
-            if vrr_min.is_some() {
-                return Err(refused("vrr is given twice".to_owned()));
-            }
-            let min: f64 = min
-                .parse()
-                .map_err(|_| refused(format!("vrr={min} is not a rate in Hz")))?;
-            vrr_min = Some(min);
-        } else {
-            return Err(refused(format!(
-                "unknown item {item:?}: expected vrr=MIN or hdr"
-            )));
-        }
-    }
-    if let Some(min) = vrr_min {
-        mode = mode.with_vrr(min).map_err(|r| refused(r.to_string()))?;
-    }
-    if hdr {
-        mode = mode.with_hdr(PG32UCDM);
-    }
-    Ok(mode)
+    })?;
+    text_str
+        .parse()
+        .map_err(|reason| format!("--output {text_str}: {reason}"))
 }
 
 fn main() -> ExitCode {
@@ -611,6 +570,7 @@ fn print_error(text: &str) {
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
+    use yuna::colour::description::PG32UCDM;
 
     fn request(arguments: &[&str]) -> Request {
         read_request(arguments.iter().map(OsString::from))

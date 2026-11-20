@@ -6,12 +6,15 @@
 //! A change made on purpose rewrites the files with `YUNA_WRITE_CONTRACTS=1 cargo test --test
 //! contracts`, and adds its changelog fragment (`changelog.d/README.md`).
 
+#[path = "common/folders.rs"]
+mod folders;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use folders::fresh_folder;
 use serde_json::{Value, json};
 
 /// The folder of the files the contracts are compared with.
@@ -51,12 +54,7 @@ fn the_help_is_the_one_held() {
 
 #[test]
 fn the_mcp_tools_are_the_ones_held() {
-    let runtime = std::env::temp_dir().join(format!("yuna-contracts-{}", std::process::id()));
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&runtime)
-        .expect("a runtime folder");
+    let runtime = fresh_folder("contracts");
     let mut child = Command::new(env!("CARGO_BIN_EXE_yuna"))
         .arg("mcp")
         .env("XDG_RUNTIME_DIR", &runtime)

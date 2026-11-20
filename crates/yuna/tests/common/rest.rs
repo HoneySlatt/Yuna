@@ -5,8 +5,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+use yuna_bench::procfs::Proc;
 
 use super::yuna_run::POLL;
 
@@ -188,24 +190,15 @@ pub fn measure_rest(pid: u32, log: &Path) -> Result<String, Activity> {
     }
 }
 
-/// Each thread of process `pid`, and its context switches so far, voluntary and not.
+/// Each thread of process `pid`, and its context switches so far, voluntary and not. A thread
+/// that ended between the listing and the read is left out.
 fn thread_context_switches(pid: u32) -> BTreeMap<u32, u64> {
-    let tasks = PathBuf::from(format!("/proc/{pid}/task"));
-    let mut threads = BTreeMap::new();
-    for task in fs::read_dir(tasks).expect("Yuna's threads").flatten() {
-        let Some(thread) = task.file_name().to_str().and_then(|id| id.parse().ok()) else {
-            continue;
-        };
-        // A thread that ended between the listing and the read is left out.
-        let Ok(status) = fs::read_to_string(task.path().join("status")) else {
-            continue;
-        };
-        let switches = status
-            .lines()
-            .filter(|line| line.contains("ctxt_switches:"))
-            .filter_map(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
-            .sum();
-        threads.insert(thread, switches);
-    }
+    let threads: BTreeMap<u32, u64> = Proc::system()
+        .threads(pid)
+        .into_iter()
+        .map(|thread| (thread.tid, thread.voluntary + thread.involuntary))
+        .collect();
+    // A process with no thread is one that is gone: a rest of nothing would pass.
+    assert!(!threads.is_empty(), "Yuna's threads");
     threads
 }

@@ -249,7 +249,10 @@ own process, and `crate::client::Client` makes a Wayland window to click in. `ni
 that the git tree is dirty whenever a file is changed: it is harmless.
 `crates/yuna/tests/consumers.rs` runs uwui's `measure.py` and Pluto's `pluto-input` against
 `yuna --headless --agent-seat`, in about 5 s once `pluto-input` is built, about 10 s, in
-`target/consumers/`; its crates come from crates.io the first time. A consumer's revision is
+`target/consumers/pluto-<key>`; its crates come from crates.io the first time. The key is a hash
+of the Nix store paths in Pluto's source and in `PATH`, `LD_LIBRARY_PATH` and `PKG_CONFIG_PATH`,
+so that a shell with other libraries builds it afresh. The folders of older keys stay: `rm -r
+target/consumers` frees them. A consumer's revision is
 raised in a commit of its own: the input's URL in `flake.nix`, then `nix flake lock`, then
 these tests ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)).
 SlimeEngine's examples run in ignored tests, `window`, `editor` and M1.5's done-when story on

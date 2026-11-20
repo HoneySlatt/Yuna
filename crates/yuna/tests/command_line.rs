@@ -1,5 +1,8 @@
 //! The program run as a user runs it: its output and its exit status.
 
+#[path = "common/folders.rs"]
+mod folders;
+
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -12,6 +15,7 @@ use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use folders::fresh_folder;
 use rustix::process::{Pid, Resource, Rlimit, Signal, getrlimit, kill_process, setrlimit};
 use wayland_client::protocol::{wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum, delegate_noop};
@@ -173,11 +177,6 @@ fn start_headless(
     start_headless_with(name, arguments, |_| {})
 }
 
-/// The runtime folder of the `yuna --headless` named `name`.
-fn runtime_dir_of(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("yuna-test-{name}-{}", std::process::id()))
-}
-
 /// As [`start_headless`], its command changed by `change` first.
 fn start_headless_with(
     name: &str,
@@ -188,8 +187,7 @@ fn start_headless_with(
     std::thread::JoinHandle<std::io::Result<String>>,
     PathBuf,
 ) {
-    let runtime_dir = runtime_dir_of(name);
-    std::fs::create_dir_all(&runtime_dir).expect("a runtime folder");
+    let runtime_dir = fresh_folder(&format!("test-{name}"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_yuna"));
     command
         .arg("--headless")
@@ -594,8 +592,7 @@ fn headless_raises_its_open_files_limit_but_not_its_programs() {
         current: Some(STARTED),
         maximum: Some(hard),
     };
-    let stand_in = runtime_dir_of("open-files").join("path");
-    std::fs::create_dir_all(&stand_in).expect("a folder for the stand-in");
+    let stand_in = fresh_folder("test-open-files-path");
     let written = stand_in.join("limits");
     std::fs::write(
         stand_in.join("Xwayland"),

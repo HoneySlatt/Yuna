@@ -21,8 +21,12 @@
 mod application_environment;
 #[path = "common/dies_with_test.rs"]
 mod dies_with_test;
+#[path = "common/folders.rs"]
+mod folders;
 
+use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -33,6 +37,7 @@ use std::time::{Duration, Instant};
 
 use application_environment::{application_environment, shell_variable};
 use dies_with_test::dies_with_test;
+use folders::fresh_folder;
 use rustix::fs::{MemfdFlags, memfd_create};
 use serde_json::Value;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -59,11 +64,8 @@ struct Yuna {
 
 impl Yuna {
     fn start(name: &str) -> Yuna {
-        let folder =
-            std::env::temp_dir().join(format!("yuna-consumers-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
+        let folder = fresh_folder(&format!("consumers-{name}"));
         fs::DirBuilder::new()
-            .recursive(true)
             .mode(0o700)
             .create(folder.join("runtime"))
             .expect("a runtime folder");
@@ -327,10 +329,43 @@ fn consumer(variable: &str) -> PathBuf {
     PathBuf::from(shell_variable(variable))
 }
 
-/// Builds Pluto's `pluto-input` from its own lock, in a target folder of its own beside Yuna's.
+/// What the development shell sets that changes how `pluto-input` builds: the pinned source and
+/// the paths its libraries are found by. Cargo does not see a library change under a build it
+/// kept, so a build kept from before a raise of `nixpkgs` would be used as it was.
+const BUILD_ENVIRONMENT: [&str; 4] = [
+    "YUNA_PLUTO_SOURCE",
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "PKG_CONFIG_PATH",
+];
+
+/// The folder name's key of `pluto-input`'s build: a hash of the Nix store paths the variables
+/// of [`BUILD_ENVIRONMENT`] name, so that a shell with other libraries builds afresh in a folder
+/// of its own. Only the store's entries: cargo adds its own target folder to `LD_LIBRARY_PATH`,
+/// and a caller's `PATH` holds its own folders, which would give one shell many keys. The hash is
+/// std's, enough to tell shells apart, as nothing reads it back.
+fn build_key() -> String {
+    let mut hasher = DefaultHasher::new();
+    for name in BUILD_ENVIRONMENT {
+        let Some(value) = std::env::var(name).ok() else {
+            continue;
+        };
+        let store_paths: Vec<&str> = value
+            .split(':')
+            .filter(|entry| entry.starts_with("/nix/store/"))
+            .collect();
+        (name, store_paths).hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// Builds Pluto's `pluto-input` from its own lock, in a target folder of its own beside Yuna's,
+/// named by [`build_key`]. The folders of older keys stay, as `target/` is throwaway.
 fn build_pluto_input() -> PathBuf {
     let pluto = consumer("YUNA_PLUTO_SOURCE");
-    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/consumers/pluto");
+    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/consumers")
+        .join(format!("pluto-{}", build_key()));
     let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()))
         .arg("build")
         .arg("--manifest-path")
