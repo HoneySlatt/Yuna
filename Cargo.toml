@@ -20,8 +20,11 @@ smithay = { git = "https://github.com/HoneySlatt/smithay.git", rev = "4b54d2f172
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # Linux's system calls in safe Rust: Yuna's processes, sockets, descriptors and limits. Smithay
 # depends on it too, the same crate in Cargo.lock, and re-exports it; Yuna names it directly, so
-# that its modules outside Smithay's types do not reach it through Smithay.
-rustix = "1.1.6"
+# that its modules outside Smithay's types do not reach it through Smithay. `use-libc-auxv`: it
+# reads the auxiliary vector through glibc's `getauxval`, not `prctl(PR_GET_AUXV)`, which valgrind
+# passes to the kernel, giving valgrind's own vector: rustix then reads a vDSO that is not in the
+# process and dies, and the parity script's callgrind and DHAT could not run Yuna.
+rustix = { version = "1.1.6", features = ["use-libc-auxv"] }
 # The compositor's logs (M1.4). Smithay logs through `tracing` already.
 tracing = "0.1.44"
 # Writes the logs to standard error. Only its formatter: no filter language, no ANSI colours, no

@@ -22,6 +22,7 @@ through the same scenarios with the same clients, and reads their costs from out
 
   yuna-bench headless [options]     run the cases, write a run file and its summary
   yuna-bench report <file.json>...  print the summary of run files, in Markdown
+  yuna-bench parity run [options]   compare two builds of Yuna (ADR-0142); parity --help
 
 Options of headless (each list separated by commas):
   --compositor <list>     sway, sway-vulkan, kwin, yuna, dwl, mango, umbriel, hyprland, mutter
@@ -196,7 +197,7 @@ impl SplitMix {
 }
 
 /// Shuffles `items` by Fisher and Yates, from `seed`.
-fn shuffle<T>(items: &mut [T], seed: u64) {
+pub(crate) fn shuffle<T>(items: &mut [T], seed: u64) {
     let mut random = SplitMix(seed);
     for i in (1..items.len()).rev() {
         let j = (random.next() % (i as u64 + 1)) as usize;
@@ -229,7 +230,7 @@ pub fn utc(time: SystemTime) -> String {
 /// Writes `path` with `write`, through a temporary file beside it, flushed to the disk, and a
 /// rename: the file is never left half written, and an earlier version stays whole until the new
 /// one replaces it.
-fn write_atomically(
+pub(crate) fn write_atomically(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
 ) -> Result<(), String> {
@@ -409,6 +410,7 @@ pub fn main(arguments: &[String]) -> ExitCode {
             }
         }),
         Some("report") => report(&arguments[1..]).map(|()| ExitCode::SUCCESS),
+        Some("parity") => return crate::parity::main(&arguments[1..]),
         Some("client") => match arguments.get(1..).unwrap_or_default() {
             [still, flag, count] if still == "still" && flag == "--windows" => count
                 .parse()
@@ -417,7 +419,18 @@ pub fn main(arguments: &[String]) -> ExitCode {
                 .map(|()| ExitCode::SUCCESS),
             [frames] if frames == "frames" => crate::capture::run().map(|()| ExitCode::SUCCESS),
             [keys] if keys == "keys" => crate::keys::run().map(|()| ExitCode::SUCCESS),
-            _ => Err("client takes `still --windows <n>`, `frames` or `keys`".to_owned()),
+            [lockstep, windows, count, control, socket]
+                if lockstep == "lockstep" && windows == "--windows" && control == "--control" =>
+            {
+                count
+                    .parse()
+                    .map_err(|_| "--windows takes a number".to_owned())
+                    .and_then(|count| crate::parity::lockstep::run(count, Path::new(socket)))
+                    .map(|()| ExitCode::SUCCESS)
+            }
+            _ => Err("client takes `still --windows <n>`, `frames`, `keys` or \
+                      `lockstep --windows <n> --control <socket>`"
+                .to_owned()),
         },
         Some("parent") => match arguments.get(1..).unwrap_or_default() {
             [file] => sandbox::run_parent(Path::new(file)).map(|ended_well| {

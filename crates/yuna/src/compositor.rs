@@ -23,6 +23,7 @@ use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Drawn, Settings};
 
 use crate::Error;
+use crate::canary::ParityCanary;
 use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
 use crate::colour::SurfaceColourDescription;
@@ -287,6 +288,8 @@ pub struct Compositor {
     /// ([`Compositor::watch_client_departures`]): none is kept otherwise. Each client leaves
     /// once, so it holds at most the clients that left between two takes.
     departures: Option<Vec<ClientDeparture>>,
+    /// The parity script's injected cost, with the `parity-canary` feature alone (`canary.rs`).
+    canary: ParityCanary,
 }
 
 impl Compositor {
@@ -364,6 +367,18 @@ impl Compositor {
                 xwayland.add_seat(OWNER_SEAT, &folder, &handle);
             }
         }
+        let canary = ParityCanary::from_environment();
+        if canary.wakes() {
+            // Counted as a waiting call's timer: a canary's build is never shipped, and the rest
+            // tool's list of sources stays the contract it is.
+            insert_source(
+                &handle,
+                Wake::of(Source::WaitingCall),
+                Timer::from_duration(Duration::from_secs(1)),
+                |_, _, _| TimeoutAction::ToDuration(Duration::from_secs(1)),
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        }
         Ok(Compositor {
             xwayland,
             event_loop,
@@ -373,6 +388,7 @@ impl Compositor {
             timer: None,
             seat_sockets,
             departures: None,
+            canary,
         })
     }
 
@@ -708,6 +724,7 @@ impl Compositor {
             timeout
         };
         self.state.rest.begin_round();
+        let frames_before = self.state.counters.frames_drawn;
         self.event_loop
             .dispatch(timeout, &mut self.state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
@@ -737,6 +754,10 @@ impl Compositor {
         }
         self.arm_rest_second();
         self.flush();
+        if cfg!(feature = "parity-canary") {
+            let frames = self.state.counters.frames_drawn - frames_before;
+            self.canary.after(frames, true);
+        }
         Ok(())
     }
 
@@ -817,6 +838,7 @@ impl Compositor {
             return Err(Error::NotManual);
         }
         let target = self.state.clock.now().saturating_add(by);
+        let frames_before = self.state.counters.frames_drawn;
         let mut last_wakeup = None;
         while let Some((at, deadline)) = self.state.clock.take_due(target) {
             self.state.clock.move_to(at);
@@ -831,6 +853,10 @@ impl Compositor {
         self.state.clock.move_to(target);
         self.arm_rest_second();
         self.flush();
+        if cfg!(feature = "parity-canary") {
+            let frames = self.state.counters.frames_drawn - frames_before;
+            self.canary.after(frames, false);
+        }
         Ok(())
     }
 

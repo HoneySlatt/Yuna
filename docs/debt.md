@@ -551,9 +551,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 - A failed drawing of a motion's last frame is drawn again at the next boundary; no test covers
   it, since a drawing cannot be made to fail headless. Stage 2a, M2.10 (captures and the GPU's
   loss), loses the GPU on demand (ADR-0082 item 22).
-- `ten_thousand_columns` runs 10,000 windows through an animated update but times nothing: a
-  quadratic search coming back would fail no check; `examples/motion_timing.rs` shows it. Paid at
-  Stage 2a, M2.1 (baselines): a guard before the rewrite.
 - On a VRR output, a motion that starts after a pause shows its second frame about 12 ms after
   its first, amdgpu's insertion of refreshes after a pause, as `vrr.rs` emulates it; then every
   shortest refresh. Kept: it is what amdgpu does, and the desktop runs at a fixed rate
@@ -600,6 +597,9 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   put to the owner.
 - Motion's budget was not judged at M1.13's release: the machine never gave the still baseline its
   rate. Judged again on a quiet machine with the measures above. Paid at Stage 2a, M2.1 (baselines).
+- In the parity script's `full` scenario, both builds' heap grows 54 bytes a frame (M2.1); whether
+  it is bounded is not known. Paid at Stage 2a, M2.9 (Vulkan the default), with the allocations
+  below.
 - Yuna's own code allocates on every frame: 83 allocations and 404 KiB on a still frame, 91 and 390
   KiB in motion, none at rest, measured by heaptrack on llvmpipe at 1080p; half are vectors rebuilt
   in the elements' path ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md)). The target

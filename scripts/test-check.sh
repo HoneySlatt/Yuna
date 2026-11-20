@@ -61,6 +61,8 @@ expect_stopped format "code not formatted" "Diff in" \
     "printf 'fn  badly_formatted( ){}\n' >> crates/yuna-layout/src/lib.rs"
 expect_stopped lints "a warning" "unused variable" \
     "printf '\n/// Unused.\npub fn warns() { let unused = 1; }\n' >> crates/yuna-layout/src/lib.rs"
+expect_stopped lints "a warning in code only the parity canaries' feature compiles" "unused variable" \
+    "printf '\n#[cfg(feature = \"parity-canary\")]\n/// Unused.\npub fn warns() { let unused = 1; }\n' >> crates/yuna-layout/src/lib.rs"
 expect_stopped lints "an unsafe block without its SAFETY comment" "undocumented_unsafe_blocks|SAFETY" \
     "printf '\n/// Unsafe.\npub fn reads() -> u8 { unsafe { *(&1u8 as *const u8) } }\n' >> crates/yuna/src/lib.rs"
 expect_stopped tests "a test that fails" "panicked.*broken|broken.*FAILED|fails \\.\\.\\. FAILED" \

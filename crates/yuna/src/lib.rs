@@ -24,6 +24,7 @@
 //! across them.
 
 mod activation;
+mod canary;
 mod capture;
 mod clock;
 pub mod colour;

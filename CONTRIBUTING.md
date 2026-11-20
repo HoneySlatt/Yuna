@@ -48,6 +48,9 @@ work), Umbriel (built from its source at the revision `flake.lock` pins, the fla
 input), Hyprland, Mutter, wlr-randr, weston, ffmpeg, D-Bus, Xwayland, the Mesa they all draw
 with, coreutils and bash. CI never fetches it.
 
+A third, `nix develop .#parity`, is the default shell and valgrind, for the parity script; CI's
+`parity` job alone fetches it.
+
 `yuna --help` lists the variables Yuna's own code reads, `XDG_RUNTIME_DIR` and `YUNA_LOG` among
 them, and its exit statuses; its contract,
 [`crates/yuna/tests/contracts/help.txt`](crates/yuna/tests/contracts/help.txt), is their one
@@ -302,7 +305,8 @@ only <step>` runs one:
 1. `rules`, the workspace's own: `rust-version` in `Cargo.toml` equals the toolchain's version,
    and every crate takes the workspace's lints;
 2. `format`, `cargo fmt --check`;
-3. `lints`, clippy over every target, warnings as errors;
+3. `lints`, clippy over every target, warnings as errors, twice: the second time with the
+   parity script's canaries (`--features yuna/parity-canary,…`), code no other build compiles;
 4. `tests`, the build and the tests;
 5. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
 6. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
@@ -318,7 +322,7 @@ only <step>` runs one:
 `scripts/test-check.sh` proves that each step stops what it guards against
 ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)): it clones the last
 commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
-warning, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
+warning, one in the canaries' code, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
 without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
 fragment misnamed, SlimeEngine's or Opium's job leaving out the drawing path), and expects the step that
 guards against it to fail, for that reason. Run it after changing `check.sh` or a check, and
@@ -330,11 +334,84 @@ A new crate goes in `crates/` and its `Cargo.toml` holds the two lines `[lints]`
 that the workspace's lints (the `// SAFETY:` comment, documentation) reach it; the check refuses it
 otherwise.
 
+### The parity script
+
+`yuna-bench parity run` compares two builds of Yuna on figures the machine's load does not move
+([ADR-0142](docs/adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#the-parity-script)). CI runs it at each push; run
+it before pushing a step of Stage 2a, in the parity shell:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --head-path .
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --base 2e14b86 --head HEAD
+```
+
+The base is the pinned baseline unless `--base <revision>` or `--base-path <folder>` names
+another; the head is `HEAD` unless `--head <revision>` or `--head-path <folder>` (a tree with
+uncommitted changes, built as it is) does. `--scenario` picks scenarios (`idle`, `partial`,
+`full`, `motion`, `scaled`, `many`, `input`, and `operations` for the layout's and motion's),
+`--repeat <n>` measures each figure `n` times on each side, `--jobs` runs that many at once (4 by
+default), `--seed` replays an order, `--before <revision>` names the push before (below). It
+writes `target/parity/parity-<time>.json` and its report, `.md`, beside it (`--out` for another
+file). Its work folder holds the trees, their builds and each run's logs: by default
+`target/parity/work-<pid>-<time>`, removed at the end unless a run failed, a figure is void, or
+`--keep`; one `--work` names is never removed, and the trees it holds are used again only at the
+same revision with no change. The revisions' worktrees are removed in every case. The work
+folder cannot be under `/tmp`: each run has a `/tmp` of its own. Each run is a user namespace, made by util-linux's `unshare` (the
+shell's `YUNA_UNSHARE`), which Ubuntu 24.04 refuses until `sudo sysctl -w
+kernel.apparmor_restrict_unprivileged_userns=0`. It runs nothing on a display or a GPU.
+
+It exits 0 when no figure is worse, 1 when one is, 2 when one is void or the run failed: the
+report says which and why, its worse and void figures first. With `--before`, a worse figure
+also gets the push before compared with the head, on its scenario, and the report says whether
+this push made it worse or an earlier one did; that never changes the exit status.
+
+The thresholds are in
+[`crates/yuna-bench/parity-thresholds.toml`](crates/yuna-bench/parity-thresholds.toml), each with
+the spread it came from. The head's file judges; a threshold the head makes looser than the
+base's makes its figure void, unless a new move of the baseline names that figure. Measure a
+spread with `--base-path . --head-path . --repeat 5`, and set the threshold at about three times
+it, with a floor.
+
+A figure the head makes worse on purpose (Vulkan in place of GLES, a bound that costs memory)
+moves the baseline: a commit that adds a `[[move]]` at the end of
+[`crates/yuna-bench/parity-baseline.toml`](crates/yuna-bench/parity-baseline.toml) and sets its
+`commit` to the new baseline, naming the figures moved as the report names them (or a kind of
+figure alone, for every scenario), why, and the ADR or the owner's go that allows it. Nothing
+else moves it. At the push that adds the move, CI also runs the head against the old baseline:
+every figure worse there must be named, else the run is void. The first `[[move]]`, the first
+baseline, has no old one to check against. A push that adds a move and is cancelled by a later
+push before its run ends is not checked; run it by hand then, with `--before` the commit before
+the move.
+
+The controls prove that the script sees what it watches. The tree against itself must give 0:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --base-path . --head-path .
+```
+
+and each canary, built into the head, must give 1, flagging its figure:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --base-path . --head-path . --canary spin
+```
+
+The canaries are `spin` (Yuna's own instructions each frame), `allocate` (an allocation each
+frame), `leak` (64 bytes kept every 16 frames, 4 bytes a frame), `memory` (1 MiB kept), `wake`
+(a timer each second),
+`round` (instructions each round of the event loop), `layout` (work in `Layout::focus`) and
+`motion` (work in an animated `Motion::update`). They are the `parity-canary` features of
+`yuna`, `yuna-layout` and `yuna-motion`, off in every shipped build; `YUNA_PARITY_CANARY` turns
+Yuna's on, read once at its start.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
-each push to `main`, each pull request, and every Monday. CI stays one job while one is enough
-([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)). A change of Markdown files alone skips it:
+each push to `main`, each pull request, and every Monday. The checks stay one job while one is
+enough ([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)); beside them, the
+`package` job builds Yuna's package, and the `parity` job runs
+[the parity script](#the-parity-script), HEAD against the pinned baseline, with the whole history
+checked out. A change of Markdown files alone skips them:
 [`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`: their
 links, the length of those read at every session, the ADRs' index, the changelog's fragments and
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.

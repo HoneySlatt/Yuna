@@ -41,9 +41,14 @@ check_format() {
     cargo fmt --all --check
 }
 
+# Twice: the second with the parity script's canaries, code that only their feature compiles
+# (ADR-0142's controls), so that it is linted too.
 check_lints() {
     step "Lints, warnings as errors"
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --all-targets --locked \
+        --features yuna/parity-canary,yuna-layout/parity-canary,yuna-motion/parity-canary \
+        -- -D warnings
 }
 
 check_tests() {

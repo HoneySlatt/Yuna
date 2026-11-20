@@ -45,6 +45,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Camera**: the position of a scrolling workspace's view on its strip, `view_x`; it moves on a
   spring while windows keep their places
   ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
+- **Canary** (parity): a cost injected on purpose into a build, about twice the threshold of the
+  figure that must flag it, so that the parity script proves it sees what it watches; compiled in
+  only with the `parity-canary` feature, which no shipped build has.
 - **Capture mapping**: how a capture's image maps to its output's logical coordinates: the
   logical point of its top-left corner, and the logical units one pixel covers.
 - **Case** (bench): one compositor, one configuration and one scenario, the unit the rivals'
@@ -98,9 +101,14 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   and HDR luminances; the owner's monitor's give the HDR outputs' colours.
 - **Embed**: an AT-SPI program's announcement of its tree to the registry, `Socket.Embed`; GTK 4
   publishes nothing until the registry has answered it.
-- **Equal work**: a rival run with its effects, wallpaper and XWayland off in the rivals' bench, so
-  that compositors that draw more are compared on the same work
+- **Equal work** (bench): a rival run with its effects, wallpaper and XWayland off in the rivals'
+  bench, so that compositors that draw more are compared on the same work
   ([ADR-0072](adr/0072-budgets-set-against-the-peers-the-same-day.md)).
+- **Equal work** (parity): what two builds must share for the parity script to compare a
+  scenario's costs: in every run of it, the same frames drawn, for the same causes, the same
+  commits taken, and the same frame callbacks, pointer events, configures and buffers its client
+  received; otherwise its figures are void
+  ([ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Fatal path**: what Yuna does when its state thread panics: it stops at once, never unwinding
   through a state left half changed; `yuna mcp` first ends its programs and removes its folder
@@ -122,6 +130,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)). The
   shell decides what follows, such as holding notifications back
   ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
+- **Lockstep client** (parity): the parity script's Wayland client, `yuna-bench client lockstep`,
+  whose windows commit only when the script tells them, then make a round trip, so that two
+  builds of Yuna are given the same work frame by frame.
 - **The games' band**: the high, narrow range of refresh rates Yuna keeps a game's VRR in, by
   showing frames several times ([ADR-0014](adr/0014-vrr-without-flicker.md)).
 - **Greeter mode**: Yuna running under greetd as the login screen's compositor, without command
@@ -195,8 +206,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   `STALL_RECHECK` later, is stalled, and its Xwayland is ended, as one owed past the bound is.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
   stack, not the core: Hyprland's headless dwl, which lends it a render node.
-- **Parity script** (Stage 2a): the script that compares two builds on the baselines' figures, the
-  same day, with its controls ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
+- **Parity script** (Stage 2a): `yuna-bench parity`, which compares two builds on the baselines'
+  figures, on the same machine, with its controls
+  ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md),
+  [ARCHITECTURE](ARCHITECTURE.md#the-parity-script)).
 - **Pace** (bench): how a backend times the frames of a compositor whose client draws as fast as
   it can, as each recipe records it: wlroots' headless timer, a frame 4 ms after each commit, or
   the mode's rate. In `game` and `pacing`, costs a second rank only within one pace.
@@ -316,6 +329,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   alone, dwl; its keys reach no other compositor.
 - **Virtual output**: an output no monitor shows, drawn offscreen at its own size, rate and scale
   ([ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
+- **Void** (parity): a figure the parity script could not measure on a side, its program missing
+  from a tree included, or measured on unequal work, with the reason; a void figure never passes.
 - **VRR**: variable refresh rate; the monitor refreshes when a frame is ready rather than at a fixed
   rate.
 - **Wake-up**: a round of the compositor's event loop in which something had work for it: a

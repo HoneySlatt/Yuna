@@ -106,6 +106,23 @@ impl Proc {
             .collect()
     }
 
+    /// The arguments process `pid` was started with, its program first.
+    pub fn command_line(&self, pid: u32) -> Option<Vec<String>> {
+        let bytes = fs::read(self.path(pid, "cmdline")).ok()?;
+        Some(
+            bytes
+                .split(|byte| *byte == 0)
+                .filter(|argument| !argument.is_empty())
+                .map(|argument| String::from_utf8_lossy(argument).into_owned())
+                .collect(),
+        )
+    }
+
+    /// The program process `pid` runs: the target of its `exe` link.
+    pub fn executable(&self, pid: u32) -> Option<PathBuf> {
+        fs::read_link(self.path(pid, "exe")).ok()
+    }
+
     /// Process `pid`'s name.
     pub fn name(&self, pid: u32) -> Option<String> {
         fs::read_to_string(self.path(pid, "comm"))

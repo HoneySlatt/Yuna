@@ -41,7 +41,8 @@ use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode,
 // lists every variable a user sets that Yuna's own code reads, `TMPDIR` for `yuna mcp`'s agents'
 // throwaway homes among them (`mcp/programs/homes.rs`). It leaves out the switches that exist in debug builds alone, for the tests of failures:
 // `YUNA_PANIC_ON_TOOL`, `YUNA_PANIC_IN_ENCODERS` (`mcp/`), `YUNA_PANIC_ON_X11_CLOSE` and
-// `YUNA_X11_OWED_BOUND` (`xwayland/manager/`); and the
+// `YUNA_X11_OWED_BOUND` (`xwayland/manager/`); `YUNA_PARITY_CANARY`, read only in a build with the
+// parity script's `parity-canary` feature (`canary.rs`); and the
 // variables Yuna's package sets for itself (`flake.nix`): `YUNA_WRAPPED_VARIABLES` and
 // `YUNA_CALLER_<name>`, which give mcp's programs the caller's own values back
 // (`mcp/programs/environment.rs`). The libraries read their own, xkbcommon's `XKB_*` and Mesa's

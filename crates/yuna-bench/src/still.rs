@@ -152,7 +152,7 @@ pub fn windows_shown(log: &str, count: u32) -> Option<Vec<StillWindow>> {
 }
 
 /// A plain colour of its own for window `n`, opaque.
-fn colour(n: usize) -> u32 {
+pub(crate) fn colour(n: usize) -> u32 {
     let n = n as u32;
     0xff00_0000 | ((n * 0x3d) & 0xff) << 16 | ((n * 0x7b + 0x40) & 0xff) << 8 | 0x90
 }

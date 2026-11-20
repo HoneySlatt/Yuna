@@ -24,8 +24,9 @@ serde_json.workspace = true
 # lacks. `time` reads CLOCK_MONOTONIC, the clock KWin stamps its frames with; `process` sends
 # SIGTERM and SIGINT, and reads the user's id, which names their runtime folder; `fs` makes the
 # still windows' memfds; `net` asks the kernel which socket each socket is connected to
-# (sock_diag), to refuse a compositor connected to the owner's.
-rustix = { workspace = true, features = ["fs", "net", "process", "time"] }
+# (sock_diag), to refuse a compositor connected to the owner's; `mount` gives each parity run a
+# `/tmp` of its own, and `thread` drops the capabilities that took before Yuna starts.
+rustix = { workspace = true, features = ["fs", "mount", "net", "process", "thread", "time"] }
 
 [lints]
 workspace = true

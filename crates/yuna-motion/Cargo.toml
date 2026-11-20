@@ -13,5 +13,11 @@ yuna-layout = { path = "../yuna-layout" }
 [dev-dependencies]
 proptest.workspace = true
 
+[features]
+# The parity script's canary (ADR-0142's controls), which the script must flag:
+# work added to an animated `Motion::update`. Off in every shipped build; `yuna-bench parity run --canary` turns it on
+# in the head it builds.
+parity-canary = []
+
 [lints]
 workspace = true

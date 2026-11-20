@@ -344,3 +344,19 @@ pub struct ShownWorkspaces {
     /// The special workspace shown over it, if any.
     pub special: Option<WorkspaceView>,
 }
+
+/// The parity script's canary, with the `parity-canary` feature alone, which no shipped build
+/// turns on: work added to [`Layout::focus`], about twice the threshold of its figure, which the
+/// script must flag (ADR-0142's controls).
+fn parity_canary() {
+    let mut sum = 0_u64;
+    for turn in 0..PARITY_CANARY_TURNS {
+        sum = std::hint::black_box(sum.wrapping_add(turn));
+    }
+    std::hint::black_box(sum);
+}
+
+/// The turns of [`parity_canary`], about four instructions each: some 6,000, twice the threshold
+/// of a focus at 100 windows in scrolling columns, more than twice at 100 and 1,000 in dwindle
+/// (`crates/yuna-bench/parity-thresholds.toml`).
+const PARITY_CANARY_TURNS: u64 = 1_500;

@@ -40,6 +40,32 @@ jobs:
       # Without the flag, an incomplete flake.lock would be completed with an unpinned revision.
       - run: nix develop --no-update-lock-file --command scripts/check.sh
 
+  # The parity script (ADR-0142, docs/ARCHITECTURE.md): HEAD against the pinned baseline of
+  # crates/yuna-bench/parity-baseline.toml, both built and measured on this runner, on figures its
+  # load does not move. A figure worse (exit 1) or void (exit 2) fails the job.
+  parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # The whole history: the baseline is a commit of it, checked out beside HEAD.
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      # Each run of the script is a user namespace of its own, with its PID, mount and network
+      # namespaces, which Ubuntu 24.04's AppArmor refuses an unprivileged user until this setting
+      # is off (actions/runner-images#10443), as .github/workflows/opium.yml does for Opium's job.
+      - name: Let an unprivileged user make namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The push before, to say which push moved a worse figure: empty outside a push.
+      - run: >-
+          nix develop .#parity --no-update-lock-file --command
+          cargo run --release --locked -p yuna-bench -- parity run --base baseline --head HEAD
+          --tier ci --before "${{ github.event.before }}"
+
   # The package, built in a job of its own so that its release build runs beside the checks.
   package:
     runs-on: ubuntu-24.04

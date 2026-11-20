@@ -1,0 +1,16 @@
+# The parity script's pinned baseline (ADR-0142): every push is compared with `commit`, built from
+# its own tree in its own development shell. `yuna-bench parity run --base baseline` reads it; its
+# format is in crates/yuna-bench/src/parity/baseline.rs, how to move it in CONTRIBUTING.md.
+#
+# The baseline moves only by a commit that adds a [[move]] at the end: the commit it moves to, the
+# figures it moves (as the report names them), why, and the ADR or the owner's go that allows it.
+# The parity run of that commit against the old baseline flags only the figures named.
+
+format = 1
+commit = "2e14b86aafd7df6d76fc18c79382d9a0ce1d6ecf"
+
+[[move]]
+commit = "2e14b86aafd7df6d76fc18c79382d9a0ce1d6ecf"
+figures = []
+reason = "The first baseline, M2.1's: no figure moved."
+allowed_by = "ADR-0142"

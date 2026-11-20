@@ -22,7 +22,8 @@ limits are in its code's documentation, linked from here; why each decision was 
   input, captures, events, the clipboard and each seat's [accessibility bus](#accessibility).
   **[The program](#the-program)**, `yuna`, runs `yuna --headless` or `yuna mcp`.
 - **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
-  Yuna included, from outside.
+  Yuna included, from outside; beside it, **[the parity script](#the-parity-script)** compares
+  two builds of Yuna on figures the machine's load does not move.
 
 **The main flows:**
 
@@ -83,7 +84,7 @@ One Cargo workspace; its crates live in `crates/`.
 | `yuna-layout` | the layout model | nothing |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout` |
 | `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-layout`, `yuna-motion`, and the crates below |
-| `yuna-bench` | the rivals' bench | nothing of Yuna's |
+| `yuna-bench` | the rivals' bench and the parity script | nothing of Yuna's |
 
 - Each dependency's reason is a comment beside it, in the root [`Cargo.toml`](../Cargo.toml)'s
   `[workspace.dependencies]` and in each crate's manifest. `deny.toml` holds the policy on
@@ -191,6 +192,7 @@ an arrangement.
 | [`wlr_screencopy.rs`](../crates/yuna/src/wlr_screencopy.rs) | `wlr-screencopy-unstable-v1`, on captures |
 | [`colour/`](../crates/yuna/src/colour/mod.rs) | `color-management-v1`: what outputs announce and surfaces declare |
 | [`rest.rs`](../crates/yuna/src/rest.rs) | the rest auditor, through which every event source is inserted |
+| [`canary.rs`](../crates/yuna/src/canary.rs) | the parity script's canaries, costs injected only with the `parity-canary` feature, which no shipped build has |
 | [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, what Yuna reads of a process in `/proc`, and its limit of open files |
 | [`xwayland/`](../crates/yuna/src/xwayland/mod.rs) | each seat's X display, its Xwayland and its X11 window manager |
 | [`dbus/`](../crates/yuna/src/dbus/mod.rs) | Yuna's own D-Bus client, for the accessibility buses |
@@ -815,8 +817,11 @@ To add a test:
     `events_look.rs`, the events' look. What they share is in `examples/common/`, whose
     [`mod.rs`](../crates/yuna/examples/common/mod.rs) says which file each one includes;
   - `crates/yuna-layout/examples/timing.rs` and `crates/yuna-motion/examples/motion_timing.rs`:
-    the models' costs at an operation and at a frame.
-- `crates/yuna-bench`: [the rivals' bench](#the-rivals-bench).
+    the models' costs at an operation and at a frame; `operations.rs` and
+    `motion_operations.rs` beside them, the same operations repeated and timed by nothing, for
+    [the parity script](#the-parity-script).
+- `crates/yuna-bench`: [the rivals' bench](#the-rivals-bench) and
+  [the parity script](#the-parity-script).
 
 ## The rivals' bench
 
@@ -857,6 +862,98 @@ up to 250 frames a second for a 240 Hz mode, so their costs a second rank apart 
 (`recipes::Pace`). niri and cosmic-comp have no recipe that runs, and are measured on the owner's
 tour alone (`recipes::TOUR_ONLY`). mpv can stay at its first frames on Mutter: the bench then
 fails the case rather than measure an empty scene.
+
+## The parity script
+
+`yuna-bench parity run` compares two builds of Yuna, a *base* and a *head*, on figures the
+machine's load does not move, by the rule of
+[ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md). Every step of
+Stage 2a must keep them ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
+CI runs it at each push, the head against the pinned baseline. Its modules are in
+[`crates/yuna-bench/src/parity/`](../crates/yuna-bench/src/parity/mod.rs); how to run it is in
+[CONTRIBUTING](../CONTRIBUTING.md#the-parity-script). It depends on nothing of `yuna`: it drives
+both builds through `yuna mcp`, whose tools are its contract with them.
+
+**The tiers.** Only the CI tier is built: callgrind's instructions, DHAT's allocations
+([ADR-0143](adr/0143-allocations-a-frame-counted-by-dhat.md)), memory, wakes and the layout's
+operations. The GPU tier (the kernel's DRM memory) and the timed tier (timed runs, start time,
+GPU memory, a soak, judged by an interval over pairs) are ADR-0142's, not built yet.
+
+A run of the script:
+
+1. **The builds** (`build.rs`). Each side is a revision, checked out as a git worktree in the
+   work folder, or a folder built as it is. Each builds in its own development shell, `nix
+   develop <tree>`, with its own toolchain and Mesa, both recorded, for release with line tables,
+   in a target folder of its own, its paths remapped: one tree built twice gives the same binary,
+   and two trees of one revision the same code (`.text`), their files differing only by the run
+   path the shell's linker wrapper writes. `yuna` is built with rustix's `use-libc-auxv`, so that
+   valgrind can run it. Each tree's baseline and thresholds files are read with it.
+2. **The plan** (`mod.rs`): each scenario five ways on each side (natively, and under callgrind
+   and DHAT, each `n` and `2n` periods), each case of the operations programs twice (`n` and
+   `2n` repeats), all in a random order from a recorded seed, several at once.
+3. **Each run** (`scenario.rs`, `launch.rs`) is a user namespace of its own, with its own PID,
+   mount and network namespaces and its own `/tmp`. In it, a launcher starts `yuna mcp
+   --manual-clock`, alone or under valgrind, and beside it the *lockstep client*
+   (`lockstep.rs`). The script speaks MCP to Yuna on its standard input and output, and to the
+   client through a socket. Each *period* gives Yuna one refresh of work, always in this order:
+   the scenario's MCP calls (pointer motions, a workspace's switch), the client's step (its
+   commits, then a round trip), and one advance of the clock by the output's period, which draws
+   the frame. Nothing else runs. In its namespaces, Yuna's start and stop see the same processes
+   and X displays in every run.
+4. **The figures** (`figures.rs`). A valgrind figure a frame is the run of `2n` periods less the
+   run of `n`, over `n`: Yuna's start, warm-up and stop cancel. Allocations a frame leave out
+   what an advance costs alone, `idle`'s. A DHAT run ends Yuna by a signal it does not handle,
+   SIGUSR1, so that it frees nothing first: the heap it still holds then, over the frames, is
+   its heap's growth, a leak among it. Native runs send each message only once Yuna's main
+   thread sleeps, and read `rest`'s wakes, the context switches of Yuna's own threads (its main
+   thread and those it names `yuna-…`, never Mesa's), and, once Yuna is at rest (`clock now`
+   arms no deadline), its wakes over 2 s of real time and its `Pss`. llvmpipe draws on Yuna's
+   thread (`LP_NUM_THREADS=0`): under valgrind, threads that wait by spinning count what the
+   scheduling gives them. LLVM, compiling llvmpipe's shaders at Yuna's start, still counts
+   differently from run to run, its hash sets keyed by address, the heap laid out after Yuna's
+   hash maps, which take random keys: tens of thousands of instructions, which the total's floors
+   absorb (a filled shader cache does not spare that work). A timer on real time would distort
+   every valgrind figure in proportion to the machine's slowness; none runs in a parity run
+   today.
+5. **Equal work, then the rule** (`rule.rs`, `thresholds.rs`). A scenario's figures are compared
+   only if every run of it, on both sides, drew the same frames for the same causes, took the
+   same commits, and gave its client the same frame callbacks, pointer events, configures and
+   releases; otherwise they are *void*. Each figure has a class: *parity*, worse beyond its
+   threshold; *budget*, against a figure of the ROADMAP or an ADR; *recorded*, never judged. The
+   thresholds are data,
+   [`crates/yuna-bench/parity-thresholds.toml`](../crates/yuna-bench/parity-thresholds.toml),
+   each about three times its spread with a floor, by scenario or case where they differ. The
+   head's judge; one the head loosens against the base's is void unless a new move of the
+   baseline names its figure. A figure that cannot be measured, its program missing from a tree
+   included, is void. The exit status is 1 if a figure is worse, else 2 if one is void, else 0.
+6. **The move, and the push before** (`mod.rs`). At the push that moves the baseline, the head is
+   also run against the old one: every figure worse there must be named by the move, else the
+   run is void. When a figure is worse and `--before` names the push before (CI passes
+   `github.event.before`), that push is run on the scenarios that flagged and compared with the
+   head, to say whether this push moved them; it never changes the verdict.
+7. **The run file and its report** (`record.rs`, `report.rs`): versioned JSON, written again
+   after each run through a temporary file and a rename, and its Markdown, appended to the CI
+   job's summary.
+
+**The scenarios**, each with its windows and what changes each period: `idle` (nothing: an
+advance alone), `partial` (a 64 × 64 square at 1080p), `full` (two whole windows), `motion`
+(workspaces switched and a window moved on springs), `scaled` (a square at 4K and scale 1.5),
+`many` (a square among 30 windows) and `input` (8 pointer motions). Popups, X11 and captures
+are not covered yet. The operations programs, `crates/yuna-layout/examples/operations.rs` and
+`crates/yuna-motion/examples/motion_operations.rs`, print a digest of the work they did; two
+builds whose digests differ are not compared.
+
+**The baseline.** [`crates/yuna-bench/parity-baseline.toml`](../crates/yuna-bench/parity-baseline.toml)
+names the commit every push is compared with, and each of its moves: the commit, the figures it
+moves, why, and the ADR or the owner's go. A base that lacks a program the head has, an
+operations program for instance, makes its figures void.
+
+**The controls.** The base against itself must pass. Each *canary*, built into the head with the
+`parity-canary` feature of `yuna`, `yuna-layout` or `yuna-motion` and turned on by
+`YUNA_PARITY_CANARY`, injects one cost about twice its figure's threshold, which must be flagged:
+`spin`, `allocate`, `leak`, `memory`, `wake`, `round`, `layout`, `motion`
+([`canary.rs`](../crates/yuna/src/canary.rs)). No shipped build has the feature; `scripts/check.sh`
+lints it.
 
 ## Where to start reading
 

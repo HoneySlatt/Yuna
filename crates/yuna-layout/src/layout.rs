@@ -837,6 +837,9 @@ impl Layout {
     /// Moves the seat's focus to the next window in `direction`. In scrolling columns, it stops
     /// at the strip's ends.
     pub fn focus(&mut self, seat: SeatId, direction: Direction) -> Result<(), LayoutError> {
+        if cfg!(feature = "parity-canary") {
+            crate::parity_canary();
+        }
         self.with_focused_workspace(seat, |ws, area, _| ws.focus(direction, area))
     }
 

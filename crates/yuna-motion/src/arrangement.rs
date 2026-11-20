@@ -144,6 +144,9 @@ impl Motion {
     /// workspaces moved or were snapped again ([ADR-0052](../../../docs/adr/0052-motion-in-a-pure-crate.md)).
     /// A `now` earlier than an output's last update counts as that update's time.
     pub fn update(&mut self, layout: &Layout, now: Duration, change: Change) {
+        if cfg!(feature = "parity-canary") && matches!(change, Change::Animated) {
+            parity_canary();
+        }
         let mut previous = std::mem::take(&mut self.outputs);
         for seat in layout.seats() {
             let animate = !self.settings.off && change.animates(seat);
@@ -219,3 +222,18 @@ pub struct Drawn {
     /// special workspace fading out, its last place before it was hidden.
     pub placed: Placed,
 }
+
+/// The parity script's canary, with the `parity-canary` feature alone, which no shipped build
+/// turns on: work added to an animated [`Motion::update`], about twice the threshold of its
+/// figure, which the script must flag (ADR-0142's controls).
+fn parity_canary() {
+    let mut sum = 0_u64;
+    for turn in 0..PARITY_CANARY_TURNS {
+        sum = std::hint::black_box(sum.wrapping_add(turn));
+    }
+    std::hint::black_box(sum);
+}
+
+/// The turns of [`parity_canary`], about four instructions each: some 500,000, twice the
+/// thresholds of both updates at 1,000 windows (`crates/yuna-bench/parity-thresholds.toml`).
+const PARITY_CANARY_TURNS: u64 = 120_000;

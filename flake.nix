@@ -208,6 +208,18 @@
       devShells.${system} = {
         default = pkgs.mkShell shell;
 
+        # The parity script (`yuna-bench parity`, docs/ARCHITECTURE.md, ADR-0142): the default
+        # shell and valgrind, whose callgrind counts a frame's instructions and whose DHAT counts
+        # its allocations (ADR-0143). Kept out of the default shell, which every check fetches;
+        # CI's parity job alone uses it. The revisions it compares are built in their own default
+        # shells.
+        parity = pkgs.mkShell (
+          shell
+          // {
+            packages = shell.packages ++ [ pkgs.valgrind ];
+          }
+        );
+
         # The rivals' bench (crates/yuna-bench, CONTRIBUTING.md): the default shell, and the
         # compositors and clients it runs, by their store paths. Kept out of the default shell, so
         # that CI, which fetches that shell at every run, never fetches KWin and its Qt.
