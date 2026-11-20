@@ -587,16 +587,10 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 
 ## Tests and examples
 
-- `yuna mcp`'s start missed two budgets on 2026-11-19, the machine quiet but the session's page
-  cache unknown: its first frame on the GPU at 1080p, 110.3 ms against 100 (58.7 at M1.11), and
-  its `seat create` on llvmpipe at 4K, 128.8 ms against 100 ([measurements](measurements.md)).
-  Its start at 4K on the GPU was measured only on a disturbed machine, 126 ms at the longest
-  against a budget of 100. The laptop and the lowest machine are not measured; no budget holds with programs open
-  ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)). Paid at Stage 2a, M2.1
-  (baselines): M1.11's commit and main measured side by side the same day, quiet, then fixed or
-  put to the owner.
-- Motion's budget was not judged at M1.13's release: the machine never gave the still baseline its
-  rate. Judged again on a quiet machine with the measures above. Paid at Stage 2a, M2.1 (baselines).
+- `yuna mcp`'s start is measured on the desktop alone: the laptop and the lowest machine are not,
+  and no budget holds with programs open
+  ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)). Paid at Stage 2b, with
+  the owner's runs on the laptop.
 - In the parity script's `full` scenario, both builds' heap grows 54 bytes a frame (M2.1); whether
   it is bounded is not known. Paid at Stage 2a, M2.9 (Vulkan the default), with the allocations
   below.

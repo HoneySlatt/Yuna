@@ -4,6 +4,98 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.1 — The baselines (2026-11-19/20)
+
+The high tier's desktop (Ryzen 7 5800X, RX 6900 XT), shared with other sessions' work; the kernel
+7.3.1 until a restart on 2026-11-20, 7.3.4 after. Each timed run read the other programs' load
+before and during it (ADR-0115). The proofs are the tasks' local `.delegation/` folders
+(`m2.1-mcp-start`, `m2.1-start-fix`, `m2.1-motion-2`, `m2.1-lavapipe-2`, `m2.1-parity-2`,
+`m2.1-captures`, `m2.1-traces-2`).
+
+### `yuna mcp`'s start: the cause of 58.7 to 110.3 ms
+
+- **Isolated**: M1.11's `yuna` in main's shell started as fast as in its own (65–94 ms to the
+  first frame), main's `yuna` in either shell as slowly (128–145 ms): the binary, not Mesa. A
+  bisection between `264087e` and main put it between `ae639b0` (61–65 ms) and `84f19c2`
+  (121–124 ms), which sweeps a killed Yuna's homes' folders from the temporary folder at start.
+  The sweep read every entry's metadata before its name; `/tmp` held 38,700 entries, and
+  `instances` starts Yuna with no `TMPDIR`. Fixed in `58f2e75`: the name first.
+- **After the fix**, `instances --phase start`, 20 cold starts each, quiet (others 0.4–1.5 cores):
+
+| Device, output | Reply, median / longest | First frame, median / longest | Budget (ADR-0100) | Verdict |
+|---|---|---|---|---|
+| GPU, 1080p | 57.6 / 63.4 ms | 69.6 / 75.9 ms | first frame ≤ 100 ms | met (M1.13: 110.3) |
+| GPU, 4K | 56.0 / 61.2 ms | 58.3 / 63.7 ms | ≤ 100 ms | met (M1.11: 126, disturbed) |
+| llvmpipe, 4K | 91.9 / 98.3 ms | 113.3 / 120.1 ms | `seat create` ≤ 100 ms | met (M1.13: 128.8) |
+
+### Motion's budget ([ADR-0144](adr/0144-motions-budget-its-clients-draw-on-the-gpu.md))
+
+`motion_time --gpu --output 3840x2160@240,1.5`, 10,000 frames each phase, at `cc29acd`, quiet:
+
+| Clients | Still baseline, % of 240 Hz | Missed still | Missed in motion | Heaviest frame | Verdict |
+|---|---|---|---|---|---|
+| radv (`--client-vulkan`) | 100 % | 0 | 0 | 1,482 µs | met |
+| lavapipe | 99.6 % | 41 | 3,674 (102 in an operation's first 3 frames) | 11,931 µs | recorded: the clients took about 8.6 cores in motion |
+
+At 1080p on llvmpipe (recorded, no pass mark), others at 1.6 cores on average: 67 missed still,
+4,123 in motion.
+
+### The same 4K scene on llvmpipe and on the Vulkan prototype's lavapipe
+
+The scene Yuna draws at its default output, 3840 × 2160 at 240 Hz and scale 1.5: two `wl_shm`
+windows of 1884 × 2112 pixels at (24, 24) and (1932, 24), full damage (both buffers uploaded) or
+one 64 × 64 region a frame. Yuna at `1877694` with a throwaway client, against the prototype's
+`scene` command (`prototype/vulkan`, `1ce1c01`); both on Mesa 26.3.0, the same cadence, output
+captures identical byte for byte. Median of each fully quiet round's median, Linux 7.3.4, at least
+three fully quiet rounds a row, 1,200 frames a run:
+
+| Damage, rasterizer threads | Yuna, llvmpipe | Prototype, lavapipe | Gap | CPU a frame, both |
+|---|---|---|---|---|
+| full, default (16) | 8,294–8,399 µs | 8,081–8,113 µs | −3.2 % | 88.9–89.9 ms |
+| partial, default | 223–226 µs | 165–166 µs | −26.1 % | |
+| full, 8 | 10,465–11,078 µs | 10,776–10,796 µs | +2.7 % | |
+| partial, 8 | 141–158 µs | 125–133 µs | −15.4 % | |
+
+M1.9's 9.6–12 ms on lavapipe drew another scene (rounded corners, shadows) on Mesa 26.2.6.
+
+### The parity script's figures (`yuna-bench parity`, ADR-0142)
+
+The tree against itself, three series of five measurements a side, every scenario on the manual
+clock with lockstep `wl_shm` clients; medians:
+
+| Scenario | Yuna's instructions a frame | Total | Allocations a frame (Yuna's own) | Wakes a frame |
+|---|---|---|---|---|
+| idle (an advance alone) | 40,787 | 55,644 | 93.00 (93.00) | 1.01 |
+| partial | 121,768 | 473,865 | 48.03 (46.03) | 3.01 |
+| full | 155,388 | 80.63 M | 73.05 (65.05) | 3.02 |
+| motion | 119,797 | 73.50 M | 65.06 (54.68) | 2.09 |
+| scaled (4K at 1.5) | 121,808 | 604,382 | 48.03 (46.03) | 3.01 |
+| many (30 windows) | 124,650 | 480,294 | 48.67 (46.67) | 3.01 |
+| input (8 motions a frame) | 571,664 | 795,584 | 1,057.3 (1,057.3) | 9.02 |
+
+- **Spreads**, each figure's widest range over its median: Yuna's instructions 0.196 % (motion
+  0.375 %); the total 0.026 % to 13 % (idle); allocations 0 (motion 0.31 blocks); heap growth
+  0.40 bytes a frame; `Pss_Anon` within 16 KiB, but one run in five 384 KiB less, cause not found.
+  Each threshold and its spread is in `crates/yuna-bench/parity-thresholds.toml`.
+- **Canaries**, each about twice its threshold, each flagged: a spin of Yuna's own instructions
+  (+1.6 to +2.1 %), one allocation a frame, 4 bytes kept a frame, 1 MiB kept, a timer at rest, work
+  each round, and work in the layout's focus and motion's update.
+- **The CI tier's time**: 709 s on 4 of the desktop's cores, quiet; on GitHub's runner, not yet
+  measured.
+- `Pss_Anon` about 48.8 MiB in most scenarios (motion 52.7, scaled 96.6); at rest, 0 wakes and 2
+  context switches in every scenario. In `full`, the heap of both builds grows 54.2 bytes a frame
+  ([debt](debt.md)).
+
+### The held captures and traces
+
+- **Captures** (`captures_held.rs`): on llvmpipe, 0 difference run to run in every class over 9 runs
+  with 0, 1, 4 and the default rasterizer threads. The same GLES path on radeonsi: windows exact,
+  blended and filtered pixels 1 level at most, and every background pixel 1 level off until the
+  background took whole 8-bit levels (`959d62a`).
+- **Traces** (`traces.rs`): 116 to 339 lines each; the whole set 7.8 to 11.4 s in a debug build on
+  a loaded machine (load 29 to 53); identical with the tests on one CPU and with four copies on
+  one CPU.
+
 ## Stage 2's opening design (2026-11-19)
 
 Five measures taken for the decisions of Stage 2's opening, at `a551df7`, on the high tier's
