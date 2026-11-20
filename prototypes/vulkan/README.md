@@ -4,11 +4,13 @@ A throwaway program that answers, on the machine it runs on, the questions of
 [ADR-0073](../../docs/adr/0073-the-vulkan-prototype-answers-only-what-no-rival-measures.md):
 which client buffers Vulkan imports, how it synchronises with them, how a `wl_shm` buffer reaches
 the GPU, what a composition costs at the least, and whether a high-priority GPU queue is granted.
-It lives on the branch `prototype/vulkan`, which is never merged, and is deleted when Stage 2's
+Its `scene` command draws the scene the processor tier is measured on (ADR-0139), below. It
+lives on the branch `prototype/vulkan`, which is never merged, and is deleted when Stage 2's
 renderer lands.
 
 It runs headless. It opens no window, no display and no surface: only the GPU's render node,
-through Vulkan. It changes no setting and needs no privilege. It writes one file, its JSON report.
+through Vulkan. It changes no setting and needs no privilege. It writes one file, its JSON report,
+and for `scene --capture` an image.
 
 ## Running it on the laptop or the Steam Deck
 
@@ -126,6 +128,85 @@ Send both files back; the figures go to `docs/measurements.md` with the commit t
    part shorter than a second), less the prototype's own time on the graphics engine
    (`drm-engine-gfx`).
 
+## The processor tier's scene (`scene`)
+
+ADR-0139 judges the processor tier on its own budget, from one scene measured on both of its
+paths: today's Yuna, GLES on Mesa's llvmpipe, and Stage 2's Vulkan on lavapipe. `scene` draws
+that scene on lavapipe; [`../llvmpipe-scene`](../llvmpipe-scene/README.md), a `wl_shm` client,
+has today's Yuna draw it. Both run on the processor alone and never open the GPU.
+
+The scene is defined once, in `src/scene_definition.rs`, which the client includes:
+
+- Yuna's default output, 3840 × 2160 at 240 Hz and scale 1.5, 8 bits a channel, and its
+  background colour.
+- Two windows where Yuna draws them, in its two columns of half the width: 1884 × 2112 pixels
+  at (24, 24) and at (1932, 24). Yuna draws nothing else: no border, no shadow, no title bar.
+- Each window is an opaque `XRGB8888` `wl_shm` buffer of that size, its viewport at its logical
+  size, so one texel lands on one pixel. Each texel's colour tells where it lies, so a capture
+  shows where every texel was drawn.
+- **Full damage**: each frame, both windows commit a buffer, damaged whole. **Partial damage**:
+  each frame, a 64 × 64 region of window 0 changes and is damaged, alone.
+
+`scene` does what Yuna's renderer, Smithay's GLES, does for the same commits. It uploads what
+was damaged, from the clients' memfds, imported once with `VK_EXT_external_memory_host`: one
+copy, as `glTexSubImage2D` makes. It then draws what the frame damaged over what the output
+holds, without blending, since the windows are opaque. Smithay draws the 64 × 64 region as the
+65 × 65 pixels at (922, 1024): it rounds the damage through logical units. `scene` draws the
+same rectangle.
+
+Both sides time each frame from its start, uploads included, to its drawing done. On Yuna's
+side that is `took_us`, which also spans the frame callbacks it sends, rounded down to whole
+microseconds. Here it runs from recording to the fence signalled. Both count the CPU time of the
+drawing process's threads over the measured frames, and check the output after the last frame
+against the definition, pixel for pixel. A run is quiet when other programs used at most 2
+logical CPUs and 10 % of the GPU, on average and in the busiest second, beyond the counters'
+rounding (`src/load.rs`).
+
+The two sides do not draw at the same cadence unless told to:
+
+- Yuna's client commits at each frame callback by default. Yuna's frame loop then aims each
+  frame at the first boundary after the one its last frame was presented at, and starts it a
+  lead earlier, at most one period (`crates/yuna/src/frames.rs`). A full-damage frame a little
+  over two periods long (8.4 ms at 240 Hz) therefore comes every second or third boundary, every
+  11.2 to 11.6 ms.
+- `scene` starts each frame at the first boundary of `--rate` (240 Hz by default) after the frame
+  before ended: every second boundary for a 7.8 ms frame.
+- `--rate HZ` on both sides paces them alike: each frame starts, or is committed, at the first
+  boundary of HZ after the frame before ended. Yuna then draws the commit at its next refresh,
+  up to a period later, at a phase fixed for the run, where `scene` starts on the boundary. The
+  rate must leave room for that: at 80 Hz an 8.4 ms frame and that delay can miss the next
+  12.5 ms boundary, and Yuna's frames then skip one. `--rate 60` gives every fourth boundary on
+  both sides.
+
+Each run reports its cadence: the measured window's length over its frames ("ms a frame"), and
+the output's periods between two frames ("steps"), from the boundaries Yuna's frames aimed at,
+or from the prototype's frame starts.
+
+Run both from Yuna's development shell, on `main`, so that both use the same Mesa, and inside
+`agent-headless`; build each first:
+
+```sh
+# Here: the prototype; in ../llvmpipe-scene: the client; in Yuna's checkout: yuna, release.
+nix develop -c cargo build --release
+# From Yuna's checkout:
+nix develop -c agent-headless -- bash -c 'VK_ICD_FILENAMES=$YUNA_LAVAPIPE_ICD \
+  <prototype>/target/release/vulkan-prototype scene --damage partial --json partial.json'
+nix develop -c agent-headless -- <client>/target/release/llvmpipe-scene \
+  --yuna <yuna>/target/release/yuna --damage partial --json partial.json --log yuna.log
+# Full damage at the same cadence on both sides, every fourth boundary:
+nix develop -c agent-headless -- bash -c 'VK_ICD_FILENAMES=$YUNA_LAVAPIPE_ICD \
+  <prototype>/target/release/vulkan-prototype scene --damage full --rate 60 --json full.json'
+nix develop -c agent-headless -- <client>/target/release/llvmpipe-scene \
+  --yuna <yuna>/target/release/yuna --damage full --rate 60 --json full.json --log yuna.log
+```
+
+`scene` takes `--damage full|partial` (full by default), `--warm-up N` (300 frames),
+`--frames N` (1200 measured), `--rate HZ` (240; 0 draws frames back to back), `--json FILE`
+(`scene.json`) and `--capture FILE`, which writes the output after the last frame as a PAM
+image. It prints its figures in Markdown. Set `LP_NUM_THREADS` to choose the rasterizer's
+threads; Mesa's default is one a logical CPU. Its exit code is 0 when it measured, 1 when it
+could not, 2 for a wrong argument.
+
 ## For a developer
 
 Everything runs in the repository's Nix shell, which has glslang for the shaders, Vulkan's loader
@@ -147,7 +228,10 @@ from a run without it.
 
 The code: `src/main.rs` runs the parts in order; `src/gpu.rs` holds the instance, the devices, the
 scope that destroys what a test made, and the recorder of commands; `src/dmabuf.rs` exports and
-imports a client's buffer; one file a part after that. `src/pattern.rs` and
+imports a client's buffer; one file a part after that. `src/scene.rs` is the `scene` command;
+`src/scene_definition.rs`, `src/scene_report.rs`, `src/threads.rs`, `src/load.rs`,
+`src/stats.rs` and `src/json.rs` hold no Vulkan, and `../llvmpipe-scene` includes them, so that
+both sides of the scene sum up their figures with the same code. `src/pattern.rs` and
 `shaders/pattern.frag` compute the same test pattern and must change together. ash 0.38 is the
 only dependency (ADR-0073); the few Linux calls the standard library lacks are declared in
 `src/sys.rs`.
@@ -168,3 +252,7 @@ only dependency (ADR-0073); the few Linux calls the standard library lacks are d
 - If the GPU never finishes a test's work, the prototype waits 20 seconds at most for it, then
   leaves that test's objects alive, and the device and instance with them, rather than hang.
 - AMD modifiers are named from drm_fourcc.h's fields; other vendors' are shown in hexadecimal.
+- `scene` follows what Yuna does on its scene, not every case: one output, opaque windows, no
+  motion. Its output is `B8G8R8A8_UNORM`; Yuna's GLES draws into `ABGR8888`, the same bytes in
+  another order. Its "client" is in its own process, where Yuna's is another: the client's work,
+  writing the 64 × 64 region, counts in `scene`'s CPU time, a few microseconds a frame.

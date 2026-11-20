@@ -993,6 +993,34 @@ impl<'d> Scope<'d> {
         })
     }
 
+    /// An image made from `info`, bound to new memory, device-local when a type of it fits.
+    pub fn bound_image(
+        &mut self,
+        gpu: &Gpu<'_>,
+        info: &vk::ImageCreateInfo<'_>,
+    ) -> Result<vk::Image, Failure> {
+        let image = self.image(info)?;
+        // SAFETY: the image was just made on this device and has no memory yet.
+        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
+        let memory_type = gpu
+            .memory_type(
+                requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::empty(),
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .ok_or_else(|| Failure::other("allocate an image's memory", "no memory type fits"))?;
+        let memory = self.memory(
+            &vk::MemoryAllocateInfo::default()
+                .allocation_size(requirements.size)
+                .memory_type_index(memory_type),
+            "allocate an image's memory",
+        )?;
+        // SAFETY: the memory is new, of a type the image allows, and as large as it needs.
+        unsafe { self.device.bind_image_memory(image, memory, 0) }
+            .map_err(|result| Failure::vulkan("bind an image's memory", result))?;
+        Ok(image)
+    }
+
     /// Waits for `fence` and resets it for the next submission.
     pub fn wait_fence(&self, fence: vk::Fence, step: &str) -> Result<(), Failure> {
         // SAFETY: the fence comes from this device; once it signalled nothing is pending on it.
@@ -1166,19 +1194,34 @@ impl Recorder<'_> {
         height: u32,
         clear: Option<[f32; 4]>,
     ) {
+        let load = if clear.is_some() {
+            vk::AttachmentLoadOp::CLEAR
+        } else {
+            vk::AttachmentLoadOp::DONT_CARE
+        };
+        self.begin_rendering_with(view, (width, height), load, clear.unwrap_or_default());
+    }
+
+    /// Begins drawing into `view` over what it holds, as a compositor draws only what changed,
+    /// its viewport and scissor the whole image.
+    pub fn begin_rendering_over(&self, view: vk::ImageView, width: u32, height: u32) {
+        self.begin_rendering_with(view, (width, height), vk::AttachmentLoadOp::LOAD, [0.0; 4]);
+    }
+
+    fn begin_rendering_with(
+        &self,
+        view: vk::ImageView,
+        (width, height): (u32, u32),
+        load: vk::AttachmentLoadOp,
+        clear: [f32; 4],
+    ) {
         let attachments = [vk::RenderingAttachmentInfo::default()
             .image_view(view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(if clear.is_some() {
-                vk::AttachmentLoadOp::CLEAR
-            } else {
-                vk::AttachmentLoadOp::DONT_CARE
-            })
+            .load_op(load)
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: clear.unwrap_or_default(),
-                },
+                color: vk::ClearColorValue { float32: clear },
             })];
         let area = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },

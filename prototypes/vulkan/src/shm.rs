@@ -170,7 +170,7 @@ pub fn run(gpu: &Gpu<'_>, load: &LoadMonitor, windows: &mut Vec<LoadWindow>) -> 
         .collect()
 }
 
-fn host_pointer_alignment(gpu: &Gpu<'_>) -> Option<u64> {
+pub fn host_pointer_alignment(gpu: &Gpu<'_>) -> Option<u64> {
     gpu.host_memory.as_ref()?;
     let mut host = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
     let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut host);
@@ -520,7 +520,7 @@ fn upload_from_host_pointer(
 /// Imports `pages` as a buffer the GPU copies from, with `VK_EXT_external_memory_host`; returns
 /// it with the memory type it took. The buffer's memory lives in `scope`, which must end before
 /// the mapping does.
-fn import_pages(
+pub fn import_pages(
     gpu: &Gpu<'_>,
     scope: &mut Scope<'_>,
     pages: &Mapping,

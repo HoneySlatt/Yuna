@@ -5,16 +5,21 @@
 //! end. Both figures are estimates:
 //!
 //! - Other programs' CPU is the machine's busy time less the prototype's own, `/proc/stat` less
-//!   `/proc/self/stat`. Both count in ticks of 10 ms (USER_HZ), each field rounded down: the six
-//!   busy fields and the prototype's two make the difference wrong by less than 8 ticks, 0.08 s
-//!   of CPU time over the part, before the kernel's own sampling of what runs at each tick.
-//!   Each window states that bound in logical CPUs: 0.4 over a 0.2 s part, 0.006 over 13 s.
+//!   `/proc/self/stat`, and less the processes it measures with it (`LoadMonitor::start`'s
+//!   `measured`: Yuna, for `llvmpipe-scene`). All count in ticks of 10 ms (USER_HZ), each field
+//!   rounded down: the six busy fields, and two fields of each own process, make the difference
+//!   wrong by less than 8 ticks for the prototype alone, 0.08 s of CPU time over the part, and 2
+//!   ticks more for each process measured with it, before the kernel's own sampling of what runs
+//!   at each tick. Each window states that bound in logical CPUs: 0.4 over a 0.2 s part, 0.006
+//!   over 13 s, for the prototype alone.
 //! - Other programs' GPU is amdgpu's `gpu_busy_percent`, the graphics engine's activity, read
 //!   after the part's start: at its end and once each second during it, so once or twice for a
 //!   part shorter than a second. Less the prototype's own share of the graphics engine over the
 //!   part, from the kernel's `drm-engine-gfx` in `/proc/self/fdinfo`.
 //!
 //! A part is disturbed when others used more than 2 logical CPUs or 10 % of the GPU on average.
+//! `LoadWindow::disturbed_in_a_second` is stricter, for the scene: it also asks that no second
+//! of the part went over either limit, beyond the counters' rounding over that second.
 //! A part that measured nothing has no window.
 
 use std::fs;
@@ -29,8 +34,11 @@ use crate::json::Json;
 const OTHERS_CORES_LIMIT: f64 = 2.0;
 const OTHERS_GPU_PERCENT_LIMIT: f64 = 10.0;
 /// The most the rounding of the CPU counters can shift others' busy time, in ticks: six fields
-/// of `/proc/stat`'s busy time and two of `/proc/self/stat`, each rounded down to a tick.
-const CPU_ROUNDING_TICKS: f64 = 8.0;
+/// of `/proc/stat`'s busy time and two of each own process's `stat`, the prototype's and those
+/// it measures, each rounded down to a tick.
+fn cpu_rounding_ticks(own_processes: usize) -> f64 {
+    (6 + 2 * own_processes) as f64
+}
 
 /// The files of the GPU the prototype runs on: its sysfs folder and its render node.
 pub struct GpuFiles {
@@ -48,6 +56,29 @@ impl GpuFiles {
             node: PathBuf::from("/dev/dri").join(name),
         })
     }
+
+    /// The GPU of the machine's first render node, for a driver that has none, such as
+    /// lavapipe: others' load on the machine's GPU is read all the same, the prototype's own
+    /// being none. Read from sysfs; the node is never opened.
+    pub fn first_render_node() -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let mut nodes: Vec<PathBuf> = fs::read_dir("/dev/dri")
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("renderD"))
+            })
+            .collect();
+        nodes.sort();
+        let device = fs::metadata(nodes.first()?).ok()?.rdev();
+        // Linux's dev_t: the major in bits 8-19 and 32-43, the minor in bits 0-7 and 20-31.
+        let major = ((device >> 8) & 0xfff) | ((device >> 32) & 0xffff_f000);
+        let minor = (device & 0xff) | ((device >> 12) & 0xffff_ff00);
+        Self::of_render_node(major as i64, minor as i64)
+    }
 }
 
 #[derive(Clone)]
@@ -55,7 +86,7 @@ struct Sample {
     at: Instant,
     /// Busy and total ticks of every CPU, and how many CPUs `/proc/stat` lists.
     cpu: Option<(u64, u64, u32)>,
-    /// The prototype's own CPU ticks, every thread's.
+    /// The CPU ticks of the prototype's own threads and of the processes it measures.
     own_ticks: Option<u64>,
     gpu_busy_percent: Option<f64>,
     /// The prototype's own GPU time on the device, in nanoseconds, every engine's.
@@ -65,12 +96,12 @@ struct Sample {
     mclk_mhz: Option<u32>,
 }
 
-fn take_sample(gpu: Option<&GpuFiles>) -> Sample {
+fn take_sample(gpu: Option<&GpuFiles>, measured: &[u32]) -> Sample {
     let read = |name: &str| gpu.and_then(|gpu| fs::read_to_string(gpu.device.join(name)).ok());
     Sample {
         at: Instant::now(),
         cpu: machine_cpu_ticks(),
-        own_ticks: own_cpu_ticks(),
+        own_ticks: own_cpu_ticks(measured),
         gpu_busy_percent: read("gpu_busy_percent").and_then(|text| text.trim().parse().ok()),
         own_gpu_ns: gpu.map(own_gpu_ns),
         performance_level: read("power_dpm_force_performance_level")
@@ -102,10 +133,14 @@ fn parse_proc_stat(text: &str) -> Option<(u64, u64, u32)> {
     Some((busy, total, cpus.max(1)))
 }
 
-/// utime and stime from `/proc/self/stat`, fields 14 and 15, after the name in parentheses.
-fn own_cpu_ticks() -> Option<u64> {
-    let text = fs::read_to_string("/proc/self/stat").ok()?;
-    parse_own_stat(&text)
+/// utime and stime from `/proc/self/stat` and each measured process's `stat`, fields 14 and 15,
+/// after the name in parentheses. None if any cannot be read, such as a process that ended.
+fn own_cpu_ticks(measured: &[u32]) -> Option<u64> {
+    let mut ticks = parse_own_stat(&fs::read_to_string("/proc/self/stat").ok()?)?;
+    for pid in measured {
+        ticks += parse_own_stat(&fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
+    }
+    Some(ticks)
 }
 
 fn parse_own_stat(text: &str) -> Option<u64> {
@@ -184,25 +219,31 @@ fn current_clock(text: &str) -> Option<u32> {
 pub struct LoadMonitor {
     samples: Arc<Mutex<Vec<Sample>>>,
     gpu: Option<Arc<GpuFiles>>,
+    /// The processes whose CPU counts as the prototype's own, not others'.
+    measured: Arc<[u32]>,
     stop: Option<mpsc::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl LoadMonitor {
-    pub fn start(gpu: Option<GpuFiles>) -> Self {
+    /// Starts sampling the load of `gpu` and of the processor, where the processes `measured`
+    /// count as the prototype's own.
+    pub fn start(gpu: Option<GpuFiles>, measured: Vec<u32>) -> Self {
         let gpu = gpu.map(Arc::new);
+        let measured: Arc<[u32]> = measured.into();
         let samples = Arc::new(Mutex::new(Vec::new()));
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = {
             let samples = Arc::clone(&samples);
             let gpu = gpu.clone();
+            let measured = Arc::clone(&measured);
             std::thread::Builder::new()
                 .name("load".to_owned())
                 .spawn(move || {
                     while let Err(RecvTimeoutError::Timeout) =
                         stopped.recv_timeout(Duration::from_secs(1))
                     {
-                        push_sample(&samples, gpu.as_deref());
+                        push_sample(&samples, gpu.as_deref(), &measured);
                     }
                 })
                 .ok()
@@ -210,6 +251,7 @@ impl LoadMonitor {
         Self {
             samples,
             gpu,
+            measured,
             stop: Some(stop),
             thread,
         }
@@ -217,7 +259,7 @@ impl LoadMonitor {
 
     /// Reads the counters now; returns the sample's place, the start of a part.
     pub fn mark(&self) -> usize {
-        push_sample(&self.samples, self.gpu.as_deref())
+        push_sample(&self.samples, self.gpu.as_deref(), &self.measured)
     }
 
     /// Reads the counters now and sums up the part that began at `start`.
@@ -229,7 +271,11 @@ impl LoadMonitor {
             .ok()
             .and_then(|samples| samples.get(start.min(end)..=end).map(<[Sample]>::to_vec))
             .unwrap_or_default();
-        LoadWindow::of(name.into(), &samples)
+        LoadWindow::of(
+            name.into(),
+            &samples,
+            cpu_rounding_ticks(1 + self.measured.len()),
+        )
     }
 }
 
@@ -243,10 +289,10 @@ impl Drop for LoadMonitor {
 }
 
 /// Reads a sample and appends it under the lock, so that samples stay in time order.
-fn push_sample(samples: &Mutex<Vec<Sample>>, gpu: Option<&GpuFiles>) -> usize {
+fn push_sample(samples: &Mutex<Vec<Sample>>, gpu: Option<&GpuFiles>, measured: &[u32]) -> usize {
     match samples.lock() {
         Ok(mut samples) => {
-            samples.push(take_sample(gpu));
+            samples.push(take_sample(gpu, measured));
             samples.len() - 1
         }
         Err(_) => 0,
@@ -278,13 +324,18 @@ pub struct LoadWindow {
 pub struct SecondRead {
     pub seconds_since_start: f64,
     pub others_cores: Option<f64>,
+    /// How far the counters' rounding may put `others_cores` off over this reading's interval.
+    pub others_cores_error: Option<f64>,
     pub gpu_busy_percent: Option<f64>,
+    /// `gpu_busy_percent` less the prototype's own share of the graphics engine over the
+    /// interval.
+    pub others_gpu_percent: Option<f64>,
     pub sclk_mhz: Option<u32>,
     pub mclk_mhz: Option<u32>,
 }
 
 impl LoadWindow {
-    fn of(name: String, samples: &[Sample]) -> Self {
+    fn of(name: String, samples: &[Sample], rounding_ticks: f64) -> Self {
         let (Some(first), Some(last)) = (samples.first(), samples.last()) else {
             return Self::empty(name);
         };
@@ -303,7 +354,7 @@ impl LoadWindow {
             Some((
                 ((busy - own) / elapsed_per_cpu).max(0.0),
                 own / elapsed_per_cpu,
-                CPU_ROUNDING_TICKS / elapsed_per_cpu,
+                rounding_ticks / elapsed_per_cpu,
             ))
         };
         let window_cores = cores(first, last);
@@ -339,12 +390,26 @@ impl LoadWindow {
         let range = |values: Vec<u32>| Some((*values.iter().min()?, *values.iter().max()?));
         let each_second = samples
             .windows(2)
-            .map(|pair| SecondRead {
-                seconds_since_start: pair[1].at.duration_since(first.at).as_secs_f64(),
-                others_cores: cores(&pair[0], &pair[1]).map(|(others, _, _)| others),
-                gpu_busy_percent: pair[1].gpu_busy_percent,
-                sclk_mhz: pair[1].sclk_mhz,
-                mclk_mhz: pair[1].mclk_mhz,
+            .map(|pair| {
+                let interval_cores = cores(&pair[0], &pair[1]);
+                let seconds = pair[1].at.duration_since(pair[0].at).as_secs_f64();
+                let own_gpu = match (pair[0].own_gpu_ns, pair[1].own_gpu_ns) {
+                    (Some(from), Some(to)) if seconds > 0.0 => {
+                        to.saturating_sub(from) as f64 / (seconds * 1e9) * 100.0
+                    }
+                    _ => 0.0,
+                };
+                SecondRead {
+                    seconds_since_start: pair[1].at.duration_since(first.at).as_secs_f64(),
+                    others_cores: interval_cores.map(|(others, _, _)| others),
+                    others_cores_error: interval_cores.map(|(_, _, error)| error),
+                    gpu_busy_percent: pair[1].gpu_busy_percent,
+                    others_gpu_percent: pair[1]
+                        .gpu_busy_percent
+                        .map(|busy| (busy - own_gpu).max(0.0)),
+                    sclk_mhz: pair[1].sclk_mhz,
+                    mclk_mhz: pair[1].mclk_mhz,
+                }
             })
             .collect();
         let others_cores = window_cores.map(|(others, _, _)| others);
@@ -375,6 +440,36 @@ impl LoadWindow {
                 || others_gpu_percent.is_some_and(|percent| percent > OTHERS_GPU_PERCENT_LIMIT),
             each_second,
         }
+    }
+
+    /// Others' load in the part's busiest second: the most logical CPUs of any reading, less the
+    /// counters' rounding over its interval, and the most of the GPU.
+    pub fn busiest_second(&self) -> (Option<f64>, Option<f64>) {
+        let most = |values: Vec<f64>| values.into_iter().reduce(f64::max);
+        (
+            most(
+                self.each_second
+                    .iter()
+                    .filter_map(|read| {
+                        Some((read.others_cores? - read.others_cores_error?).max(0.0))
+                    })
+                    .collect(),
+            ),
+            most(
+                self.each_second
+                    .iter()
+                    .filter_map(|read| read.others_gpu_percent)
+                    .collect(),
+            ),
+        )
+    }
+
+    /// Disturbed on average, or in its busiest second beyond the counters' rounding.
+    pub fn disturbed_in_a_second(&self) -> bool {
+        let (cores, gpu) = self.busiest_second();
+        self.disturbed
+            || cores.is_some_and(|cores| cores > OTHERS_CORES_LIMIT)
+            || gpu.is_some_and(|percent| percent > OTHERS_GPU_PERCENT_LIMIT)
     }
 
     fn empty(name: String) -> Self {
@@ -440,7 +535,12 @@ impl LoadWindow {
                             Json::Object(vec![
                                 ("at_seconds", Json::Number(read.seconds_since_start)),
                                 ("others_logical_cpus", number(read.others_cores)),
+                                (
+                                    "others_logical_cpus_rounding_bound",
+                                    number(read.others_cores_error),
+                                ),
                                 ("gpu_busy_percent", number(read.gpu_busy_percent)),
+                                ("others_gpu_percent", number(read.others_gpu_percent)),
                                 ("sclk_mhz", clock(read.sclk_mhz)),
                                 ("mclk_mhz", clock(read.mclk_mhz)),
                             ])
@@ -574,7 +674,57 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_clock, parse_fdinfo, parse_own_stat, parse_proc_stat};
+    use super::{
+        LoadWindow, Sample, cpu_rounding_ticks, current_clock, parse_fdinfo, parse_own_stat,
+        parse_proc_stat,
+    };
+    use std::time::{Duration, Instant};
+
+    /// A sample `second` seconds in, of 16 CPUs, `busy` ticks busy of `total`, the GPU `gpu` %
+    /// busy with none of it the prototype's.
+    fn sample(start: Instant, second: u64, busy: u64, total: u64, gpu: Option<f64>) -> Sample {
+        Sample {
+            at: start + Duration::from_secs(second),
+            cpu: Some((busy, total, 16)),
+            own_ticks: Some(0),
+            gpu_busy_percent: gpu,
+            own_gpu_ns: Some(0),
+            performance_level: None,
+            sclk_mhz: None,
+            mclk_mhz: None,
+        }
+    }
+
+    #[test]
+    fn a_busy_second_disturbs_a_quiet_average() {
+        let start = Instant::now();
+        // Others: 0.5 logical CPUs in the first second, 3 in the second: 1.75 on average.
+        let cpu = [
+            sample(start, 0, 0, 0, None),
+            sample(start, 1, 50, 1600, None),
+            sample(start, 2, 350, 3200, None),
+        ];
+        let window = LoadWindow::of("cpu".to_owned(), &cpu, cpu_rounding_ticks(1));
+        assert!(!window.disturbed);
+        let (cores, _) = window.busiest_second();
+        assert!((cores.expect("a reading") - 2.92).abs() < 1e-9);
+        assert!(window.disturbed_in_a_second());
+        // The GPU: 5 % then 15 %, 10 % on average, which is not above the limit.
+        let gpu = [
+            sample(start, 0, 0, 0, Some(0.0)),
+            sample(start, 1, 0, 1600, Some(5.0)),
+            sample(start, 2, 0, 3200, Some(15.0)),
+        ];
+        let window = LoadWindow::of("gpu".to_owned(), &gpu, cpu_rounding_ticks(1));
+        assert!(!window.disturbed);
+        assert!(window.disturbed_in_a_second());
+        let quiet = [
+            sample(start, 0, 0, 0, Some(1.0)),
+            sample(start, 1, 100, 1600, Some(2.0)),
+        ];
+        let window = LoadWindow::of("quiet".to_owned(), &quiet, cpu_rounding_ticks(2));
+        assert!(!window.disturbed_in_a_second());
+    }
 
     #[test]
     fn reads_the_kernels_files() {

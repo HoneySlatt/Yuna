@@ -1,0 +1,25 @@
+[package]
+name = "llvmpipe-scene"
+version = "0.0.0"
+edition = "2024"
+# The toolchain the branch pins in rust-toolchain.toml.
+rust-version = "1.99.1"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Draws the processor tier's scene on today's Yuna, on llvmpipe, as a wl_shm client, and measures it (ADR-0139); thrown away after Stage 2"
+
+# A workspace of its own, as the Vulkan prototype's.
+[workspace]
+
+[dependencies]
+# A Wayland client, at the versions Yuna's own Cargo.lock holds (this crate's Cargo.lock is a copy
+# of it): `staging` for the fractional scale and the client's capture.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# AGENTS.md: every `unsafe` block says why it is sound, in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "warn"

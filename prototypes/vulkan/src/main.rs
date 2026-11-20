@@ -26,10 +26,14 @@ mod modifiers;
 mod outcome;
 mod pattern;
 mod priority;
+mod scene;
+mod scene_definition;
+mod scene_report;
 mod shm;
 mod stats;
 mod sync;
 mod sys;
+mod threads;
 
 use std::env;
 use std::fs;
@@ -51,6 +55,13 @@ Usage:
       (3840x2160 by default). Prints the report in Markdown and writes it in JSON
       to FILE (vulkan-prototype.json by default). --validate turns on Khronos'
       validation layer and exits with 3 if it reported anything.
+  vulkan-prototype scene [--device N] [--damage full|partial] [--warm-up N]
+                         [--frames N] [--rate HZ] [--json FILE] [--capture FILE]
+      Draws the scene the processor tier is measured on, as Yuna draws it, full
+      or partial damage (full by default), 300 frames of warm-up then 1200
+      measured, each at a 240 Hz boundary (--rate 0: back to back). Prints the
+      figures in Markdown and writes them in JSON to FILE (scene.json by
+      default); --capture writes the output after the last frame as a PAM image.
 ";
 
 /// The version of the JSON file, raised when its fields change meaning.
@@ -73,6 +84,7 @@ enum Command {
     Help,
     Devices,
     Report(Options),
+    Scene(scene::SceneOptions),
 }
 
 fn main() -> ExitCode {
@@ -87,6 +99,7 @@ fn main() -> ExitCode {
         },
         Ok(Command::Devices) => devices(),
         Ok(Command::Report(options)) => report(&options, &arguments),
+        Ok(Command::Scene(options)) => draw_scene(&options, &arguments),
         Err(message) => {
             progress!("{message}\n\n{USAGE}");
             ExitCode::from(2)
@@ -105,6 +118,7 @@ fn parse(arguments: &[String]) -> Result<Command, String> {
             };
         }
         Some("report") => {}
+        Some("scene") => return parse_scene(words).map(Command::Scene),
         Some(word) => return Err(format!("unknown command `{word}`")),
     }
     let mut options = Options {
@@ -133,6 +147,65 @@ fn parse(arguments: &[String]) -> Result<Command, String> {
         }
     }
     Ok(Command::Report(options))
+}
+
+fn parse_scene<'a>(
+    mut words: impl Iterator<Item = &'a String>,
+) -> Result<scene::SceneOptions, String> {
+    let mut options = scene::SceneOptions::new();
+    while let Some(word) = words.next() {
+        let value = words
+            .next()
+            .ok_or_else(|| format!("`{word}` needs a value"))?;
+        let number = |least: usize| {
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|&number| number >= least)
+                .ok_or_else(|| format!("`{word}` takes a whole number from {least}, not `{value}`"))
+        };
+        match word.as_str() {
+            "--device" => options.device = number(0)?,
+            "--damage" => options.damage = scene_report::Damage::parse(value)?,
+            "--warm-up" => options.warm_up = number(0)?,
+            "--frames" => options.frames = number(1)?,
+            "--rate" => {
+                options.rate_hz = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|rate| (0.0..=1000.0).contains(rate))
+                    .ok_or_else(|| format!("`--rate` takes 0 to 1000 Hz, not `{value}`"))?
+            }
+            "--json" => options.json = PathBuf::from(value),
+            "--capture" => options.capture = Some(PathBuf::from(value)),
+            other => return Err(format!("unknown option `{other}`")),
+        }
+    }
+    Ok(options)
+}
+
+/// Draws the scene, writes its JSON, then prints its Markdown.
+fn draw_scene(options: &scene::SceneOptions, arguments: &[String]) -> ExitCode {
+    let run = match scene::run(options, &arguments.join(" ")) {
+        Ok(run) => run,
+        Err(failure) => {
+            progress!("{}", failure.describe());
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = write_atomically(&options.json, run.to_json().to_pretty_string().as_bytes())
+    {
+        progress!("cannot write {}: {error}", options.json.display());
+        return ExitCode::FAILURE;
+    }
+    progress!("the JSON figures are in {}", options.json.display());
+    match print_out(&run.to_markdown()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            progress!("cannot print the figures: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
@@ -332,6 +405,7 @@ fn report(options: &Options, arguments: &[String]) -> ExitCode {
         driver
             .render_node
             .and_then(|node| GpuFiles::of_render_node(node.major, node.minor)),
+        Vec::new(),
     );
     let mut load_windows = Vec::new();
     let parts = run_on_two_devices(&vulkan, physical, options, &load, &mut load_windows);
@@ -679,6 +753,17 @@ mod tests {
         assert!(parse(&words("report --device")).is_err());
         assert!(parse(&words("report --colour")).is_err());
         assert!(matches!(parse(&words("devices")), Ok(Command::Devices)));
+        let Ok(Command::Scene(scene)) =
+            parse(&words("scene --damage partial --frames 1000 --rate 0"))
+        else {
+            panic!("a valid scene command");
+        };
+        assert_eq!(
+            (scene.damage, scene.frames, scene.rate_hz),
+            (crate::scene_report::Damage::Partial, 1000, 0.0)
+        );
+        assert!(parse(&words("scene --damage some")).is_err());
+        assert!(parse(&words("scene --frames 0")).is_err());
         assert!(parse_size("3840x").is_err());
     }
 }
