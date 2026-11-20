@@ -68,6 +68,13 @@ use crate::xwayland::X11Toplevel;
 /// busy for long.
 pub const MAX_TYPED: usize = 4_096;
 
+/// The characters typed between two flushes of the clients: a character is a few key and
+/// modifier events, under 200 bytes, so that 16 stay under the 4,096 bytes a client's buffer
+/// starts at. wayland-rs grows a buffer rather than flush it when it is full, and never shrinks
+/// it: without these flushes a call of [`MAX_TYPED`] characters would leave its client a buffer
+/// of hundreds of KiB for its life (ADR-0147).
+const TYPED_BETWEEN_FLUSHES: usize = 16;
+
 /// The most wheel steps one scroll takes on each axis.
 pub const MAX_SCROLL_STEPS: f64 = 100.0;
 
@@ -928,7 +935,10 @@ impl State {
         if !text.is_empty() && self.text_field_enabled(seat) {
             self.compose_text(seat, "")?;
         }
-        for step in steps {
+        for (typed, step) in steps.into_iter().enumerate() {
+            if typed > 0 && typed % TYPED_BETWEEN_FLUSHES == 0 {
+                self.flush_clients();
+            }
             let done = match step {
                 Typed::Keys(chord) => {
                     tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed))
@@ -945,6 +955,14 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// Writes to their sockets the events each client was sent, as the loop's round does at its
+    /// end; a client that cannot take them is ended there.
+    fn flush_clients(&mut self) {
+        if let Err(error) = self.display_handle.flush_clients() {
+            tracing::debug!(%error, "flushing the clients failed");
+        }
     }
 
     /// Types `keysyms` through an injected keymap, to the surface `seat`'s keyboard is on.

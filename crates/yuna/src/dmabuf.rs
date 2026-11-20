@@ -14,7 +14,8 @@
 //! the protocol tells clients not to rely on; any other may still share a buffer the processor
 //! cannot map, which Yuna refuses. Without feedback, Mesa's Vulkan takes the compositor to be on
 //! its own GPU, and shares buffers in video memory the processor cannot map. On llvmpipe, only
-//! formats of one plane whose pixels Yuna knows the size of are offered. If the feedback cannot
+//! formats of one plane whose pixels Yuna knows the size of are offered; on any device, at most
+//! [`MAX_OFFERED_FORMATS`], so that the tranche's event fits 4,096 bytes. If the feedback cannot
 //! be made, the global is version 3, the formats alone. A renderer that imports no format gets
 //! no global, and Mesa's clients use `wl_shm`.
 //!
@@ -76,6 +77,13 @@ enum MainDevice {
 /// GPU finds another device.
 const NO_DEVICE: u64 = 0;
 
+/// The most formats, each a fourcc code and a modifier, the global offers: the feedback's tranche
+/// lists them in one `tranche_formats` event, 2 bytes an index after an 8-byte header and the
+/// array's 4-byte length, and a client of wayland-rs reads no event past 4,096 bytes, whatever
+/// the server's buffer (ADR-0136). A GPU imports a few hundred; llvmpipe 23.
+const MAX_OFFERED_FORMATS: usize = (4_096 - 8 - 4) / 2;
+const _: () = assert!(8 + 4 + 2 * MAX_OFFERED_FORMATS <= 4_096);
+
 /// The main device the feedback of a renderer on `device` that imports `format_count` formats
 /// names; none, and no global, without a format.
 fn main_device(device: Device, format_count: usize) -> Option<MainDevice> {
@@ -97,11 +105,7 @@ pub(crate) fn create_global(
 ) -> Offer {
     let planes_mapped = device == Device::Software;
     let imported = renderer.dmabuf_formats();
-    let formats: Vec<DrmFormat> = imported
-        .iter()
-        .copied()
-        .filter(|format| !planes_mapped || bytes_per_pixel(format.code).is_some())
-        .collect();
+    let formats = formats_to_offer(imported.iter().copied(), planes_mapped);
     let count = formats.len();
     let left_out = imported.indexset().len() - count;
     let Some(main_device) = main_device(device, count) else {
@@ -135,6 +139,27 @@ pub(crate) fn create_global(
         formats: count,
         planes_mapped,
     }
+}
+
+/// The formats of `imported` the global offers: on a device whose planes the processor maps, only
+/// those whose pixels Yuna knows the size of; [`MAX_OFFERED_FORMATS`] at most, in the renderer's
+/// order, the rest left out with a warning.
+fn formats_to_offer(
+    imported: impl Iterator<Item = DrmFormat>,
+    planes_mapped: bool,
+) -> Vec<DrmFormat> {
+    let mut formats: Vec<DrmFormat> = imported
+        .filter(|format| !planes_mapped || bytes_per_pixel(format.code).is_some())
+        .collect();
+    if formats.len() > MAX_OFFERED_FORMATS {
+        tracing::warn!(
+            imported = formats.len(),
+            offered = MAX_OFFERED_FORMATS,
+            "the renderer imports more dmabuf formats than one event lists; the last are left out"
+        );
+        formats.truncate(MAX_OFFERED_FORMATS);
+    }
+    formats
 }
 
 /// The feedback a renderer gives: `main_device`, and one tranche of the formats offered.
@@ -374,10 +399,28 @@ mod tests {
     use std::fs::{File, OpenOptions};
     use std::os::fd::{AsFd, AsRawFd};
 
+    use drm_fourcc::DrmModifier;
     use rustix::fs::{MemfdFlags, fcntl_add_seals, memfd_create};
     use rustix::io::Errno;
 
     use super::*;
+
+    /// A tranche's formats travel as one event, which a client of wayland-rs cannot read past
+    /// 4,096 bytes whatever the server's buffer (ADR-0136).
+    #[test]
+    fn the_formats_offered_fit_one_event_however_many_the_renderer_imports() {
+        let imported: Vec<DrmFormat> = (0..3_000u64)
+            .map(|modifier| DrmFormat {
+                code: DrmFourcc::Argb8888,
+                modifier: DrmModifier::from(modifier),
+            })
+            .collect();
+        let offered = formats_to_offer(imported.iter().copied(), false);
+        assert_eq!(offered.len(), MAX_OFFERED_FORMATS);
+        assert_eq!(offered[..], imported[..MAX_OFFERED_FORMATS]);
+        let few = formats_to_offer(imported[..23].iter().copied(), false);
+        assert_eq!(few.len(), 23);
+    }
 
     #[test]
     fn feedback_names_no_device_on_the_software_device_the_render_node_on_a_gpu() {
