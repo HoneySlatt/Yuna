@@ -106,14 +106,19 @@ runs Yuna in its own process with six `vkcube`, and plays a round of scrolls, co
 workspace switches and the special workspace's fade, against a still baseline of as many frames;
 it prints, for each, the frames a second against the output's rate, the frames drawn at once and
 missed, and where the misses fall; then the heaviest frame and the ADR's verdict. The verdict names
-the mode it ran at, and counts as the ADR's only at 3840x2160@240,1.5 on `--gpu`; anywhere else it
-is recorded without a pass mark. It gives none when the baseline ran below 95 % of the output's
+the mode it ran at, and counts as the ADR's only at 3840x2160@240,1.5 on `--gpu` with its clients on
+the GPU too, `--client-vulkan` naming the GPU's Vulkan driver
+([ADR-0144](docs/adr/0144-motions-budget-its-clients-draw-on-the-gpu.md)); anywhere else it is
+recorded without a pass mark. It gives none when the baseline ran below 95 % of the output's
 rate. Under `--reduced-motion` the round has no retarget: its load is jumps and fades. Its
 documentation gives its options, `--gpu` among them:
 
 ```sh
 nix develop -c cargo build --release -p yuna --example motion_time
 nix develop -c target/release/examples/motion_time --output 1920x1080@240,1
+# The budget's run, the GPU's Vulkan driver from the shell's Mesa:
+nix develop -c bash -c 'target/release/examples/motion_time --gpu --output 3840x2160@240,1.5 \
+  --client-vulkan "$(dirname "$YUNA_LAVAPIPE_ICD")/radeon_icd.x86_64.json"'
 ```
 
 It runs alone among measurements, as `frame_time` does; on the owner's machine, inside

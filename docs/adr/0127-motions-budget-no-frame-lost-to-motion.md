@@ -2,7 +2,8 @@
 
 - Status: Accepted; supersedes
   [0056](0056-motions-budget-judged-on-the-gpu-against-a-still-baseline.md); supersedes in part
-  [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) (motion's budget)
+  [0077](0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md) (motion's budget); superseded in part by [0144](0144-motions-budget-its-clients-draw-on-the-gpu.md) (where the
+  budget's clients draw)
 - Date: 2026-11-19
 
 ## Context

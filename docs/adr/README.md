@@ -147,7 +147,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0124](0124-x11-windows-across-outputs-of-different-scales.md) | X11 windows across outputs of different scales | Accepted; supersedes 0044, 0068 and 0069 |
 | [0125](0125-the-rust-toolchain-an-exact-stable-version-a-nightly-for-fuzzing.md) | The Rust toolchain: an exact stable version, a pinned nightly for fuzzing alone | Accepted; supersedes 0016 and 0058 |
 | [0126](0126-yuna-and-the-owners-other-projects.md) | Yuna and the owner's other projects: their test compositor, its package, shared practices | Accepted; supersedes 0058 and 0089 |
-| [0127](0127-motions-budget-no-frame-lost-to-motion.md) | Motion's budget: no frame lost to motion, judged against a still baseline | Accepted; supersedes 0056; supersedes in part 0077 |
+| [0127](0127-motions-budget-no-frame-lost-to-motion.md) | Motion's budget: no frame lost to motion, judged against a still baseline | Accepted; supersedes 0056; supersedes in part 0077; superseded in part by 0144 |
 | [0128](0128-hdr-virtual-outputs-and-when-colour-is-chosen.md) | HDR virtual outputs, and when Yuna's colour pipeline is chosen | Accepted; supersedes 0048; superseded in part by 0134 |
 | [0129](0129-configuration-in-kdl-its-includes-and-variants.md) | Configuration in KDL, its includes and variants | Accepted; supersedes 0008 and 0057; supersedes in part 0064 |
 | [0130](0130-oled-care-chosen-at-stage-5s-design.md) | OLED care chosen at Stage 5's design, from a survey | Accepted; supersedes in part 0062 |
@@ -164,3 +164,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0141](0141-a-dwindle-window-that-does-not-fit-floats.md) | A dwindle window that does not fit floats | Accepted |
 | [0142](0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md) | Parity: a pinned baseline, figures in classes, three verdicts | Accepted |
 | [0143](0143-allocations-a-frame-counted-by-dhat.md) | Allocations a frame, counted by valgrind's DHAT | Accepted; supersedes in part 0140 |
+| [0144](0144-motions-budget-its-clients-draw-on-the-gpu.md) | Motion's budget: its clients draw on the GPU | Accepted; supersedes in part 0127 |

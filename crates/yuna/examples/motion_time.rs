@@ -36,8 +36,9 @@
 //!
 //! Last comes ADR-0056's verdict: motion missed no more frames than the still baseline, over
 //! 10,000 frames or more each. It names the mode it ran at, and is the ADR's only at the ADR's
-//! mode, 3840 × 2160 at 240 Hz and scale 1.5, on `--gpu`; anywhere else it is recorded without a
-//! pass mark. It gives no verdict when a phase has too few frames, or when the baseline ran below
+//! mode, 3840 × 2160 at 240 Hz and scale 1.5, on `--gpu`, the clients drawing on the GPU too
+//! through `--client-vulkan` ([ADR-0144](../../../docs/adr/0144-motions-budget-its-clients-draw-on-the-gpu.md));
+//! anywhere else it is recorded without a pass mark. It gives no verdict when a phase has too few frames, or when the baseline ran below
 //! 95 % of the output's rate: it would not be the output redrawn whole at its rate.
 //!
 //! Build it for release, then run it in the development shell, alone among measurements:
@@ -1068,9 +1069,11 @@ fn verdict(baseline: &Summary, motion: &Summary, pace: Pace) -> Verdict {
     }
 }
 
-/// Whether a run at `mode`, on the GPU or not, is the one ADR-0056 judges.
-fn is_the_adrs_mode(gpu: bool, mode: &OutputMode) -> bool {
-    gpu && read_mode(DEFAULT_OUTPUT).is_ok_and(|adrs| adrs == *mode)
+/// Whether a run at `mode`, on the GPU or not, its clients on lavapipe or on the Vulkan driver
+/// `--client-vulkan` named, is the one ADR-0056 judges: Yuna and its clients on the GPU
+/// (ADR-0144).
+fn is_the_adrs_mode(gpu: bool, clients_on_gpu: bool, mode: &OutputMode) -> bool {
+    gpu && clients_on_gpu && read_mode(DEFAULT_OUTPUT).is_ok_and(|adrs| adrs == *mode)
 }
 
 /// The verdict as the report prints it, with the mode it ran at, and "no pass mark" unless that
@@ -1078,15 +1081,19 @@ fn is_the_adrs_mode(gpu: bool, mode: &OutputMode) -> bool {
 fn verdict_line(
     verdict: &Verdict,
     gpu: bool,
+    clients_on_gpu: bool,
     output: &str,
     mode: &OutputMode,
     pace: Pace,
 ) -> String {
     let device = if gpu { "--gpu" } else { "llvmpipe" };
-    let standing = if is_the_adrs_mode(gpu, mode) {
+    let standing = if is_the_adrs_mode(gpu, clients_on_gpu, mode) {
         "the ADR's mode".to_owned()
     } else {
-        format!("recorded, no pass mark: the ADR judges only at {DEFAULT_OUTPUT} on --gpu")
+        format!(
+            "recorded, no pass mark: the ADR judges only at {DEFAULT_OUTPUT} on --gpu, the \
+             clients on the GPU through --client-vulkan"
+        )
     };
     let result = match verdict {
         Verdict::Met => "met: motion missed no more frames than the still output".to_owned(),
@@ -1191,6 +1198,7 @@ fn report(
         verdict_line(
             &verdict(&still, &moving, pace),
             options.gpu,
+            options.client_vulkan.is_some(),
             &options.output,
             &options.mode,
             pace
@@ -1525,6 +1533,7 @@ mod tests {
         let line = verdict_line(
             &Verdict::BaselineBelowRate,
             true,
+            true,
             DEFAULT_OUTPUT,
             &read_mode(DEFAULT_OUTPUT).unwrap(),
             pace(60.0),
@@ -1538,7 +1547,14 @@ mod tests {
     #[test]
     fn the_verdict_names_its_mode_and_is_the_adrs_only_at_its_mode_on_the_gpu() {
         let line = |verdict, gpu, output: &str| {
-            verdict_line(&verdict, gpu, output, &read_mode(output).unwrap(), AT_RATE)
+            verdict_line(
+                &verdict,
+                gpu,
+                gpu,
+                output,
+                &read_mode(output).unwrap(),
+                AT_RATE,
+            )
         };
         let adr = line(Verdict::Met, true, "3840x2160@240,1.5");
         assert!(
@@ -1551,6 +1567,14 @@ mod tests {
             line(Verdict::Met, true, "3840x2160@120,1.5"),
             line(Verdict::Met, true, "3840x2160@240,1"),
             line(Verdict::Met, false, "3840x2160@240,1.5"),
+            verdict_line(
+                &Verdict::Met,
+                true,
+                false,
+                "3840x2160@240,1.5",
+                &read_mode("3840x2160@240,1.5").unwrap(),
+                AT_RATE,
+            ),
         ] {
             assert!(other.contains("no pass mark"), "{other}");
             assert!(other.contains("3840x2160@240,1.5"), "{other}");
