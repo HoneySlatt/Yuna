@@ -587,17 +587,33 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 
 ## Tests and examples
 
+- The parity script's `parity` job takes 18 to 22 minutes on GitHub's runner, over the method's
+  bar of 20 for a CI job; its thresholds come from the desktop's spreads alone, and one run on the
+  runner passed ([measurements](measurements.md)). Caching the baseline's build by its commit
+  would halve its builds; a new action is put to the owner first. Paid at Stage 2a, M2.2 (the
+  interface), before its first move of the baseline.
+- The parity script has no scenario for popups, X11 windows, captures or subsurfaces, and the held
+  captures take no X11 window: their *filtered* class tests the renderer's bilinear filter, not
+  X11's area filter. Paid before the milestones that rewrite them: subsurfaces at M2.5 (the
+  boundary), X11 windows and the area filter at M2.8 (the Vulkan renderer), captures at M2.10,
+  popups at M2.13.
+- The parity script's "allocations a frame through Yuna's binary" counts the blocks whose stack,
+  within DHAT's 12 frames, passes through Yuna's binary, Mesa's allocations called from Yuna
+  included; ADR-0140's target needs the innermost frame outside the allocator. Its context
+  switches count only Yuna's main thread and its threads named `yuna-…`. Paid at Stage 2a, M2.4
+  (the map, tasks, frames and events), with the table of tasks.
+- Two X11 stories absorb a race between the manager's thread and the story by retrying:
+  `a_surface_committed_after_its_windows_serial_is_paired_with_it` (three tries, a 500 ms sleep)
+  and the managers' burst in `x11_bounds.rs` (up to eight). Paid at Stage 2a, M2.4, where every
+  task runs inline on the manual clock.
 - `yuna mcp`'s start is measured on the desktop alone: the laptop and the lowest machine are not,
   and no budget holds with programs open
   ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)). Paid at Stage 2b, with
   the owner's runs on the laptop.
-- In the parity script's `full` scenario, both builds' heap grows 54 bytes a frame (M2.1); whether
-  it is bounded is not known. Paid at Stage 2a, M2.9 (Vulkan the default), with the allocations
-  below.
 - Yuna's own code allocates on every frame: 83 allocations and 404 KiB on a still frame, 91 and 390
   KiB in motion, none at rest, measured by heaptrack on llvmpipe at 1080p; half are vectors rebuilt
   in the elements' path ([ADR-0140](adr/0140-rust-1-100s-features-what-yuna-takes.md)). The target
-  is none on a still or a moving frame, checked by heaptrack in the parity script. Paid at Stage 2a,
+  is none on a still or a moving frame, checked by DHAT in the parity script (ADR-0143). Paid at Stage 2a,
   M2.9 (Vulkan the default).
 - `tests/consumers.rs` builds Pluto's `pluto-input` once into `target/consumers/`, and Cargo does
   not build it again when the development shell's libraries change: after a raise of `nixpkgs`, a

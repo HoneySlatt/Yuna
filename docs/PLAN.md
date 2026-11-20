@@ -22,7 +22,11 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   **Left, at the owner's go when the machine is free**: the timed and GPU tiers. Their code is on
   the branch `m2.1-timed` (`073ab79`), unfinished and unreviewed; then its self control, its `spin` and `start` canaries, the GPU tier and the soak are
   run, the code reviewed and merged. Missing scenarios: popups, X11, captures, subsurfaces.
-- **Next: M2.2, the interface**, in a new session; the timed tier may finish beside it.
+- **Next: M2.2, the interface**, in a new session. The owner chose on 2026-11-20 to pause the
+  measurements and start M2.2, the timed tier finishing at their go, against ADR-0139's "baselines
+  first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
+  the baseline. The timed tier's start scenario takes a full `TMPDIR`, so that it guards
+  `58f2e75`'s fix.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -37,8 +41,8 @@ from its first commit. Each Smithay behaviour [debt](debt.md) lists becomes a te
 milestone that replaces its module. A new dependency is put to the owner at its milestone's start.
 
 - **M2.1 Baselines.** A parity script: at each push in CI, figures the load does not move
-  (callgrind's instructions for a frame and the layout's operations, `Pss`, wakes, heaptrack's
-  allocations a frame); in an agent's runs on the GPU, DRM memory; once per milestone, timed runs
+  (callgrind's instructions for a frame and the layout's operations, `Pss`, wakes, DHAT's
+  allocations a frame, ADR-0143); in an agent's runs on the GPU, DRM memory; once per milestone, timed runs
   interleaved, with a build against itself and an injected slowdown as controls; start time, GPU
   memory, a partial-damage frame, a soak. Protocol traces of scripted clients, times kept on the
   manual clock. Captures from a buffer the processor maps. `yuna mcp`'s start at M1.11's commit

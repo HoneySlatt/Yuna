@@ -63,7 +63,7 @@ M1.9's 9.6–12 ms on lavapipe drew another scene (rounded corners, shadows) on 
 The tree against itself, three series of five measurements a side, every scenario on the manual
 clock with lockstep `wl_shm` clients; medians:
 
-| Scenario | Yuna's instructions a frame | Total | Allocations a frame (Yuna's own) | Wakes a frame |
+| Scenario | Yuna's instructions a frame | Total | Allocations a frame (through Yuna's binary) | Wakes a frame |
 |---|---|---|---|---|
 | idle (an advance alone) | 40,787 | 55,644 | 93.00 (93.00) | 1.01 |
 | partial | 121,768 | 473,865 | 48.03 (46.03) | 3.01 |
@@ -74,17 +74,22 @@ clock with lockstep `wl_shm` clients; medians:
 | input (8 motions a frame) | 571,664 | 795,584 | 1,057.3 (1,057.3) | 9.02 |
 
 - **Spreads**, each figure's widest range over its median: Yuna's instructions 0.196 % (motion
-  0.375 %); the total 0.026 % to 13 % (idle); allocations 0 (motion 0.31 blocks); heap growth
+  0.375 %); the total 0.026 % to 15.5 % (idle); allocations 0 (motion 0.31 blocks); heap growth
   0.40 bytes a frame; `Pss_Anon` within 16 KiB, but one run in five 384 KiB less, cause not found.
   Each threshold and its spread is in `crates/yuna-bench/parity-thresholds.toml`.
 - **Canaries**, each about twice its threshold, each flagged: a spin of Yuna's own instructions
   (+1.6 to +2.1 %), one allocation a frame, 4 bytes kept a frame, 1 MiB kept, a timer at rest, work
   each round, and work in the layout's focus and motion's update.
-- **The CI tier's time**: 709 s on 4 of the desktop's cores, quiet; on GitHub's runner, not yet
-  measured.
+- **The CI tier's time**: 709 s on 4 of the desktop's cores, quiet; on GitHub's runner
+  (`ubuntu-24.04`) the `parity` job took 21 min 40 s on a pull request (job 136221466738) and
+  18 min 10 s on main's push (job 136233239285), its two 10,000-window motion cases 200 to 270 s
+  each. One run, base `500e804` against head `4aa4451`, the same Yuna code, passed; the runner's
+  own spreads are not measured.
 - `Pss_Anon` about 48.8 MiB in most scenarios (motion 52.7, scaled 96.6); at rest, 0 wakes and 2
-  context switches in every scenario. In `full`, the heap of both builds grows 54.2 bytes a frame
-  ([debt](debt.md)).
+  context switches in every scenario. In `full`, the heap of both builds grows 54.2 bytes a frame: 51.2 is
+  `Drawings::recent` (`frames.rs`) filling up to its `DRAWING_WINDOW` of 500 ms, 120 entries at
+  240 Hz, between the 40- and 80-period runs, and 3 one llvmpipe fence held at the end; bounded,
+  not a leak (M2.1's closing review).
 
 ### The held captures and traces
 
