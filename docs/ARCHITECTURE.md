@@ -93,8 +93,9 @@ One Cargo workspace; its crates live in `crates/`.
 - `yuna` uses Yuna's fork of Smithay at a pinned revision
   ([ADR-0112](adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md), its
   [patches](smithay-patches.md)), with only its `wayland_frontend`, `desktop` and `renderer_gl`
-  features. Beside it: rustix for the system calls, named directly though Smithay re-exports it;
-  x11rb for the X11 window manager; zbus's wire format for D-Bus; `serde` and `serde_json` for
+  features. Beside it, named directly though Smithay depends on them too: wayland-server, calloop,
+  the server side of wayland-protocols and wayland-protocols-wlr, xkbcommon, drm-fourcc, and rustix
+  for the system calls; x11rb for the X11 window manager; zbus's wire format for D-Bus; `serde` and `serde_json` for
   MCP; `png` for captures; `tracing` for the logs. Its tests and measuring examples add proptest,
   the Wayland client crates, and `yuna-bench`'s readers of `/proc` and the DRM statistics.
 - At run time Yuna needs libxkbcommon, linked; libglvnd's EGL and Mesa, loaded; Xwayland, found

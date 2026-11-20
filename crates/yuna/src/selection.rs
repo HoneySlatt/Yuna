@@ -28,15 +28,13 @@ use std::os::fd::OwnedFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use calloop::generic::Generic;
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::Errno;
 use rustix::pipe::{PipeFlags, pipe_with};
 use smithay::input::Seat;
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::selection::data_device::{
     self, DataDeviceHandler, DataDeviceState, clear_data_device_selection,
     current_data_device_selection_userdata, request_data_device_client_selection,
@@ -49,6 +47,8 @@ use smithay::wayland::selection::primary_selection::{
     set_primary_selection,
 };
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{DisplayHandle, Resource};
 
 use yuna_layout::SeatId;
 

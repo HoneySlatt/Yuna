@@ -70,12 +70,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use calloop::channel::{self, Sender};
+use calloop::generic::Generic;
+use calloop::{Interest, Mode, PostAction, RegistrationToken};
 use rustix::fs::OFlags;
 use rustix::process::Pid;
 use serde_json::{Value, json};
-use smithay::reexports::calloop::channel::{self, Sender};
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
 use yuna_layout::SeatId;
 
 use crate::compositor::Compositor;
@@ -263,8 +263,8 @@ pub enum Stop {
 
 /// Whether epoll refused a descriptor because it cannot be watched: a regular file, or a device
 /// such as `/dev/null`.
-fn is_not_pollable(error: &smithay::reexports::calloop::Error) -> bool {
-    matches!(error, smithay::reexports::calloop::Error::IoError(io)
+fn is_not_pollable(error: &calloop::Error) -> bool {
+    matches!(error, calloop::Error::IoError(io)
         if io.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()))
 }
 

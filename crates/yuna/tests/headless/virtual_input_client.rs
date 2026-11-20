@@ -11,7 +11,6 @@ use std::os::fd::AsFd;
 use std::path::Path;
 
 use rustix::fs::{MemfdFlags, memfd_create};
-use smithay::input::keyboard::xkb;
 use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
@@ -20,6 +19,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
 };
+use xkbcommon::xkb;
 use yuna::Compositor;
 use yuna::yuna_layout::SeatId;
 

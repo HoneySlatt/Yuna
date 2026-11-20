@@ -25,14 +25,15 @@ use std::collections::BTreeSet;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
-use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig, xkb};
+use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
-use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
-use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::{Logical, Point, Serial};
+use wayland_server::backend::{ClientId, DisconnectReason};
+use wayland_server::protocol::wl_seat::WlSeat;
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{Client, DisplayHandle, Resource};
+use xkbcommon::xkb;
 use yuna_layout::SeatId;
 use yuna_motion::Change;
 

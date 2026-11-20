@@ -8,9 +8,9 @@
 //! `agent-2` and `agent-3`, each with an output of 1920 × 1080 at scale 1.
 
 use serde_json::{Value, json};
-use smithay::input::keyboard::Keysym;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::ConnectionExt as _;
+use xkbcommon::xkb::Keysym;
 use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, KeyboardLayout, MAX_LAYOUT_NAME, OWNER_SEAT};
 

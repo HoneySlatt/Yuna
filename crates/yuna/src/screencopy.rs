@@ -16,8 +16,6 @@
 use std::time::Duration;
 
 use smithay::output::Output;
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::reexports::wayland_server::protocol::wl_shm::Format;
 use smithay::utils::{Rectangle, Transform};
 use smithay::wayland::image_capture_source::{
     ImageCaptureSource, ImageCaptureSourceHandler, ImageCaptureSourceState,
@@ -28,6 +26,8 @@ use smithay::wayland::image_copy_capture::{
     ImageCopyCaptureState, Session, SessionRef,
 };
 use smithay::wayland::shm::with_buffer_contents_mut;
+use wayland_server::protocol::wl_buffer::WlBuffer;
+use wayland_server::protocol::wl_shm::Format;
 use yuna_layout::OutputId;
 
 use crate::OutputMode;
@@ -35,7 +35,7 @@ use crate::capture::{Destination, Failure};
 use crate::output::to_i32;
 use crate::seats::seat_of_client;
 use crate::state::State;
-use smithay::reexports::wayland_server::backend::ClientId;
+use wayland_server::backend::ClientId;
 
 /// The most capture sessions one client keeps; past it, a new one is stopped at once
 /// ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)). A recorder or
@@ -62,9 +62,7 @@ pub(crate) struct ScreencopyState {
 
 impl ScreencopyState {
     /// Announces the globals to every client.
-    pub(crate) fn new(
-        display: &smithay::reexports::wayland_server::DisplayHandle,
-    ) -> ScreencopyState {
+    pub(crate) fn new(display: &wayland_server::DisplayHandle) -> ScreencopyState {
         ScreencopyState {
             _sources: ImageCaptureSourceState::new(),
             output_sources: OutputCaptureSourceState::new::<State>(display),

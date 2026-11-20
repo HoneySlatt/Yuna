@@ -99,9 +99,9 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
+use calloop::channel::SyncSender;
+use calloop::ping::Ping;
 use rustix::net::SendFlags;
-use smithay::reexports::calloop::channel::SyncSender;
-use smithay::reexports::calloop::ping::Ping;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::errors::{ConnectionError, ReplyError};
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};

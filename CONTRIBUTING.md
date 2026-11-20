@@ -494,6 +494,11 @@ home. The owner's decisions:
   ([ADR-0094](docs/adr/0094-the-accessibility-tree-yuna-as-the-registry-of-each-seats-bus.md));
   `rustix`, named directly, the crate Smithay re-exports and `Cargo.lock` held already.
 - 2026-11-19: util-linux in the shell, for the Opium test's `unshare` (ADR-0122).
+- 2026-11-20 (M2.2): `wayland-server`, `calloop`, `xkbcommon`, `drm-fourcc`, and the server side of
+  `wayland-protocols` and `wayland-protocols-wlr`, named directly in place of Smithay's re-exports,
+  the crates `Cargo.lock` held already, under MIT
+  ([ADR-0139](docs/adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md), which needs no new
+  ask for them).
 
 Smithay is Yuna's public fork, read over HTTPS and pinned to one commit
 ([ADR-0112](docs/adr/0112-smithay-pinned-patched-in-a-public-fork-left-at-stage-2.md)); its

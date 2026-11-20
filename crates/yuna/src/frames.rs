@@ -73,17 +73,17 @@ use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::desktop::utils::{
-    OutputPresentationFeedback, SurfacePresentationFeedback, take_presentation_feedback_surface_tree,
-    with_surfaces_surface_tree,
+    OutputPresentationFeedback, SurfacePresentationFeedback,
+    take_presentation_feedback_surface_tree, with_surfaces_surface_tree,
 };
-use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Monotonic, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
     SurfaceAttributes, SurfaceData, TraversalAction, with_surface_tree_downward,
 };
 use smithay::wayland::presentation::PresentationFeedbackCachedState;
+use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+use wayland_server::Resource;
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::{OutputId, Placed, SeatId, WindowId};
 use yuna_motion::{Change, Drawn};
 

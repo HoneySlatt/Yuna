@@ -11,9 +11,9 @@
 //! This file is the thin layer over Smithay's `text_input` module; `input.rs` decides what goes
 //! through it.
 
-use smithay::reexports::wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::ZwpTextInputV3;
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::text_input::{TextInputActivation, TextInputManagerState, TextInputSeat};
+use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::ZwpTextInputV3;
+use wayland_server::DisplayHandle;
 use yuna_layout::SeatId;
 
 use crate::Error;

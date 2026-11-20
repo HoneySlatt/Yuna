@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use smithay::backend::allocator::Fourcc;
+use drm_fourcc::DrmFourcc;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
@@ -20,8 +20,8 @@ use smithay::backend::renderer::element::{Kind, render_elements};
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, ffi};
 use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
 use smithay::desktop::PopupManager;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::geometry::Rect;
 
 use crate::Error;
@@ -154,7 +154,7 @@ pub(crate) fn create_buffer(
 ) -> Result<GlesRenderbuffer, Error> {
     let size: Size<i32, Buffer> = (to_i32(width), to_i32(height)).into();
     renderer
-        .create_buffer(Fourcc::Abgr8888, size)
+        .create_buffer(DrmFourcc::Abgr8888, size)
         .map_err(|e| Error::Renderer(format!("cannot allocate an output's buffer: {e}")))
 }
 
@@ -304,7 +304,7 @@ pub(crate) fn read_pixels(
         (region.size.w, region.size.h).into(),
     );
     let mapping = renderer
-        .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+        .copy_framebuffer(&target, region, DrmFourcc::Abgr8888)
         .map_err(read)?;
     let pixels = renderer.map_texture(&mapping).map_err(read)?.to_vec();
     Ok(pixels)

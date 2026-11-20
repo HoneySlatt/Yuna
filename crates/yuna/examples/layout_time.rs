@@ -33,7 +33,7 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use smithay::input::keyboard::xkb;
+use xkbcommon::xkb;
 use yuna::{ClockMode, Compositor, Config, KeyboardLayout};
 use yuna_bench::machine::MachineWatch;
 use yuna_bench::sandbox::RENDER_NODE;

@@ -34,11 +34,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use smithay::input::Seat;
 use smithay::input::dnd::{DndAction, DndFocus, OfferData, Source, SourceMetadata};
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::wl_data_source::{self, WlDataSource};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{IsAlive, Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::selection::data_device::WlOfferData;
+use wayland_server::Resource;
+use wayland_server::protocol::wl_data_source::{self, WlDataSource};
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::SeatId;
 
 use super::bridge::MAX_X11_TRANSFERS;

@@ -34,17 +34,18 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::fs::MetadataExt;
 use std::ptr;
 
+use drm_fourcc::{DrmFormat, DrmFourcc};
 use rustix::fs::{FsWord, SealFlags, SeekFrom, fcntl_get_seals, fstatfs, seek};
 use rustix::mm::{MapFlags, ProtFlags, mmap, munmap};
+use smithay::backend::allocator::Buffer;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::get_bpp;
-use smithay::backend::allocator::{Buffer, Format, Fourcc};
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::dmabuf::{
     DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
 };
+use wayland_server::DisplayHandle;
 
 use crate::render::Device;
 use crate::state::State;
@@ -96,7 +97,7 @@ pub(crate) fn create_global(
 ) -> Offer {
     let planes_mapped = device == Device::Software;
     let imported = renderer.dmabuf_formats();
-    let formats: Vec<Format> = imported
+    let formats: Vec<DrmFormat> = imported
         .iter()
         .copied()
         .filter(|format| !planes_mapped || bytes_per_pixel(format.code).is_some())
@@ -140,7 +141,7 @@ pub(crate) fn create_global(
 fn default_feedback(
     renderer: &GlesRenderer,
     main_device: MainDevice,
-    formats: Vec<Format>,
+    formats: Vec<DrmFormat>,
 ) -> Result<DmabufFeedback, String> {
     let device_number = match main_device {
         MainDevice::NoDevice => NO_DEVICE,
@@ -183,8 +184,8 @@ fn planes_are_safe_to_read(dmabuf: &Dmabuf, planes_mapped: bool) -> bool {
 /// their mean bits per pixel: they are left out, as is any whose bits make no whole byte. Of the
 /// 57 formats Mesa 26.2's llvmpipe imports, this keeps its 23 of red, red and green, and RGB
 /// (`R8`, `AR24`, `AB4H`…); its YUV formats, packed or of several planes, are left out.
-fn bytes_per_pixel(code: Fourcc) -> Option<u64> {
-    if matches!(code, Fourcc::Yuv420 | Fourcc::Nv12) {
+fn bytes_per_pixel(code: DrmFourcc) -> Option<u64> {
+    if matches!(code, DrmFourcc::Yuv420 | DrmFourcc::Nv12) {
         return None;
     }
     let bits = get_bpp(code)?;
@@ -393,17 +394,17 @@ mod tests {
     /// of several planes, though Smithay gives NV12 and YUV420 a mean of bits per pixel.
     #[test]
     fn bytes_per_pixel_of_formats_of_one_plane_alone() {
-        assert_eq!(bytes_per_pixel(Fourcc::R8), Some(1));
-        assert_eq!(bytes_per_pixel(Fourcc::Rgb565), Some(2));
-        assert_eq!(bytes_per_pixel(Fourcc::Argb8888), Some(4));
-        assert_eq!(bytes_per_pixel(Fourcc::Abgr16161616f), Some(8));
+        assert_eq!(bytes_per_pixel(DrmFourcc::R8), Some(1));
+        assert_eq!(bytes_per_pixel(DrmFourcc::Rgb565), Some(2));
+        assert_eq!(bytes_per_pixel(DrmFourcc::Argb8888), Some(4));
+        assert_eq!(bytes_per_pixel(DrmFourcc::Abgr16161616f), Some(8));
         for code in [
-            Fourcc::Nv12,
-            Fourcc::Yuv420,
-            Fourcc::Nv16,
-            Fourcc::P010,
-            Fourcc::Yuyv,
-            Fourcc::Ayuv,
+            DrmFourcc::Nv12,
+            DrmFourcc::Yuv420,
+            DrmFourcc::Nv16,
+            DrmFourcc::P010,
+            DrmFourcc::Yuyv,
+            DrmFourcc::Ayuv,
         ] {
             assert_eq!(bytes_per_pixel(code), None, "{code:?}");
         }

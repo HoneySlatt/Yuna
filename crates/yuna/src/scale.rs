@@ -19,11 +19,11 @@
 use std::cell::Cell;
 
 use smithay::desktop::utils::with_surfaces_surface_tree;
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Transform;
 use smithay::wayland::compositor::{SurfaceData, send_surface_state, with_states};
 use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
+use wayland_server::Resource;
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::OutputId;
 
 use crate::popups::popup_toplevel;

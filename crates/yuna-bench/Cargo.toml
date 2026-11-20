@@ -13,7 +13,7 @@ publish.workspace = true
 # The bench's own clients: still windows, and the counter of frames through
 # ext-image-copy-capture.
 wayland-client.workspace = true
-wayland-protocols.workspace = true
+wayland-protocols = { workspace = true, features = ["client", "staging", "unstable"] }
 # `zwp_virtual_keyboard_v1`, through which the bench types its keys into a compositor driven by
 # its keys alone, dwl, in its own sandbox.
 wayland-protocols-misc.workspace = true

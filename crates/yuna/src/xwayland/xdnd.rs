@@ -51,7 +51,7 @@
 
 use std::time::{Duration, Instant};
 
-use smithay::reexports::calloop::channel::SyncSender;
+use calloop::channel::SyncSender;
 use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::{self, SelectionEvent};
 use x11rb::protocol::xproto::{

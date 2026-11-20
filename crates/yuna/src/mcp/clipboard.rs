@@ -10,10 +10,10 @@
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
+use calloop::generic::Generic;
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::{Interest, Mode, PostAction, RegistrationToken};
 use serde_json::{Map, Value, json};
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken};
 use yuna_layout::SeatId;
 
 use super::Server;

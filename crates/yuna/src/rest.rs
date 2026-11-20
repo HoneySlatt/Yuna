@@ -42,8 +42,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 
+use calloop::{EventSource, InsertError, LoopHandle, RegistrationToken};
 use rustix::event::epoll;
-use smithay::reexports::calloop::{EventSource, InsertError, LoopHandle, RegistrationToken};
 use yuna_layout::SeatId;
 
 use crate::compositor::ClientProcess;

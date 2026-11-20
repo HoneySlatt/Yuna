@@ -11,7 +11,8 @@
 use std::sync::{Arc, Mutex};
 
 use smithay::output::Output;
-use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
+use smithay::wayland::compositor::{Cacheable, with_states};
+use wayland_protocols::wp::color_management::v1::server::{
     wp_color_management_output_v1::{self, WpColorManagementOutputV1},
     wp_color_management_surface_feedback_v1::{self, WpColorManagementSurfaceFeedbackV1},
     wp_color_management_surface_v1::{self, WpColorManagementSurfaceV1},
@@ -22,11 +23,10 @@ use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
     wp_image_description_reference_v1::{self, WpImageDescriptionReferenceV1},
     wp_image_description_v1::{self, WpImageDescriptionV1},
 };
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum, Weak,
 };
-use smithay::wayland::compositor::{Cacheable, with_states};
 
 use super::description::{
     Chromaticities, Description, Luminances, NamedPrimaries, Params, ParamsError, TransferFunction,
@@ -223,7 +223,7 @@ impl Dispatch<WpColorManagementOutputV1, Option<smithay::output::WeakOutput>> fo
 
     fn destroyed(
         state: &mut State,
-        _client: smithay::reexports::wayland_server::backend::ClientId,
+        _client: wayland_server::backend::ClientId,
         object: &WpColorManagementOutputV1,
         _output: &Option<smithay::output::WeakOutput>,
     ) {
@@ -326,7 +326,7 @@ impl Dispatch<WpColorManagementSurfaceFeedbackV1, Feedback> for State {
 
     fn destroyed(
         state: &mut State,
-        _client: smithay::reexports::wayland_server::backend::ClientId,
+        _client: wayland_server::backend::ClientId,
         object: &WpColorManagementSurfaceFeedbackV1,
         _feedback: &Feedback,
     ) {

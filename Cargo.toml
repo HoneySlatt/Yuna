@@ -46,18 +46,32 @@ x11rb = { version = "0.14.0", default-features = false, features = ["composite",
 # its default features it holds no connection, no runtime and no executor (crates/yuna/src/dbus/).
 # zvariant, its former home, is unmaintained (RUSTSEC-2026-0370).
 zbus = { version = "6.3.0", default-features = false }
+# The crates below the next one are those Smithay depends on and Yuna names itself, rather than
+# through Smithay's re-exports (ADR-0139): the versions Cargo.lock holds, so that Yuna and Smithay
+# share one copy; each MIT. Each crate turns on the features it uses.
+#
+# The Wayland protocol's server side: the display, its clients and the core protocol's objects.
+wayland-server = "0.31.14"
+# The event loop every source of Yuna's runs on: sockets, timers, clients, programs' pipes.
+calloop = "0.14.5"
+# Keymaps: compiled for each seat, sent to clients, read by the tests' clients.
+xkbcommon = "0.9.0"
+# The pixel formats of buffers and dmabufs, by their DRM four-character codes.
+drm-fourcc = "2.2.0"
+# The protocols beyond the core one: their server side in Yuna (`server`), their client side in
+# the tests' clients and the bench (`client`, ADR-0025), unstable and staging ones included
+# (`ext-data-control-v1`, colour management, fractional scale, xdg-activation, xdg-dialog).
+wayland-protocols = "0.32.13"
+# The wlroots protocols: `wlr-screencopy-unstable-v1`'s server side in Yuna, and the client side of
+# `zwlr_virtual_pointer_v1` and `wlr-screencopy-unstable-v1` in tests only, as the owner's other
+# projects drive and read Yuna (ADR-0089).
+wayland-protocols-wlr = "0.3.12"
 # Test clients of the headless compositor, in tests only (ADR-0025): the client side of the
-# Wayland protocol and of the protocols beyond the core one, unstable and staging ones included
-# (`ext-data-control-v1`, fractional scale, xdg-activation, xdg-dialog).
+# Wayland protocol.
 wayland-client = "0.31.15"
-wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
 # The virtual keyboard's client side, `zwp_virtual_keyboard_v1`: the rivals' bench's
 # (crates/yuna-bench) and the tests' drivers'. Already in Cargo.lock through Smithay, MIT.
 wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
-# The client side of `zwlr_virtual_pointer_v1` and `wlr-screencopy-unstable-v1`, in tests only,
-# as the owner's other projects drive and read Yuna (ADR-0089). Already in Cargo.lock through
-# Smithay, MIT.
-wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

@@ -37,15 +37,15 @@ use smithay::desktop::{
     PopupUngrabStrategy,
 };
 use smithay::input::pointer::Focus;
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
-use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Resource, Weak};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
 use smithay::wayland::compositor::{get_role, with_states};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, XDG_POPUP_ROLE, XdgPopupSurfaceData,
 };
+use wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
+use wayland_server::protocol::wl_seat::WlSeat;
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{Resource, Weak};
 use yuna_layout::{OutputId, SeatId, WindowId};
 
 use crate::seats::SeatData;

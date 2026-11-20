@@ -9,15 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
+use calloop::generic::Generic;
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::process::{Pid, WaitStatus};
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{
-    EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
-};
-use smithay::reexports::wayland_server::backend::DisconnectReason;
-use smithay::reexports::wayland_server::{BindError, Display, ListeningSocket};
 use smithay::utils::{Physical, Rectangle};
+use wayland_server::backend::DisconnectReason;
+use wayland_server::{BindError, Display, ListeningSocket};
 use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Drawn, Settings};

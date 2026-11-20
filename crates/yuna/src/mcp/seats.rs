@@ -13,10 +13,10 @@
 
 use std::time::Duration;
 
+use calloop::RegistrationToken;
+use calloop::timer::{TimeoutAction, Timer};
 use rustix::process::{Pid, Signal};
 use serde_json::{Map, Value, json};
-use smithay::reexports::calloop::RegistrationToken;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use yuna_layout::SeatId;
 
 use super::Server;
@@ -226,7 +226,7 @@ impl Server {
         key: u64,
         seat: SeatId,
         after: Duration,
-    ) -> Result<RegistrationToken, smithay::reexports::calloop::Error> {
+    ) -> Result<RegistrationToken, calloop::Error> {
         let events = self.events.clone();
         insert_source(
             &self.compositor.loop_handle(),

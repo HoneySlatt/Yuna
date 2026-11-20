@@ -51,9 +51,9 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::time::Duration;
 
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Point};
+use wayland_server::Resource;
+use wayland_server::protocol::wl_surface::WlSurface;
 use x11rb::protocol::xproto::Window;
 use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, SeatId, WindowId};

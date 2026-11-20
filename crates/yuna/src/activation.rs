@@ -22,12 +22,12 @@
 
 use std::time::Duration;
 
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
+use wayland_server::Resource;
+use wayland_server::backend::ClientId;
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::{SeatId, WindowId};
 use yuna_motion::Change;
 

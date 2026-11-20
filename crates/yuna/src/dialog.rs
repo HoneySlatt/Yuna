@@ -6,10 +6,10 @@
 //! nothing of that yet. Smithay keeps the hint on the toplevel's role, where Yuna reads whether a
 //! window is modal; nothing uses it yet.
 
-use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::dialog::{ToplevelDialogHint, XdgDialogHandler};
 use smithay::wayland::shell::xdg::{ToplevelSurface, XdgToplevelSurfaceData};
+use wayland_server::Resource;
 use yuna_layout::WindowId;
 
 use crate::state::State;

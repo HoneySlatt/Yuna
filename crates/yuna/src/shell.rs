@@ -29,11 +29,6 @@ use std::time::Duration;
 
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::utils::bbox_from_surface_tree;
-use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use smithay::reexports::wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{Logical, Rectangle, Serial};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
@@ -41,6 +36,11 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelStateSet, ToplevelSurface,
     XdgShellHandler, XdgShellState, XdgShellSurfaceUserData, XdgToplevelSurfaceData,
 };
+use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
+use wayland_server::Resource;
+use wayland_server::backend::ClientId;
+use wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use yuna_layout::geometry::{Rect, Size};
 use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
 use yuna_motion::Change;

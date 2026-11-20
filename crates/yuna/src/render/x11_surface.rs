@@ -35,11 +35,11 @@ use smithay::backend::renderer::utils::{
     CommitCounter, DamageSet, DamageSnapshot, RendererSurfaceStateUserData, import_surface,
 };
 use smithay::backend::renderer::{Renderer, Texture};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use smithay::wayland::compositor::{SurfaceData, with_states};
 use smithay::wayland::viewporter::ViewportCachedState;
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::geometry::Rect;
 
 use super::{WindowElement, window_pixels};
@@ -685,10 +685,10 @@ impl RenderElement<GlesRenderer> for X11SurfaceElement {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use smithay::backend::allocator::Fourcc;
+    use drm_fourcc::DrmFourcc;
     use smithay::backend::renderer::ImportMem;
     use smithay::backend::renderer::utils::DamageBag;
-    use smithay::reexports::wayland_server::Display;
+    use wayland_server::Display;
     use yuna_motion::Settings;
 
     use super::*;
@@ -800,7 +800,7 @@ mod tests {
 
         /// `image` as a buffer of `format`: `Xrgb8888`, as Xwayland gives an opaque window, or
         /// `Argb8888`, premultiplied.
-        fn texture(&mut self, image: &Image, format: Fourcc) -> GlesTexture {
+        fn texture(&mut self, image: &Image, format: DrmFourcc) -> GlesTexture {
             let bytes: Vec<u8> = image
                 .pixels
                 .iter()
@@ -950,7 +950,7 @@ mod tests {
         what: &str,
     ) {
         let rect = scene.state.outputs[0].rect;
-        let texture = scene.texture(image, Fourcc::Xrgb8888);
+        let texture = scene.texture(image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, rect, x11_scale, 1.0, 0)
             .expect("an element");
@@ -972,7 +972,7 @@ mod tests {
         // A corner on whole pixels, and one at (10.5, 7.5) that rounds to (11, 8). Each window is
         // 10 pixels wider and taller than its buffer, so that the cut does not hide an edge.
         for ((x, y), corner) in [((2.0, 4.0), (3, 6)), ((7.0, 5.0), (11, 8))] {
-            let texture = scene.texture(&image, Fourcc::Xrgb8888);
+            let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
             let rect = Rect::new(x, y, 1010.0 / 1.5, 1010.0 / 1.5);
             let element = scene
                 .element(texture, rect, 1.5, 1.0, 0)
@@ -998,7 +998,7 @@ mod tests {
     fn x11_element_area_filters_at_two_thirds() {
         let image = sharp_image();
         let mut scene = Scene::new(&[(700, 700, 1.0)]);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(3.0, 5.0, 680.0, 680.0), 1.5, 1.0, 0)
             .expect("an element");
@@ -1023,7 +1023,7 @@ mod tests {
                 } else {
                     Image::new(3, 30, |_, y| if y == place { WHITE } else { BLACK })
                 };
-                let texture = scene.texture(&line, Fourcc::Xrgb8888);
+                let texture = scene.texture(&line, DrmFourcc::Xrgb8888);
                 let element = scene
                     .element(texture, Rect::new(0.0, 0.0, 30.0, 30.0), 1.5, 1.0, 0)
                     .expect("an element");
@@ -1056,7 +1056,7 @@ mod tests {
                     (2 * width + 1) / 3
                 };
                 let image = Image::new(width, 3, |_, _| WHITE);
-                let texture = scene.texture(&image, Fourcc::Xrgb8888);
+                let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
                 // The window's rectangle is the whole output: it cuts nothing.
                 let rect = scene.state.outputs[output].rect;
                 let element = scene
@@ -1106,7 +1106,7 @@ mod tests {
         );
         // Through the element, an empty buffer gives none, and nothing panics.
         let empty = Image::new(0, 0, |_, _| WHITE);
-        let texture = scene.texture(&empty, Fourcc::Xrgb8888);
+        let texture = scene.texture(&empty, DrmFourcc::Xrgb8888);
         assert!(scene.element(texture, rect, 1.5, 1.0, 0).is_none());
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
         size: (i32, i32),
         x11_scale: f64,
     ) -> (Placement, Filter) {
-        let texture = scene.texture(image, Fourcc::Xrgb8888);
+        let texture = scene.texture(image, DrmFourcc::Xrgb8888);
         let rect = scene.state.outputs[0].rect;
         let view = View {
             source,
@@ -1213,7 +1213,7 @@ mod tests {
         // Copied: 1000 × 800 X11 pixels at S = 1 on an output of 640 × 480 at 1.
         let image = Image::new(1000, 800, noise);
         let mut scene = Scene::new(&[(640, 480, 1.0)]);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(0.0, 0.0, 1000.0, 800.0), 1.0, 1.0, 0)
             .expect("an element");
@@ -1227,7 +1227,7 @@ mod tests {
 
         // Filtered: 1600 × 1200 X11 pixels at S = 1.5, 1067 × 800 pixels, cut to the output.
         let image = Image::new(1600, 1200, noise);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(0.0, 0.0, 1067.0, 800.0), 1.5, 1.0, 0)
             .expect("an element");
@@ -1246,7 +1246,7 @@ mod tests {
         // At s = S, its corner 20 by 10 logical units off the output's, 30 by 15 pixels.
         let output = scene.state.outputs[0].rect;
         let rect = Rect::new(output.x - 20.0, output.y - 10.0, 200.0, 200.0);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, rect, 1.5, 1.0, 0)
             .expect("an element");
@@ -1262,7 +1262,7 @@ mod tests {
         // output, its texels' phases those of the whole buffer.
         let output = scene.state.outputs[1].rect;
         let rect = Rect::new(output.x - 20.0, output.y - 10.0, 200.0, 200.0);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, rect, 1.5, 1.0, 1)
             .expect("an element");
@@ -1288,7 +1288,7 @@ mod tests {
         let image = Image::new(300, 300, noise);
         let mut scene = Scene::new(&[(200, 200, 1.0)]);
         let background = scene.background(0, 199, 199);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let surface = SurfaceTexture {
             id: Id::new(),
             texture,
@@ -1347,7 +1347,10 @@ mod tests {
         // (the area filter) and 0.5 (the bilinear filter).
         let opaque = [200, 100, 50, 255];
         let translucent = [100, 50, 25, 128];
-        for (colour, format) in [(opaque, Fourcc::Xrgb8888), (translucent, Fourcc::Argb8888)] {
+        for (colour, format) in [
+            (opaque, DrmFourcc::Xrgb8888),
+            (translucent, DrmFourcc::Argb8888),
+        ] {
             for x11_scale in [1.0, 1.5, 0.5] {
                 let image = Image::new(48, 48, |_, _| colour);
                 let texture = scene.texture(&image, format);
@@ -1372,7 +1375,7 @@ mod tests {
     fn x11_element_at_scale_one_under_one_is_a_plain_copy() {
         let image = Image::new(256, 256, noise);
         let mut scene = Scene::new(&[(300, 300, 1.0)]);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(0.0, 0.0, 300.0, 300.0), 1.0, 1.0, 0)
             .expect("an element");
@@ -1411,7 +1414,7 @@ mod tests {
 
         // At 1/8 a footprint is narrowed to its middle 4 texels: a plain colour stays itself.
         let image = Image::new(160, 160, |_, _| [90, 180, 30, 255]);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(0.0, 0.0, 400.0, 400.0), 8.0, 1.0, 0)
             .expect("an element");
@@ -1427,7 +1430,7 @@ mod tests {
         let image = Image::new(300, 300, |x, _| if x < 150 { RED } else { BLUE });
         let mut scene = Scene::new(&[(500, 500, 2.0)]);
         let background = scene.background(0, 499, 499);
-        let texture = scene.texture(&image, Fourcc::Xrgb8888);
+        let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
         let element = scene
             .element(texture, Rect::new(0.0, 0.0, 250.0, 250.0), 1.5, 1.0, 0)
             .expect("an element");
@@ -1461,7 +1464,7 @@ mod tests {
         // mapped to pixels and rounded outward: at 2/3, through the area filter, [6, 9.33) is
         // [6, 10); at 4/3, through the bilinear filter, [12, 18.67) is [12, 19).
         for (output, rounded_out) in [(0, ((6, 6), (4, 4))), (1, ((12, 12), (7, 7)))] {
-            let texture = scene.texture(&image, Fourcc::Xrgb8888);
+            let texture = scene.texture(&image, DrmFourcc::Xrgb8888);
             let surface = SurfaceTexture {
                 id: Id::new(),
                 texture,
@@ -1553,7 +1556,7 @@ mod tests {
         x11_scale: f64,
         output: usize,
     ) -> X11SurfaceElement {
-        let texture = scene.texture(image, Fourcc::Xrgb8888);
+        let texture = scene.texture(image, DrmFourcc::Xrgb8888);
         let surface = SurfaceTexture {
             id: id.clone(),
             texture,
@@ -1632,7 +1635,7 @@ mod tests {
             ("3840 × 2160 to 2560 × 1440, bilinear", &at_4k, 0, true),
             ("3840 × 2160 copied at 1.5", &at_4k, 1, false),
         ] {
-            let texture = scene.texture(image, Fourcc::Xrgb8888);
+            let texture = scene.texture(image, DrmFourcc::Xrgb8888);
             let rect = scene.state.outputs[output].rect;
             let mut element = scene
                 .element(texture, rect, 1.5, 1.0, output)

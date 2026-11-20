@@ -26,19 +26,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use smithay::output::Output;
-use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
+use smithay::utils::{Physical, Rectangle};
+use smithay::wayland::shm::with_buffer_contents;
+use wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::{self, ZwlrScreencopyManagerV1},
 };
-use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
-use smithay::reexports::wayland_server::protocol::wl_shm::Format;
-use smithay::reexports::wayland_server::{
-    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
-};
-use smithay::utils::{Physical, Rectangle};
-use smithay::wayland::shm::with_buffer_contents;
+use wayland_server::backend::ClientId;
+use wayland_server::protocol::wl_buffer::WlBuffer;
+use wayland_server::protocol::wl_output::WlOutput;
+use wayland_server::protocol::wl_shm::Format;
+use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
 use yuna_layout::OutputId;
 use yuna_layout::geometry::Rect;
 

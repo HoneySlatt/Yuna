@@ -25,7 +25,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use smithay::input::keyboard::{Keycode, Keysym, XkbConfig, xkb};
+use smithay::input::keyboard::XkbConfig;
+use xkbcommon::xkb::{self, Keycode, Keysym};
 
 use crate::Error;
 

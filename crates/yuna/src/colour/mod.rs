@@ -19,16 +19,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use smithay::output::Output;
-use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
+use smithay::wayland::compositor::{TraversalAction, get_role, with_surface_tree_downward};
+use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
+use wayland_protocols::wp::color_management::v1::server::{
     wp_color_management_output_v1::WpColorManagementOutputV1,
     wp_color_management_surface_feedback_v1::WpColorManagementSurfaceFeedbackV1,
     wp_image_description_info_v1::WpImageDescriptionInfoV1,
 };
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::backend::ObjectId;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::wayland::compositor::{TraversalAction, get_role, with_surface_tree_downward};
-use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
+use wayland_server::Resource;
+use wayland_server::backend::ObjectId;
+use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::{OutputId, WindowId};
 
 use self::description::{Description, sdr_description};

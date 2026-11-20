@@ -27,9 +27,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Physical, Point};
+use wayland_server::Resource;
+use wayland_server::protocol::wl_surface::WlSurface;
 use x11rb::protocol::xproto::Window;
 use yuna_layout::{OutputId, WindowId};
 

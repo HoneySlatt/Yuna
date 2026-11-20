@@ -14,7 +14,6 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
-use smithay::input::keyboard::xkb;
 use wayland_client::protocol::{
     wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source, wl_keyboard, wl_pointer,
     wl_registry, wl_seat, wl_surface,
@@ -26,6 +25,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::{
 use wayland_protocols::wp::text_input::zv3::client::{
     zwp_text_input_manager_v3, zwp_text_input_v3,
 };
+use xkbcommon::xkb;
 use yuna::Compositor;
 use yuna::yuna_layout::SeatId;
 

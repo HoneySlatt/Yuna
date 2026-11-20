@@ -16,15 +16,13 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use smithay::reexports::wayland_protocols::xwayland::shell::v1::server::{
+use smithay::wayland::compositor::{Cacheable, get_role, give_role, with_states};
+use wayland_protocols::xwayland::shell::v1::server::{
     xwayland_shell_v1::{self, XwaylandShellV1},
     xwayland_surface_v1::{self, XwaylandSurfaceV1},
 };
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{
-    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
-};
-use smithay::wayland::compositor::{Cacheable, get_role, give_role, with_states};
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
 
 use crate::state::{ClientState, State};
 

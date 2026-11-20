@@ -9,9 +9,9 @@
 
 use std::time::Instant;
 
+use calloop::RegistrationToken;
+use calloop::timer::{TimeoutAction, Timer};
 use serde_json::{Map, Value};
-use smithay::reexports::calloop::RegistrationToken;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use yuna_layout::SeatId;
 
 use super::Server;

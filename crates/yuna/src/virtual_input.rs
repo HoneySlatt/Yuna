@@ -33,9 +33,6 @@ use smithay::backend::input::{
     PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::pointer::AxisFrame;
-use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
-use smithay::reexports::wayland_server::{Client, DisplayHandle};
 use smithay::utils::{Logical, Point};
 use smithay::wayland::virtual_keyboard::{
     VirtualKeyboardBackend, VirtualKeyboardDevice, VirtualKeyboardHandler,
@@ -44,6 +41,9 @@ use smithay::wayland::virtual_keyboard::{
 use smithay::wayland::virtual_pointer::{
     VirtualPointerBackend, VirtualPointerDevice, VirtualPointerHandler, VirtualPointerManagerState,
 };
+use wayland_server::backend::ClientId;
+use wayland_server::protocol::wl_seat::WlSeat;
+use wayland_server::{Client, DisplayHandle};
 use yuna_layout::SeatId;
 
 use crate::seats::seat_of_wl_seat;

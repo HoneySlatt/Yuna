@@ -16,12 +16,6 @@ use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::desktop::PopupManager;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatHandler, SeatState};
-use smithay::reexports::wayland_server::backend::{
-    ClientData, ClientId, DisconnectReason, GlobalId, ObjectId,
-};
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
 use smithay::utils::ClockSource;
 use smithay::utils::Monotonic;
 use smithay::wayland::buffer::BufferHandler;
@@ -42,6 +36,10 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
+use wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId, ObjectId};
+use wayland_server::protocol::wl_buffer::WlBuffer;
+use wayland_server::protocol::wl_surface::WlSurface;
+use wayland_server::{Client, DisplayHandle, Resource};
 use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Motion, Settings};
 

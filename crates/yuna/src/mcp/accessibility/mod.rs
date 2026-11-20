@@ -53,11 +53,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use calloop::generic::Generic;
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::process::{Pid, WaitStatus};
 use serde_json::{Value, json};
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use yuna_layout::{OutputId, SeatId, WindowId};
 
 use super::protocol::Revision;
