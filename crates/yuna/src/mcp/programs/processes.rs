@@ -169,12 +169,12 @@ pub(super) fn processes_under(root: Pid) -> HashMap<i32, ProcessStat> {
     under
 }
 
-/// The living processes under `root`, zombies left out: those are dead, and waiting for their
-/// parent.
+/// The living processes under `root`, those whose exit is done left out: zombies waiting for
+/// their parent, and processes being reaped.
 pub(super) fn living_descendants(root: Pid) -> Vec<Pid> {
     processes_under(root)
         .into_iter()
-        .filter(|(_, process)| !process.zombie)
+        .filter(|(_, process)| !process.ended)
         .filter_map(|(pid, _)| Pid::from_raw(pid))
         .collect()
 }

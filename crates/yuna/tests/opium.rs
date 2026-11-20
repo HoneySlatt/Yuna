@@ -194,10 +194,11 @@ fn opium_story() -> Result<String, String> {
     let closing = Instant::now();
     let closed_seat = yuna.close_seat(seat).map_err(failure)?;
     let closed = closing.elapsed();
-    // Yuna answers once the seat's processes have ended, before it may have reaped them.
+    // Yuna answers once the seat's processes have ended, before it may have reaped them: a
+    // zombie (`Z`), or a process being reaped (`X`), which `/proc` shows for a moment.
     if closed_seat["ended"] != json!([pid])
         || closed_seat["left_running"] != json!([])
-        || state_of(pid).is_some_and(|state| state != 'Z')
+        || state_of(pid).is_some_and(|state| !matches!(state, 'Z' | 'X'))
     {
         return Err(failure(format!(
             "it still runs once its seat closed: {closed_seat}"

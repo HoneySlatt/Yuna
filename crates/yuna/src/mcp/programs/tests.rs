@@ -227,17 +227,27 @@ fn a_seats_daemon_gets_the_kept_variables_and_no_session_bus() {
 
 #[test]
 fn a_stat_line_is_read_past_a_name_with_spaces_and_parentheses() {
-    let stat = |parent, group, zombie| {
+    let stat = |parent, group, ended| {
         Some(ProcessStat {
             parent,
             group,
-            zombie,
+            ended,
         })
     };
     assert_eq!(read_stat("42 (a b) c)) S 7 40 42 0"), stat(7, 40, false));
     assert_eq!(read_stat("43 (z) Z 1 43"), stat(1, 43, true));
     assert_eq!(read_stat("44 no parenthesis"), None);
     assert_eq!(read_stat("45 (x) S 1"), None);
+}
+
+/// A process its parent is reaping shows `X` in `/proc` for a moment before it goes: it has
+/// ended, as a zombie has.
+#[test]
+fn a_process_being_reaped_has_ended() {
+    let ended = read_stat("46 (sleep) X 7 46").expect("a stat line");
+    assert!(ended.ended);
+    let running = read_stat("47 (sleep) R 7 47").expect("a stat line");
+    assert!(!running.ended);
 }
 
 /// A log in a file of its own, in the test's temporary folder.

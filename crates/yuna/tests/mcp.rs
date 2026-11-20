@@ -271,13 +271,14 @@ fn wait_for<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// The parent of process `pid`, from `/proc`; none once it is gone.
+/// The parent of process `pid`, from `/proc`; none once it has ended: gone, a zombie (`Z`), or
+/// being reaped (`X`), which `/proc` shows for a moment, longer on a loaded machine.
 fn parent_of(pid: i32) -> Option<i32> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let after_name = &stat[stat.rfind(')')? + 1..];
     let mut fields = after_name.split_whitespace();
     let state = fields.next()?;
-    if state == "Z" {
+    if matches!(state, "Z" | "X") {
         return None;
     }
     fields.next()?.parse().ok()

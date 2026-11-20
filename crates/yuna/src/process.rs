@@ -129,7 +129,9 @@ unsafe extern "C" {
 pub(crate) struct ProcessStat {
     pub parent: i32,
     pub group: i32,
-    pub zombie: bool,
+    /// Its exit is done: a zombie (`Z`) waiting for its parent, or a process its parent is
+    /// reaping (`X`), which `/proc` shows for a moment before it goes.
+    pub ended: bool,
 }
 
 /// A `/proc/<pid>/stat` line: `pid (name) state ppid pgrp …`, the name possibly holding spaces
@@ -143,7 +145,7 @@ pub(crate) fn read_stat(stat: &str) -> Option<ProcessStat> {
     Some(ProcessStat {
         parent,
         group,
-        zombie: state == "Z",
+        ended: matches!(state, "Z" | "X"),
     })
 }
 

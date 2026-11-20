@@ -635,7 +635,7 @@ impl Programs {
         };
         let mut found: Vec<Pid> = processes
             .iter()
-            .filter(|(_, process)| !process.zombie)
+            .filter(|(_, process)| !process.ended)
             .map(|(&pid, _)| pid)
             .filter(|&pid| lineage(pid).unwrap_or_else(|| member(pid)))
             .filter_map(Pid::from_raw)
