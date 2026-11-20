@@ -319,7 +319,7 @@ impl Workspace {
             !self.floating.is_empty()
         };
         if other_has_windows {
-            self.focus_floating = !self.focus_floating;
+            self.focus_floating.toggle();
         }
     }
 

@@ -19,6 +19,7 @@
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Read, Write};
+use std::mem::DropGuard;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -118,7 +119,7 @@ impl Display {
             let Some(abstract_socket) = bind_abstract(number)? else {
                 continue;
             };
-            let lock = match Lock::take(number) {
+            let lock = match take_lock(number) {
                 Ok(Some(lock)) => Some(lock),
                 Ok(None) => continue,
                 Err(error) => {
@@ -262,58 +263,47 @@ impl Drop for FileSocket {
 }
 
 /// The lock of a display, `/tmp/.X<n>-lock`, which holds its server's process id as X servers
-/// write it, ten characters and a newline. Removed when it drops.
-#[derive(Debug)]
-struct Lock {
-    path: PathBuf,
-}
+/// write it, ten characters and a newline: its path, removed when the guard drops.
+type Lock = DropGuard<PathBuf, fn(PathBuf)>;
 
-impl Lock {
-    /// Takes the lock of display `number`; none when a live process holds it, or one that
-    /// cannot be read, which may be a server writing it. A lock of a process that no longer
-    /// exists is replaced. An error when `/tmp` cannot hold one.
-    fn take(number: u32) -> io::Result<Option<Lock>> {
-        let path = PathBuf::from(format!("/tmp/.X{number}-lock"));
-        let pid = rustix::process::getpid().as_raw_nonzero().get();
-        // Written whole beside it, then linked to its name, which fails if it exists: a reader
-        // never finds it half written, as X servers write theirs.
-        let mut written = OsString::from(format!("/tmp/.tX{number}-lock-"));
-        written.push(pid.to_string());
-        let written = PathBuf::from(written);
-        remove_quietly(&written);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o444)
-            .open(&written)?;
-        let linked = file
-            .write_all(format!("{pid:>10}\n").as_bytes())
-            .and_then(|()| fs::hard_link(&written, &path));
-        drop(file);
-        let linked = match linked {
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                if lock_is_stale(&path) && fs::remove_file(&path).is_ok() {
-                    fs::hard_link(&written, &path).map(|()| true)
-                } else {
-                    Ok(false)
-                }
+/// Takes the lock of display `number`; none when a live process holds it, or one that cannot be
+/// read, which may be a server writing it. A lock of a process that no longer exists is replaced.
+/// An error when `/tmp` cannot hold one.
+fn take_lock(number: u32) -> io::Result<Option<Lock>> {
+    let path = PathBuf::from(format!("/tmp/.X{number}-lock"));
+    let pid = rustix::process::getpid().as_raw_nonzero().get();
+    // Written whole beside it, then linked to its name, which fails if it exists: a reader
+    // never finds it half written, as X servers write theirs.
+    let mut written = OsString::from(format!("/tmp/.tX{number}-lock-"));
+    written.push(pid.to_string());
+    let written = PathBuf::from(written);
+    remove_quietly(&written);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o444)
+        .open(&written)?;
+    let linked = file
+        .write_all(format!("{pid:>10}\n").as_bytes())
+        .and_then(|()| fs::hard_link(&written, &path));
+    drop(file);
+    let linked = match linked {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if lock_is_stale(&path) && fs::remove_file(&path).is_ok() {
+                fs::hard_link(&written, &path).map(|()| true)
+            } else {
+                Ok(false)
             }
-            linked => linked.map(|()| true),
-        };
-        remove_quietly(&written);
-        match linked {
-            Ok(true) => Ok(Some(Lock { path })),
-            // Taken by another server between the two tries.
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
-            Ok(false) => Ok(None),
-            Err(error) => Err(error),
         }
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        remove_quietly(&self.path);
+        linked => linked.map(|()| true),
+    };
+    remove_quietly(&written);
+    match linked {
+        Ok(true) => Ok(Some(DropGuard::new(path, |path| remove_quietly(&path)))),
+        // Taken by another server between the two tries.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+        Ok(false) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 

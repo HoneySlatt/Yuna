@@ -92,7 +92,7 @@ fn time(layout: &mut Layout, mut operation: impl FnMut(&mut Layout)) -> (Duratio
 fn back_and_forth(mut step: impl FnMut(&mut Layout, bool)) -> impl FnMut(&mut Layout) {
     let mut forth = false;
     move |layout| {
-        forth = !forth;
+        forth.toggle();
         step(layout, forth);
     }
 }

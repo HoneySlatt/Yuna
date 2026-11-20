@@ -101,7 +101,7 @@ impl Programs {
             Timer::from_duration(running_for),
             move |_, _, _| {
                 pace_wakes.set(pace_wakes.get() + 1);
-                running = !running;
+                running.toggle();
                 let signal = if running { Signal::CONT } else { Signal::STOP };
                 match rustix::process::kill_process_group(group, signal) {
                     // Its whole group has ended: nothing is left to pace.
