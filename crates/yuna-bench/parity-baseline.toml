@@ -7,10 +7,10 @@
 # The parity run of that commit against the old baseline flags only the figures named.
 
 format = 1
-commit = "2e14b86aafd7df6d76fc18c79382d9a0ce1d6ecf"
+commit = "500e804b30395611fc54dd1a56accfc8e67b3efa"
 
 [[move]]
-commit = "2e14b86aafd7df6d76fc18c79382d9a0ce1d6ecf"
+commit = "500e804b30395611fc54dd1a56accfc8e67b3efa"
 figures = []
-reason = "The first baseline, M2.1's: no figure moved."
+reason = "The first baseline, M2.1's parity script: no figure moved."
 allowed_by = "ADR-0142"
