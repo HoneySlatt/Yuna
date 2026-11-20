@@ -82,7 +82,8 @@ clock with lockstep `wl_shm` clients; medians:
   each round, and work in the layout's focus and motion's update.
 - **The CI tier's time**: 709 s on 4 of the desktop's cores, quiet; on GitHub's runner
   (`ubuntu-24.04`) the `parity` job took 21 min 40 s on a pull request (job 136221466738) and
-  18 min 10 s on main's push (job 136233239285), its two 10,000-window motion cases 200 to 270 s
+  18 min 10 s on main's push (job 136233239285), 28 min 29 s once `full` warmed up past the
+  drawings Yuna keeps (run 44745258897), its two 10,000-window motion cases 200 to 270 s
   each. One run, base `500e804` against head `4aa4451`, the same Yuna code, passed; the runner's
   own spreads are not measured.
 - `Pss_Anon` about 48.8 MiB in most scenarios (motion 52.7, scaled 96.6); at rest, 0 wakes and 2
