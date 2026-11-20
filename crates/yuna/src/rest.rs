@@ -44,7 +44,7 @@ use std::os::unix::net::UnixStream;
 
 use calloop::{EventSource, InsertError, LoopHandle, RegistrationToken};
 use rustix::event::epoll;
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::compositor::ClientProcess;
 use crate::state::State;

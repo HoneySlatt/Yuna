@@ -76,7 +76,7 @@ use calloop::{Interest, Mode, PostAction, RegistrationToken};
 use rustix::fs::OFlags;
 use rustix::process::Pid;
 use serde_json::{Value, json};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::compositor::Compositor;
 use crate::output::OutputMode;

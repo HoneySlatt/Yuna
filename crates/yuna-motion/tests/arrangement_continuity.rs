@@ -8,10 +8,9 @@
 use std::time::Duration;
 
 use yuna_layout::geometry::{Point, Rect, Size};
-use yuna_layout::{
-    Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId, SeatId, Tiling, WindowId,
-};
+use yuna_layout::{Layout, LayoutError, OpenOptions, Options, OutputConfig};
 use yuna_motion::{Change, Curve, Drawn, Motion, Settings, Spring};
+use yuna_types::{OutputId, SeatId, Tiling, WindowId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);
@@ -183,7 +182,7 @@ fn columns_changing_places_while_the_camera_runs_keep_their_speed() {
     rig.wait(ms(40));
     let before = rig.motion.clone();
     // The focused column, 4, trades places with 3.
-    rig.op(|l| l.move_focused(SEAT, yuna_layout::Direction::Left));
+    rig.op(|l| l.move_focused(SEAT, yuna_types::Direction::Left));
     rig.animated();
     for n in [3, 4] {
         assert_speed_kept(speeds_around(&before, &rig.motion, n, rig.now), 0, 5000.0);
@@ -444,7 +443,7 @@ fn a_workspace_sliding_out_keeps_its_cameras_motion_through_later_updates() {
         rig.op(|l| l.add_workspace(SEAT, "2", Some(OUTPUT)));
         rig.op(|l| l.focus_workspace(SEAT, "2"));
         rig.open(2);
-        rig.op(|l| l.focus_workspace_relative(SEAT, yuna_layout::Direction::Up));
+        rig.op(|l| l.focus_workspace_relative(SEAT, yuna_types::Direction::Up));
         rig.instant();
         rig.wait(ms(5));
         // The first workspace's strip scrolls to its last column; before it is done, it slides out.
@@ -686,7 +685,7 @@ fn the_camera_carries_the_focused_column_when_no_column_stays_in_place() {
     rig.instant();
     let view = view_x(&rig);
     rig.wait(ms(5));
-    rig.op(|l| l.move_focused(SEAT, yuna_layout::Direction::Right));
+    rig.op(|l| l.move_focused(SEAT, yuna_types::Direction::Right));
     rig.animated();
     assert_eq!(view_x(&rig), view, "the view does not move");
     let place = rig

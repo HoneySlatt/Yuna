@@ -30,11 +30,11 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_layout::{OutputId, SeatId, WindowId};
 use yuna::{
     ClockMode, Compositor, Config, Counters, MAX_MENUS_PER_CLIENT, MAX_WINDOWS_PER_CLIENT,
     OutputMode, X11Display, XwaylandConfig,
 };
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::client::Client;
 use crate::x11_client::{Image, PATIENCE, WindowSpec, X11Client, connect, step, step_pumping};

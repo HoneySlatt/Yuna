@@ -14,8 +14,8 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode, Window};
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::yuna_layout::{OutputId, SeatId, WindowId};
 use yuna::{ClockMode, Compositor, MAX_MENUS_PER_CLIENT, MAX_MENUS_PER_XWAYLAND, OutputMode};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::client::Client;
 use crate::seats::{two_seats, windows_of};

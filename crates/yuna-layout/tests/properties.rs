@@ -29,9 +29,9 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 use yuna_layout::geometry::{Point, Rect, Size};
 use yuna_layout::{
-    ColumnId, ColumnWidth, Direction, Layer, Layout, LayoutError, OpenOptions, Options,
-    OutputConfig, OutputId, Placed, SeatId, Tiling, WindowId, WorkspaceId,
+    ColumnWidth, Layer, Layout, LayoutError, OpenOptions, Options, OutputConfig, Placed,
 };
+use yuna_types::{ColumnId, Direction, OutputId, SeatId, Tiling, WindowId, WorkspaceId};
 
 /// The seats that exist from the start; seat 3 never does, to exercise unknown ids.
 const SEATS: [u64; 3] = [1, 2, 3];

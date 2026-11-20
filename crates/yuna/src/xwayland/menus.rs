@@ -31,7 +31,7 @@ use smithay::utils::{Physical, Point};
 use wayland_server::Resource;
 use wayland_server::protocol::wl_surface::WlSurface;
 use x11rb::protocol::xproto::Window;
-use yuna_layout::{OutputId, WindowId};
+use yuna_types::{OutputId, WindowId};
 
 use super::properties::X11Rect;
 use super::windows::{X11Server, X11Windows, x11_origin};

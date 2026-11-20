@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use yuna_layout::{OutputId, WindowId};
+use yuna_types::{OutputId, WindowId};
 
 use super::{DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_WORKSPACE_NAME, TEXT_TYPES};
 use crate::compositor::WindowDescription;

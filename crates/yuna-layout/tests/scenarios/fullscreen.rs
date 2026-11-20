@@ -1,7 +1,8 @@
 //! Fullscreen, fake fullscreen, and how they meet columns and floating windows (niri).
 
 use crate::harness::*;
-use yuna_layout::{ColumnWidth, Direction, OpenOptions, Options};
+use yuna_layout::{ColumnWidth, OpenOptions, Options};
+use yuna_types::Direction;
 
 const OUTPUT: yuna_layout::geometry::Rect =
     yuna_layout::geometry::Rect::new(0.0, 0.0, 1920.0, 1080.0);
@@ -163,7 +164,7 @@ fn a_floating_window_goes_fullscreen_through_the_tiles_and_floats_back_where_it_
 #[test]
 fn a_floating_window_floats_back_only_when_it_leaves_fullscreen_itself() {
     let mut m = Model::with(Options {
-        default_tiling: yuna_layout::Tiling::Dwindle,
+        default_tiling: yuna_types::Tiling::Dwindle,
         ..Options::default()
     });
     m.open(1);
@@ -294,7 +295,7 @@ fn activation_over_a_fullscreen_game_is_granted_to_the_game_and_its_dialogs() {
 #[test]
 fn a_fullscreen_game_holds_the_screen_while_a_window_over_it_has_the_focus() {
     let mut m = Model::with(Options {
-        default_tiling: yuna_layout::Tiling::Dwindle,
+        default_tiling: yuna_types::Tiling::Dwindle,
         ..Options::default()
     });
     m.open(1);
@@ -339,7 +340,7 @@ fn a_fullscreen_game_holds_the_screen_while_a_window_over_it_has_the_focus() {
 /// own and its dialog's are granted.
 #[test]
 fn activation_is_refused_while_a_fullscreen_games_dialog_has_the_focus() {
-    for tiling in [yuna_layout::Tiling::Scrolling, yuna_layout::Tiling::Dwindle] {
+    for tiling in [yuna_types::Tiling::Scrolling, yuna_types::Tiling::Dwindle] {
         let mut m = Model::with(Options {
             default_tiling: tiling,
             ..Options::default()

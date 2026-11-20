@@ -18,9 +18,9 @@
 
 use std::time::Duration;
 
-use yuna::yuna_layout::Direction;
 use yuna::yuna_motion::{Change, Drawn, Motion};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_types::Direction;
 
 use crate::client::{Client, Feedback};
 use crate::motion::{

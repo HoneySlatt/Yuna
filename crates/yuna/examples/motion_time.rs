@@ -95,9 +95,10 @@ use tracing_subscriber::fmt::MakeWriter;
 use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
 use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_layout::{Direction, Layout, LayoutError, OutputId, WindowId};
+use yuna::yuna_layout::{Layout, LayoutError};
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, OWNER_SEAT, OutputMode};
+use yuna_types::{Direction, OutputId, WindowId};
 
 /// The output's mode without `--output`: Yuna's default, an agent's output, and the mode
 /// ADR-0056 judges at.

@@ -8,7 +8,7 @@
 //! keeps them), and tells the result.
 
 use serde_json::{Map, Value, json};
-use yuna_layout::{OutputId, SeatId};
+use yuna_types::{OutputId, SeatId};
 
 use super::Server;
 use super::captures::RECENT_CAPTURES;

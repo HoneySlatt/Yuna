@@ -105,9 +105,9 @@ mod tests {
     use crate::rest::{RestCounts, Source};
     use crate::xwayland::Selection;
     use crate::{OutputMode, WindowShell};
-    use yuna_layout::SeatId;
     use yuna_layout::geometry::Rect;
-    use yuna_layout::{OutputId, WindowId};
+    use yuna_types::SeatId;
+    use yuna_types::{OutputId, WindowId};
 
     fn args(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap_or_default()

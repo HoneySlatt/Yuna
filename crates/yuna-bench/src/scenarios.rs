@@ -2078,8 +2078,13 @@ fn build_yuna() -> Result<(PathBuf, String), String> {
         .unwrap_or_else(|| workspace().join("target"));
     let program = fs::canonicalize(target.join("release/yuna"))
         .map_err(|e| format!("target/release/yuna: {e}"))?;
-    let version = commit(&["crates/yuna", "crates/yuna-layout", "crates/yuna-motion"])
-        .ok_or("the workspace's commit cannot be read")?;
+    let version = commit(&[
+        "crates/yuna",
+        "crates/yuna-layout",
+        "crates/yuna-motion",
+        "crates/yuna-types",
+    ])
+    .ok_or("the workspace's commit cannot be read")?;
     Ok((program, version))
 }
 

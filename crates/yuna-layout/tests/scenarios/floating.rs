@@ -1,8 +1,9 @@
 //! Floating windows (niri).
 
 use crate::harness::*;
+use yuna_layout::OpenOptions;
 use yuna_layout::geometry::Size;
-use yuna_layout::{Direction, OpenOptions};
+use yuna_types::Direction;
 
 fn floating(size: Option<Size>) -> OpenOptions {
     OpenOptions {

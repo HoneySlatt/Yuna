@@ -8,8 +8,8 @@
 //! The compositor has the owner's seat, with its 4K output, and two agents' seats, `agent-2` and
 //! `agent-3`, each with an output of 1920 × 1080 at scale 1.
 
-use yuna::yuna_layout::{OutputId, SeatId, WindowId};
 use yuna::{BUTTON_LEFT, BUTTON_RIGHT, Compositor, OWNER_SEAT, OutputMode};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::client::{Client, Parent, Placement};
 use crate::input_client::{InputClient, InputEvent, Shape};

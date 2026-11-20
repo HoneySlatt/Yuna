@@ -1,7 +1,8 @@
 //! Workspaces: named, with an output of their own, and dynamic ones as an option (ADR-0018).
 
 use crate::harness::*;
-use yuna_layout::{Direction, OpenOptions, Options, Tiling};
+use yuna_layout::{OpenOptions, Options};
+use yuna_types::{Direction, Tiling};
 
 /// The owner's desk, as Yuna starts: the configuration declares the workspaces, then the
 /// monitors come. The 4K one at scale 1.5 on the left holds workspaces 1, 3 and 5; the 1080p one

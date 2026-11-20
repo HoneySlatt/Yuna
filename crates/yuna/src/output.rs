@@ -19,8 +19,9 @@ use wayland_server::Resource;
 use wayland_server::backend::GlobalId;
 use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{OutputConfig, OutputId, Placed, SeatId, WindowId};
+use yuna_layout::{OutputConfig, Placed};
 use yuna_motion::{Change, Drawn};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::capture::Failure;

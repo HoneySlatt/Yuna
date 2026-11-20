@@ -939,6 +939,7 @@ dependencies = [
  "yuna-bench",
  "yuna-layout",
  "yuna-motion",
+ "yuna-types",
  "zbus",
 ]
 
@@ -959,6 +960,7 @@ name = "yuna-layout"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "yuna-types",
 ]
 
 [[package]]
@@ -967,7 +969,12 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "yuna-layout",
+ "yuna-types",
 ]
+
+[[package]]
+name = "yuna-types"
+version = "0.1.0"
 
 [[package]]
 name = "zbus"

@@ -9,7 +9,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::Size;
-use yuna_layout::{Direction, LayoutError, OpenOptions, Options, OutputConfig, Tiling};
+use yuna_layout::{LayoutError, OpenOptions, Options, OutputConfig};
+use yuna_types::{Direction, Tiling};
 
 fn size(w: f64, h: f64) -> Size {
     Size { w, h }

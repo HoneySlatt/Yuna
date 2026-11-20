@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use yuna::yuna_layout::WindowId;
 use yuna::{HIDDEN_FRAME_INTERVAL, MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
+use yuna_types::WindowId;
 
 use crate::client::Client;
 use crate::{advance_to, assert_rests, manual_compositor, millis};

@@ -50,7 +50,7 @@ use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTa
 use wayland_server::protocol::wl_surface::WlSurface;
 use wayland_server::{DisplayHandle, Resource};
 
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::rest::{Source, Wake, insert_source};
 use crate::seats::{seat_id, seat_of_client};

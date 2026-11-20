@@ -21,7 +21,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_session_v1,
 };
 use yuna::Compositor;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

@@ -1,7 +1,7 @@
 //! `xdg-dialog-v1`: a toplevel's modal hint is recorded and taken back; its dialog object or its
 //! toplevel may go first.
 
-use yuna::yuna_layout::WindowId;
+use yuna_types::WindowId;
 
 use crate::client::Client;
 use crate::{BLUE, RED, advance_to, assert_rests, boundary, manual_compositor, open_and_commit};

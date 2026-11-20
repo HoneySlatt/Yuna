@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::Deserialize;
 use yuna_layout::geometry::Rect;
-use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use super::programs::End;
 use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription, WindowShell};

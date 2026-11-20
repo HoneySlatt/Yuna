@@ -223,7 +223,7 @@ fn measure(changes: usize) -> Result<(), String> {
 /// `calls` calls typing `line` on `seat`, each timed.
 fn time_typing(
     compositor: &mut Compositor,
-    seat: yuna::yuna_layout::SeatId,
+    seat: yuna_types::SeatId,
     line: &str,
     calls: usize,
 ) -> Result<Vec<Duration>, String> {

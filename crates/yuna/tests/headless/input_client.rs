@@ -27,7 +27,7 @@ use wayland_protocols::wp::text_input::zv3::client::{
 };
 use xkbcommon::xkb;
 use yuna::Compositor;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

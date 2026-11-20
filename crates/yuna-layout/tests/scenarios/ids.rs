@@ -4,10 +4,8 @@
 //! output is 1920 × 1080 at scale 1 with gaps of 16, so a column of half the width is 936 wide.
 
 use crate::harness::*;
-use yuna_layout::{
-    ColumnId, ColumnWidth, Direction, Layer, LayoutError, OpenOptions, OutputId, Tiling,
-    WorkspaceId,
-};
+use yuna_layout::{ColumnWidth, Layer, LayoutError, OpenOptions};
+use yuna_types::{ColumnId, Direction, OutputId, Tiling, WorkspaceId};
 
 /// A strip position, from one column's left edge to the next: a half column and a gap.
 const STEP: f64 = 936.0 + 16.0;

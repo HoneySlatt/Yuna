@@ -36,9 +36,9 @@ use std::time::Duration;
 use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, TestRunner, contextualize_config};
 use wayland_client::protocol::wl_surface::WlSurface;
-use yuna::yuna_layout::{Direction, OutputId, Tiling, WindowId};
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_types::{Direction, OutputId, Tiling, WindowId};
 
 use crate::client::{Anchor, Client, ConstraintAdjustment, Gravity, Parent, Placement};
 use crate::selection_client::{SelectionClient, SelectionEvent};

@@ -42,8 +42,9 @@ use wayland_server::Resource;
 use wayland_server::backend::ClientId;
 use wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use yuna_layout::geometry::{Rect, Size};
-use yuna_layout::{MAX_SIZE, OpenOptions, OutputId, WindowId};
+use yuna_layout::{MAX_SIZE, OpenOptions};
 use yuna_motion::Change;
+use yuna_types::{OutputId, WindowId};
 
 use crate::activation::TokenOrigin;
 use crate::compositor::{WindowDescription, WindowShell};

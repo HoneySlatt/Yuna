@@ -14,7 +14,7 @@ use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, Mode, PostAction, RegistrationToken};
 use serde_json::{Map, Value, json};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::Server;
 use super::protocol::Revision;

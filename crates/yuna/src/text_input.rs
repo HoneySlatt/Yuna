@@ -14,7 +14,7 @@
 use smithay::wayland::text_input::{TextInputActivation, TextInputManagerState, TextInputSeat};
 use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::ZwpTextInputV3;
 use wayland_server::DisplayHandle;
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::Error;
 use crate::state::State;

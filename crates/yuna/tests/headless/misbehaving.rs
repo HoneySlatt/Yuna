@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use wayland_client::protocol::{wl_shm, wl_surface};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use yuna::yuna_layout::WindowId;
 use yuna::{Compositor, OWNER_SEAT};
+use yuna_types::WindowId;
 
 use crate::client::{Client, Parent, Placement, ProtocolError};
 use crate::popups::pixel;

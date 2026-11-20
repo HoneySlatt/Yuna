@@ -39,8 +39,8 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use yuna::mcp::Server;
-use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, Config, MAX_WINDOWS_PER_CLIENT, OutputMode};
+use yuna_types::SeatId;
 
 /// The window counts measured.
 const COUNTS: [usize; 3] = [100, 1_000, 2_000];

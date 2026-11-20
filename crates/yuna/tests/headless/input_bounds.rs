@@ -11,8 +11,8 @@
 //! `agent-2` and `agent-3`, each with an output of 1920 × 1080 at scale 1.
 
 use xkbcommon::xkb;
-use yuna::yuna_layout::SeatId;
 use yuna::{BUTTON_LEFT, Compositor, MAX_HELD_BUTTONS, MAX_HELD_KEYS};
+use yuna_types::SeatId;
 
 use crate::input_client::{InputClient, InputEvent};
 use crate::seats::{open, settle, two_seats, windows_of};

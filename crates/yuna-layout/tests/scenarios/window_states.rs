@@ -5,7 +5,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::{Point, Size};
-use yuna_layout::{Direction, OpenOptions, OutputConfig};
+use yuna_layout::{OpenOptions, OutputConfig};
+use yuna_types::Direction;
 
 fn floating() -> OpenOptions {
     OpenOptions {

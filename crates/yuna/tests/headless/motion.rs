@@ -18,12 +18,13 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use smithay::utils::Rectangle;
 use yuna::mcp::Server;
+use yuna::yuna_layout::Layout;
 use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_layout::{Direction, Layout, OutputId, SeatId, WindowId};
 use yuna::yuna_motion::{Change, Drawn, Motion, Settings, SpringParams};
 use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, ClockMode, Compositor, Config, OWNER_SEAT, OutputMode,
 };
+use yuna_types::{Direction, OutputId, SeatId, WindowId};
 
 use crate::client::{Client, Feedback, Parent, Placement, State};
 use crate::input_client::{InputClient, InputEvent};

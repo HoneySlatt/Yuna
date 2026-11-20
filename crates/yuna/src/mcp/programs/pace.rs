@@ -12,7 +12,7 @@ use std::time::Duration;
 use calloop::LoopHandle;
 use calloop::timer::{TimeoutAction, Timer};
 use rustix::process::Signal;
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::{Program, Programs, signal_group};
 use crate::rest::{Source, Wake, insert_source};

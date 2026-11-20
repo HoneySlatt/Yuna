@@ -71,7 +71,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::io::Errno;
 use rustix::process::{Pid, WaitStatus};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::process::{End, find_program, kill, kill_and_reap, reap};
 use crate::render::Device;

@@ -3,7 +3,8 @@
 //! [ADR-0020](../../../../docs/adr/0020-the-layout-models-shape.md)).
 
 use crate::harness::*;
-use yuna_layout::{LayoutError, OpenOptions, Placed, WorkspaceId};
+use yuna_layout::{LayoutError, OpenOptions, Placed};
+use yuna_types::WorkspaceId;
 
 fn floating() -> OpenOptions {
     OpenOptions {
@@ -14,7 +15,7 @@ fn floating() -> OpenOptions {
 
 /// Peeks at `output`'s workspace `workspace`, and checks that the model did not change.
 #[track_caller]
-fn peek(m: &Model, output: yuna_layout::OutputId, workspace: WorkspaceId) -> Vec<Placed> {
+fn peek(m: &Model, output: yuna_types::OutputId, workspace: WorkspaceId) -> Vec<Placed> {
     let before = format!("{:?}", m.layout);
     let placed = m.layout.arrange_workspace(output, workspace).unwrap();
     assert_eq!(
@@ -139,7 +140,7 @@ fn the_owner_peeks_at_an_agents_workspace_and_bad_requests_are_refused() {
         m.layout.arrange_workspace(SIDE, not_its_own),
         Err(LayoutError::InvalidValue)
     );
-    let unknown = yuna_layout::OutputId(9);
+    let unknown = yuna_types::OutputId(9);
     assert_eq!(
         m.layout.arrange_workspace(unknown, m.workspace_id(SIDE, 0)),
         Err(LayoutError::UnknownOutput(unknown))

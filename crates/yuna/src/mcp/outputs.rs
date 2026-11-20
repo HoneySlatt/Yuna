@@ -9,7 +9,7 @@
 //! holds the server; `tools/` the tools' schemas, arguments and results.
 
 use serde_json::{Map, Value, json};
-use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use super::Server;
 use super::tools::{self, OutputsCall, ToolResult, WorkspacesCall};

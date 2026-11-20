@@ -32,6 +32,7 @@ x11rb.workspace = true
 zbus.workspace = true
 yuna-layout = { path = "../yuna-layout" }
 yuna-motion = { path = "../yuna-motion" }
+yuna-types = { path = "../yuna-types" }
 
 [dev-dependencies]
 proptest.workspace = true

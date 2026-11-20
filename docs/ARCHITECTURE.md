@@ -12,7 +12,8 @@ limits are in its code's documentation, linked from here; why each decision was 
 
 - **The pure models.** [`yuna-layout`](#the-layout-model) decides where every window goes.
   [`yuna-motion`](#motion) turns the layout's jumps into what each frame draws. Neither knows
-  Wayland, Smithay, a renderer or a clock.
+  Wayland, Smithay, a renderer or a clock. Both name their ids from `yuna-types`, the shared
+  vocabulary that depends on nothing.
 - **The headless compositor**, the `yuna` crate's library, on Smithay. In front: the Wayland
   protocols, and for each seat [XWayland](#xwayland) with Yuna's own X11 window manager. Behind:
   the layout and the motion. Underneath: virtual [outputs](#outputs), refreshed by one
@@ -81,9 +82,10 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-layout` | the layout model | nothing |
-| `yuna-motion` | the motion of the layout's arrangements | `yuna-layout` |
-| `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-layout`, `yuna-motion`, and the crates below |
+| `yuna-types` | the shared vocabulary: the ids, `Direction` and `Tiling`; level 0 of the map in [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | nothing |
+| `yuna-layout` | the layout model | `yuna-types` |
+| `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |
+| `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-layout`, `yuna-motion`, `yuna-types`, and the crates below |
 | `yuna-bench` | the rivals' bench and the parity script | nothing of Yuna's |
 
 - Each dependency's reason is a comment beside it, in the root [`Cargo.toml`](../Cargo.toml)'s
@@ -101,9 +103,10 @@ One Cargo workspace; its crates live in `crates/`.
 - At run time Yuna needs libxkbcommon, linked; libglvnd's EGL and Mesa, loaded; Xwayland, found
   on `PATH`; and `dbus-daemon` for the accessibility buses, named by `YUNA_DBUS_DAEMON`, else
   found on `PATH`. The development shell and Yuna's package give all four (`flake.nix`).
-- The rules: `yuna-layout` and `yuna-motion` hold no Wayland or Smithay object; `yuna-bench`
-  depends on nothing of `yuna`, so that it measures Yuna as it measures the others; `yuna` uses
-  `yuna-bench` only in its tests and examples.
+- The rules: `yuna-types`, `yuna-layout` and `yuna-motion` hold no Wayland or Smithay object;
+  `yuna-types` depends on nothing, and no crate re-exports its types: each names `yuna_types`
+  itself; `yuna-bench` depends on nothing of `yuna`, so that it measures Yuna as it measures the
+  others; `yuna` uses `yuna-bench` only in its tests and examples.
 
 ## The layout model
 

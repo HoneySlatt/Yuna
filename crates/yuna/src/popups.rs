@@ -46,7 +46,7 @@ use wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
 use wayland_server::protocol::wl_seat::WlSeat;
 use wayland_server::protocol::wl_surface::WlSurface;
 use wayland_server::{Resource, Weak};
-use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::seats::SeatData;
 use crate::seats::{seat_of_surface, seat_of_wl_seat};

@@ -32,9 +32,9 @@ use std::process::ExitCode;
 
 use tracing::level_filters::LevelFilter;
 use yuna::mcp::{Server, Stop};
-use yuna::yuna_layout::SeatId;
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
+use yuna_types::SeatId;
 
 // The command line's contract (ADR-0079), held in `tests/contracts/help.txt`. The environment
 // lists every variable a user sets that Yuna's own code reads, `TMPDIR` for `yuna mcp`'s agents'

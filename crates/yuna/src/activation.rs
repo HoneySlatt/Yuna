@@ -28,8 +28,8 @@ use smithay::wayland::xdg_activation::{
 use wayland_server::Resource;
 use wayland_server::backend::ClientId;
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::{SeatId, WindowId};
 use yuna_motion::Change;
+use yuna_types::{SeatId, WindowId};
 
 use crate::input::window_of_surface;
 use crate::seats::{seat_of_surface, seat_of_wl_seat};

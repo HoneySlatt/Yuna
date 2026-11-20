@@ -19,10 +19,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use yuna_layout::geometry::Point;
-use yuna_layout::{
-    Direction, Layout, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId, Tiling,
-    WindowId,
-};
+use yuna_layout::{Layout, OpenOptions, Options, OutputConfig, Placed};
+use yuna_types::{Direction, OutputId, SeatId, Tiling, WindowId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);

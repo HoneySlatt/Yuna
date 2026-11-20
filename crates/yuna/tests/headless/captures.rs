@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yuna::mcp::{MAX_ENCODERS, RECENT_CAPTURES};
-use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, OutputMode};
+use yuna_types::SeatId;
 
 use crate::client::Client;
 use crate::mcp::{Mcp, modern};
@@ -33,7 +33,7 @@ fn background(mcp: &mut Mcp, output: u64) -> [u8; 3] {
         .server
         .compositor()
         .read_pixels(
-            yuna::yuna_layout::OutputId(output),
+            yuna_types::OutputId(output),
             smithay::utils::Rectangle::new((0, 0).into(), (1, 1).into()),
         )
         .expect("a pixel");

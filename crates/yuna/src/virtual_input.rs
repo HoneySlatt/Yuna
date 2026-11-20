@@ -44,7 +44,7 @@ use smithay::wayland::virtual_pointer::{
 use wayland_server::backend::ClientId;
 use wayland_server::protocol::wl_seat::WlSeat;
 use wayland_server::{Client, DisplayHandle};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::seats::seat_of_wl_seat;
 use crate::state::{ClientState, OWNER_SEAT, State};

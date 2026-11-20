@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use yuna::colour::SurfaceRole;
 use yuna::colour::description::{NamedPrimaries, PG32UCDM, TransferFunction as Tf};
-use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_types::{OutputId, WindowId};
 
 use crate::colour_client::{
     ColourClient, Feature, Params, Primaries, RenderIntent, TransferFunction,

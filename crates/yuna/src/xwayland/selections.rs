@@ -12,7 +12,7 @@
 
 use std::os::fd::OwnedFd;
 
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::bridge::{MAX_X11_TRANSFERS, Selection};
 use super::manager::{Command, ManagerEvent};

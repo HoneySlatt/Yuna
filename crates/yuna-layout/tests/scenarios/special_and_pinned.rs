@@ -145,7 +145,7 @@ fn a_pinned_window_follows_the_workspaces_its_output_shows_without_taking_focus(
     assert_eq!(m.focused(), Some(2));
     // Unpinned, it stays where it is.
     m.ok(|l| l.set_pinned(w(1), false));
-    m.ok(|l| l.focus_workspace_relative(OWNER, yuna_layout::Direction::Up));
+    m.ok(|l| l.focus_workspace_relative(OWNER, yuna_types::Direction::Up));
     assert_eq!(m.info(1).workspace.as_deref(), Some("web"));
 }
 

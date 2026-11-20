@@ -114,7 +114,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};

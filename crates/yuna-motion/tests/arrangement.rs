@@ -9,13 +9,11 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use yuna_layout::geometry::{Point, Rect, Size};
-use yuna_layout::{
-    Layer, Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId,
-    Tiling, WindowId, WorkspaceId,
-};
+use yuna_layout::{Layer, Layout, LayoutError, OpenOptions, Options, OutputConfig, Placed};
 use yuna_motion::{
     Change, Curve, CurveParams, Drawn, Easing, Frame, Motion, Settings, Spring, SpringParams,
 };
+use yuna_types::{OutputId, SeatId, Tiling, WindowId, WorkspaceId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);

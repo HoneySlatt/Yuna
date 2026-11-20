@@ -4,7 +4,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::Size;
-use yuna_layout::{OpenOptions, Options, Tiling};
+use yuna_layout::{OpenOptions, Options};
+use yuna_types::Tiling;
 
 fn dwindle() -> Model {
     Model::with(Options {

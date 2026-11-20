@@ -8,8 +8,9 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+use yuna_layout::WorkspaceInfo;
 use yuna_layout::geometry::Rect;
-use yuna_layout::{SeatId, WindowId, WorkspaceInfo};
+use yuna_types::{SeatId, WindowId};
 
 use super::arguments::Button;
 use crate::colour::SurfaceColourDescription;

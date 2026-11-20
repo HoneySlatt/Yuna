@@ -392,7 +392,7 @@ fn a_mode_that_keeps_the_rectangle_keeps_the_windows_where_they_were() {
 /// them; another seat's output never moves, though it lies there too.
 #[test]
 fn the_outputs_on_its_right_move_with_its_right_edge_and_no_other_seats() {
-    const AGENTS_OUTPUT: yuna_layout::OutputId = yuna_layout::OutputId(3);
+    const AGENTS_OUTPUT: yuna_types::OutputId = yuna_types::OutputId(3);
     let mut m = two_outputs();
     m.ok(|l| l.focus_workspace(OWNER, "c"));
     m.open(2);
@@ -439,7 +439,7 @@ fn the_outputs_on_its_right_move_with_its_right_edge_and_no_other_seats() {
 #[test]
 fn a_mode_out_of_range_is_refused_and_changes_nothing() {
     let mut m = two_outputs();
-    let unknown = yuna_layout::OutputId(9);
+    let unknown = yuna_types::OutputId(9);
     m.refused(LayoutError::UnknownOutput(unknown), |l| {
         l.configure_output(unknown, 1280, 720, 1.0)
     });

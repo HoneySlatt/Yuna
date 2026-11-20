@@ -40,8 +40,8 @@ use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use yuna::rest::Source;
-use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, Config, OutputMode};
+use yuna_types::SeatId;
 
 /// The client counts measured.
 const COUNTS: [usize; 2] = [10, 100];

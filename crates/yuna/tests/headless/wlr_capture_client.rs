@@ -17,7 +17,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1,
 };
 use yuna::Compositor;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

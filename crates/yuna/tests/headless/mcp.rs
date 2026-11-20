@@ -15,8 +15,8 @@ use yuna::mcp::{
     MAX_LINE, MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS,
     MAX_WORKSPACE_NAME, MODERN_REVISION, Server, Stop,
 };
-use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, Config, OutputMode};
+use yuna_types::SeatId;
 
 use crate::RED;
 use crate::client::Client;

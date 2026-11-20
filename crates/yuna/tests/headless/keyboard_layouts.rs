@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use xkbcommon::xkb::Keysym;
-use yuna::yuna_layout::SeatId;
 use yuna::{ClockMode, Compositor, KeyboardLayout, MAX_LAYOUT_NAME, OWNER_SEAT};
+use yuna_types::SeatId;
 
 use crate::input_client::{InputClient, InputEvent};
 use crate::mcp::Mcp;

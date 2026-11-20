@@ -1,7 +1,8 @@
 //! The words of a refusal: a caller shows them to whoever asked, so each says what was refused.
 
 use crate::harness::*;
-use yuna_layout::{LayoutError, OutputId, SeatId};
+use yuna_layout::LayoutError;
+use yuna_types::{OutputId, SeatId};
 
 #[test]
 fn every_refusal_says_what_it_refuses() {

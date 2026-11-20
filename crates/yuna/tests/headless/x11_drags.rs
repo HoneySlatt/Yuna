@@ -36,9 +36,9 @@ use wayland_client::protocol::wl_data_device_manager::DndAction;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
 use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::yuna_motion::Settings;
 use yuna::{BUTTON_LEFT, ClockMode, Compositor, OutputMode, X11_SYNC_TIMEOUT};
+use yuna_types::{OutputId, WindowId};
 
 use crate::selection_client::{DragEvent, SelectionClient, SourceDragEvent};
 use crate::x11_client::{Geometry, Image, PATIENCE, WindowSpec, X11Client, step, step_pumping};

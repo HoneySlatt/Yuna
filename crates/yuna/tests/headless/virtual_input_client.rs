@@ -21,7 +21,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 use xkbcommon::xkb;
 use yuna::Compositor;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

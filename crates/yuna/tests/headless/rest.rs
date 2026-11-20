@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yuna::ClockMode;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::RED;
 use crate::client::Client;

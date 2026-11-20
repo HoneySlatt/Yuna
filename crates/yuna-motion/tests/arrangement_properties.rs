@@ -27,11 +27,9 @@ use std::time::Duration;
 
 use proptest::prelude::*;
 use yuna_layout::geometry::{Point, Rect, Size};
-use yuna_layout::{
-    Direction, Layer, Layout, OpenOptions, Options, OutputConfig, OutputId, SeatId, Tiling,
-    WindowId, WorkspaceId,
-};
+use yuna_layout::{Layer, Layout, OpenOptions, Options, OutputConfig};
 use yuna_motion::{Change, CurveParams, Drawn, Easing, Frame, Motion, Settings, SpringParams};
+use yuna_types::{Direction, OutputId, SeatId, Tiling, WindowId, WorkspaceId};
 
 /// The seats that may exist: seat 1 from the start, seat 2 added and removed by the steps.
 const SEATS: [u64; 2] = [1, 2];

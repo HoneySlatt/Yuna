@@ -16,7 +16,7 @@ use wayland_protocols::wp::color_management::v1::client::{
     wp_image_description_creator_params_v1, wp_image_description_info_v1, wp_image_description_v1,
 };
 use yuna::Compositor;
-use yuna::yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

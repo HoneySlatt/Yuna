@@ -31,7 +31,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::xwayland::X11Display;
 

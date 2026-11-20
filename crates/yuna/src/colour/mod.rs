@@ -29,7 +29,7 @@ use wayland_protocols::wp::color_management::v1::server::{
 use wayland_server::Resource;
 use wayland_server::backend::ObjectId;
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::{OutputId, WindowId};
+use yuna_types::{OutputId, WindowId};
 
 use self::description::{Description, sdr_description};
 use crate::input::window_of_surface;

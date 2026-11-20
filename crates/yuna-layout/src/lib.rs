@@ -50,37 +50,9 @@ mod workspace;
 pub use layout::{Layout, MAX_SIZE};
 pub use scrolling::ColumnWidth;
 
-use std::num::NonZeroU64;
-
 use geometry::{Rect, Size};
-
-/// A window, named by the caller. The caller keeps ids unique among the windows it opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct WindowId(pub u64);
-
-/// An output, named by the caller. The caller gives the same id to the same monitor each time it
-/// is plugged in, so that its workspaces come back to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OutputId(pub u64);
-
-/// A seat: a pointer and a keyboard with their own focus, the owner's or an agent's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SeatId(pub u64);
-
-/// A workspace's id, which the model gives every workspace it creates: named, unnamed or special.
-/// Ids start at 1 and are never reused for the life of a [`Layout`], across seats. A workspace
-/// keeps its id when it moves to another output and back, and when it loses its name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct WorkspaceId(pub u64);
-
-/// A column's id, which the model gives every column of scrolling columns it creates. Ids start
-/// at 1 and are never reused for the life of a [`Layout`], across seats and workspaces. A column
-/// keeps its id while it exists: when it moves along its strip, a window joins or leaves it, it
-/// changes width, or it goes fullscreen and back. A window that leaves it for a column of its own
-/// gets a new column, with a new id; a column whose last window leaves is gone. A workspace whose
-/// tiling changes to dwindle and back gets new columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ColumnId(pub NonZeroU64);
+// Named here for the whole crate: its modules reach the ids through `crate::`.
+use yuna_types::{ColumnId, Direction, OutputId, SeatId, Tiling, WindowId, WorkspaceId};
 
 /// The part of its workspace a window is placed in, which says how it moves: the columns of a
 /// strip slide together under one camera, the others do not
@@ -95,29 +67,6 @@ pub enum Layer {
     Floating,
     /// A floating window pinned over every workspace of its output.
     Pinned,
-}
-
-/// A direction on screen. Workspaces of an output are stacked vertically: up is the previous one,
-/// down the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Direction {
-    /// Towards the left.
-    Left,
-    /// Towards the right.
-    Right,
-    /// Upwards.
-    Up,
-    /// Downwards.
-    Down,
-}
-
-/// How a workspace tiles its windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Tiling {
-    /// Columns on a strip that scrolls horizontally (niri).
-    Scrolling,
-    /// Each new window splits the focused one's space (Hyprland).
-    Dwindle,
 }
 
 /// The model's settings, read from the configuration.

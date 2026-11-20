@@ -84,8 +84,9 @@ use smithay::wayland::presentation::PresentationFeedbackCachedState;
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
 use wayland_server::Resource;
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::{OutputId, Placed, SeatId, WindowId};
+use yuna_layout::Placed;
 use yuna_motion::{Change, Drawn};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;

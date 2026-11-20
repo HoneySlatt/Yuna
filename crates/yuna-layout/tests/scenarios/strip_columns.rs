@@ -4,7 +4,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::Size;
-use yuna_layout::{ColumnWidth, Direction, OpenOptions, Options, Tiling};
+use yuna_layout::{ColumnWidth, OpenOptions, Options};
+use yuna_types::{Direction, Tiling};
 
 /// Windows 1, 2 and 3 in one column, from top to bottom, the focus on 3.
 fn stacked() -> Model {

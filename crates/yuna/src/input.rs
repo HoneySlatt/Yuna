@@ -52,8 +52,8 @@ use wayland_server::Resource;
 use wayland_server::protocol::wl_data_source::WlDataSource;
 use wayland_server::protocol::wl_surface::WlSurface;
 use xkbcommon::xkb::{self, Keycode, Keysym};
-use yuna_layout::{OutputId, SeatId, WindowId};
 use yuna_motion::Change;
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::keymap::{Chord, KeyPlanner, KeyboardState};

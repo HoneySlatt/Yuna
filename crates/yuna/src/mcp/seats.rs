@@ -17,7 +17,7 @@ use calloop::RegistrationToken;
 use calloop::timer::{TimeoutAction, Timer};
 use rustix::process::{Pid, Signal};
 use serde_json::{Map, Value, json};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::Server;
 use super::programs::{self, END_GRACE, KILL_WAIT};

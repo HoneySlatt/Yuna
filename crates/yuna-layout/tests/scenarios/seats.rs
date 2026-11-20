@@ -1,7 +1,8 @@
 //! Seats: an agent's seat never reaches the owner's (ADR-0015, ADR-0020).
 
 use crate::harness::*;
-use yuna_layout::{Direction, LayoutError, OpenOptions, Options, OutputId};
+use yuna_layout::{LayoutError, OpenOptions, Options};
+use yuna_types::{Direction, OutputId};
 
 const AGENT_OUTPUT: OutputId = OutputId(10);
 

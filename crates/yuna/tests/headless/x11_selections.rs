@@ -21,8 +21,8 @@ use x11rb::protocol::xproto::{
     SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Timestamp, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::yuna_layout::WindowId;
 use yuna::{ClockMode, MAX_X11_TRANSFERS, WindowShell, X11_TRANSFER_TIMEOUT};
+use yuna_types::WindowId;
 
 use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step, step_pumping};

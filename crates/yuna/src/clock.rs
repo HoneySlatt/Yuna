@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use smithay::utils::{Clock as SystemClock, Monotonic};
-use yuna_layout::OutputId;
+use yuna_types::OutputId;
 
 /// How the clock's time moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

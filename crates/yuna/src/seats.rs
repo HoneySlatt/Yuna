@@ -34,8 +34,8 @@ use wayland_server::protocol::wl_seat::WlSeat;
 use wayland_server::protocol::wl_surface::WlSurface;
 use wayland_server::{Client, DisplayHandle, Resource};
 use xkbcommon::xkb;
-use yuna_layout::SeatId;
 use yuna_motion::Change;
+use yuna_types::SeatId;
 
 use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;

@@ -24,11 +24,11 @@ use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt as _, Window};
 use yuna::mcp::{
     DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES, MAX_WAITING_CALLS,
 };
-use yuna::yuna_layout::SeatId;
 use yuna::{
     CLIPBOARD_TIMEOUT, ClockMode, Compositor, Config, MAX_CLIPBOARD_WRITES, X11Display,
     XwaylandConfig,
 };
+use yuna_types::SeatId;
 
 use crate::mcp::{Mcp, modern};
 use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};

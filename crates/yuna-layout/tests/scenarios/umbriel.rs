@@ -3,7 +3,8 @@
 //! dwindle.
 
 use crate::harness::*;
-use yuna_layout::{ColumnWidth, OpenOptions, Options, Tiling};
+use yuna_layout::{ColumnWidth, OpenOptions, Options};
+use yuna_types::Tiling;
 
 const OUTPUT: yuna_layout::geometry::Rect =
     yuna_layout::geometry::Rect::new(0.0, 0.0, 2560.0, 1440.0);

@@ -8,8 +8,8 @@
 use std::time::Duration;
 
 use smithay::utils::Rectangle;
-use yuna::yuna_layout::WindowId;
 use yuna::{Compositor, MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW, OWNER_SEAT};
+use yuna_types::WindowId;
 
 use crate::client::{Client, ConstraintAdjustment, Feedback, Kind, Parent, Placement};
 use crate::{

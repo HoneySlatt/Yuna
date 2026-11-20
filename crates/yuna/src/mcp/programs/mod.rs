@@ -56,7 +56,7 @@ use calloop::{LoopHandle, RegistrationToken};
 use rustix::pipe::{PipeFlags, pipe_with};
 use rustix::process::{Pid, Signal, WaitStatus};
 
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use crate::compositor::{ClientProcess, ClientProtocolError};
 use crate::process::keep_descriptors_from_the_program;

@@ -4,7 +4,7 @@
 //! one starts 952 further along the strip.
 
 use crate::harness::*;
-use yuna_layout::Direction;
+use yuna_types::Direction;
 
 /// The strip position shown at the left edge of the working area.
 fn view_x(m: &Model) -> f64 {

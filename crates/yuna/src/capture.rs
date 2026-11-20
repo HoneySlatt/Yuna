@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use smithay::utils::{Physical, Rectangle};
 use yuna_layout::geometry::Rect;
-use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::Deadline;

@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use wayland_client::WEnum;
 
-use yuna::yuna_layout::OutputId;
 use yuna::{
     ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT,
     OWNER_SEAT,
 };
+use yuna_types::OutputId;
 
 use crate::capture_client::CaptureClient;
 use crate::screencopy::{compositor_with_a_window, output_pixel, small_output};

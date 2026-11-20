@@ -28,7 +28,7 @@ use smithay::wayland::image_copy_capture::{
 use smithay::wayland::shm::with_buffer_contents_mut;
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_shm::Format;
-use yuna_layout::OutputId;
+use yuna_types::OutputId;
 
 use crate::OutputMode;
 use crate::capture::{Destination, Failure};

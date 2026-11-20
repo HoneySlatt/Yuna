@@ -24,7 +24,7 @@ use smithay::wayland::compositor::{SurfaceData, send_surface_state, with_states}
 use smithay::wayland::fractional_scale::{FractionalScaleHandler, with_fractional_scale};
 use wayland_server::Resource;
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::OutputId;
+use yuna_types::OutputId;
 
 use crate::popups::popup_toplevel;
 use crate::seats::seat_of_surface;

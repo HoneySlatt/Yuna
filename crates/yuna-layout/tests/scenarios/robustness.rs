@@ -3,9 +3,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::Point;
-use yuna_layout::{
-    ColumnWidth, Direction, LayoutError, OpenOptions, OutputConfig, OutputId, SeatId,
-};
+use yuna_layout::{ColumnWidth, LayoutError, OpenOptions, OutputConfig};
+use yuna_types::{Direction, OutputId, SeatId};
 
 #[test]
 fn stale_ids_are_refused() {
@@ -158,6 +157,6 @@ fn a_thousand_windows_open_and_close_with_every_invariant_kept() {
     for n in (0..1000).step_by(3) {
         m.layout.close_window(w(n)).unwrap();
     }
-    m.ok(|l| l.set_tiling(OWNER, yuna_layout::Tiling::Dwindle));
-    m.ok(|l| l.set_tiling(OWNER, yuna_layout::Tiling::Scrolling));
+    m.ok(|l| l.set_tiling(OWNER, yuna_types::Tiling::Dwindle));
+    m.ok(|l| l.set_tiling(OWNER, yuna_types::Tiling::Scrolling));
 }

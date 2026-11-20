@@ -6,10 +6,9 @@
 use std::time::Duration;
 
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{
-    Direction, Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId, SeatId, WindowId,
-};
+use yuna_layout::{Layout, LayoutError, OpenOptions, Options, OutputConfig};
 use yuna_motion::{Change, Frame, Motion, Settings, SpringParams};
+use yuna_types::{Direction, OutputId, SeatId, WindowId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);

@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-use yuna_layout::{Placed, WorkspaceId};
+use yuna_layout::Placed;
+use yuna_types::WorkspaceId;
 
 use crate::{Curve, CurveParams};
 

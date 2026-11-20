@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use yuna::yuna_layout::WindowId;
 use yuna::{Compositor, MAX_KEPT_TOKENS_OF_CLIENTS_GONE, OWNER_SEAT, TOKEN_LIFETIME};
+use yuna_types::WindowId;
 
 use crate::client::{Client, Parent, Placement, State};
 use crate::{

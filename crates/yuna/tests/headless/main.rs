@@ -62,8 +62,9 @@ use std::time::Duration;
 
 use client::{Client, Feedback, Kind, Mode, State};
 use smithay::utils::Rectangle;
-use yuna::yuna_layout::{OpenOptions, OutputId, Tiling, WindowId};
+use yuna::yuna_layout::OpenOptions;
 use yuna::{ClockMode, Compositor, Config, Counters, Error, OWNER_SEAT, OutputMode};
+use yuna_types::{OutputId, Tiling, WindowId};
 
 const TILE: (i32, i32) = (1256, 1408);
 const RED: u32 = 0xFF_FF_00_00;

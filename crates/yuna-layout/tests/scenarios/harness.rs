@@ -2,10 +2,8 @@
 //! so that a scenario fails at the step that breaks one.
 
 use yuna_layout::geometry::{Point, Rect};
-use yuna_layout::{
-    Layout, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId, WindowId,
-    WindowInfo, WorkspaceId,
-};
+use yuna_layout::{Layout, LayoutError, OpenOptions, Options, OutputConfig, Placed, WindowInfo};
+use yuna_types::{OutputId, SeatId, WindowId, WorkspaceId};
 
 /// The owner's seat.
 pub const OWNER: SeatId = SeatId(1);

@@ -3,7 +3,8 @@
 //! the space to share is 1888 × 1048 at (16, 16).
 
 use crate::harness::*;
-use yuna_layout::{Direction, Options, Tiling};
+use yuna_layout::Options;
+use yuna_types::{Direction, Tiling};
 
 fn dwindle() -> Model {
     Model::with(Options {

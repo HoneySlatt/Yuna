@@ -10,11 +10,11 @@
 use std::time::Duration;
 
 use smithay::utils::Rectangle;
-use yuna::yuna_layout::OutputId;
 use yuna::{
     ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT,
     OWNER_SEAT, OutputMode,
 };
+use yuna_types::OutputId;
 
 use crate::capture_client::{CaptureClient, FailureReason, Format};
 use crate::client::Client;

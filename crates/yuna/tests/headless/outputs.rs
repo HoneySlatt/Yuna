@@ -4,11 +4,11 @@
 
 use std::time::Duration;
 
-use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::{
     CaptureSize, CaptureTarget, ClockMode, Compositor, Config, Error, MAX_OUTPUTS, OWNER_SEAT,
     OutputMode, RETIRED_GLOBAL_LIFETIME,
 };
+use yuna_types::{OutputId, WindowId};
 
 use crate::client::{Client, Feedback, Kind};
 use crate::{

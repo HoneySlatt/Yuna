@@ -10,7 +10,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::dialog::{ToplevelDialogHint, XdgDialogHandler};
 use smithay::wayland::shell::xdg::{ToplevelSurface, XdgToplevelSurfaceData};
 use wayland_server::Resource;
-use yuna_layout::WindowId;
+use yuna_types::WindowId;
 
 use crate::state::State;
 

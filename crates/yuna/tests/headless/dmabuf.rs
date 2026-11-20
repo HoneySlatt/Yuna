@@ -17,7 +17,7 @@ use rustix::fs::{SealFlags, fcntl_add_seals};
 use smithay::utils::{Physical, Rectangle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{self, Flags};
 use yuna::Compositor;
-use yuna::yuna_layout::WindowId;
+use yuna_types::WindowId;
 
 use crate::client::{
     Client, ProtocolError, memory_file, memory_file_sealed_with, sealed_memory_file, write_only,

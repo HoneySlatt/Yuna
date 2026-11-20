@@ -16,7 +16,7 @@ use std::time::Instant;
 use calloop::timer::{TimeoutAction, Timer};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::Server;
 use super::accessibility::{BusState, Outcome};

@@ -16,9 +16,10 @@ use wayland_client::protocol::{
     wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
+use yuna::yuna_layout::OpenOptions;
 use yuna::yuna_layout::geometry::Size;
-use yuna::yuna_layout::{OpenOptions, WindowId};
 use yuna::{Compositor, HIDDEN_FRAME_INTERVAL, MAX_WINDOWS_PER_CLIENT, OWNER_SEAT};
+use yuna_types::WindowId;
 
 use crate::client::{Client, memory_file};
 use crate::{OUTPUT, manual_compositor};
@@ -464,7 +465,7 @@ fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
     for _ in 0..5 {
         let started = Instant::now();
         compositor.change_layout(|layout| {
-            let _ = layout.focus(OWNER_SEAT, yuna::yuna_layout::Direction::Left);
+            let _ = layout.focus(OWNER_SEAT, yuna_types::Direction::Left);
         });
         compositor
             .advance(Duration::from_millis(20))
@@ -480,7 +481,7 @@ fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
     assert_eq!(compositor.next_deadline(), None);
     let before = compositor.counters().windows_looked_at_for_hidden_frames;
     compositor.change_layout(|layout| {
-        let _ = layout.focus(OWNER_SEAT, yuna::yuna_layout::Direction::Left);
+        let _ = layout.focus(OWNER_SEAT, yuna_types::Direction::Left);
     });
     compositor
         .advance(Duration::from_millis(20))

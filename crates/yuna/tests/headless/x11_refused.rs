@@ -22,8 +22,9 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode, Window};
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::yuna_layout::{OpenOptions, WindowId};
+use yuna::yuna_layout::OpenOptions;
 use yuna::{ClockMode, MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT, OutputMode};
+use yuna_types::WindowId;
 
 use crate::client::Client;
 use crate::x11_client::{Image, WindowSpec, X11Client, step};

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use smithay::utils::Rectangle;
 use wayland_protocols::wp::viewporter::client::wp_viewport;
-use yuna::yuna_layout::{OutputId, WindowId};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_types::{OutputId, WindowId};
 
 use crate::client::{Client, Parent, Placement, ProtocolError, State};
 use crate::{

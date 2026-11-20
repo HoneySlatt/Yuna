@@ -3,7 +3,8 @@
 
 use crate::harness::*;
 use yuna_layout::geometry::Point;
-use yuna_layout::{Direction, LayoutError, Options, OutputConfig, OutputId};
+use yuna_layout::{LayoutError, Options, OutputConfig};
+use yuna_types::{Direction, OutputId};
 
 const THIRD: OutputId = OutputId(3);
 

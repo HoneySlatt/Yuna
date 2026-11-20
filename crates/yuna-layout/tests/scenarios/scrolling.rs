@@ -2,7 +2,8 @@
 //! column of half the width is (1920 − 16) × 0.5 − 16 = 936 wide and 1080 − 2 × 16 = 1048 tall.
 
 use crate::harness::*;
-use yuna_layout::{ColumnWidth, Direction, OpenOptions, Options};
+use yuna_layout::{ColumnWidth, OpenOptions, Options};
+use yuna_types::Direction;
 
 const HALF: f64 = 936.0;
 const TALL: f64 = 1048.0;

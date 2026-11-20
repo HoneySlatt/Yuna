@@ -12,7 +12,7 @@ use std::time::Instant;
 use calloop::RegistrationToken;
 use calloop::timer::{TimeoutAction, Timer};
 use serde_json::{Map, Value};
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::Server;
 use super::image::{self, Encoded, MAX_IMAGE_SIDE};

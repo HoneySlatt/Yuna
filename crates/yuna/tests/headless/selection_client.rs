@@ -36,8 +36,8 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
     zwp_primary_selection_offer_v1, zwp_primary_selection_source_v1,
 };
-use yuna::yuna_layout::SeatId;
 use yuna::{Compositor, OWNER_SEAT};
+use yuna_types::SeatId;
 
 use crate::client::Client;
 

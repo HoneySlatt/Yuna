@@ -24,11 +24,11 @@ use x11rb::errors::ConnectError;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 use x11rb::rust_connection::{DefaultStream, RustConnection};
 use yuna::rest::Source;
-use yuna::yuna_layout::SeatId;
 use yuna::{
     ClockMode, Compositor, Config, FIRST_PAUSE, IDLE_SECONDS, MAX_DISPLAYS, OWNER_SEAT, OutputMode,
     X11Display, XwaylandConfig,
 };
+use yuna_types::SeatId;
 
 use crate::x11_client::xauthority::entry_fields;
 use crate::{assert_rests, run_armed_deadlines};

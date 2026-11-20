@@ -58,7 +58,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::process::{Pid, WaitStatus};
 use serde_json::{Value, json};
-use yuna_layout::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use super::protocol::Revision;
 use super::tools::{AccessibilityCall, MAX_WAIT, ToolResult};

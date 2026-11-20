@@ -21,7 +21,7 @@ fn keymaps(events: &[InputEvent]) -> usize {
 }
 
 /// A client of seat A, its window open and focused, its text field entered.
-fn focused_field() -> (yuna::Compositor, yuna::yuna_layout::SeatId, InputClient) {
+fn focused_field() -> (yuna::Compositor, yuna_types::SeatId, InputClient) {
     let (mut compositor, a, _) = two_seats();
     let mut client = InputClient::connect(&mut compositor, a, "agent-2");
     open(&mut client, &mut compositor);

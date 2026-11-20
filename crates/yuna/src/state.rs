@@ -40,8 +40,9 @@ use wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId, 
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_surface::WlSurface;
 use wayland_server::{Client, DisplayHandle, Resource};
-use yuna_layout::{Layout, OutputId, SeatId, WindowId};
+use yuna_layout::Layout;
 use yuna_motion::{Change, Motion, Settings};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::capture::{CaptureTicket, CapturedFrame, FailedCopies, PendingCapture};
 use crate::clock::{Clock, ClockMode};

@@ -39,7 +39,7 @@ use smithay::wayland::selection::data_device::WlOfferData;
 use wayland_server::Resource;
 use wayland_server::protocol::wl_data_source::{self, WlDataSource};
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::SeatId;
+use yuna_types::SeatId;
 
 use super::bridge::MAX_X11_TRANSFERS;
 use super::drag_session::{DragAction, DragKey, Effect, Pick, Pressed, SeatDrags};

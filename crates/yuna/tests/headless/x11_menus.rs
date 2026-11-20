@@ -12,9 +12,9 @@
 use std::time::{Duration, Instant};
 
 use x11rb::protocol::xproto::Window;
-use yuna::yuna_layout::{Direction, OutputId};
 use yuna::yuna_motion::Settings;
 use yuna::{CaptureSize, CaptureTarget, ClockMode, Compositor, DrawnX11Menu, OutputMode};
+use yuna_types::{Direction, OutputId};
 
 use crate::x11_client::{Image, WindowSpec, X11Client, step};
 use crate::x11_windows::{

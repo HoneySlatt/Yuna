@@ -16,9 +16,10 @@ use rustix::process::{Pid, WaitStatus};
 use smithay::utils::{Physical, Rectangle};
 use wayland_server::backend::DisconnectReason;
 use wayland_server::{BindError, Display, ListeningSocket};
+use yuna_layout::Layout;
 use yuna_layout::geometry::Rect;
-use yuna_layout::{Layout, OutputId, SeatId, WindowId};
 use yuna_motion::{Change, Drawn, Settings};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::canary::ParityCanary;
