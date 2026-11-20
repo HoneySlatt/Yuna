@@ -15,7 +15,7 @@
 
 use std::fs::File;
 use std::path::Path;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
 
 /// The options `unshare` takes to make a run's namespaces: a user namespace, in which the user
 /// keeps its own id, and in it the PID, mount (for `/proc`) and network ones. The launcher keeps
@@ -98,18 +98,45 @@ fn launch(arguments: &[String]) -> Result<ExitCode, String> {
     if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
         client.env("XDG_RUNTIME_DIR", runtime);
     }
-    let client = client.spawn();
+    let mut client = start_client(&mut client, &mut measured)?;
     let status = measured
         .wait()
         .map_err(|e| format!("{}: {e}", command[0]))?;
-    if let Ok(mut client) = client {
-        let _ = client.kill();
-        let _ = client.wait();
-    }
+    let _ = client.kill();
+    let _ = client.wait();
     use std::os::unix::process::ExitStatusExt;
     Ok(match (status.code(), status.signal()) {
         (Some(code), _) => ExitCode::from(code.clamp(0, 255) as u8),
         (None, Some(signal)) => ExitCode::from((128 + signal).clamp(0, 255) as u8),
         (None, None) => ExitCode::FAILURE,
     })
+}
+
+/// Starts `client` beside `measured`; if it cannot start, ends `measured` and says why. No run
+/// goes on without its client: the run fails now, not when the script gives up waiting for a
+/// client that never connects.
+fn start_client(client: &mut Command, measured: &mut Child) -> Result<Child, String> {
+    client.spawn().map_err(|error| {
+        let _ = measured.kill();
+        let _ = measured.wait();
+        format!("the lockstep client: {error}")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_client_that_cannot_start_ends_the_measured_command() {
+        let mut measured = Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("sleep, in the development shell");
+        let mut client = Command::new("/nonexistent/lockstep-client");
+        let error = start_client(&mut client, &mut measured).unwrap_err();
+        assert!(error.contains("the lockstep client"), "{error}");
+        // Ended and reaped: nothing is left to wait for.
+        assert!(measured.try_wait().expect("its status").is_some());
+    }
 }

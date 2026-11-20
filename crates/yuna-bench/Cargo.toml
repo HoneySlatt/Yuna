@@ -1,6 +1,6 @@
 [package]
 name = "yuna-bench"
-description = "The rivals' bench: compositors measured from outside, the same way for each"
+description = "The rivals' bench, compositors measured from outside the same way for each, and the parity script, two builds of Yuna compared"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

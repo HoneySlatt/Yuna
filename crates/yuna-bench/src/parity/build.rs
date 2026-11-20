@@ -68,16 +68,23 @@ pub enum Source {
 /// controls), and the figure each must flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Canary {
-    /// Yuna's own instructions each frame.
+    /// Yuna's own instructions each frame: 1.8 times the threshold of Yuna's own figure in
+    /// `motion`, the widest, and more elsewhere.
     Spin,
+    /// Yuna's own instructions each frame: twice the threshold of the total's figure in `full`,
+    /// the widest of the scenarios that draw, and more elsewhere.
+    SpinTotal,
     /// One allocation each frame, freed.
     Allocate,
-    /// 64 bytes kept each frame.
+    /// 64 bytes kept every 16 frames, 4 bytes a frame.
     Leak,
     /// 1 MiB kept and touched at start.
     Memory,
     /// A timer each second, at rest too.
     Wake,
+    /// One more wake of the event loop each frame, after a sleep: 20 times the threshold of a
+    /// frame's wakes, 5 times that of its context switches.
+    FrameWake,
     /// Work in each round of the event loop.
     Round,
     /// Work in one operation of the layout.
@@ -88,12 +95,14 @@ pub enum Canary {
 
 impl Canary {
     /// Every canary.
-    pub const ALL: [Canary; 8] = [
+    pub const ALL: [Canary; 10] = [
         Canary::Spin,
+        Canary::SpinTotal,
         Canary::Allocate,
         Canary::Leak,
         Canary::Memory,
         Canary::Wake,
+        Canary::FrameWake,
         Canary::Round,
         Canary::Layout,
         Canary::Motion,
@@ -103,10 +112,12 @@ impl Canary {
     pub fn name(self) -> &'static str {
         match self {
             Canary::Spin => "spin",
+            Canary::SpinTotal => "spin-total",
             Canary::Allocate => "allocate",
             Canary::Leak => "leak",
             Canary::Memory => "memory",
             Canary::Wake => "wake",
+            Canary::FrameWake => "frame-wake",
             Canary::Round => "round",
             Canary::Layout => "layout",
             Canary::Motion => "motion",
@@ -164,8 +175,6 @@ pub struct Built {
     pub programs: BTreeMap<String, PathBuf>,
     /// The cases each of its operations programs lists, or why it could not list them.
     pub cases: BTreeMap<String, Result<Vec<String>, String>>,
-    /// Its tree's baseline file, read; none if the tree has none.
-    pub baseline: Option<Result<super::baseline::Baseline, String>>,
     /// Its tree's thresholds file, read; none if the tree has none.
     pub thresholds: Option<Result<super::thresholds::Thresholds, String>>,
     /// The variables of its shell Yuna reads.
@@ -200,7 +209,6 @@ pub fn build(
         info: SideInfo::default(),
         programs: BTreeMap::new(),
         cases: BTreeMap::new(),
-        baseline: None,
         thresholds: None,
         run_environment: Vec::new(),
     };
@@ -223,10 +231,7 @@ fn build_into(
     let tree = match source {
         Source::Revision(revision) => {
             info.asked = revision.clone();
-            let commit = git(
-                repository,
-                &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
-            )?;
+            let commit = commit_of(repository, revision)?;
             let tree = folder.join("tree");
             if tree.exists() && !tree_is_at(&tree, &commit) {
                 // Left by an earlier run at another revision, or changed since: never reused.
@@ -265,7 +270,6 @@ fn build_into(
             tree
         }
     };
-    built.baseline = read_file(&tree, super::baseline::PATH, super::baseline::parse);
     built.thresholds = read_file(&tree, super::thresholds::PATH, super::thresholds::parse);
     let shell = shell_environment(&tree)?;
     let variable = |name: &str| {
@@ -443,6 +447,14 @@ pub fn git(folder: &Path, arguments: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+
+/// The commit `revision` names in `repository`, in full.
+pub fn commit_of(repository: &Path, revision: &str) -> Result<String, String> {
+    git(
+        repository,
+        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+    )
 }
 
 /// Removes the worktree a revision was checked out in, if it was.

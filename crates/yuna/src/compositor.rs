@@ -756,7 +756,23 @@ impl Compositor {
         self.flush();
         if cfg!(feature = "parity-canary") {
             let frames = self.state.counters.frames_drawn - frames_before;
-            self.canary.after(frames, true);
+            let wakes = self.canary.after(frames, true);
+            self.wake_for_the_canary(wakes)?;
+        }
+        Ok(())
+    }
+
+    /// Inserts `wakes` timers already due, which wake the next round, each counted as a waiting
+    /// call's: what the `frame-wake` canary asks (`canary.rs`).
+    fn wake_for_the_canary(&self, wakes: u64) -> Result<(), Error> {
+        for _ in 0..wakes {
+            insert_source(
+                &self.event_loop.handle(),
+                Wake::of(Source::WaitingCall),
+                Timer::from_duration(Duration::ZERO),
+                |_, _, _| TimeoutAction::Drop,
+            )
+            .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         }
         Ok(())
     }
@@ -855,7 +871,8 @@ impl Compositor {
         self.flush();
         if cfg!(feature = "parity-canary") {
             let frames = self.state.counters.frames_drawn - frames_before;
-            self.canary.after(frames, false);
+            let wakes = self.canary.after(frames, false);
+            self.wake_for_the_canary(wakes)?;
         }
         Ok(())
     }

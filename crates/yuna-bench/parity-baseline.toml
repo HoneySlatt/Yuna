@@ -2,9 +2,10 @@
 # its own tree in its own development shell. `yuna-bench parity run --base baseline` reads it; its
 # format is in crates/yuna-bench/src/parity/baseline.rs, how to move it in CONTRIBUTING.md.
 #
-# The baseline moves only by a commit that adds a [[move]] at the end: the commit it moves to, the
-# figures it moves (as the report names them), why, and the ADR or the owner's go that allows it.
-# The parity run of that commit against the old baseline flags only the figures named.
+# The baseline moves only by a commit that adds a [[move]] at the end: the commit it moves to, an
+# earlier one that holds the change, the figures it moves (as the report names them), why, and
+# the ADR or the owner's go that allows it. The parity run of the push that adds the move also
+# runs the head against the old baseline, and flags there only the figures named.
 
 format = 1
 commit = "500e804b30395611fc54dd1a56accfc8e67b3efa"

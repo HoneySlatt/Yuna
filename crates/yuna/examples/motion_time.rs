@@ -56,7 +56,8 @@
 //! load and the commit.
 //!
 //! Options: `--gpu` draws on the GPU's render node (never in the tests); `--client-vulkan
-//! <icd.json>` gives `vkcube` that Vulkan driver rather than lavapipe; `--output
+//! <icd.json>` gives `vkcube` that Vulkan driver rather than lavapipe (lavapipe's own file there
+//! still draws on the processor: no pass mark); `--output
 //! WIDTHxHEIGHT@RATE,SCALE`, a fixed rate; `--frames <n>`, each phase's frames;
 //! `--reduced-motion`, animations under reduced motion, where nothing slides and fades are kept
 //! ([ADR-0059](../../../docs/adr/0059-reduced-motion-nothing-slides-fades-stay.md)). The round
@@ -1069,6 +1070,21 @@ fn verdict(baseline: &Summary, motion: &Summary, pace: Pace) -> Verdict {
     }
 }
 
+/// Whether `vkcube` draws on a GPU: given a Vulkan driver by `--client-vulkan`, `client_vulkan`,
+/// that is not lavapipe, which draws on the processor, named as the development shell's
+/// `YUNA_LAVAPIPE_ICD`, `lavapipe_icd`, or by its own file's name, `lvp_icd.<arch>.json`.
+fn clients_on_gpu(client_vulkan: Option<&str>, lavapipe_icd: Option<&str>) -> bool {
+    let Some(icd) = client_vulkan.map(Path::new) else {
+        return false;
+    };
+    let lavapipe = lavapipe_icd.is_some_and(|lavapipe| Path::new(lavapipe) == icd)
+        || icd
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("lvp"));
+    !lavapipe
+}
+
 /// Whether a run at `mode`, on the GPU or not, its clients on lavapipe or on the Vulkan driver
 /// `--client-vulkan` named, is the one ADR-0056 judges: Yuna and its clients on the GPU
 /// (ADR-0144).
@@ -1198,7 +1214,10 @@ fn report(
         verdict_line(
             &verdict(&still, &moving, pace),
             options.gpu,
-            options.client_vulkan.is_some(),
+            clients_on_gpu(
+                options.client_vulkan.as_deref(),
+                std::env::var("YUNA_LAVAPIPE_ICD").ok().as_deref(),
+            ),
             &options.output,
             &options.mode,
             pace
@@ -1584,6 +1603,31 @@ mod tests {
             small.contains("1920x1080@240,1") && small.contains("no pass mark"),
             "{small}"
         );
+    }
+
+    #[test]
+    fn clients_on_lavapipe_are_never_on_the_gpu() {
+        let lavapipe = "/nix/store/aaaa-mesa/share/vulkan/icd.d/lvp_icd.x86_64.json";
+        let radv = "/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json";
+        assert!(clients_on_gpu(Some(radv), Some(lavapipe)));
+        assert!(clients_on_gpu(Some(radv), None));
+        // No driver given: vkcube's own lavapipe.
+        assert!(!clients_on_gpu(None, Some(lavapipe)));
+        // lavapipe named: the shell's, another Mesa's, another architecture's.
+        assert!(!clients_on_gpu(Some(lavapipe), Some(lavapipe)));
+        let elsewhere = "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json";
+        assert!(!clients_on_gpu(Some(elsewhere), Some(lavapipe)));
+        let other = "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.i686.json";
+        assert!(!clients_on_gpu(Some(other), None));
+        // YUNA_LAVAPIPE_ICD's file, whatever its name.
+        assert!(!clients_on_gpu(Some("/w/cpu.json"), Some("/w/cpu.json")));
+        // So the ADR's mode is never claimed with clients on lavapipe.
+        let mode = read_mode(DEFAULT_OUTPUT).unwrap();
+        assert!(!is_the_adrs_mode(
+            true,
+            clients_on_gpu(Some(lavapipe), Some(lavapipe)),
+            &mode
+        ));
     }
 
     #[test]

@@ -17,7 +17,16 @@
 //! ```
 //!
 //! Each move names the commit the baseline moved to, the figures it moved, why, and the ADR or
-//! the owner's go that allows it. The newest move is last, and its commit is `commit`.
+//! the owner's go that allows it. The newest move is last, and its commit is `commit`. A commit
+//! cannot name itself, so the baseline is always an earlier commit than the file that pins it,
+//! and its own file never holds the move to it.
+//!
+//! The script reads the files of the head and of the push before ([`at`]) before it builds
+//! anything, so that a run that cannot tell which moves are new fails at once.
+
+use std::path::Path;
+
+use super::build::{self, Source};
 
 /// The file's path, from the workspace's root.
 pub const PATH: &str = "crates/yuna-bench/parity-baseline.toml";
@@ -97,6 +106,35 @@ pub fn parse(text: &str) -> Result<Baseline, String> {
     Ok(Baseline { commit, moves })
 }
 
+/// The baseline file of the tree `source` names, read; none if that tree has none. A revision's
+/// is read from `repository`'s history, a folder's from the folder, uncommitted changes included.
+pub fn at(source: &Source, repository: &Path) -> Result<Option<Baseline>, String> {
+    let (text, place) = match source {
+        Source::Revision(revision) => {
+            let commit = build::commit_of(repository, revision)?;
+            // Empty when the commit has no such file; an error only for a commit git cannot read.
+            if build::git(repository, &["ls-tree", "--name-only", &commit, "--", PATH])?.is_empty()
+            {
+                return Ok(None);
+            }
+            let text = build::git(repository, &["show", &format!("{commit}:{PATH}")])?;
+            (
+                text,
+                format!("{PATH} at {}", &commit[..commit.len().min(12)]),
+            )
+        }
+        Source::Path(folder) => {
+            let path = folder.join(PATH);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => (text, path.display().to_string()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(format!("{}: {error}", path.display())),
+            }
+        }
+    };
+    parse(&text).map(Some).map_err(|e| format!("{place}: {e}"))
+}
+
 /// A commit is named in full, so that no later commit can share its prefix.
 fn check_commit(commit: &str) -> Result<(), String> {
     if commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -171,6 +209,43 @@ mod tests {
         let no_comma = first.replace("figures = []", "figures = [\"a\" \"b\"]");
         assert!(parse(&file(&no_comma)).is_err());
         assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn a_trees_file_is_read_from_its_folder_or_its_revision() {
+        let folder = crate::testing::folder("parity-baseline-at");
+        let source = Source::Path(folder.clone());
+        let repository = crate::scenarios::workspace();
+        // A tree from before the file has none.
+        assert_eq!(at(&source, &repository), Ok(None));
+        let file = folder.join(PATH);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let text = format!(
+            "format = 1\ncommit = \"{A}\"\n[[move]]\ncommit = \"{A}\"\nfigures = []\n\
+             reason = \"r\"\nallowed_by = \"a\"\n"
+        );
+        std::fs::write(&file, &text).unwrap();
+        assert_eq!(at(&source, &repository).unwrap().unwrap().commit, A);
+        // A file that does not read fails, naming itself; never read as absent.
+        std::fs::write(&file, text.replace("format = 1", "format = 9")).unwrap();
+        let error = at(&source, &repository).unwrap_err();
+        assert!(
+            error.contains(PATH) && error.contains("format 9"),
+            "{error}"
+        );
+        // A revision's is its commit's, as git holds it.
+        let tracked = parse(&std::fs::read_to_string(repository.join(PATH)).unwrap()).unwrap();
+        let committed = at(&Source::Revision("HEAD".to_owned()), &repository)
+            .expect("HEAD's file")
+            .expect("HEAD has one");
+        assert_eq!(committed.moves.first(), tracked.moves.first());
+        assert!(
+            at(
+                &Source::Revision("no-such-revision".to_owned()),
+                &repository
+            )
+            .is_err()
+        );
     }
 
     #[test]

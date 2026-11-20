@@ -30,10 +30,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   of Firefox and Chromium, and AccessKit speak it; screen readers and Yuna's `accessibility` tool
   read it.
 - **Baselines** (Stage 2a): the figures taken before 2a changes anything, against which every step
-  is judged: load-insensitive ones at each push (instructions by callgrind, `Pss`, wake-ups, the
-  kernel's DRM memory, allocations a frame), timed runs once a milestone with controls, and start
-  time, GPU memory, a frame with partial damage and a soak. A step that makes one worse is
-  reverted ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
+  is judged, in the parity script's three *tiers*: load-insensitive ones at each push
+  (instructions by callgrind, `Pss`, wake-ups, allocations a frame), the kernel's DRM memory in
+  an agent's runs on the GPU, and once a milestone timed runs with controls, start time, GPU
+  memory, a frame with partial damage and a soak. A step that makes one worse is reverted
+  ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md),
+  [ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
 - **Bench shell**: `nix develop .#bench`, the development shell with the compositors and clients
   the rivals' bench runs, which CI's shell leaves out.
 - **Boundary** (Stage 2a): the temporary contract between the protocols' modules and the surfaces'
@@ -130,9 +132,6 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([ADR-0109](adr/0109-animations-and-effects-what-moves-reduced-motion-and-games.md)). The
   shell decides what follows, such as holding notifications back
   ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
-- **Lockstep client** (parity): the parity script's Wayland client, `yuna-bench client lockstep`,
-  whose windows commit only when the script tells them, then make a round trip, so that two
-  builds of Yuna are given the same work frame by frame.
 - **The games' band**: the high, narrow range of refresh rates Yuna keeps a game's VRR in, by
   showing frames several times ([ADR-0014](adr/0014-vrr-without-flicker.md)).
 - **Greeter mode**: Yuna running under greetd as the login screen's compositor, without command
@@ -162,6 +161,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   boundary after its last refresh has passed; it then draws a commit at once.
 - **llvmpipe**: Mesa's OpenGL driver that draws on the CPU; the headless mode's default
   ([ADR-0123](adr/0123-the-headless-backend-virtual-outputs-llvmpipe-and-dmabufs.md)).
+- **Lockstep client** (parity): the parity script's Wayland client, `yuna-bench client lockstep`,
+  whose windows commit only when the script tells them, then make a round trip, so that two
+  builds of Yuna are given the same work frame by frame.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
@@ -193,6 +195,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Motion**: a value moving to a target on a spring or a curve, a function of time alone, held by
   `yuna-motion`; it ends when it can no longer move a pixel
   ([ADR-0053](adr/0053-springs-in-closed-form-keeping-their-velocity.md)).
+- **Move** (parity): a commit that moves the parity script's pinned baseline to an earlier commit
+  holding a change made on purpose, by adding a `[[move]]` to `parity-baseline.toml` that names
+  the figures moved, why, and the ADR or the owner's go. A move is *new* to a push when the push
+  before's file lacks it; at that push the head is also run against the old baseline, where only
+  what the move names may be worse
+  ([ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
 - **Newest frame**: what a capture shows: the frame an output's armed refresh draws, else the
   one its buffer holds.
 - **Offset**: a window's drawn position minus its place, after a layout operation moved it; it
@@ -283,6 +291,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   name only that seat's.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
+- **Self control** (parity): the parity script run with one tree as both base and head, which
+  must find no figure worse or void: proof that it flags nothing of its own. Its report says
+  whether the two builds have the same code (`.text`).
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
   well-behaved client that joined first; its frame callbacks, at the exact deadline of its frame,
   show that the others did not stop its frames.
@@ -309,6 +320,11 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   agent does not give; removed with its seat, so that a program never reads or writes the user's
   settings, data or caches
   ([ADR-0105](adr/0105-an-agents-programs-on-a-throwaway-home.md)).
+- **Tier** (parity): the figures the parity script measures together, where and when
+  [ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md) says: the
+  *CI tier* at each push, figures the machine's load does not move; the *GPU tier* in an agent's
+  runs on the GPU, the kernel's DRM memory; the *timed tier* once a milestone, on the high tier's
+  desktop. Only the CI tier is built. Not the tiers of machines, such as the *processor tier*.
 - **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
   one after another ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.

@@ -52,17 +52,21 @@ yuna-bench parity: two builds of Yuna compared on figures the machine's load doe
   yuna-bench parity run [options]
 
 Options:
-  --base <revision>|baseline  the base: a revision, or the pinned baseline of
-                              crates/yuna-bench/parity-baseline.toml (default: baseline)
+  --base <revision>|baseline  the base: a revision, or the baseline the head's
+                              crates/yuna-bench/parity-baseline.toml pins (default: baseline)
   --base-path <folder>        the base: a folder's tree, built as it is
   --head <revision>           the head (default: HEAD)
   --head-path <folder>        the head: a folder's tree, built as it is
   --tier ci                   the figures CI compares at each push (the only tier so far)
-  --before <revision>         the push before the head's: when a figure is worse, compared with
-                              the head too, to say whether this push moved it (CI passes
-                              github.event.before; empty or zeros: none)
+  --before <revision>         the push before the head's: the moves of the baseline its file
+                              lacks are the head's own, and a figure worse is compared with it
+                              too, to say whether this push moved it. CI passes the push before,
+                              a pull request's base (HEAD^1), or the head itself for the
+                              schedule; by hand, needed against the pinned baseline (empty or
+                              zeros: none)
   --canary <kind>             build the head with an injected cost, which must be flagged:
-                              spin, allocate, leak, memory, wake, round, layout, motion
+                              spin, spin-total, allocate, leak, memory, wake, frame-wake,
+                              round, layout, motion
   --scenario <list>           idle, partial, full, motion, scaled, many, input, operations
                               (default: all; idle is always run, the others subtract it)
   --repeat <n>                measure each figure n times on each side (default: 1)
@@ -87,8 +91,8 @@ pub struct Options {
     pub head: Source,
     /// The canary the head is built with.
     pub canary: Option<Canary>,
-    /// The push before the head's, compared with the head on what flags, to say which push
-    /// moved it.
+    /// The push before the head's: the moves of the baseline its file lacks are the head's own;
+    /// compared with the head on what flags, it says which push moved it.
     pub before: Option<String>,
     /// The scenarios, and `operations`.
     pub scenarios: Vec<String>,
@@ -174,7 +178,7 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
                 }
             }
             "--before" => {
-                // CI's `github.event.before`: empty outside a push, zeros for a new branch.
+                // Empty or zeros, as GitHub gives a push that makes a branch: none.
                 let before = value()?;
                 options.before =
                     (!before.is_empty() && before.bytes().any(|b| b != b'0')).then_some(before);
@@ -322,27 +326,38 @@ pub fn main(arguments: &[String]) -> ExitCode {
     }
 }
 
-/// `parity run`: builds both sides, makes every run, judges every figure, writes the run file
-/// and its report; gives the exit status.
+/// `parity run`: reads the baseline files, builds both sides, makes every run, judges every
+/// figure, writes the run file and its report; gives the exit status.
 fn run(arguments: &[String]) -> Result<u8, String> {
     // Before any thread or child: no descriptor this process inherited, `run.sh --exclusive`'s
     // lock or cargo's jobserver, may reach a build or a Yuna.
     let inherited = crate::sandbox::close_inherited_on_exec();
     let options = read_options(arguments)?;
     let repository = crate::scenarios::workspace();
-    let pinned = match &options.base {
-        Some(_) => None,
-        None => {
-            let path = repository.join(baseline::PATH);
-            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            Some(baseline::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?)
-        }
+    // Before any build, so that a run that cannot tell which moves are new fails at once.
+    let head_file =
+        baseline::at(&options.head, &repository).map_err(|e| format!("the head's {e}"))?;
+    let base = match &options.base {
+        Some(source) => source.clone(),
+        None => Source::Revision(
+            head_file
+                .as_ref()
+                .ok_or_else(|| {
+                    format!(
+                        "the head has no {}, which pins its baseline: name the base with --base",
+                        baseline::PATH
+                    )
+                })?
+                .commit
+                .clone(),
+        ),
     };
-    let base = match (&options.base, &pinned) {
-        (Some(source), _) => source.clone(),
-        (None, Some(pinned)) => Source::Revision(pinned.commit.clone()),
-        (None, None) => unreachable!("the pinned baseline is read when no base is given"),
-    };
+    let before = options
+        .before
+        .as_deref()
+        .map(|revision| PushBefore::read(revision, &repository))
+        .transpose()?;
+    let moves = new_moves(head_file.as_ref(), options.base.is_none(), before.as_ref())?;
     let valgrind = find_on_path("valgrind")
         .ok_or("no valgrind on PATH: run the script in the parity shell, nix develop .#parity")?;
     // The shell's util-linux, never the host's: it makes each run's namespaces.
@@ -364,31 +379,7 @@ fn run(arguments: &[String]) -> Result<u8, String> {
             std::process::id()
         ))
     });
-    fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
-    let work = fs::canonicalize(&work).map_err(|e| format!("{}: {e}", work.display()))?;
-    // Each run has a /tmp of its own (`launch.rs`), which hides the one the script sees.
-    if work.starts_with("/tmp") {
-        return Err(format!(
-            "the work folder {} is under /tmp, which each run replaces with its own: give \
-             --work another folder",
-            work.display()
-        ));
-    }
-    // The sockets' folder, in the work folder: Yuna's seat's socket in it must stay under Unix's
-    // 108 bytes.
-    let runtime = work.join("rt");
-    if runtime.as_os_str().len() > 64 {
-        return Err(format!(
-            "the work folder's path is too long for its sockets: {} (64 bytes at most for \
-             <work>/rt)",
-            runtime.display()
-        ));
-    }
-    let _ = fs::remove_dir_all(&runtime);
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&runtime)
-        .map_err(|e| format!("{}: {e}", runtime.display()))?;
+    let (work, runtime) = make_work_folder(&work)?;
     let out = options.out.clone().unwrap_or_else(|| {
         repository.join(format!(
             "target/parity/parity-{}.json",
@@ -398,6 +389,12 @@ fn run(arguments: &[String]) -> Result<u8, String> {
     if let Some(folder) = out.parent() {
         fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     }
+    let tools = Tools {
+        program: std::env::current_exe().map_err(|e| format!("this program: {e}"))?,
+        valgrind,
+        runtime: runtime.clone(),
+        unshare,
+    };
     let mut file = RunFile {
         format: record::FORMAT,
         script_commit: crate::scenarios::commit(&[]),
@@ -406,7 +403,7 @@ fn run(arguments: &[String]) -> Result<u8, String> {
         tier: "ci".to_owned(),
         seed,
         machine: crate::machine::MachineInfo::read("", None),
-        valgrind: Command::new(&valgrind)
+        valgrind: Command::new(&tools.valgrind)
             .arg("--version")
             .output()
             .ok()
@@ -418,17 +415,33 @@ fn run(arguments: &[String]) -> Result<u8, String> {
             "descriptors inherited and kept from every child: {inherited:?}"
         ));
     }
+    if options.base.is_some()
+        && let Some(old) = &moves.old
+    {
+        file.notes.push(format!(
+            "the head moves the baseline from {}: that move is checked only against the pinned \
+             baseline, without --base",
+            short(old)
+        ));
+    }
+    let runs = Runs {
+        options: &options,
+        repository: &repository,
+        work: &work,
+        tools: &tools,
+        out: &out,
+        seed,
+    };
+    // From the first build on, whatever ends the run: an error, a panic, or its end.
+    let worktrees = Worktrees {
+        repository: &repository,
+        work: &work,
+    };
 
     eprintln!("yuna-bench parity: building the base");
-    let base_built = build::build("base", &base, &repository, &work.join("base"), None);
+    let base_built = runs.build(Side::Base, &base, None, &mut file);
     eprintln!("yuna-bench parity: building the head");
-    let head_built = build::build(
-        "head",
-        &options.head,
-        &repository,
-        &work.join("head"),
-        options.canary,
-    );
+    let head_built = runs.build(Side::Head, &options.head, options.canary, &mut file);
     for side in [&base_built, &head_built] {
         if let Some(error) = &side.info.error {
             eprintln!(
@@ -437,213 +450,68 @@ fn run(arguments: &[String]) -> Result<u8, String> {
             );
         }
     }
-    file.sides = vec![base_built.info.clone(), head_built.info.clone()];
     file.notes
         .extend(side_notes(&base_built, &head_built, options.canary));
     let (head_thresholds, base_thresholds) =
         thresholds_of(&repository, &base_built, &head_built, &mut file.notes)?;
-    let moves = new_moves(&base_built, &head_built);
     let judging = figures::Judging {
         head: &head_thresholds,
         base: base_thresholds.as_ref(),
-        moves: &moves,
+        moves: &moves.figures,
     };
     let built = [&base_built, &head_built];
     let jobs = plan(&options, &built, seed);
     file.order = jobs.iter().map(Job::label).collect();
     record::write(&out, &mut file)?;
 
-    let tools = Tools {
-        valgrind,
-        program: std::env::current_exe().map_err(|e| format!("this program: {e}"))?,
-        runtime: runtime.clone(),
-        unshare,
-    };
     let sides = BTreeMap::from([(Side::Base, &base_built), (Side::Head, &head_built)]);
     let mut finished = run_jobs(&jobs, &sides, &tools, &work, options.jobs, &out, &mut file)?;
     let judged = figures::judge_all(&finished, &built, judging);
     let failed_build = base_built.info.error.is_some() || head_built.info.error.is_some();
-
-    // The baseline's move, at the push that makes it: the head against the old baseline flags
-    // only what the move names.
-    let mut extra_trees = Vec::new();
-    if let Some(pinned) = &pinned
+    if options.base.is_none()
         && !failed_build
-        && let Some(old) = move_to_check(pinned, &base_built, &options, &repository)
+        && let Some(old) = &moves.old
     {
-        eprintln!("yuna-bench parity: building the old baseline, {old}");
-        let old_built = build::build(
-            "old",
-            &Source::Revision(old.clone()),
-            &repository,
-            &work.join("old"),
-            None,
-        );
-        extra_trees.push("old");
-        file.sides.push(old_built.info.clone());
-        let mut check = record::MoveCheck {
-            old: old.clone(),
-            named: moves.iter().flatten().cloned().collect(),
-            ..record::MoveCheck::default()
-        };
-        if let Some(error) = &old_built.info.error {
-            check
-                .unnamed
-                .push(format!("the old baseline did not build: {error}"));
-        } else {
-            let mut jobs = plan_side(Side::Old, &old_built, &options.scenarios, options.repeat);
-            crate::cli::shuffle(&mut jobs, seed);
-            let sides = BTreeMap::from([(Side::Old, &old_built), (Side::Head, &head_built)]);
-            finished.extend(run_jobs(
-                &jobs,
-                &sides,
-                &tools,
-                &work,
-                options.jobs,
-                &out,
-                &mut file,
-            )?);
-            let against_old = figures::judge_all(
-                &figures::against(&finished, Side::Old),
-                &[&old_built, &head_built],
-                figures::Judging {
-                    head: &head_thresholds,
-                    base: None,
-                    moves: &[],
-                },
-            );
-            for figure in &against_old {
-                let named = check
-                    .named
-                    .iter()
-                    .any(|n| *n == figure.name || n == figure.kind.name);
-                match &figure.verdict {
-                    rule::Verdict::Worse if named => check.worse.push(figure.name.clone()),
-                    rule::Verdict::Worse => check.unnamed.push(figure.name.clone()),
-                    rule::Verdict::Void(reason) => {
-                        check
-                            .unnamed
-                            .push(format!("{}: void against it: {reason}", figure.name));
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let check = check_move(
+            old,
+            &moves,
+            &head_built,
+            &head_thresholds,
+            &runs,
+            &mut finished,
+            &mut file,
+        )?;
         file.move_check = Some(check);
     }
-
-    // Which push moved a worse figure: the push before against the head, on what flagged. It
-    // says; it never changes the verdict.
     let worse: Vec<&figures::Judged> = judged
         .iter()
         .filter(|figure| figure.verdict == rule::Verdict::Worse)
         .collect();
-    if let Some(before) = &options.before
+    if let Some(before) = &before
         && !worse.is_empty()
     {
-        eprintln!("yuna-bench parity: building the push before, {before}");
-        let before_built = build::build(
-            "before",
-            &Source::Revision(before.clone()),
-            &repository,
-            &work.join("before"),
-            None,
-        );
-        extra_trees.push("before");
-        file.sides.push(before_built.info.clone());
-        let mut parts: Vec<String> = worse
-            .iter()
-            .map(|figure| match figure.group.as_str() {
-                "operations" | "motion_operations" => "operations".to_owned(),
-                scenario => scenario.to_owned(),
-            })
-            .collect();
-        parts.push("idle".to_owned());
-        parts.sort();
-        parts.dedup();
-        let against_before = if before_built.info.error.is_none() {
-            let mut jobs = plan_side(Side::Before, &before_built, &parts, options.repeat);
-            crate::cli::shuffle(&mut jobs, seed);
-            let sides = BTreeMap::from([(Side::Before, &before_built), (Side::Head, &head_built)]);
-            finished.extend(run_jobs(
-                &jobs,
-                &sides,
-                &tools,
-                &work,
-                options.jobs,
-                &out,
-                &mut file,
-            )?);
-            figures::judge_all(
-                &figures::against(&finished, Side::Before),
-                &[&before_built, &head_built],
-                judging,
-            )
-        } else {
-            Vec::new()
-        };
-        file.pushes = worse
-            .iter()
-            .map(|figure| {
-                let then = against_before.iter().find(|f| f.name == figure.name);
-                let said = match then.map(|f| &f.verdict) {
-                    Some(rule::Verdict::Worse) => "this push made it worse".to_owned(),
-                    Some(rule::Verdict::NoWorse) => {
-                        "it was as bad at the push before: an earlier push made it worse".to_owned()
-                    }
-                    Some(rule::Verdict::Void(reason)) => format!("unknown: {reason}"),
-                    Some(rule::Verdict::Recorded) | None => before_built
-                        .info
-                        .error
-                        .as_ref()
-                        .map_or("unknown: not measured".to_owned(), |e| {
-                            format!("unknown: the push before did not build: {e}")
-                        }),
-                };
-                record::PushNote {
-                    figure: figure.name.clone(),
-                    said,
-                }
-            })
-            .collect();
+        file.pushes = which_push(
+            before,
+            &worse,
+            &head_built,
+            judging,
+            &runs,
+            &mut finished,
+            &mut file,
+        )?;
     }
 
     file.figures = judged.iter().map(FigureRecord::of).collect();
-    // A figure worse than the old baseline that no new move names makes the run void.
-    let unmoved = file
-        .move_check
-        .as_ref()
-        .filter(|check| !check.unnamed.is_empty())
-        .map(|check| {
-            rule::Verdict::Void(format!(
-                "the move from {} does not name every figure it makes worse",
-                short(&check.old)
-            ))
-        });
     let status = if failed_build {
         2
     } else {
-        rule::exit_status(judged.iter().map(|figure| &figure.verdict).chain(&unmoved))
+        exit_status(&judged, file.move_check.as_ref())
     };
     file.exit = Some(status);
     record::write(&out, &mut file)?;
-    let text = report::markdown(&file);
-    let summary = out.with_extension("md");
-    crate::cli::write_atomically(&summary, |writer| writer.write_all(text.as_bytes()))?;
-    if let Some(step_summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-        let appended = fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&step_summary)
-            .and_then(|mut summary| summary.write_all(text.as_bytes()));
-        if let Err(error) = appended {
-            eprintln!("yuna-bench parity: GITHUB_STEP_SUMMARY: {error}");
-        }
-    }
+    let summary = write_report(&out, &file)?;
 
-    for side in ["base", "head"].into_iter().chain(extra_trees) {
-        build::remove_tree(&repository, &work.join(side));
-    }
+    drop(worktrees);
     let _ = fs::remove_dir_all(&runtime);
     let clean = status != 2 && finished.iter().all(|run| run.outcome.error.is_none());
     if options.keep || !clean {
@@ -657,6 +525,138 @@ fn run(arguments: &[String]) -> Result<u8, String> {
     println!("{}", out.display());
     println!("{}", summary.display());
     Ok(status)
+}
+
+/// Makes the work folder `asked` and its folder of sockets, `rt`, empty; gives both, the work
+/// folder's path made absolute.
+fn make_work_folder(asked: &Path) -> Result<(PathBuf, PathBuf), String> {
+    fs::create_dir_all(asked).map_err(|e| format!("{}: {e}", asked.display()))?;
+    let work = fs::canonicalize(asked).map_err(|e| format!("{}: {e}", asked.display()))?;
+    // Each run has a /tmp of its own (`launch.rs`), which hides the one the script sees.
+    if work.starts_with("/tmp") {
+        return Err(format!(
+            "the work folder {} is under /tmp, which each run replaces with its own: give \
+             --work another folder",
+            work.display()
+        ));
+    }
+    // Yuna's seat's socket in it must stay under Unix's 108 bytes.
+    let runtime = work.join("rt");
+    if runtime.as_os_str().len() > 64 {
+        return Err(format!(
+            "the work folder's path is too long for its sockets: {} (64 bytes at most for \
+             <work>/rt)",
+            runtime.display()
+        ));
+    }
+    let _ = fs::remove_dir_all(&runtime);
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&runtime)
+        .map_err(|e| format!("{}: {e}", runtime.display()))?;
+    Ok((work, runtime))
+}
+
+/// The exit status of a run whose builds both built: its figures' verdicts, and a move that does
+/// not name every figure it makes worse than the old baseline, which makes the run void.
+fn exit_status(judged: &[figures::Judged], move_check: Option<&record::MoveCheck>) -> u8 {
+    let unmoved = move_check
+        .filter(|check| !check.unnamed.is_empty())
+        .map(|check| {
+            rule::Verdict::Void(format!(
+                "the move from {} does not name every figure it makes worse",
+                short(&check.old)
+            ))
+        });
+    rule::exit_status(judged.iter().map(|figure| &figure.verdict).chain(&unmoved))
+}
+
+/// Writes the report of `file`, in Markdown, beside the run file `out`, and appends it to the CI
+/// job's summary when there is one; gives the report's path.
+fn write_report(out: &Path, file: &RunFile) -> Result<PathBuf, String> {
+    let text = report::markdown(file);
+    let summary = out.with_extension("md");
+    crate::cli::write_atomically(&summary, |writer| writer.write_all(text.as_bytes()))?;
+    if let Some(step_summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        let appended = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&step_summary)
+            .and_then(|mut summary| summary.write_all(text.as_bytes()));
+        if let Err(error) = appended {
+            eprintln!("yuna-bench parity: GITHUB_STEP_SUMMARY: {error}");
+        }
+    }
+    Ok(summary)
+}
+
+/// What a run's later builds and runs share: the options, the folders, the tools, the run file's
+/// path and the order's seed.
+struct Runs<'a> {
+    options: &'a Options,
+    repository: &'a Path,
+    work: &'a Path,
+    tools: &'a Tools,
+    out: &'a Path,
+    seed: u64,
+}
+
+impl Runs<'_> {
+    /// Builds `side` from `source`, `canary` built in, in the work folder's `<side>`, and records
+    /// it in `file`.
+    fn build(
+        &self,
+        side: Side,
+        source: &Source,
+        canary: Option<Canary>,
+        file: &mut RunFile,
+    ) -> Built {
+        let built = build::build(
+            side.name(),
+            source,
+            self.repository,
+            &self.work.join(side.name()),
+            canary,
+        );
+        file.sides.push(built.info.clone());
+        built
+    }
+
+    /// Makes the runs of `parts` on `side`, built as `built`, in a random order from the seed.
+    fn measure(
+        &self,
+        side: Side,
+        built: &Built,
+        parts: &[String],
+        file: &mut RunFile,
+    ) -> Result<Vec<Finished>, String> {
+        let mut jobs = plan_side(side, built, parts, self.options.repeat);
+        crate::cli::shuffle(&mut jobs, self.seed);
+        run_jobs(
+            &jobs,
+            &BTreeMap::from([(side, built)]),
+            self.tools,
+            self.work,
+            self.options.jobs,
+            self.out,
+            file,
+        )
+    }
+}
+
+/// Removes the revisions' worktrees from the work folder once dropped: at the end of a run,
+/// whether it ended, failed or panicked. A side built from a folder has none.
+struct Worktrees<'a> {
+    repository: &'a Path,
+    work: &'a Path,
+}
+
+impl Drop for Worktrees<'_> {
+    fn drop(&mut self) {
+        for side in [Side::Base, Side::Head, Side::Old, Side::Before] {
+            build::remove_tree(self.repository, &self.work.join(side.name()));
+        }
+    }
 }
 
 /// What a reader needs to know of the two sides: a self control, a canary.
@@ -729,56 +729,249 @@ fn thresholds_of(
     Ok((head_thresholds, base_thresholds))
 }
 
-/// The figures each move of the baseline names that the head's baseline file holds and the
-/// base's does not: what the head may make worse, or loosen, on purpose.
-fn new_moves(base: &Built, head: &Built) -> Vec<Vec<String>> {
-    let Some(Ok(head)) = &head.baseline else {
-        return Vec::new();
-    };
-    let known: &[baseline::Move] = match &base.baseline {
-        Some(Ok(base)) => &base.moves,
-        _ => &[],
-    };
-    head.moves
-        .iter()
-        .filter(|m| !known.contains(m))
-        .map(|m| m.figures.clone())
-        .collect()
+/// The push before the head's, `--before`: its commit and its baseline file.
+#[derive(Debug, Clone, PartialEq)]
+struct PushBefore {
+    /// Its commit, in full.
+    commit: String,
+    /// Its tree's baseline file; none if its tree has none.
+    baseline: Option<baseline::Baseline>,
 }
 
-/// The old baseline to check the head against, when this run's baseline is a move that has not
-/// been checked: the pinned commit's own file names another commit, a move after the first
-/// baseline is new to that file, and the push before, when given, did not hold that move yet.
-/// Each later push leaves it, already checked at the push that made it.
-fn move_to_check(
-    pinned: &baseline::Baseline,
-    base: &Built,
-    options: &Options,
-    repository: &Path,
-) -> Option<String> {
-    let Some(Ok(own)) = &base.baseline else {
-        return None;
+impl PushBefore {
+    /// Whether it is the tree `head` was built from: a scheduled run's push before is its head,
+    /// the same code, nothing to compare.
+    fn is(&self, head: &build::SideInfo) -> bool {
+        head.commit.as_deref() == Some(self.commit.as_str()) && head.dirty == Some(false)
+    }
+
+    /// The push before named `revision` in `repository`, read.
+    fn read(revision: &str, repository: &Path) -> Result<PushBefore, String> {
+        let commit = build::commit_of(repository, revision)
+            .map_err(|e| format!("the push before, {revision}: {e}"))?;
+        let baseline = baseline::at(&Source::Revision(commit.clone()), repository)
+            .map_err(|e| format!("the push before's {e}"))?;
+        Ok(PushBefore { commit, baseline })
+    }
+}
+
+/// The moves of the baseline that are this push's own, and the baseline before them.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct NewMoves {
+    /// The figures each new move names: what the head may make worse than the old baseline, or
+    /// judge more loosely than the base and the old baseline do.
+    figures: Vec<Vec<String>>,
+    /// The old baseline, which the push before pinned, to run the head against at the push that
+    /// moves it; none when nothing moved, or for the first baseline, the first move, made where
+    /// the push before had no baseline file: it has no old one.
+    old: Option<String>,
+}
+
+/// The moves the head's baseline file holds that the push before's lacks.
+///
+/// "New" is judged against the push before, never the base: a baseline's own file cannot hold
+/// the move to itself. So a later push, a pull request whose base already moved, and a scheduled
+/// run, whose push before is its head, bring none. Against the pinned baseline (`base_is_pinned`)
+/// without the push before, by hand, the run asks for `--before`; against a base `--base` names,
+/// it takes none as new.
+///
+/// The head's moves must be the push before's with new ones at the end: a move once pushed is
+/// never changed or dropped, the first baseline included. A new move may not pin the commit the
+/// move before it pinned: it would be checked against itself.
+fn new_moves(
+    head: Option<&baseline::Baseline>,
+    base_is_pinned: bool,
+    before: Option<&PushBefore>,
+) -> Result<NewMoves, String> {
+    let Some(head) = head else {
+        return Ok(NewMoves::default());
     };
-    if own.commit == pinned.commit {
-        return None;
+    let Some(before) = before else {
+        if !base_is_pinned {
+            return Ok(NewMoves::default());
+        }
+        return Err(format!(
+            "the head's {} pins the baseline, whose own file cannot hold the move to it: give \
+             --before, the revision the head's work starts from (origin/main for commits not \
+             pushed yet, HEAD for a tree's changes that move nothing), so that the script knows \
+             which moves are the head's own",
+            baseline::PATH
+        ));
+    };
+    let known = before.baseline.as_ref().map_or(&[][..], |b| &b.moves);
+    if !head.moves.starts_with(known) {
+        return Err(format!(
+            "the head's {} changes or drops a move that the push before, {}, held: a move is only \
+             ever added, at the end",
+            baseline::PATH,
+            short(&before.commit)
+        ));
     }
-    let newest = pinned.moves.last()?;
-    let is_first = pinned.moves.len() == 1;
-    if is_first || own.moves.contains(newest) {
-        return None;
+    if let Some(again) = (known.len().max(1)..head.moves.len())
+        .find(|&at| head.moves[at].commit == head.moves[at - 1].commit)
+    {
+        return Err(format!(
+            "the head's {} moves the baseline to {}, which the move before already pinned: a move \
+             is checked once, at the push that makes it, and this one would be checked against \
+             itself. A move check that failed or was cancelled is run again by hand, with \
+             --before the commit before that move (CONTRIBUTING.md)",
+            baseline::PATH,
+            short(&head.moves[again].commit)
+        ));
     }
-    if let Some(before) = &options.before {
-        let earlier = build::git(
-            repository,
-            &["show", &format!("{before}:{}", baseline::PATH)],
-        )
-        .ok()
-        .and_then(|text| baseline::parse(&text).ok());
-        if earlier.is_some_and(|earlier| earlier.moves.contains(newest)) {
-            return None;
+    let fresh = &head.moves[known.len()..];
+    let figures = fresh.iter().map(|m| m.figures.clone()).collect();
+    if fresh.is_empty() {
+        return Ok(NewMoves { figures, old: None });
+    }
+    match &before.baseline {
+        Some(pinned) => Ok(NewMoves {
+            figures,
+            old: Some(pinned.commit.clone()),
+        }),
+        // The first baseline, where the push before had no file: no old one to check it against.
+        None if head.moves.len() == 1 => Ok(NewMoves { figures, old: None }),
+        None => Err(format!(
+            "the push before, {}, has no {}, and the head's holds moves after the first \
+             baseline, which cannot be checked: give --before a revision that has it",
+            short(&before.commit),
+            baseline::PATH
+        )),
+    }
+}
+
+/// The check of the baseline's move, at the push that makes it: the head run against the old
+/// baseline, `old`, where a figure may be worse, or judged more loosely than the old baseline's
+/// file judges it, only if a new move names it.
+fn check_move(
+    old: &str,
+    moves: &NewMoves,
+    head: &Built,
+    head_thresholds: &thresholds::Thresholds,
+    runs: &Runs,
+    finished: &mut Vec<Finished>,
+    file: &mut RunFile,
+) -> Result<record::MoveCheck, String> {
+    eprintln!(
+        "yuna-bench parity: building the old baseline, {}",
+        short(old)
+    );
+    let old_built = runs.build(Side::Old, &Source::Revision(old.to_owned()), None, file);
+    let mut check = record::MoveCheck {
+        old: old.to_owned(),
+        named: moves.figures.iter().flatten().cloned().collect(),
+        ..record::MoveCheck::default()
+    };
+    if let Some(error) = &old_built.info.error {
+        check
+            .unnamed
+            .push(format!("the old baseline did not build: {error}"));
+        return Ok(check);
+    }
+    let old_thresholds = old_built
+        .thresholds
+        .clone()
+        .transpose()
+        .map_err(|e| format!("the old baseline's {e}"))?;
+    finished.extend(runs.measure(Side::Old, &old_built, &runs.options.scenarios, file)?);
+    let against_old = figures::judge_all(
+        &figures::against(finished, Side::Old),
+        &[&old_built, head],
+        figures::Judging {
+            head: head_thresholds,
+            base: old_thresholds.as_ref(),
+            moves: &moves.figures,
+        },
+    );
+    for figure in &against_old {
+        let named = check
+            .named
+            .iter()
+            .any(|n| *n == figure.name || n == figure.kind.name);
+        match &figure.verdict {
+            rule::Verdict::Worse if named => check.worse.push(figure.name.clone()),
+            rule::Verdict::Worse => check.unnamed.push(figure.name.clone()),
+            rule::Verdict::Void(reason) => {
+                check
+                    .unnamed
+                    .push(format!("{}: void against it: {reason}", figure.name));
+            }
+            _ => {}
         }
     }
-    Some(own.commit.clone())
+    Ok(check)
+}
+
+/// Which push moved each figure of `worse`: the push before run on their scenarios and judged
+/// against the head, as `judging` judged the base. It says; it never changes a verdict.
+fn which_push(
+    before: &PushBefore,
+    worse: &[&figures::Judged],
+    head: &Built,
+    judging: figures::Judging,
+    runs: &Runs,
+    finished: &mut Vec<Finished>,
+    file: &mut RunFile,
+) -> Result<Vec<record::PushNote>, String> {
+    let note = |figure: &figures::Judged, said: String| record::PushNote {
+        figure: figure.name.clone(),
+        said,
+    };
+    if before.is(&head.info) {
+        let said = "not compared: the push before is the head's own commit";
+        return Ok(worse.iter().map(|f| note(f, said.to_owned())).collect());
+    }
+    eprintln!(
+        "yuna-bench parity: building the push before, {}",
+        short(&before.commit)
+    );
+    let before_built = runs.build(
+        Side::Before,
+        &Source::Revision(before.commit.clone()),
+        None,
+        file,
+    );
+    let mut parts: Vec<String> = worse
+        .iter()
+        .map(|figure| match figure.group.as_str() {
+            "operations" | "motion_operations" => "operations".to_owned(),
+            scenario => scenario.to_owned(),
+        })
+        .collect();
+    parts.push("idle".to_owned());
+    parts.sort();
+    parts.dedup();
+    let against_before = if before_built.info.error.is_none() {
+        finished.extend(runs.measure(Side::Before, &before_built, &parts, file)?);
+        figures::judge_all(
+            &figures::against(finished, Side::Before),
+            &[&before_built, head],
+            judging,
+        )
+    } else {
+        Vec::new()
+    };
+    Ok(worse
+        .iter()
+        .map(|figure| {
+            let then = against_before.iter().find(|f| f.name == figure.name);
+            let said = match then.map(|f| &f.verdict) {
+                Some(rule::Verdict::Worse) => "this push made it worse".to_owned(),
+                Some(rule::Verdict::NoWorse) => {
+                    "it was as bad at the push before: an earlier push made it worse".to_owned()
+                }
+                Some(rule::Verdict::Void(reason)) => format!("unknown: {reason}"),
+                Some(rule::Verdict::Recorded) | None => before_built
+                    .info
+                    .error
+                    .as_ref()
+                    .map_or("unknown: not measured".to_owned(), |e| {
+                        format!("unknown: the push before did not build: {e}")
+                    }),
+            };
+            note(figure, said)
+        })
+        .collect())
 }
 
 /// A commit's first 12 digits.
@@ -960,60 +1153,251 @@ mod tests {
         }
     }
 
-    fn with_baseline(moves: Vec<baseline::Move>) -> Built {
-        Built {
-            info: build::SideInfo::default(),
-            programs: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            baseline: Some(Ok(baseline::Baseline {
-                commit: moves.last().expect("a move").commit.clone(),
-                moves,
-            })),
-            thresholds: None,
-            run_environment: Vec::new(),
+    /// A baseline file holding `moves`, which pins the last.
+    fn pinning(moves: &[&baseline::Move]) -> baseline::Baseline {
+        baseline::Baseline {
+            commit: moves.last().expect("a move").commit.clone(),
+            moves: moves.iter().map(|m| (*m).clone()).collect(),
         }
     }
 
+    /// A push before, at `commit`, holding `file`.
+    fn before(commit: &str, file: Option<baseline::Baseline>) -> PushBefore {
+        PushBefore {
+            commit: commit.repeat(40),
+            baseline: file,
+        }
+    }
+
+    /// Whether the head's thresholds, which loosen the moved figure's, are refused when the new
+    /// moves are `moves`.
+    fn refuses_its_loosening(moves: &NewMoves) -> bool {
+        let entry = |absolute: f64| thresholds::Entry {
+            figure: "Pss_Anon".to_owned(),
+            group: "*".to_owned(),
+            class: rule::Class::Parity,
+            threshold: rule::Threshold {
+                relative: 0.0,
+                absolute,
+            },
+            basis: "a test's".to_owned(),
+        };
+        let (was, looser) = (
+            thresholds::Thresholds {
+                entries: vec![entry(512.0)],
+            },
+            thresholds::Thresholds {
+                entries: vec![entry(2048.0)],
+            },
+        );
+        let figures: Vec<&[String]> = moves.figures.iter().map(Vec::as_slice).collect();
+        thresholds::loosened(
+            &was,
+            &looser,
+            "Pss_Anon",
+            "partial",
+            "partial: Pss_Anon",
+            &figures,
+        )
+        .is_some()
+    }
+
     #[test]
-    fn a_move_of_the_baseline_is_checked_against_the_old_one() {
-        let options = read(&[]).unwrap();
-        let repository = Path::new("/nowhere");
+    fn a_move_is_checked_at_the_push_that_makes_it_and_never_after() {
+        // The baseline moves from a to c, an earlier commit holding the change; the push of d
+        // holds the move. c's own file cannot name c: it still pins a.
         let first = moved("a", &[]);
         let to_c = moved("c", &["partial: Pss_Anon"]);
-        // The head pins c; c's own file still pins a, and lacks the move to c: checked against a.
-        let pinned = baseline::Baseline {
-            commit: to_c.commit.clone(),
-            moves: vec![first.clone(), to_c.clone()],
+        let head = pinning(&[&first, &to_c]);
+        let base = pinning(&[&first]);
+        // The push that moves it, and a pull request that makes the move: the push before, and
+        // the pull request's base, still pin a.
+        let moving = new_moves(Some(&head), true, Some(&before("b", Some(base.clone())))).unwrap();
+        assert_eq!(
+            moving,
+            NewMoves {
+                figures: vec![vec!["partial: Pss_Anon".to_owned()]],
+                old: Some("a".repeat(40)),
+            }
+        );
+        assert!(!refuses_its_loosening(&moving), "the move names it");
+        // A later push, whose push before holds the move; a pull request whose base already
+        // moved; a scheduled run, whose push before is its head: the move stays unchecked, and
+        // no threshold of what it moved may loosen.
+        for (case, known) in [
+            ("a later push", before("d", Some(head.clone()))),
+            (
+                "a pull request after the move",
+                before("e", Some(head.clone())),
+            ),
+            ("a scheduled run", before("f", Some(head.clone()))),
+        ] {
+            let moves = new_moves(Some(&head), true, Some(&known)).unwrap();
+            assert_eq!(moves, NewMoves::default(), "{case}");
+            assert!(refuses_its_loosening(&moves), "{case}");
+        }
+        // Two moves in one push: both named, checked against what the push before pinned.
+        let to_g = moved("g", &["many: Pss_Anon"]);
+        let two = pinning(&[&first, &to_c, &to_g]);
+        let both = new_moves(Some(&two), true, Some(&before("b", Some(base.clone())))).unwrap();
+        assert_eq!(both.figures.len(), 2);
+        assert_eq!(both.old, Some("a".repeat(40)));
+    }
+
+    #[test]
+    fn by_hand_the_pinned_baseline_needs_the_push_before() {
+        let first = moved("a", &[]);
+        let to_c = moved("c", &["partial: Pss_Anon"]);
+        let head = pinning(&[&first, &to_c]);
+        // Against the pinned baseline, whose file never holds the move to itself.
+        let error = new_moves(Some(&head), true, None).unwrap_err();
+        assert!(error.contains("--before"), "{error}");
+        // Against a base `--base` names, nothing is new without the push before: no move is
+        // checked, and no threshold may loosen.
+        let named = new_moves(Some(&head), false, None).unwrap();
+        assert_eq!(named, NewMoves::default());
+        assert!(refuses_its_loosening(&named));
+        // A head without the file holds no move.
+        assert_eq!(new_moves(None, true, None), Ok(NewMoves::default()));
+    }
+
+    #[test]
+    fn a_move_once_pushed_is_never_changed_dropped_or_made_again() {
+        let first = moved("a", &[]);
+        let to_c = moved("c", &["partial: Pss_Anon"]);
+        let known = before("b", Some(pinning(&[&first, &to_c])));
+        // A move changed after its push: it would name figures nothing checked.
+        let changed = moved("c", &["partial: Pss_Anon", "full: Pss_Anon"]);
+        let error = new_moves(Some(&pinning(&[&first, &changed])), true, Some(&known)).unwrap_err();
+        assert!(error.contains("changes or drops"), "{error}");
+        // A move dropped.
+        let dropped = pinning(&[&first, &moved("g", &[])]);
+        assert!(new_moves(Some(&dropped), true, Some(&known)).is_err());
+        // The first baseline rewritten: the sole move a push before holds is no placeholder.
+        let real_first = before("b", Some(pinning(&[&moved("5", &[])])));
+        let repinned = pinning(&[&moved("9", &["partial: Pss_Anon"])]);
+        let error = new_moves(Some(&repinned), true, Some(&real_first)).unwrap_err();
+        assert!(error.contains("changes or drops"), "{error}");
+        // So is the placeholder of the parity script's own commit, which 37d925a replaced once.
+        let placeholder = before("b", Some(pinning(&[&moved("e", &[])])));
+        assert!(new_moves(Some(&pinning(&[&first])), true, Some(&placeholder)).is_err());
+        // A second move to the commit the push before pinned, as if to repair a move check that
+        // failed: it would be checked against itself.
+        let again = moved("c", &["full: Pss_Anon"]);
+        let error =
+            new_moves(Some(&pinning(&[&first, &to_c, &again])), true, Some(&known)).unwrap_err();
+        assert!(error.contains("already pinned"), "{error}");
+        // Two moves to one commit in the same push.
+        let only_first = before("b", Some(pinning(&[&first])));
+        let twice = pinning(&[&first, &to_c, &again]);
+        assert!(new_moves(Some(&twice), true, Some(&only_first)).is_err());
+    }
+
+    #[test]
+    fn the_first_baseline_has_no_old_one_where_the_push_before_had_no_file() {
+        let first = moved("a", &[]);
+        let to_c = moved("c", &["partial: Pss_Anon"]);
+        assert_eq!(
+            new_moves(Some(&pinning(&[&first])), true, Some(&before("b", None))),
+            Ok(NewMoves {
+                figures: vec![Vec::new()],
+                old: None,
+            })
+        );
+        // Later moves where the push before had no file: nothing pinned to check them against.
+        let error = new_moves(
+            Some(&pinning(&[&first, &to_c])),
+            true,
+            Some(&before("b", None)),
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot be checked"), "{error}");
+    }
+
+    #[test]
+    fn the_worktrees_are_removed_whatever_ends_the_run() {
+        let root = crate::testing::folder("parity-worktrees");
+        let repository = root.join("repository");
+        let work = root.join("work");
+        let git = |arguments: &[&str]| build::git(&root, arguments).expect("git");
+        git(&["init", "--quiet", &repository.to_string_lossy()]);
+        git(&[
+            "-C",
+            &repository.to_string_lossy(),
+            "-c",
+            "user.name=parity",
+            "-c",
+            "user.email=parity@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "--message",
+            "A test's commit",
+        ]);
+        let check_out = |side: Side| {
+            let tree = work.join(side.name()).join("tree");
+            build::git(
+                &repository,
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    &tree.to_string_lossy(),
+                    "HEAD",
+                ],
+            )
+            .expect("a worktree");
+            tree
         };
-        let base = with_baseline(vec![first.clone()]);
-        assert_eq!(
-            move_to_check(&pinned, &base, &options, repository),
-            Some("a".repeat(40))
-        );
-        // The figures a new move names, which the head may make worse or loosen.
-        let head = with_baseline(vec![first.clone(), to_c.clone()]);
-        assert_eq!(
-            new_moves(&base, &head),
-            [vec!["partial: Pss_Anon".to_owned()]]
-        );
-        assert!(new_moves(&head, &head).is_empty());
-        // The base's own file pins itself, or already holds the move: nothing to check.
-        let itself = with_baseline(vec![first.clone(), to_c.clone()]);
-        assert_eq!(move_to_check(&pinned, &itself, &options, repository), None);
-        // The first baseline replacing a placeholder has no old one to check against.
-        let placeholder = with_baseline(vec![moved("e", &[])]);
-        let first_pin = baseline::Baseline {
-            commit: first.commit.clone(),
-            moves: vec![first.clone()],
+        let listed = || {
+            build::git(&repository, &["worktree", "list"])
+                .unwrap()
+                .lines()
+                .count()
         };
-        assert_eq!(
-            move_to_check(&first_pin, &placeholder, &options, repository),
-            None
-        );
-        // A base without the file, a revision from before it: nothing to check.
-        let mut bare = with_baseline(vec![first]);
-        bare.baseline = None;
-        assert_eq!(move_to_check(&pinned, &bare, &options, repository), None);
+        // An error after the builds.
+        let base = check_out(Side::Base);
+        let head = check_out(Side::Head);
+        let failed = || -> Result<(), String> {
+            let _worktrees = Worktrees {
+                repository: &repository,
+                work: &work,
+            };
+            Err("the head's thresholds do not read".to_owned())
+        };
+        assert!(failed().is_err());
+        assert!(!base.exists() && !head.exists());
+        assert_eq!(listed(), 1, "the repository's own tree alone");
+        // A panic, the old baseline's and the push before's trees too.
+        let trees = [Side::Old, Side::Before].map(check_out);
+        let panicked = std::panic::catch_unwind(|| {
+            let _worktrees = Worktrees {
+                repository: &repository,
+                work: &work,
+            };
+            panic!("a run that panicked");
+        });
+        assert!(panicked.is_err());
+        assert!(trees.iter().all(|tree| !tree.exists()));
+        assert_eq!(listed(), 1);
+    }
+
+    #[test]
+    fn a_push_before_that_is_the_head_is_not_built_again() {
+        let pushed = before("a", None);
+        let head = |commit: &str, dirty: bool| build::SideInfo {
+            commit: Some(commit.repeat(40)),
+            dirty: Some(dirty),
+            ..build::SideInfo::default()
+        };
+        // A scheduled run: its push before is its head.
+        assert!(pushed.is(&head("a", false)));
+        // A folder at that commit with changes, another commit, a head with no commit.
+        assert!(!pushed.is(&head("a", true)));
+        assert!(!pushed.is(&head("b", false)));
+        assert!(!pushed.is(&build::SideInfo::default()));
     }
 
     #[test]
@@ -1032,7 +1416,6 @@ mod tests {
             info: build::SideInfo::default(),
             programs: BTreeMap::from([("yuna".to_owned(), PathBuf::from("/w/yuna"))]),
             cases: BTreeMap::new(),
-            baseline: None,
             thresholds: None,
             run_environment: Vec::new(),
         };

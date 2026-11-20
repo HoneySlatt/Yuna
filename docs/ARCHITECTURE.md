@@ -887,7 +887,9 @@ A run of the script:
    in a target folder of its own, its paths remapped: one tree built twice gives the same binary,
    and two trees of one revision the same code (`.text`), their files differing only by the run
    path the shell's linker wrapper writes. `yuna` is built with rustix's `use-libc-auxv`, so that
-   valgrind can run it. Each tree's baseline and thresholds files are read with it.
+   valgrind can run it. Each tree's thresholds file is read with it. The baseline files of the
+   head and of the push before are read before any build, from git or the folder, so that a run
+   that cannot tell which moves are new fails at once.
 2. **The plan** (`mod.rs`): each scenario five ways on each side (natively, and under callgrind
    and DHAT, each `n` and `2n` periods), each case of the operations programs twice (`n` and
    `2n` repeats), all in a random order from a recorded seed, several at once.
@@ -917,43 +919,59 @@ A run of the script:
    today.
 5. **Equal work, then the rule** (`rule.rs`, `thresholds.rs`). A scenario's figures are compared
    only if every run of it, on both sides, drew the same frames for the same causes, took the
-   same commits, and gave its client the same frame callbacks, pointer events, configures and
-   releases; otherwise they are *void*. Each figure has a class: *parity*, worse beyond its
-   threshold; *budget*, against a figure of the ROADMAP or an ADR; *recorded*, never judged. The
-   thresholds are data,
+   same commits, and gave its client the same frame callbacks, pointer events and configures,
+   and made it the same buffers; otherwise they are *void*. Each figure has a class: *parity*,
+   worse beyond its threshold; *budget*, against a figure of the ROADMAP or an ADR; *recorded*,
+   never judged. The classes and thresholds are data,
    [`crates/yuna-bench/parity-thresholds.toml`](../crates/yuna-bench/parity-thresholds.toml),
-   each about three times its spread with a floor, by scenario or case where they differ. The
-   head's judge; one the head loosens against the base's is void unless a new move of the
-   baseline names its figure. A figure that cannot be measured, its program missing from a tree
-   included, is void. The exit status is 1 if a figure is worse, else 2 if one is void, else 0.
-6. **The move, and the push before** (`mod.rs`). At the push that moves the baseline, the head is
-   also run against the old one: every figure worse there must be named by the move, else the
-   run is void. When a figure is worse and `--before` names the push before (CI passes
-   `github.event.before`), that push is run on the scenarios that flagged and compared with the
-   head, to say whether this push moved them; it never changes the verdict.
+   each threshold about three times its spread with a floor, by scenario or case where they
+   differ. The head's file judges; a figure whose class the head changes, or whose threshold or
+   budget it loosens, against the base's file is void unless a new move of the baseline names
+   it. A figure that cannot be measured, its program missing from a tree included, is void. The
+   exit status is 1 if a figure is worse, else 2 if one is void, else 0.
+6. **The move, and the push before** (`mod.rs`). `--before` names the push before: CI passes a
+   push's `github.event.before`, a pull request's base (`HEAD^1`, the first parent of the merge
+   commit it checks out) and, for the schedule, the head itself. The moves the head's baseline
+   file holds and the push before's lacks are the head's *new* moves; never judged against the
+   base's file, which cannot hold the move to itself. By hand, a run against the pinned baseline
+   needs `--before`. The head's moves must be the push before's with new ones at the end, and a
+   new move may not pin the commit the move before it pinned; otherwise the run fails. At a push
+   with a new move, the head is also run against the old baseline, the one the push before
+   pinned: every figure worse there, or judged more loosely than the old baseline's file judges
+   it, must be named by a new move, else the run is void. That check runs at that push alone: a
+   move check that fails or is cancelled is never redone by CI, since the next push's push
+   before holds the move. It is run again by hand, with `--before` the commit before the move,
+   and no push goes on top of a red or cancelled move check. When a figure is worse, the push
+   before is run on the scenarios that flagged and compared with the head, to say whether this
+   push moved them, unless it is the head's own commit; it never changes the verdict.
 7. **The run file and its report** (`record.rs`, `report.rs`): versioned JSON, written again
    after each run through a temporary file and a rename, and its Markdown, appended to the CI
    job's summary.
 
 **The scenarios**, each with its windows and what changes each period: `idle` (nothing: an
-advance alone), `partial` (a 64 × 64 square at 1080p), `full` (two whole windows), `motion`
-(workspaces switched and a window moved on springs), `scaled` (a square at 4K and scale 1.5),
-`many` (a square among 30 windows) and `input` (8 pointer motions). Popups, X11 and captures
+advance alone), `partial` (a 64 × 64 square at 1080p), `full` (two whole windows; its runs,
+shorter than the half second of drawings Yuna keeps to predict its lead, start after 121 periods
+of a square, which fill the drawings Yuna keeps), `motion` (workspaces switched and a window
+moved on springs), `scaled` (a square at 4K and scale 1.5), `many` (a square among 30 windows)
+and `input` (8 pointer motions). Popups, X11 and captures
 are not covered yet. The operations programs, `crates/yuna-layout/examples/operations.rs` and
 `crates/yuna-motion/examples/motion_operations.rs`, print a digest of the work they did; two
 builds whose digests differ are not compared.
 
-**The baseline.** [`crates/yuna-bench/parity-baseline.toml`](../crates/yuna-bench/parity-baseline.toml)
-names the commit every push is compared with, and each of its moves: the commit, the figures it
-moves, why, and the ADR or the owner's go. A base that lacks a program the head has, an
-operations program for instance, makes its figures void.
+**The baseline.** [`crates/yuna-bench/parity-baseline.toml`](../crates/yuna-bench/parity-baseline.toml),
+the head's, names the commit every push is compared with, and each of its moves: the commit, an
+earlier one that holds the change, the figures it moves, why, and the ADR or the owner's go. A
+base that lacks a program the head has, an operations program for instance, makes its figures
+void.
 
-**The controls.** The base against itself must pass. Each *canary*, built into the head with the
-`parity-canary` feature of `yuna`, `yuna-layout` or `yuna-motion` and turned on by
-`YUNA_PARITY_CANARY`, injects one cost about twice its figure's threshold, which must be flagged:
-`spin`, `allocate`, `leak`, `memory`, `wake`, `round`, `layout`, `motion`
-([`canary.rs`](../crates/yuna/src/canary.rs)). No shipped build has the feature; `scripts/check.sh`
-lints it.
+**The controls.** The base against itself, the *self control*, must pass. Each *canary*, built
+into the head with the `parity-canary` feature of `yuna`, `yuna-layout` or `yuna-motion` and
+turned on by `YUNA_PARITY_CANARY`, injects one cost about twice its figure's threshold, which
+must be flagged: `spin` (Yuna's own instructions), `spin-total` (the total's), `allocate`, `leak`,
+`memory`, `wake` (at rest), `frame-wake` (a wake and a context switch a frame, more than twice:
+one a frame is the least), `round`, `layout`, `motion`
+([`canary.rs`](../crates/yuna/src/canary.rs)). No shipped build has the feature;
+`scripts/check.sh` lints it.
 
 ## Where to start reading
 

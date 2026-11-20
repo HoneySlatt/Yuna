@@ -1,5 +1,5 @@
-//! The figures, from the runs, and their verdicts: what each figure is and its class; its
-//! threshold comes from `parity-thresholds.toml` (`thresholds.rs`).
+//! The figures, from the runs, and their verdicts: what each figure is; its class and its
+//! threshold come from `parity-thresholds.toml` (`thresholds.rs`).
 //!
 //! A figure *a frame* is a cost over one period of the output's refresh, one advance of the
 //! manual clock: in `partial`, `full`, `scaled` and `many`, each period draws one frame; in
@@ -148,18 +148,15 @@ pub struct Kind {
     pub name: &'static str,
     /// Its unit.
     pub unit: &'static str,
-    /// Its class.
-    pub class: Class,
     from: From,
 }
 
-/// Every scenario's figures. Their thresholds are data, in `parity-thresholds.toml`
+/// Every scenario's figures. Their classes and thresholds are data, in `parity-thresholds.toml`
 /// (`thresholds.rs`), each with the spread it came from.
 pub const KINDS: [Kind; 11] = [
     Kind {
         name: "instructions a frame, yuna",
         unit: "instructions",
-        class: Class::Parity,
         from: From::Difference {
             tool: Tool::Callgrind,
             reading: "instructions_yuna",
@@ -169,7 +166,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "instructions a frame",
         unit: "instructions",
-        class: Class::Parity,
         from: From::Difference {
             tool: Tool::Callgrind,
             reading: "instructions",
@@ -179,7 +175,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "allocations a frame",
         unit: "blocks",
-        class: Class::Parity,
         from: From::Difference {
             tool: Tool::Dhat,
             reading: "blocks",
@@ -189,7 +184,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "allocations a frame, yuna",
         unit: "blocks",
-        class: Class::Parity,
         from: From::Difference {
             tool: Tool::Dhat,
             reading: "blocks_own",
@@ -199,7 +193,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "heap growth a frame",
         unit: "bytes",
-        class: Class::Parity,
         from: From::Difference {
             tool: Tool::Dhat,
             reading: "end_bytes",
@@ -209,7 +202,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "Pss_Anon",
         unit: "KiB",
-        class: Class::Parity,
         from: From::Native {
             reading: "pss_anon_kib",
             per_period: false,
@@ -218,7 +210,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "Pss_File",
         unit: "KiB",
-        class: Class::Recorded,
         from: From::Native {
             reading: "pss_file_kib",
             per_period: false,
@@ -227,7 +218,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "wakes a frame",
         unit: "wakes",
-        class: Class::Parity,
         from: From::Native {
             reading: "wakes",
             per_period: true,
@@ -236,7 +226,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "context switches a frame",
         unit: "switches",
-        class: Class::Parity,
         from: From::Native {
             reading: "switches",
             per_period: true,
@@ -245,7 +234,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "wakes at rest",
         unit: "wakes",
-        class: Class::Parity,
         from: From::Native {
             reading: "rest_wakes",
             per_period: false,
@@ -254,7 +242,6 @@ pub const KINDS: [Kind; 11] = [
     Kind {
         name: "context switches at rest",
         unit: "switches",
-        class: Class::Parity,
         from: From::Native {
             reading: "rest_switches",
             per_period: false,
@@ -267,7 +254,6 @@ pub const KINDS: [Kind; 11] = [
 pub const WAKES_BY_SOURCE: Kind = Kind {
     name: "wakes a frame, by source",
     unit: "wakes",
-    class: Class::Parity,
     from: From::Native {
         reading: "wakes:",
         per_period: true,
@@ -278,7 +264,6 @@ pub const WAKES_BY_SOURCE: Kind = Kind {
 pub const OPERATION: Kind = Kind {
     name: "instructions an operation",
     unit: "instructions",
-    class: Class::Parity,
     from: From::Difference {
         tool: Tool::Callgrind,
         reading: "instructions",
@@ -290,7 +275,6 @@ pub const OPERATION: Kind = Kind {
 pub const MOTION_OPERATION: Kind = Kind {
     name: "instructions an update",
     unit: "instructions",
-    class: Class::Parity,
     from: From::Difference {
         tool: Tool::Callgrind,
         reading: "instructions",
@@ -307,6 +291,8 @@ pub struct Judged {
     pub group: String,
     /// Its kind.
     pub kind: Kind,
+    /// Its class, from the head's thresholds file; [`Class::Parity`] when the file has none for it.
+    pub class: Class,
     /// Its threshold, and where it came from; none when the thresholds file has none for it.
     pub threshold: Option<(Threshold, String)>,
     /// Each side's values, one a measurement; void ones left out.
@@ -319,15 +305,16 @@ pub struct Judged {
     pub verdict: Verdict,
 }
 
-/// What judging takes beside the runs: the head's thresholds, which judge, and the base's, which
-/// the head may not loosen unless a new move of the baseline names the figure.
+/// What judging takes beside the runs: the head's classes and thresholds, which judge, and the
+/// base's, which the head may not loosen unless a new move of the baseline names the figure.
 #[derive(Debug, Clone, Copy)]
 pub struct Judging<'a> {
-    /// The head's thresholds.
+    /// The head's classes and thresholds.
     pub head: &'a Thresholds,
     /// The base's, when its tree has the file.
     pub base: Option<&'a Thresholds>,
-    /// The figures each move of the baseline that the base's file lacks names.
+    /// The figures each new move of the baseline names: each move the head's baseline file holds
+    /// and the push before's lacks.
     pub moves: &'a [Vec<String>],
 }
 
@@ -430,21 +417,15 @@ fn judge_one(
         )
     });
     let verdict = match (entry, loosened) {
-        (None, _) if kind.class == Class::Parity => Verdict::Void(format!(
-            "no threshold for {:?} in {}",
+        (None, _) => Verdict::Void(format!(
+            "no threshold for {:?} in {}, which gives each figure its class too",
             kind.name,
             super::thresholds::PATH
         )),
         (_, Some(reason)) => Verdict::Void(reason),
-        (entry, None) => rule::judge(
-            kind.class,
-            entry.map_or(
-                Threshold {
-                    relative: 0.0,
-                    absolute: 0.0,
-                },
-                |e| e.threshold,
-            ),
+        (Some(entry), None) => rule::judge(
+            entry.class,
+            entry.threshold,
             &measured(&sides[0], medians[0]),
             &measured(&sides[1], medians[1]),
         ),
@@ -467,6 +448,7 @@ fn judge_one(
         name,
         group: group.to_owned(),
         kind,
+        class: entry.map_or(Class::Parity, |e| e.class),
         threshold: entry.map(|e| (e.threshold, e.basis.clone())),
         values,
         medians,
@@ -804,6 +786,11 @@ mod tests {
                 .map(|figure| super::super::thresholds::Entry {
                     figure: figure.to_owned(),
                     group: "*".to_owned(),
+                    class: if figure == "Pss_File" {
+                        Class::Recorded
+                    } else {
+                        Class::Parity
+                    },
                     threshold: Threshold {
                         relative: 0.005,
                         absolute: if figure.starts_with("instructions an") {
@@ -862,6 +849,7 @@ mod tests {
         looser.entries.push(super::super::thresholds::Entry {
             figure: "heap growth a frame".to_owned(),
             group: "partial".to_owned(),
+            class: Class::Parity,
             threshold: Threshold {
                 relative: 0.0,
                 absolute: 64.0,
@@ -898,7 +886,6 @@ mod tests {
             info: SideInfo::default(),
             programs: BTreeMap::from([("yuna".to_owned(), "/w/yuna".into())]),
             cases: BTreeMap::new(),
-            baseline: None,
             thresholds: None,
             run_environment: Vec::new(),
         }

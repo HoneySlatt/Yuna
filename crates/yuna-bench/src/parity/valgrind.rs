@@ -245,9 +245,15 @@ pub fn files(folder: &Path, tool: Tool) -> Vec<PathBuf> {
     files
 }
 
-/// Whether a process's `command` ran `binary`.
+/// Whether a process's `command`, its program then its arguments as valgrind writes them, ran
+/// `binary`: the whole path, which may hold a space, then nothing or an argument. valgrind does
+/// not quote, so another program at `binary`'s path followed by a space and more would read the
+/// same; none can be: `binary` is a side's copy, `<work>/<side>/bin/<name>`, and nothing in
+/// `bin` is a folder whose name starts with `<name> `.
 pub fn runs(command: &str, binary: &Path) -> bool {
-    command.split_whitespace().next() == Some(&*binary.to_string_lossy())
+    command
+        .strip_prefix(&*binary.to_string_lossy())
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
 }
 
 #[cfg(test)]
@@ -297,6 +303,18 @@ totals: 1175
         assert_eq!(read.by_object["???"], 100);
         assert!(runs(&read.command, Path::new("/w/bin/base/yuna")));
         assert!(!runs(&read.command, Path::new("/w/bin/head/yuna")));
+    }
+
+    #[test]
+    fn a_command_ran_a_binary_by_its_whole_path() {
+        let binary = Path::new("/w/my work/bin/base/yuna");
+        assert!(runs("/w/my work/bin/base/yuna mcp --manual-clock", binary));
+        assert!(runs("/w/my work/bin/base/yuna", binary));
+        // Another binary whose path starts the same, or a path cut at its space.
+        assert!(!runs("/w/my work/bin/base/yuna-old mcp", binary));
+        assert!(!runs("/w/my mcp", binary));
+        assert!(!runs("/w/my work/bin/head/yuna mcp", binary));
+        assert!(!runs("", binary));
     }
 
     #[test]

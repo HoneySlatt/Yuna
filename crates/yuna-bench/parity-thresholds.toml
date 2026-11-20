@@ -1,19 +1,21 @@
-# The parity script's thresholds (ADR-0142): how far each parity figure may grow before it is
-# worse, `max(relative × base, absolute)`, and the spread each came from. The script judges with
-# the head's file; a threshold the head loosens against the base's makes its figure void, unless
-# a new [[move]] in parity-baseline.toml names the figure. Format: crates/yuna-bench/src/parity/
-# thresholds.rs.
+# The parity script's classes and thresholds (ADR-0142): how each figure is judged, `parity`,
+# `budget` or `recorded`; how far each parity figure may grow before it is worse, `max(relative ×
+# base, absolute)`; and the spread each came from. The script judges with the head's file; a
+# class the head changes, or a threshold it loosens, against the base's makes its figure void,
+# unless a new [[move]] in parity-baseline.toml names the figure. Format:
+# crates/yuna-bench/src/parity/thresholds.rs.
 #
 # The spreads: the M2.1 tree against itself, five measurements a side, three times (all figures
 # twice, the scenarios' once more), on the owner's desktop (Ryzen 7 5800X), 2026-11-19 and 20
 # (.delegation/, local). A spread is a figure's range over its median, over a series' ten; each
 # threshold takes the widest of the series. Desktop only: not yet measured on GitHub's runner.
 
-format = 1
+format = 2
 
 [[threshold]]
 figure = "instructions a frame, yuna"
 group = "*"
+class = "parity"
 relative = 0.006
 absolute = 600
 basis = "3 × 0.196 %, the widest spread but motion's, idle's; floor 3 × 183, the widest range but motion's, full's"
@@ -21,6 +23,7 @@ basis = "3 × 0.196 %, the widest spread but motion's, idle's; floor 3 × 183, t
 [[threshold]]
 figure = "instructions a frame, yuna"
 group = "motion"
+class = "parity"
 relative = 0.012
 absolute = 1400
 basis = "3 × 0.375 %, motion's widest spread; floor 3 × 449, its range"
@@ -28,6 +31,7 @@ basis = "3 × 0.375 %, motion's widest spread; floor 3 × 449, its range"
 [[threshold]]
 figure = "instructions a frame"
 group = "*"
+class = "parity"
 relative = 0.001
 absolute = 103000
 basis = "3 × 0.026 %, full's spread; floor 3 × 34,094, input's range: LLVM, compiling llvmpipe's shaders at Yuna's start, counts differently from run to run"
@@ -35,6 +39,7 @@ basis = "3 × 0.026 %, full's spread; floor 3 × 34,094, input's range: LLVM, co
 [[threshold]]
 figure = "instructions a frame"
 group = "idle"
+class = "parity"
 relative = 0.001
 absolute = 26300
 basis = "floor 3 × 8,764, idle's range (15.53 % of 56,448): LLVM's start-up counts"
@@ -42,6 +47,7 @@ basis = "floor 3 × 8,764, idle's range (15.53 % of 56,448): LLVM's start-up cou
 [[threshold]]
 figure = "instructions a frame"
 group = "partial"
+class = "parity"
 relative = 0.001
 absolute = 33200
 basis = "floor 3 × 11,061, partial's range (2.33 % of 473,865): LLVM's start-up counts"
@@ -49,6 +55,7 @@ basis = "floor 3 × 11,061, partial's range (2.33 % of 473,865): LLVM's start-up
 [[threshold]]
 figure = "instructions a frame"
 group = "full"
+class = "parity"
 relative = 0.001
 absolute = 63600
 basis = "floor 3 × 21,182, full's range (0.03 % of 80,632,753): LLVM's start-up counts"
@@ -56,6 +63,7 @@ basis = "floor 3 × 21,182, full's range (0.03 % of 80,632,753): LLVM's start-up
 [[threshold]]
 figure = "instructions a frame"
 group = "motion"
+class = "parity"
 relative = 0.001
 absolute = 37300
 basis = "floor 3 × 12,423, motion's range (0.02 % of 73,497,063): LLVM's start-up counts"
@@ -63,6 +71,7 @@ basis = "floor 3 × 12,423, motion's range (0.02 % of 73,497,063): LLVM's start-
 [[threshold]]
 figure = "instructions a frame"
 group = "scaled"
+class = "parity"
 relative = 0.001
 absolute = 30700
 basis = "floor 3 × 10,207, scaled's range (1.69 % of 604,382): LLVM's start-up counts"
@@ -70,6 +79,7 @@ basis = "floor 3 × 10,207, scaled's range (1.69 % of 604,382): LLVM's start-up 
 [[threshold]]
 figure = "instructions a frame"
 group = "many"
+class = "parity"
 relative = 0.001
 absolute = 19000
 basis = "floor 3 × 6,319, many's range (1.32 % of 478,375): LLVM's start-up counts"
@@ -77,6 +87,7 @@ basis = "floor 3 × 6,319, many's range (1.32 % of 478,375): LLVM's start-up cou
 [[threshold]]
 figure = "instructions a frame"
 group = "input"
+class = "parity"
 relative = 0.001
 absolute = 102300
 basis = "floor 3 × 34,094, input's range (4.34 % of 785,973): LLVM's start-up counts"
@@ -84,6 +95,7 @@ basis = "floor 3 × 34,094, input's range (4.34 % of 785,973): LLVM's start-up c
 [[threshold]]
 figure = "allocations a frame"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.5
 basis = "spread 0: valgrind counts the same work the same way; floor half a block"
@@ -91,6 +103,7 @@ basis = "spread 0: valgrind counts the same work the same way; floor half a bloc
 [[threshold]]
 figure = "allocations a frame"
 group = "motion"
+class = "parity"
 relative = 0
 absolute = 1
 basis = "floor about 3 × 0.31 blocks, motion's range"
@@ -98,6 +111,7 @@ basis = "floor about 3 × 0.31 blocks, motion's range"
 [[threshold]]
 figure = "allocations a frame, yuna"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.5
 basis = "spread 0; floor half a block"
@@ -105,6 +119,7 @@ basis = "spread 0; floor half a block"
 [[threshold]]
 figure = "allocations a frame, yuna"
 group = "motion"
+class = "parity"
 relative = 0
 absolute = 1
 basis = "floor about 3 × 0.31 blocks, motion's range"
@@ -112,6 +127,7 @@ basis = "floor about 3 × 0.31 blocks, motion's range"
 [[threshold]]
 figure = "heap growth a frame"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 2
 basis = "floor 5 × 0.40 B, full's range, the widest"
@@ -119,6 +135,7 @@ basis = "floor 5 × 0.40 B, full's range, the widest"
 [[threshold]]
 figure = "Pss_Anon"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 512
 basis = "floor above the one step seen, not 3 × it: one run in five lacks 384 KiB, the others are within 16 KiB"
@@ -126,13 +143,13 @@ basis = "floor above the one step seen, not 3 × it: one run in five lacks 384 K
 [[threshold]]
 figure = "Pss_File"
 group = "*"
-relative = 0
-absolute = 0
-basis = "recorded, never judged: the page cache's share moves with other programs"
+class = "recorded"
+basis = "never judged: the page cache's share moves with other programs"
 
 [[threshold]]
 figure = "wakes a frame"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.05
 basis = "spread 0; floor a wake in 20 frames"
@@ -140,6 +157,7 @@ basis = "spread 0; floor a wake in 20 frames"
 [[threshold]]
 figure = "wakes a frame, by source"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.05
 basis = "spread 0; floor a wake in 20 frames"
@@ -147,6 +165,7 @@ basis = "spread 0; floor a wake in 20 frames"
 [[threshold]]
 figure = "context switches a frame"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.2
 basis = "floor 4 × 0.05, full's range: each message sent once Yuna sleeps"
@@ -154,6 +173,7 @@ basis = "floor 4 × 0.05, full's range: each message sent once Yuna sleeps"
 [[threshold]]
 figure = "wakes at rest"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.5
 basis = "none at rest: any wake is one too many"
@@ -161,6 +181,7 @@ basis = "none at rest: any wake is one too many"
 [[threshold]]
 figure = "context switches at rest"
 group = "*"
+class = "parity"
 relative = 0
 absolute = 0.5
 basis = "spread 0, two in every run; floor half a switch"
@@ -168,6 +189,7 @@ basis = "spread 0, two in every run; floor half a switch"
 [[threshold]]
 figure = "instructions an operation"
 group = "*"
+class = "parity"
 relative = 0.07
 absolute = 100
 basis = "3 × 2.1 %, the widest spread, arrange at 1,000 windows in scrolling columns"
@@ -175,6 +197,7 @@ basis = "3 × 2.1 %, the widest spread, arrange at 1,000 windows in scrolling co
 [[threshold]]
 figure = "instructions an update"
 group = "*"
+class = "parity"
 relative = 0.11
 absolute = 100
 basis = "3 × 3.4 %, the widest spread, at 10,000 windows"
@@ -182,6 +205,7 @@ basis = "3 × 3.4 %, the widest spread, at 10,000 windows"
 [[threshold]]
 figure = "instructions an update"
 group = "focus-two-left@1000"
+class = "parity"
 relative = 0.053
 absolute = 100
 basis = "3 × 1.758 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -189,6 +213,7 @@ basis = "3 × 1.758 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an update"
 group = "focus-two-left@10000"
+class = "parity"
 relative = 0.102
 absolute = 100
 basis = "3 × 3.377 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -196,6 +221,7 @@ basis = "3 × 3.377 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an update"
 group = "open-left@1000"
+class = "parity"
 relative = 0.027
 absolute = 100
 basis = "3 × 0.888 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -203,6 +229,7 @@ basis = "3 × 0.888 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "arrange@100-dwindle"
+class = "parity"
 relative = 0.018
 absolute = 100
 basis = "3 × 0.598 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -210,6 +237,7 @@ basis = "3 × 0.598 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "arrange@100-scrolling"
+class = "parity"
 relative = 0.028
 absolute = 100
 basis = "3 × 0.919 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -217,6 +245,7 @@ basis = "3 × 0.919 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "arrange@1000-dwindle"
+class = "parity"
 relative = 0.002
 absolute = 100
 basis = "3 × 0.058 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -224,6 +253,7 @@ basis = "3 × 0.058 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "arrange@1000-scrolling"
+class = "parity"
 relative = 0.064
 absolute = 100
 basis = "3 × 2.126 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -231,6 +261,7 @@ basis = "3 × 2.126 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "float-tile@100-dwindle"
+class = "parity"
 relative = 0.016
 absolute = 100
 basis = "3 × 0.515 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -238,6 +269,7 @@ basis = "3 × 0.515 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "float-tile@100-scrolling"
+class = "parity"
 relative = 0.012
 absolute = 100
 basis = "3 × 0.376 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -245,6 +277,7 @@ basis = "3 × 0.376 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "float-tile@1000-dwindle"
+class = "parity"
 relative = 0.002
 absolute = 100
 basis = "3 × 0.040 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -252,6 +285,7 @@ basis = "3 × 0.040 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "float-tile@1000-scrolling"
+class = "parity"
 relative = 0.027
 absolute = 100
 basis = "3 × 0.871 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -259,6 +293,7 @@ basis = "3 × 0.871 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "focus-left-right@100-dwindle"
+class = "parity"
 relative = 0.024
 absolute = 100
 basis = "3 × 0.770 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -266,6 +301,7 @@ basis = "3 × 0.770 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "focus-left-right@100-scrolling"
+class = "parity"
 relative = 0.019
 absolute = 100
 basis = "3 × 0.621 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -273,6 +309,7 @@ basis = "3 × 0.621 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "focus-left-right@1000-dwindle"
+class = "parity"
 relative = 0.001
 absolute = 100
 basis = "3 × 0.033 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -280,6 +317,7 @@ basis = "3 × 0.033 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "focus-left-right@1000-scrolling"
+class = "parity"
 relative = 0.017
 absolute = 100
 basis = "3 × 0.537 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -287,6 +325,7 @@ basis = "3 × 0.537 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "fullscreen-on-off@100-dwindle"
+class = "parity"
 relative = 0.018
 absolute = 100
 basis = "3 × 0.584 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -294,6 +333,7 @@ basis = "3 × 0.584 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "fullscreen-on-off@100-scrolling"
+class = "parity"
 relative = 0.019
 absolute = 100
 basis = "3 × 0.612 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -301,6 +341,7 @@ basis = "3 × 0.612 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "fullscreen-on-off@1000-dwindle"
+class = "parity"
 relative = 0.002
 absolute = 100
 basis = "3 × 0.059 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -308,6 +349,7 @@ basis = "3 × 0.059 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "fullscreen-on-off@1000-scrolling"
+class = "parity"
 relative = 0.028
 absolute = 100
 basis = "3 × 0.903 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -315,6 +357,7 @@ basis = "3 × 0.903 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "move-left-right@100-dwindle"
+class = "parity"
 relative = 0.014
 absolute = 100
 basis = "3 × 0.434 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -322,6 +365,7 @@ basis = "3 × 0.434 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "move-left-right@100-scrolling"
+class = "parity"
 relative = 0.012
 absolute = 100
 basis = "3 × 0.367 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -329,6 +373,7 @@ basis = "3 × 0.367 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "move-left-right@1000-dwindle"
+class = "parity"
 relative = 0.001
 absolute = 100
 basis = "3 × 0.031 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -336,6 +381,7 @@ basis = "3 × 0.031 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "move-left-right@1000-scrolling"
+class = "parity"
 relative = 0.029
 absolute = 100
 basis = "3 × 0.941 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -343,6 +389,7 @@ basis = "3 × 0.941 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "open-close@100-dwindle"
+class = "parity"
 relative = 0.016
 absolute = 100
 basis = "3 × 0.526 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -350,6 +397,7 @@ basis = "3 × 0.526 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "open-close@100-scrolling"
+class = "parity"
 relative = 0.013
 absolute = 100
 basis = "3 × 0.400 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -357,6 +405,7 @@ basis = "3 × 0.400 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "open-close@1000-dwindle"
+class = "parity"
 relative = 0.002
 absolute = 100
 basis = "3 × 0.035 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -364,6 +413,7 @@ basis = "3 × 0.035 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "open-close@1000-scrolling"
+class = "parity"
 relative = 0.029
 absolute = 100
 basis = "3 × 0.960 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -371,6 +421,7 @@ basis = "3 × 0.960 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "switch-tiling@100-dwindle"
+class = "parity"
 relative = 0.012
 absolute = 100
 basis = "3 × 0.383 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -378,6 +429,7 @@ basis = "3 × 0.383 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "switch-tiling@100-scrolling"
+class = "parity"
 relative = 0.014
 absolute = 100
 basis = "3 × 0.434 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -385,6 +437,7 @@ basis = "3 × 0.434 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "switch-tiling@1000-dwindle"
+class = "parity"
 relative = 0.002
 absolute = 100
 basis = "3 × 0.038 %, its spread; the layout's and motion's hash maps take random keys at each start"
@@ -392,6 +445,7 @@ basis = "3 × 0.038 %, its spread; the layout's and motion's hash maps take rand
 [[threshold]]
 figure = "instructions an operation"
 group = "switch-tiling@1000-scrolling"
+class = "parity"
 relative = 0.017
 absolute = 100
 basis = "3 × 0.561 %, its spread; the layout's and motion's hash maps take random keys at each start"

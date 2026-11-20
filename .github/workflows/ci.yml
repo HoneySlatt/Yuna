@@ -60,13 +60,19 @@ jobs:
       # is off (actions/runner-images#10443), as .github/workflows/opium.yml does for Opium's job.
       - name: Let an unprivileged user make namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # The push before, to say which push moved a worse figure: empty outside a push.
+      # The push before: the moves of the baseline its file lacks are this push's, checked
+      # against the old baseline, and a worse figure is compared with it to say which push moved
+      # it. A push's is the commit it follows; a pull request's, the first parent of the merge
+      # commit GitHub checks out, its base by construction; the schedule's, the head itself, which
+      # moves nothing.
       # The work folder at a short path: the checkout's own, /home/runner/work/Yuna/Yuna, leaves
       # too few of a socket path's 108 bytes for the runs' sockets.
       - run: >-
           nix develop .#parity --no-update-lock-file --command
           cargo run --release --locked -p yuna-bench -- parity run --base baseline --head HEAD
-          --tier ci --before "${{ github.event.before }}" --work /home/runner/parity
+          --tier ci
+          --before "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'schedule' && github.sha || github.event.before }}"
+          --work /home/runner/parity
 
   # The package, built in a job of its own so that its release build runs beside the checks.
   package:

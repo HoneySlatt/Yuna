@@ -587,6 +587,11 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 
 ## Tests and examples
 
+- A move of the parity baseline whose check fails, or is cancelled, has no repair path: a move is
+  never changed or dropped, a second move to the same commit is refused, and a move to another
+  commit is checked only against the failed one. Its repair, moving back to the old baseline first
+  or rewriting history, is the owner's decision when it first happens. Paid at Stage 2a, M2.2 (the
+  interface), at the baseline's first move.
 - The parity script's `parity` job takes 18 to 22 minutes on GitHub's runner, over the method's
   bar of 20 for a CI job; its thresholds come from the desktop's spreads alone, and one run on the
   runner passed ([measurements](measurements.md)). Caching the baseline's build by its commit

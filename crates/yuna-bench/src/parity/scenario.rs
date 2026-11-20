@@ -11,7 +11,8 @@
 //!
 //! A run is a warm-up, `rest`'s counts, the measured periods, `rest`'s counts again; a native run
 //! then lets Yuna come to rest and reads its wakes over [`REST_WINDOW`] of real time and its
-//! memory.
+//! memory. `full`'s warm-up starts with square frames, so that its measured periods start with
+//! the drawings Yuna keeps at their most (`drawings_filled`).
 //!
 //! **Real time.** On the manual clock, Yuna's own deadlines run only when the script advances the
 //! clock: what valgrind counts follows the periods, not the machine's speed. A timer on real time
@@ -185,6 +186,28 @@ fn warm_up(scenario: &Scenario) -> u32 {
     match scenario.action {
         Action::Motion => 4 * MOTION_STEP + 8,
         _ => 8,
+    }
+}
+
+/// The periods that start a run, with nothing asked, so that Yuna places and draws the windows it
+/// was given.
+const PLACING_PERIODS: u32 = 2;
+
+/// The drawings Yuna keeps to predict an output's lead, one a frame: those of
+/// `DRAWING_WINDOW`, 500 ms (`crates/yuna/src/frames.rs`), 120 periods at 240 Hz, and the one
+/// just drawn. Once that many frames are drawn, each frame forgets one as it keeps one.
+const DRAWINGS_KEPT: u32 = 121;
+
+/// The periods, before the warm-up, in which a square changes, as in `partial`: in `full`, so
+/// that its measured periods start with Yuna's drawings kept at their most. Its runs of 40 and 80
+/// periods are shorter than the drawings Yuna keeps, and without these the two ended with the
+/// queue that holds them at two sizes, 54 bytes a frame of heap growth that no frame costs. A
+/// square costs under a hundredth of a full frame's instructions (474 thousand against 80.6
+/// million at M2.1); the warm-up's full frames come after.
+fn drawings_filled(scenario: &Scenario) -> u32 {
+    match scenario.action {
+        Action::Full => DRAWINGS_KEPT,
+        _ => 0,
     }
 }
 
@@ -760,14 +783,18 @@ impl Run {
     ) -> Result<(), String> {
         let clock = self.call("clock", json!({"action": "now"}))?;
         self.note_room(&clock)?;
-        // Two periods with nothing asked, so that Yuna places and draws the windows it was given.
-        for _ in 0..2 {
+        for _ in 0..PLACING_PERIODS {
             self.step("step none")?;
             self.advance()?;
         }
         self.find_windows(scenario.windows)?;
         if scenario.action == Action::Motion {
             self.set_up_motion()?;
+        }
+        for _ in 0..drawings_filled(scenario) {
+            let square = format!("step square {}", self.square_window);
+            self.step(&square)?;
+            self.advance()?;
         }
         for index in 0..warm_up(scenario) {
             self.period(scenario, index)?;
@@ -1162,6 +1189,23 @@ mod tests {
         let motion = named("motion").unwrap();
         assert_eq!(motion.periods % (4 * MOTION_STEP), 0);
         assert_eq!(warm_up(motion) % MOTION_STEP, 8);
+        // Every scenario that draws ends its shorter run with Yuna's drawings kept at their most,
+        // as its longer run does, so that their difference holds none of the queue's growth;
+        // `full`'s measured periods start so.
+        for scenario in SCENARIOS
+            .iter()
+            .filter(|s| !matches!(s.action, Action::Idle | Action::Input))
+        {
+            let before = PLACING_PERIODS + drawings_filled(scenario) + warm_up(scenario);
+            assert!(
+                before + scenario.periods >= DRAWINGS_KEPT,
+                "{}",
+                scenario.name
+            );
+        }
+        let full = named("full").unwrap();
+        assert!(PLACING_PERIODS + drawings_filled(full) + warm_up(full) >= DRAWINGS_KEPT);
+        assert!(full.periods < DRAWINGS_KEPT, "the fill would be needless");
     }
 
     #[test]

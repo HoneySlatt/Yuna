@@ -172,8 +172,8 @@ impl FigureRecord {
         FigureRecord {
             name: figure.name.clone(),
             unit: figure.kind.unit.to_owned(),
-            class: figure.kind.class.name().to_owned(),
-            budget: match figure.kind.class {
+            class: figure.class.name().to_owned(),
+            budget: match figure.class {
                 super::rule::Class::Budget(budget) => Some(budget),
                 _ => None,
             },
