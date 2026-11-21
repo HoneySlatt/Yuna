@@ -93,6 +93,8 @@
         # so both must load the same glibc and libstdc++.
         YUNA_WLCS_RUNNER = "${pkgs.wlcs}/libexec/wlcs/wlcs";
         YUNA_WLCS_INCLUDE = "${pkgs.wlcs}/include";
+        # Its version, which the list of expected outcomes names (crates/yuna-wlcs/expected.txt).
+        YUNA_WLCS_VERSION = pkgs.wlcs.version;
 
         # What the applications' tests give each application, so that it draws the same on every
         # machine, on the CPU (crates/yuna/tests/applications.rs, ADR-0025). Its PATH, of the
