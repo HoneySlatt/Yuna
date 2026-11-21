@@ -427,6 +427,13 @@ bus.
   focus leaves first; then its socket and X display go, its clients are ended and freed, and last
   its outputs, its place in the layout and its `wl_seat` global. A seat's outputs coming and going,
   or its removal, never end another seat's motion.
+- **Bounds.** A seat serves `MAX_CLIENTS_PER_SEAT` clients at once, its Xwayland neither counted
+  nor refused ([ADR-0147](adr/0147-a-seat-connects-256-clients-at-most.md)). Past it, a
+  connection on the seat's socket is accepted and closed at once while the socket listens on; Yuna
+  logs a warning and tells MCP's agents `client_refused`, both at most once a second of real time
+  per seat, with the refusals since the last told. An in-process connection
+  (`Compositor::connect_client_to`) gets an error. A place is free once Yuna has freed the client
+  that left, at the end of the round.
 - **How it fails.** A seat's socket that fails to `accept`, most often out of descriptors, pauses
   `SOCKET_PAUSE` rather than stop Yuna, the owner's in `yuna --headless` too. The program raises
   its limit of open files at start ([The program](#the-program)).
@@ -642,8 +649,9 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   [ADR-0093](adr/0093-a-call-that-waits-for-the-seats-events.md)). Each agent seat keeps a log of
   its last `MAX_EVENTS` events. Once a round, when the compositor's description generation has
   moved, the server looks at its windows and outputs and records what changed; it also records
-  the clients the display ended, with their protocol error, and the programs reaped. The cursor
-  is the agent's: the server keeps no state of a call.
+  the clients the display ended, with their protocol error, the connections the seats' sockets
+  refused past their bound, and the programs reaped. The cursor is the agent's: the server keeps
+  no state of a call.
 - **Closing a seat** (`seat close`, [`mcp/seats.rs`](../crates/yuna/src/mcp/seats.rs)). The
   compositor removes the seat at once ([Seats and input](#seats-and-input)) and the calls waiting
   on it fail. Then every process that belongs to the seat gets SIGTERM and SIGCONT, and SIGKILL

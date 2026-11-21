@@ -10,7 +10,7 @@
 //! Each runs the development shell's Xwayland for one agent's seat, on the real clock. The
 //! memory figures are the process's anonymous memory, Yuna's and its managers' threads': a story
 //! compares its growth with what a bound allows. Such a story runs alone, in a process of its
-//! own ([`in_its_own_process`]): the stories that run beside it in one process would change the
+//! own ([`in_its_own_process`](crate::in_its_own_process)): the stories that run beside it in one process would change the
 //! figure.
 
 use std::time::{Duration, Instant};
@@ -32,6 +32,7 @@ use yuna::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
 use yuna_ipc::{Caller, Command};
 
 use crate::client::Client;
+use crate::in_its_own_process;
 use crate::selection_client::SelectionClient;
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step};
 use crate::x11_misbehaving::assert_rests_real;
@@ -40,39 +41,6 @@ use crate::x11_windows::{
     TILE, X11Seat, at_1_5, button_press_at, click_at, off, open_drawn, pump, rest, wait,
     window_titled,
 };
-
-/// The variable that marks the process a story runs alone in.
-const ALONE: &str = "YUNA_STORY_ALONE";
-
-/// Whether this is `story`'s own process: the test binary run again, filtered to it, with
-/// `variables` and [`ALONE`]. When it is not, runs it there, waits for it, and checks that it ran
-/// and passed: the caller then has nothing more to do.
-fn in_its_own_process(story: &str, variables: &[(&str, &str)]) -> bool {
-    if std::env::var_os(ALONE).is_some() {
-        return true;
-    }
-    let filter = format!("x11_bounds::{story}");
-    let run = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args([
-            filter.as_str(),
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(ALONE, "1")
-        .envs(variables.iter().copied())
-        .output()
-        .expect("the story runs in a process of its own");
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    println!("{output}");
-    assert!(run.status.success(), "{story} failed in its own process");
-    assert!(output.contains("1 passed"), "{story} did not run");
-    false
-}
 
 /// A field of a `/proc/<pid>/status` file, in KiB: `RssAnon:`, `VmRSS:`.
 fn status_kib(pid: &str, field: &str) -> u64 {
@@ -237,7 +205,7 @@ fn churn_clipboard_as(seat: &mut X11Seat, wl: &mut SelectionClient, rounds: usiz
 #[test]
 fn commands_to_a_stalled_manager_are_bounded() {
     const ROUNDS: usize = 1_500;
-    if !in_its_own_process("commands_to_a_stalled_manager_are_bounded", &[]) {
+    if !in_its_own_process("x11_bounds::commands_to_a_stalled_manager_are_bounded", &[]) {
         return;
     }
     let mut seat = X11Seat::new("stalled-commands", &[at_1_5()], ClockMode::Real, off());
@@ -430,7 +398,7 @@ fn a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_n
     const BOUND: usize = 4 * 1024;
     let bound = BOUND.to_string();
     if !in_its_own_process(
-        "a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_new_one",
+        "x11_bounds::a_manager_owed_past_its_bound_ends_its_xwayland_and_the_next_program_gets_a_new_one",
         &[(X11_OWED_BOUND, bound.as_str())],
     ) {
         return;
@@ -661,7 +629,10 @@ fn latin1_title(length: usize) -> Vec<u8> {
 #[test]
 fn unmapped_windows_hold_at_most_the_debts_figure() {
     const WINDOWS: usize = 64;
-    if !in_its_own_process("unmapped_windows_hold_at_most_the_debts_figure", &[]) {
+    if !in_its_own_process(
+        "x11_bounds::unmapped_windows_hold_at_most_the_debts_figure",
+        &[],
+    ) {
         return;
     }
     let mut seat = X11Seat::new("unmapped", &[at_1_5()], ClockMode::Real, off());
@@ -912,7 +883,7 @@ fn answer_targets(client: &mut X11Client, owner: Window, targets: &[Atom]) -> Re
 #[test]
 fn long_atom_names_in_targets_are_not_kept() {
     const LENGTH: usize = 60_000;
-    if !in_its_own_process("long_atom_names_in_targets_are_not_kept", &[]) {
+    if !in_its_own_process("x11_bounds::long_atom_names_in_targets_are_not_kept", &[]) {
         return;
     }
     let mut seat = X11Seat::new("atom-names", &[at_1_5()], ClockMode::Real, off());
@@ -1017,12 +988,15 @@ fn xwaylands_environment_holds_only_what_it_reads() {
 /// and once that program leaves, Yuna rests. The panic is asked through
 /// [`PANIC_ON_X11_CLOSE`], which a debug build alone has, and which holds for every manager of
 /// the process it is given to: the story runs in a process of its own
-/// ([`in_its_own_process`]).
+/// ([`in_its_own_process`](crate::in_its_own_process)).
 #[cfg(debug_assertions)]
 #[test]
 fn a_panic_of_the_manager_ends_its_xwayland_alone() {
     let switch = [(PANIC_ON_X11_CLOSE, "1"), ("RUST_BACKTRACE", "0")];
-    if !in_its_own_process("a_panic_of_the_manager_ends_its_xwayland_alone", &switch) {
+    if !in_its_own_process(
+        "x11_bounds::a_panic_of_the_manager_ends_its_xwayland_alone",
+        &switch,
+    ) {
         return;
     }
     let mut seat = X11Seat::new("manager-panic", &[at_1_5()], ClockMode::Real, off());

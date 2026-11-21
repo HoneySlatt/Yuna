@@ -22,8 +22,10 @@
 //! (`Compositor::remove_seat`).
 
 use std::collections::BTreeSet;
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
+use std::time::Duration;
 
 use smithay::input::keyboard::{KeyboardHandle, KeymapFile, XkbConfig};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
@@ -40,11 +42,31 @@ use yuna_types::SeatId;
 use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
-use crate::{ClientProcess, Error};
+use crate::{ClientProcess, ClientRefusal, Error};
 
 /// The layout every agent's keyboard starts with: the same on every machine and in CI, whatever
 /// the `XKB_DEFAULT_*` variables say (ADR-0037).
 pub const AGENT_KEYBOARD_LAYOUT: &str = "us";
+
+/// The most clients one seat connects at once, its Xwayland apart
+/// ([ADR-0147](../../../docs/adr/0147-a-seat-connects-256-clients-at-most.md)): one program
+/// opening connection after connection would otherwise multiply what a client that stops reading
+/// can make Yuna hold, its buffer and the descriptors it keeps
+/// ([ADR-0136](../../../docs/adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
+///
+/// Past it, a connection on the seat's socket is accepted and closed at once, the socket
+/// listening on and the seat's other clients served; its refusal is told, with those before it,
+/// at most once a second of real time, in a warning and to MCP's agents (`Refusals`). An
+/// in-process connection ([`Compositor::connect_client_to`](crate::Compositor::connect_client_to))
+/// is an error instead. The seat's own Xwayland is Yuna's: it is neither counted nor refused, so
+/// that the seat's X11 never breaks. A client frees its place when Yuna frees it
+/// (`State::forget_client`), at the end of the round in which the display ended it; one the
+/// display ends while a round ends, once its clients are freed, at the next round's end.
+pub const MAX_CLIENTS_PER_SEAT: usize = 256;
+
+/// How often a seat's refusals past [`MAX_CLIENTS_PER_SEAT`] are told at most, on real time
+/// whatever the clock: in Yuna's log, and to MCP's agents.
+const REFUSALS_TOLD_EVERY: Duration = Duration::from_secs(1);
 
 /// How long a key waits before it repeats, and how many times a second it then repeats, as most
 /// desktops have it. Clients repeat a held key themselves.
@@ -86,9 +108,11 @@ pub(crate) struct SeatData {
     /// keyboard's keys switch the keyboard to that keyboard's own keymap, and Yuna's own keys
     /// switch it back (`virtual_input.rs`).
     pub own_keymap: KeymapFile,
-    /// The clients connected through its socket, or for it through `connect_client_to`, while
-    /// they are served.
-    pub clients: Vec<ClientId>,
+    /// The clients connected through its socket, or for it through `connect_client_to`, and its
+    /// Xwayland's, while they are served: [`MAX_CLIENTS_PER_SEAT`] at most, its Xwayland apart.
+    pub clients: Vec<SeatClient>,
+    /// The connections its socket refused past [`MAX_CLIENTS_PER_SEAT`], not yet told.
+    pub refusals: Refusals,
     /// The commits of its clients' surfaces: a seat's accessibility call walks its trees again
     /// when they move, never for another seat's drawing.
     pub commits: u64,
@@ -167,8 +191,46 @@ impl SeatData {
             pointer_origin: None,
             keymap: None,
             clients: Vec::new(),
+            refusals: Refusals::default(),
             commits: 0,
         }
+    }
+}
+
+/// A client a seat serves.
+#[derive(Debug, Clone)]
+pub(crate) struct SeatClient {
+    pub id: ClientId,
+    /// Whether it is the seat's Xwayland, which [`MAX_CLIENTS_PER_SEAT`] does not count.
+    pub xwayland: bool,
+}
+
+/// The connections a seat's socket refused past [`MAX_CLIENTS_PER_SEAT`]: told at the first
+/// refusal, then at the first one [`REFUSALS_TOLD_EVERY`] or more after the last told, with
+/// every refusal since. No timer is armed for them: the refusals after the last told wait for a
+/// refusal a second or more after it, and are never told if none comes, nor if the seat is
+/// removed meanwhile.
+#[derive(Debug, Default)]
+pub(crate) struct Refusals {
+    /// Those refused since the last told.
+    untold: u64,
+    /// When they were last told, on real time; none before the first.
+    told_at: Option<Duration>,
+}
+
+impl Refusals {
+    /// Counts a refusal at `now`, on real time, and gives how many refusals to tell now, this one
+    /// included; none while the last told is under [`REFUSALS_TOLD_EVERY`] old.
+    fn refused(&mut self, now: Duration) -> Option<u64> {
+        self.untold += 1;
+        if self
+            .told_at
+            .is_some_and(|at| now.saturating_sub(at) < REFUSALS_TOLD_EVERY)
+        {
+            return None;
+        }
+        self.told_at = Some(now);
+        Some(std::mem::take(&mut self.untold))
     }
 }
 
@@ -282,15 +344,88 @@ impl State {
             .map(|keymap| keymap.layout().clone())
     }
 
-    /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal.
-    /// Refused for a seat that does not exist.
-    /// With `sees_every_seat`, it is shown every seat's globals, for tests alone.
     /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal, with
     /// who it is: its peer's process, from the socket's credentials, and, for an agent's seat,
     /// the processes above it, read in `/proc` now. The peer may have exited since it connected
-    /// ([`ClientProcess`]). Refused for a seat that does not exist. With `sees_every_seat`, it
-    /// is shown every seat's globals, for tests alone.
+    /// ([`ClientProcess`]). Refused for a seat that does not exist, and, before anything of the
+    /// client is read, for one that serves [`MAX_CLIENTS_PER_SEAT`] clients already. With
+    /// `sees_every_seat`, it is shown every seat's globals, for tests alone.
     pub(crate) fn insert_client(
+        &mut self,
+        seat: SeatId,
+        stream: UnixStream,
+        sees_every_seat: bool,
+    ) -> Result<(), Error> {
+        if self.is_full(seat) {
+            return Err(Error::Refused(format!(
+                "seat {} serves {MAX_CLIENTS_PER_SEAT} clients, the most a seat connects \
+                 (ADR-0147): another connects once one has left",
+                seat.0
+            )));
+        }
+        self.serve_client(seat, stream, sees_every_seat)
+    }
+
+    /// Serves a client that connected through `seat`'s socket, or, past
+    /// [`MAX_CLIENTS_PER_SEAT`], closes its connection at once and counts it
+    /// ([`State::refuse_connection`]).
+    pub(crate) fn accept_connection(&mut self, seat: SeatId, stream: UnixStream) {
+        if self.is_full(seat) {
+            self.refuse_connection(seat, stream);
+        } else if let Err(error) = self.serve_client(seat, stream, false) {
+            tracing::warn!(%error, seat = seat.0, "a client could not connect");
+        }
+    }
+
+    /// Whether `seat` serves [`MAX_CLIENTS_PER_SEAT`] clients, its Xwayland's apart, and those
+    /// the display has ended and Yuna not yet freed: their place is free already. False for a
+    /// seat that does not exist, which serving refuses.
+    fn is_full(&self, seat: SeatId) -> bool {
+        let departed = self
+            .departed_clients
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.seat(seat).is_some_and(|data| {
+            data.clients
+                .iter()
+                .filter(|client| !client.xwayland)
+                .filter(|client| !departed.iter().any(|gone| gone.client == client.id))
+                .count()
+                >= MAX_CLIENTS_PER_SEAT
+        })
+    }
+
+    /// Closes a connection `seat`'s socket took past [`MAX_CLIENTS_PER_SEAT`], and tells it, with
+    /// the refusals before it not yet told, at most once every [`REFUSALS_TOLD_EVERY`] of real
+    /// time ([`Refusals`]): in a warning, and to whoever watches the refusals
+    /// (`Compositor::watch_client_refusals`). The connection is shut down before it is closed,
+    /// so that its peer reads its end of file at once, even while a child that has not yet run
+    /// its program, an Xwayland starting, holds a copy of the descriptor.
+    fn refuse_connection(&mut self, seat: SeatId, stream: UnixStream) {
+        // A peer gone already is what shutting down would have made it.
+        let _ = stream.shutdown(Shutdown::Both);
+        drop(stream);
+        let now = self.clock.real_now();
+        let Some(refused) = self
+            .seat_mut(seat)
+            .and_then(|data| data.refusals.refused(now))
+        else {
+            return;
+        };
+        tracing::warn!(
+            seat = seat.0,
+            bound = MAX_CLIENTS_PER_SEAT,
+            refused,
+            "a seat refuses connections past its bound of clients"
+        );
+        if let Some(told) = &mut self.client_refusals {
+            told.push(ClientRefusal { seat, refused });
+        }
+    }
+
+    /// Serves a client of `seat` on `stream`, as [`State::insert_client`] says, whatever the
+    /// clients the seat serves.
+    fn serve_client(
         &mut self,
         seat: SeatId,
         stream: UnixStream,
@@ -359,7 +494,10 @@ impl State {
         self.rest
             .client_connected(number, seat, process, xwayland, second);
         if let Some(seat) = self.seat_mut(seat) {
-            seat.clients.push(client.id());
+            seat.clients.push(SeatClient {
+                id: client.id(),
+                xwayland,
+            });
         }
         Ok(())
     }
@@ -368,7 +506,7 @@ impl State {
     pub(crate) fn seat_of_client_id(&self, client: &ClientId) -> Option<SeatId> {
         self.seats
             .iter()
-            .find(|seat| seat.clients.contains(client))
+            .find(|seat| seat.clients.iter().any(|served| served.id == *client))
             .map(|seat| seat.id)
     }
 
@@ -378,7 +516,7 @@ impl State {
         self.seat(seat)
             .into_iter()
             .flat_map(|seat| &seat.clients)
-            .filter_map(|client| backend.get_client_credentials(client.clone()).ok())
+            .filter_map(|client| backend.get_client_credentials(client.id.clone()).ok())
             .map(|credentials| credentials.pid)
             .collect()
     }
@@ -386,7 +524,7 @@ impl State {
     /// Forgets `client` in its seat's list once the display has ended it.
     pub(crate) fn forget_client(&mut self, client: &ClientId) {
         for seat in &mut self.seats {
-            seat.clients.retain(|id| id != client);
+            seat.clients.retain(|served| served.id != *client);
         }
     }
 
@@ -424,7 +562,7 @@ impl State {
             .unwrap_or_default();
         let backend = self.display_handle.backend_handle();
         for client in clients {
-            backend.kill_client(client, DisconnectReason::ConnectionClosed);
+            backend.kill_client(client.id, DisconnectReason::ConnectionClosed);
         }
         pids
     }
@@ -460,5 +598,33 @@ impl State {
         self.mark_layout_changed(Change::InstantFor(BTreeSet::from([id])));
         tracing::info!(seat = id.0, "seat removed");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusals_are_told_at_the_first_then_once_a_second_with_those_between() {
+        let at = Duration::from_millis;
+        let mut refusals = Refusals::default();
+        assert_eq!(
+            refusals.refused(at(5_000)),
+            Some(1),
+            "the first is told at once"
+        );
+        assert_eq!(refusals.refused(at(5_400)), None);
+        assert_eq!(refusals.refused(at(5_999)), None);
+        assert_eq!(
+            refusals.refused(at(6_000)),
+            Some(3),
+            "a second after the last told: those between, and this one"
+        );
+        assert_eq!(refusals.refused(at(6_500)), None);
+        // No timer: the one refused at 6.5 s waits for the next refusal, however late.
+        assert_eq!(refusals.refused(at(60_000)), Some(2));
+        // A clock read earlier than the last told, which real time never gives, tells nothing.
+        assert_eq!(refusals.refused(at(1_000)), None);
     }
 }

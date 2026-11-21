@@ -64,8 +64,8 @@ pub use capture::{
 };
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
-    ClientDeparture, ClientProcess, ClientProtocolError, Compositor, Config, Counters,
-    OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
+    ClientDeparture, ClientProcess, ClientProtocolError, ClientRefusal, Compositor, Config,
+    Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
 };
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
@@ -78,7 +78,7 @@ pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use process::raise_open_files_limit;
 pub use render::Device;
 pub use screencopy::{MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT};
-pub use seats::AGENT_KEYBOARD_LAYOUT;
+pub use seats::{AGENT_KEYBOARD_LAYOUT, MAX_CLIENTS_PER_SEAT};
 pub use selection::{CLIPBOARD_TIMEOUT, MAX_CLIPBOARD_WRITES};
 pub use shell::{MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT};
 pub use state::OWNER_SEAT;

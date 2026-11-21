@@ -12,6 +12,7 @@ mod capture_client;
 mod captures;
 mod captures_held;
 mod client;
+mod client_bound;
 mod colour;
 mod colour_client;
 mod commands;
@@ -85,6 +86,35 @@ fn owner() -> Caller {
 /// output's corner.
 fn on_output(coordinate: i32) -> u32 {
     u32::try_from(coordinate).expect("a pixel on the output, not before its corner")
+}
+
+/// The variable that marks the process a story runs alone in.
+const ALONE: &str = "YUNA_STORY_ALONE";
+
+/// Whether this is `story`'s own process, `story` named by its path in this binary
+/// (`x11_bounds::…`, `client_bound::…`): the binary run again, filtered to it, with `variables`
+/// and [`ALONE`]. When it is not, runs it there, waits for it, and checks that it ran and passed:
+/// the caller then has nothing more to do. For a story whose descriptors, threads or bounds must
+/// not mix with the other stories of this process.
+pub(crate) fn in_its_own_process(story: &str, variables: &[(&str, &str)]) -> bool {
+    if std::env::var_os(ALONE).is_some() {
+        return true;
+    }
+    let run = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([story, "--exact", "--nocapture", "--test-threads=1"])
+        .env(ALONE, "1")
+        .envs(variables.iter().copied())
+        .output()
+        .expect("the story runs in a process of its own");
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    println!("{output}");
+    assert!(run.status.success(), "{story} failed in its own process");
+    assert!(output.contains("1 passed"), "{story} did not run");
+    false
 }
 
 fn manual_compositor() -> Compositor {

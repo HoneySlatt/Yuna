@@ -61,6 +61,7 @@ pub enum Kind {
     Focus,
     ProgramExited,
     ClientLeft,
+    ClientRefused,
     OutputAdded,
     OutputRemoved,
     OutputChanged,
@@ -68,7 +69,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in the order the tool's description gives them.
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::WindowOpened,
         Kind::WindowClosed,
         Kind::WindowChanged,
@@ -77,6 +78,7 @@ impl Kind {
         Kind::Focus,
         Kind::ProgramExited,
         Kind::ClientLeft,
+        Kind::ClientRefused,
         Kind::OutputAdded,
         Kind::OutputRemoved,
         Kind::OutputChanged,
@@ -93,6 +95,7 @@ impl Kind {
             Kind::Focus => "focus",
             Kind::ProgramExited => "program_exited",
             Kind::ClientLeft => "client_left",
+            Kind::ClientRefused => "client_refused",
             Kind::OutputAdded => "output_added",
             Kind::OutputRemoved => "output_removed",
             Kind::OutputChanged => "output_changed",
@@ -144,6 +147,13 @@ pub enum EventData {
         program: Option<u64>,
         error: Option<ClientProtocolError>,
     },
+    /// The seat's socket refused connections past its bound of clients, `bound`: `refused` of
+    /// them since the seat's last such event, this one's refusal included. A seat tells one a
+    /// second at most ([`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT)).
+    ClientRefused {
+        bound: usize,
+        refused: u64,
+    },
     OutputAdded {
         output: OutputId,
     },
@@ -167,6 +177,7 @@ impl EventData {
             EventData::Focus { .. } => Kind::Focus,
             EventData::ProgramExited { .. } => Kind::ProgramExited,
             EventData::ClientLeft { .. } => Kind::ClientLeft,
+            EventData::ClientRefused { .. } => Kind::ClientRefused,
             EventData::OutputAdded { .. } => Kind::OutputAdded,
             EventData::OutputRemoved { .. } => Kind::OutputRemoved,
             EventData::OutputChanged { .. } => Kind::OutputChanged,

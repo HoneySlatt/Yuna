@@ -237,6 +237,17 @@ pub struct ClientDeparture {
     pub error: Option<ClientProtocolError>,
 }
 
+/// Connections a seat's socket refused past [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT),
+/// as [`Compositor::take_client_refusals`] tells them: at the seat's first refusal, then at its
+/// first a second or more, on real time, after the last told, with every refusal since.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientRefusal {
+    /// The seat whose socket refused them.
+    pub seat: SeatId,
+    /// How many connections it refused since it last told some, this one included.
+    pub refused: u64,
+}
+
 /// A protocol error a client was ended for: `wl_display.error`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientProtocolError {
@@ -404,7 +415,9 @@ impl Compositor {
     }
 
     /// Connects a client of `seat` through a socket pair, as one that came through the seat's
-    /// socket. Refused for a seat that does not exist.
+    /// socket. Refused for a seat that does not exist, and for one that serves
+    /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT) clients already, its Xwayland
+    /// apart: the error names the seat and the bound, and nothing is connected.
     pub fn connect_client_to(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
         self.state.insert_client(seat, ours, false)?;
@@ -414,7 +427,7 @@ impl Compositor {
     /// Connects a client of `seat` that is shown every seat's `wl_seat` and every output's
     /// `wl_output`, as the per-client filter of ADR-0042 never shows a client. Only for tests of
     /// the layer below the filter: that a client holding another seat's globals gets none of its
-    /// input, focus or serials.
+    /// input, focus or serials. Refused as [`Compositor::connect_client_to`] is.
     pub fn connect_client_seeing_every_seat(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
         let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
         self.state.insert_client(seat, ours, true)?;
@@ -553,6 +566,24 @@ impl Compositor {
     /// unless [`Compositor::watch_client_departures`] was called.
     pub fn take_client_departures(&mut self) -> Vec<ClientDeparture> {
         self.departures
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// From now on, keeps each seat's refusals of connections past
+    /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT), as the seat tells them, once a
+    /// second at most, until [`Compositor::take_client_refusals`] takes them: what the MCP
+    /// server tells agents.
+    pub fn watch_client_refusals(&mut self) {
+        self.state.client_refusals.get_or_insert_with(Vec::new);
+    }
+
+    /// The refusals the seats told since the last call, oldest first; none unless
+    /// [`Compositor::watch_client_refusals`] was called.
+    pub fn take_client_refusals(&mut self) -> Vec<ClientRefusal> {
+        self.state
+            .client_refusals
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
@@ -1324,10 +1355,11 @@ impl Compositor {
     }
 }
 
-/// Serves `seat` on `socket`: each client that connects through it belongs to that seat. An
-/// `accept` that fails, out of descriptors most often, pauses the socket for [`SOCKET_PAUSE`]
-/// rather than stop Yuna, the owner's socket as an agent's: one client holding many
-/// descriptors must not end the others
+/// Serves `seat` on `socket`: each client that connects through it belongs to that seat. Past
+/// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT), a connection is accepted and closed at
+/// once, and the socket listens on (`State::accept_connection`). An `accept` that fails, out of
+/// descriptors most often, pauses the socket for [`SOCKET_PAUSE`] rather than stop Yuna, the
+/// owner's socket as an agent's: one client holding many descriptors must not end the others
 /// ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)). The
 /// connection waits meanwhile in the socket's queue.
 fn insert_seat_socket(
@@ -1342,11 +1374,7 @@ fn insert_seat_socket(
         move |_, socket, state| {
             loop {
                 match socket.accept() {
-                    Ok(Some(stream)) => {
-                        if let Err(error) = state.insert_client(seat, stream, false) {
-                            tracing::warn!(%error, "a client could not connect");
-                        }
-                    }
+                    Ok(Some(stream)) => state.accept_connection(seat, stream),
                     Ok(None) => return Ok(PostAction::Continue),
                     // Rests a moment rather than spin on a connection it cannot take.
                     Err(error) => {

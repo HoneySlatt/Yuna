@@ -37,6 +37,7 @@ use super::protocol::Revision;
 use super::tools::{
     self, EventsCall, MAX_WAIT, MAX_WAITING_CALLS, RestCall, ToolResult, WindowsCall,
 };
+use crate::MAX_CLIENTS_PER_SEAT;
 use crate::compositor::WindowDescription;
 use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::state::OWNER_SEAT;
@@ -236,7 +237,8 @@ impl Server {
 
     /// Records in the seats' logs what happened since the last time: outputs and windows as the
     /// compositor describes them now, the clients the display ended, with the program each
-    /// belonged to, which keeps the protocol error it was ended for, and the programs reaped.
+    /// belonged to, which keeps the protocol error it was ended for, the connections the seats'
+    /// sockets refused past their bound, as each seat told them, and the programs reaped.
     /// The windows and outputs are described only when the compositor's description generation
     /// moved since the last look: a round in which only buffers changed, a game drawing,
     /// describes nothing. Each agent seat has a log from its first look; a closed seat's went
@@ -276,6 +278,13 @@ impl Server {
                 error: departure.error,
             };
             self.event_log.record(departure.seat, time_ns, left);
+        }
+        for refusal in self.compositor.take_client_refusals() {
+            let refused = EventData::ClientRefused {
+                bound: MAX_CLIENTS_PER_SEAT,
+                refused: refusal.refused,
+            };
+            self.event_log.record(refusal.seat, time_ns, refused);
         }
         for (seat, program, end) in std::mem::take(&mut self.program_exits) {
             self.event_log

@@ -262,6 +262,11 @@ pub fn definitions() -> Value {
                 message, or closed, error null: it left, sent what is not Wayland, or could not \
                 take its events; pid as windows gives it; program null for a client of no \
                 program, or one whose process had exited before Yuna accepted it); \
+                client_refused (bound, refused: the seat's socket closed connections at once, \
+                the seat serving bound clients already, its Xwayland apart; refused counts them \
+                since the seat's last client_refused; told at the first refusal, then at the \
+                first a second or more after the last told: the refusals after the last told \
+                wait for such a refusal, and are not told if none comes); \
                 output_added, \
                 output_removed, output_changed (output). With after, a seq or a reply's next, \
                 gives the events after it, only kinds when given, at most 256 a reply; next is \

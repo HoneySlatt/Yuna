@@ -179,13 +179,21 @@ read again.
   subsurfaces and a client's windows not yet mapped are unbounded: their protocols refuse only by
   ending the client. The owner kept them so on 2026-11-18, until Stage 2's core and its queue of
   pending commits bound them
-  ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)). Nothing bounds the
-  clients one seat connects either. Yuna raises its limit of open files at start, and an
-  `accept` that fails on a seat's socket, the owner's in `yuna --headless` too, pauses that socket
-  100 ms (`SOCKET_PAUSE`) rather than stop Yuna. Paid at Stage 2a: the pools, buffers, subsurfaces
-  and unmapped windows are modelled at M2.6 (the queue and the store, alone) and bounded when wired,
-  at M2.16 (the store, wired behind a switch); the clients one seat connects, at M2.2 (the interface), with the
-  1 MiB of [ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md).
+  ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)). Paid at Stage 2a: the
+  pools, buffers, subsurfaces and unmapped windows are modelled at M2.6 (the queue and the store,
+  alone) and bounded when wired, at M2.16 (the store, wired behind a switch).
+- A seat's 256 clients, all frozen, can make Yuna hold each one's outgoing buffer and the
+  descriptors its events carry: 4 KiB each today, up to 1 MiB each, some 256 MiB a seat, once M2.2
+  raises the buffer
+  ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)). The owner
+  accepted it until Stage 2a bounds it
+  ([ADR-0147](adr/0147-a-seat-connects-256-clients-at-most.md)): M2.12 (seats and input) knows
+  which clients are congested, and M2.15 (the other protocols) brings per-client budgets. One
+  program may still open 256 connections on each seat it reaches: a bound per process follows
+  Stage 2's client identity
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+  item 15). The refusals past the bound are told an agent at most once a second, without a timer:
+  those after the last told wait for a later refusal, and are not told if none comes.
 - One commit of a window whose subsurfaces are synchronised in a deep chain costs Smithay a linear
   search of its transaction at each level (`transaction.rs:119`, `tree.rs:267` and `:277`, at
   `7ff0ede4`), about

@@ -344,6 +344,9 @@ pub fn event_json(event: &Event) -> Value {
             "reason": if error.is_some() { "protocol_error" } else { "closed" },
             "error": error.as_ref().map(protocol_error_json),
         }),
+        EventData::ClientRefused { bound, refused } => {
+            json!({ "bound": bound, "refused": refused })
+        }
         EventData::OutputAdded { output }
         | EventData::OutputRemoved { output }
         | EventData::OutputChanged { output } => json!({ "output": output.0 }),

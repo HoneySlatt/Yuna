@@ -663,6 +663,23 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_gives_the_bound_and_how_many_were_refused() {
+        let refused = Event {
+            seq: 8,
+            time_ns: 50,
+            data: EventData::ClientRefused {
+                bound: crate::MAX_CLIENTS_PER_SEAT,
+                refused: 3,
+            },
+        };
+        assert_eq!(
+            event_json(&refused),
+            json!({"seq": 8, "time_ns": 50, "kind": "client_refused", "bound": 256,
+                   "refused": 3})
+        );
+    }
+
+    #[test]
     fn an_advance_takes_one_positive_length() {
         assert_eq!(advance_length(Some(5), None), Ok(Duration::from_nanos(5)));
         assert_eq!(

@@ -282,6 +282,7 @@ impl Server {
         children: Option<OwnedFd>,
     ) -> Result<Server, Error> {
         compositor.watch_client_departures();
+        compositor.watch_client_refusals();
         let failed = |what: &str, error: &dyn std::fmt::Display| {
             Error::EventLoop(format!("the MCP server's {what}: {error}"))
         };

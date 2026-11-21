@@ -53,7 +53,7 @@ use crate::screencopy::ScreencopyState;
 use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
-use crate::{ClientProcess, Error};
+use crate::{ClientProcess, ClientRefusal, Error};
 
 /// The owner's seat, which always exists; agents' seats come after it, from 2
 /// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
@@ -138,6 +138,12 @@ pub(crate) struct State {
     pub paused_sockets: Vec<SeatId>,
     pub resumed_sockets: Vec<SeatId>,
     pub departed_clients: DepartedClients,
+    /// The seats' refusals of connections past
+    /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT) told since they were last taken,
+    /// once someone watches them (`Compositor::watch_client_refusals`): none is kept otherwise.
+    /// A seat tells one a second at most, so it holds one a seat for each second between two
+    /// takes.
+    pub client_refusals: Option<Vec<ClientRefusal>>,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     _xdg_decoration_state: XdgDecorationState,
@@ -247,6 +253,7 @@ impl State {
             paused_sockets: Vec::new(),
             resumed_sockets: Vec::new(),
             departed_clients: DepartedClients::default(),
+            client_refusals: None,
             // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
             compositor_state: CompositorState::new_v6::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),

@@ -1522,6 +1522,82 @@ fn a_client_that_reads_nothing_while_it_is_typed_to_is_told_closed() {
     assert_eq!(left["error"], Value::Null);
 }
 
+/// A seat that holds its bound of clients refuses the connections its socket takes, and tells
+/// its agent `client_refused`, with the bound and how many it refused since its last such event,
+/// at most once a second: a burst of refusals within a second is told once, by its first; the
+/// first refusal of a burst a second later tells the rest of the first and itself. The socket is
+/// the compositor's own (`listen_for_seat`), which needs no reaping of children, unlike the one
+/// `seat create` makes in `yuna mcp`. It runs in a process of its own, as the other stories of
+/// 257 clients do (`client_bound.rs`).
+#[test]
+fn refused_connections_are_told_once_a_second_at_most() {
+    use yuna::MAX_CLIENTS_PER_SEAT;
+
+    if !crate::in_its_own_process(
+        "mcp::refused_connections_are_told_once_a_second_at_most",
+        &[],
+    ) {
+        return;
+    }
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let folder = crate::x11_windows::Folder::new("client-bound-mcp");
+    let path = folder.0.join("seat");
+    let compositor = mcp.server.compositor();
+    compositor
+        .listen_for_seat(SeatId(seat), path.clone())
+        .expect("the seat listens");
+    let _clients: Vec<UnixStream> = (0..MAX_CLIENTS_PER_SEAT)
+        .map(|_| {
+            compositor
+                .connect_client_to(SeatId(seat))
+                .expect("a client within the bound connects")
+        })
+        .collect();
+    let start = cursor(&mut mcp, seat);
+    let refuse = |mcp: &mut Mcp| {
+        let mut refused = UnixStream::connect(&path).expect("the socket takes the connection");
+        mcp.replies();
+        let mut byte = [0_u8; 1];
+        refused
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("a timeout");
+        assert_eq!(refused.read(&mut byte).ok(), Some(0), "closed at once");
+    };
+    let refused_told = |mcp: &mut Mcp| {
+        events(
+            mcp,
+            json!({"seat": seat, "after": start, "kinds": ["client_refused"]}),
+        )
+    };
+
+    let first_burst = Instant::now();
+    refuse(&mut mcp);
+    // Yuna told the first refusal before this instant: a second after it, the next is told.
+    let first_told = Instant::now();
+    for _ in 0..4 {
+        refuse(&mut mcp);
+    }
+    assert!(
+        first_burst.elapsed() < Duration::from_secs(1),
+        "the first burst took {:?}: a second passed within it",
+        first_burst.elapsed()
+    );
+    let told = refused_told(&mut mcp);
+    assert_eq!(kinds(&told), ["client_refused"], "{told}");
+    let event = &told["events"][0];
+    assert_eq!(event["bound"], json!(MAX_CLIENTS_PER_SEAT), "{event}");
+    assert_eq!(event["refused"], json!(1), "{event}");
+
+    std::thread::sleep(Duration::from_secs(1).saturating_sub(first_told.elapsed()));
+    for _ in 0..3 {
+        refuse(&mut mcp);
+    }
+    let told = refused_told(&mut mcp);
+    assert_eq!(kinds(&told), ["client_refused", "client_refused"], "{told}");
+    assert_eq!(told["events"][1]["refused"], json!(4 + 1), "{told}");
+}
+
 /// The windows and outputs are described for events only when something events tell may have
 /// changed: a client drawing frame after frame, as a game does, while its title, place and focus
 /// stay, makes no look; a title it changes makes one.
