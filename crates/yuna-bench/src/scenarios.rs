@@ -2079,7 +2079,10 @@ fn build_yuna() -> Result<(PathBuf, String), String> {
     let program = fs::canonicalize(target.join("release/yuna"))
         .map_err(|e| format!("target/release/yuna: {e}"))?;
     let version = commit(&[
+        "Cargo.toml",
+        "Cargo.lock",
         "crates/yuna",
+        "crates/yuna-ipc",
         "crates/yuna-layout",
         "crates/yuna-motion",
         "crates/yuna-types",

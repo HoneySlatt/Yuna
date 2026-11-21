@@ -14,7 +14,7 @@ use std::fs;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -31,30 +31,12 @@ use yuna::{
 use yuna_types::SeatId;
 
 use crate::x11_client::xauthority::entry_fields;
+use crate::x11_windows::Folder;
 use crate::{assert_rests, run_armed_deadlines};
 
 /// How long a story waits for Xwayland: a start takes a fraction of a second, longer while every
 /// test runs at once.
 const PATIENCE: Duration = Duration::from_secs(30);
-
-/// A test's own folder in the temporary folder, removed when it drops.
-struct Folder(PathBuf);
-
-impl Folder {
-    fn new(story: &str) -> Folder {
-        let path =
-            std::env::temp_dir().join(format!("yuna-xwayland-{story}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("the test's folder");
-        Folder(path)
-    }
-}
-
-impl Drop for Folder {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 /// A compositor on the manual clock, XWayland on with `idle_seconds`, the owner's seat given a
 /// display, its Xauthority in `folder`, and `outputs`.
@@ -223,7 +205,7 @@ fn xsettings_integer(blob: &[u8], name: &str) -> Option<i32> {
 /// path alone cannot tell the two apart.
 #[test]
 fn xwayland_starts_on_the_first_connection_and_serves_it() {
-    let folder = Folder::new("first");
+    let folder = Folder::new("xwayland-first");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
     assert!(display.number < MAX_DISPLAYS);
@@ -270,7 +252,7 @@ fn xwayland_starts_on_the_first_connection_and_serves_it() {
 /// machine's display device to draw even on the CPU, then closes it.
 #[test]
 fn xwayland_on_the_software_device_loads_no_gpu_driver() {
-    let folder = Folder::new("software");
+    let folder = Folder::new("xwayland-software");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
     let client = answered_client(display.number, checked_cookie_of(&display));
@@ -291,7 +273,7 @@ fn xwayland_on_the_software_device_loads_no_gpu_driver() {
 /// Xwayland lets a client in.
 #[test]
 fn the_first_client_reads_xft_dpi_of_the_largest_scale() {
-    let folder = Folder::new("dpi");
+    let folder = Folder::new("xwayland-dpi");
     let outputs = vec![
         OutputMode::default(),
         OutputMode::new(1920, 1080, 60.0, 1.0).expect("a valid mode"),
@@ -356,7 +338,7 @@ fn the_first_client_reads_xft_dpi_of_the_largest_scale() {
 /// A client that gives no cookie, or a wrong one, is refused; one with the seat's is served.
 #[test]
 fn a_client_without_the_cookie_is_refused() {
-    let folder = Folder::new("refused");
+    let folder = Folder::new("xwayland-refused");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
     let number = display.number;
@@ -378,7 +360,7 @@ fn a_client_without_the_cookie_is_refused() {
 /// cookie opens its own display, never the other's.
 #[test]
 fn a_seat_s_cookie_does_not_open_another_seat_s_display() {
-    let folder = Folder::new("two-seats");
+    let folder = Folder::new("xwayland-two-seats");
     let mut compositor = Compositor::new(Config {
         outputs: Vec::new(),
         clock: ClockMode::Manual,
@@ -450,7 +432,7 @@ fn a_seat_s_cookie_does_not_open_another_seat_s_display() {
 /// connected, and is reaped; a new connection starts another.
 #[test]
 fn xwayland_stops_when_idle_and_starts_again() {
-    let folder = Folder::new("idle");
+    let folder = Folder::new("xwayland-idle");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
     let display = display_of(&compositor, OWNER_SEAT);
     let client = answered_client(display.number, checked_cookie_of(&display));
@@ -483,7 +465,7 @@ fn xwayland_stops_when_idle_and_starts_again() {
 /// connection that started it was named too, and the Xwayland that served it.
 #[test]
 fn xwaylands_idle_stop_is_named_by_the_rest_auditor() {
-    let folder = Folder::new("rest-audit");
+    let folder = Folder::new("xwayland-rest-audit");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
     let display = display_of(&compositor, OWNER_SEAT);
     let client = answered_client(display.number, checked_cookie_of(&display));
@@ -524,7 +506,7 @@ fn xwaylands_idle_stop_is_named_by_the_rest_auditor() {
 /// connection starts another at once.
 #[test]
 fn a_crash_of_xwayland_leaves_yuna_running() {
-    let folder = Folder::new("crash");
+    let folder = Folder::new("xwayland-crash");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
     let client = answered_client(display.number, checked_cookie_of(&display));
@@ -554,7 +536,7 @@ fn a_crash_of_xwayland_leaves_yuna_running() {
 /// Xwayland's start alone may take longer than the pause.
 #[test]
 fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
-    let folder = Folder::new("crash-loop");
+    let folder = Folder::new("xwayland-crash-loop");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], IDLE_SECONDS);
     let display = display_of(&compositor, OWNER_SEAT);
     let pauses = |compositor: &Compositor| {
@@ -598,7 +580,7 @@ fn a_second_crash_in_a_row_pauses_before_xwayland_starts_again() {
 /// display, another number, serves.
 #[test]
 fn a_display_whose_abstract_name_is_taken_is_skipped() {
-    let folder = Folder::new("taken");
+    let folder = Folder::new("xwayland-taken");
     // The lowest numbers free now, which Yuna would take first.
     let mut held = Vec::new();
     for number in 0..MAX_DISPLAYS {
@@ -632,7 +614,7 @@ fn a_display_whose_abstract_name_is_taken_is_skipped() {
 /// With XWayland off, no seat gets a display, and no file is made.
 #[test]
 fn no_xwayland_when_it_is_off() {
-    let folder = Folder::new("off");
+    let folder = Folder::new("xwayland-off");
     let mut compositor = Compositor::new(Config {
         outputs: Vec::new(),
         clock: ClockMode::Manual,
@@ -654,7 +636,7 @@ fn no_xwayland_when_it_is_off() {
 /// made.
 #[test]
 fn xwayland_missing_from_path_gives_no_display() {
-    let folder = Folder::new("missing");
+    let folder = Folder::new("xwayland-missing");
     let empty = folder.0.join("bin");
     fs::create_dir(&empty).expect("an empty folder");
     let mut compositor = Compositor::new(Config {
@@ -683,7 +665,7 @@ fn xwayland_missing_from_path_gives_no_display() {
 /// Once Xwayland has stopped, idle, Yuna rests again.
 #[test]
 fn yuna_rests_with_xwayland_idle() {
-    let folder = Folder::new("rest");
+    let folder = Folder::new("xwayland-rest");
     let mut compositor = compositor(&folder, vec![OutputMode::default()], 1);
     let rests = |compositor: &mut Compositor| {
         run_armed_deadlines(compositor);
