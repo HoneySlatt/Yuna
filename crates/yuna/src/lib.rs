@@ -67,6 +67,8 @@ pub use compositor::{
     CLIENT_BUFFER_BYTES, ClientDeparture, ClientProcess, ClientProtocolError, ClientRefusal,
     Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
 };
+#[doc(hidden)]
+pub use compositor::{ClientKey, Waker};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
     BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_HELD_BUTTONS,

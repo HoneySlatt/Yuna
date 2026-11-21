@@ -10,11 +10,12 @@ use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use calloop::generic::Generic;
+use calloop::ping::{Ping, make_ping};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use rustix::process::{Pid, WaitStatus};
 use smithay::utils::{Physical, Rectangle};
-use wayland_server::backend::DisconnectReason;
+use wayland_server::backend::{ClientId, DisconnectReason};
 use wayland_server::{BindError, Display, ListeningSocket};
 use yuna_ipc::{Caller, Command, Refusal};
 use yuna_layout::geometry::Rect;
@@ -289,6 +290,28 @@ pub struct OutputDescription {
     pub rect: Rect,
 }
 
+/// A test seam's handle (ADR-0149) that wakes a [`Compositor`] from another thread
+/// ([`Compositor::waker`]). It may be cloned and sent to any thread, and outlive the compositor:
+/// a wake then does nothing.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct Waker(Ping);
+
+impl Waker {
+    /// Makes the compositor's next round, or the one waiting now, return at once: wakes given
+    /// before that round runs count as one.
+    pub fn wake(&self) {
+        self.0.ping();
+    }
+}
+
+/// A test seam's name (ADR-0149) for a client connected by [`Compositor::connect_client_keyed`],
+/// which [`Compositor::window_of_surface`] takes. It holds nothing of the client: once the client
+/// has left, it names none.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ClientKey(ClientId);
+
 /// A headless compositor: its event loop, its Wayland display and its state.
 ///
 /// Everything runs on the thread that created it: drive it with [`Compositor::dispatch`] and,
@@ -312,6 +335,9 @@ pub struct Compositor {
     departures: Option<Vec<ClientDeparture>>,
     /// The parity script's injected cost, with the `parity-canary` feature alone (`canary.rs`).
     canary: ParityCanary,
+    /// What every [`Waker`] it gave pings, once one was asked: kept, so that its source stays in
+    /// the loop while no other handle lives.
+    waker: Option<Ping>,
 }
 
 impl Compositor {
@@ -421,6 +447,7 @@ impl Compositor {
             seat_sockets,
             departures: None,
             canary,
+            waker: None,
         })
     }
 
@@ -440,9 +467,7 @@ impl Compositor {
     /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT) clients already, its Xwayland
     /// apart: the error names the seat and the bound, and nothing is connected.
     pub fn connect_client_to(&mut self, seat: SeatId) -> Result<UnixStream, Error> {
-        let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
-        self.state.insert_client(seat, ours, false)?;
-        Ok(theirs)
+        self.connect_client_keyed(seat).map(|(_, stream)| stream)
     }
 
     /// Connects a client of `seat` that is shown every seat's `wl_seat` and every output's
@@ -1170,6 +1195,77 @@ impl Compositor {
     #[doc(hidden)]
     pub fn rearrange(&mut self) {
         self.state.mark_layout_changed(Change::Animated);
+    }
+
+    /// A test seam (ADR-0149): a handle another thread wakes the compositor with, so that a
+    /// [`Compositor::dispatch`] waiting on this thread, `None` its timeout, returns, rather than
+    /// the thread polling for what the other one sends it. Each round it wakes in is counted
+    /// under [`Source::Waker`]. Every handle it gives shares one source, made at the first call,
+    /// which stays in the loop while the compositor lives. It breaks no invariant: a wake only
+    /// runs a round, as any source does; Yuna's own code holds no handle, so that nothing wakes
+    /// it at rest. Fails only if the source cannot be made, out of descriptors.
+    #[doc(hidden)]
+    pub fn waker(&mut self) -> Result<Waker, Error> {
+        if let Some(ping) = &self.waker {
+            return Ok(Waker(ping.clone()));
+        }
+        let (ping, source) = make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
+        insert_source(
+            &self.event_loop.handle(),
+            Wake::of(Source::Waker),
+            source,
+            |(), &mut (), _| {},
+        )
+        .map_err(|e| Error::EventLoop(e.error.to_string()))?;
+        self.waker = Some(ping.clone());
+        Ok(Waker(ping))
+    }
+
+    /// A test seam (ADR-0149): [`Compositor::connect_client_to`], with a key that names the
+    /// client to [`Compositor::window_of_surface`]. It breaks no invariant: the client is any
+    /// other of the seat's, refused as `connect_client_to` refuses.
+    #[doc(hidden)]
+    pub fn connect_client_keyed(&mut self, seat: SeatId) -> Result<(ClientKey, UnixStream), Error> {
+        let (ours, theirs) = UnixStream::pair().map_err(|e| Error::EventLoop(e.to_string()))?;
+        let client = self.state.insert_client(seat, ours, false)?;
+        Ok((ClientKey(client), theirs))
+    }
+
+    /// A test seam (ADR-0149): the window whose own surface is the `wl_surface` of protocol id
+    /// `surface` in `client`, as the client's side names it. None at once for a client gone, an
+    /// id that names no `wl_surface` of that client, and a surface that is no window's, or not
+    /// yet mapped. It reads only, and breaks no invariant.
+    #[doc(hidden)]
+    pub fn window_of_surface(&self, client: &ClientKey, surface: u32) -> Option<WindowId> {
+        self.state.window_of_client_surface(&client.0, surface)
+    }
+
+    /// A test seam (ADR-0149): from now on, the new xdg-shell windows of `seat`'s clients open
+    /// floating when `floating`, tiled otherwise, as a window rule would; those open already stay
+    /// as they are. A floating window is asked 0 × 0, chooses its own size and follows its
+    /// client's commits (`yuna-layout`'s `floating.rs`). It breaks what Yuna promises of every
+    /// seat: that its new windows tile, unless their client's sizes or parent make them float.
+    /// Refused for a seat that does not exist.
+    #[doc(hidden)]
+    pub fn set_seat_opens_floating(&mut self, seat: SeatId, floating: bool) -> Result<(), Refusal> {
+        let data = self
+            .state
+            .seat_mut(seat)
+            .ok_or(Refusal::UnknownSeat(seat))?;
+        data.opens_floating = floating;
+        Ok(())
+    }
+
+    /// A test seam (ADR-0149): moves floating `window` to (`x`, `y`), logical units from the
+    /// top-left corner of its output, at the size it is drawn at; enough of it stays on the
+    /// output to grab it, as for any floating window. A move alone: the window is not raised or
+    /// focused, its client is sent no configure, and its seat's outputs show it there at their
+    /// next refresh, without motion. It breaks no invariant of the layout's; it moves a window
+    /// where no command of Yuna's can yet. Refused for an unknown or tiled window, and one its
+    /// output does not show: on a workspace not shown, or under a fullscreen window.
+    #[doc(hidden)]
+    pub fn place_window(&mut self, window: WindowId, x: f64, y: f64) -> Result<(), Refusal> {
+        self.state.place_floating_window(window, x, y)
     }
 
     /// What `output` drew in its last frame, bottom to top: each window at its rectangle and

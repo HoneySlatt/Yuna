@@ -75,6 +75,9 @@ pub enum Source {
     ClockDrags,
     /// SIGTERM or SIGINT, through its pipe.
     StopSignal,
+    /// Another thread woke it through a [`Waker`](crate::Waker), a test seam: the WLCS shim's
+    /// hooks, which reach the compositor's thread this way.
+    Waker,
     /// SIGCHLD, through its pipe: a child of `yuna mcp` ended.
     ChildEnded,
     /// The MCP client sent something.
@@ -135,7 +138,7 @@ pub enum Source {
 
 impl Source {
     /// How many there are.
-    pub const COUNT: usize = 36;
+    pub const COUNT: usize = 37;
 
     /// Every source, in the order results give them.
     pub const ALL: [Source; Source::COUNT] = [
@@ -148,6 +151,7 @@ impl Source {
         Source::ClockX11Answers,
         Source::ClockDrags,
         Source::StopSignal,
+        Source::Waker,
         Source::ChildEnded,
         Source::McpInput,
         Source::McpOutput,
@@ -189,6 +193,7 @@ impl Source {
             Source::ClockX11Answers => "clock_x11_answers",
             Source::ClockDrags => "clock_drags",
             Source::StopSignal => "stop_signal",
+            Source::Waker => "waker",
             Source::ChildEnded => "child_ended",
             Source::McpInput => "mcp_input",
             Source::McpOutput => "mcp_output",
@@ -223,9 +228,9 @@ impl Source {
     /// outputs' refreshes and presentations, its programs, its closing, its Xwayland, its
     /// accessibility bus and calls, its clipboard's reads and writes, and the display's wakes in
     /// which one of its clients had something. The others are Yuna's own parts: the signals,
-    /// MCP's input and output, its encoders, its waiting calls and its captures' timers, the
-    /// throttle every program shares, the hidden windows', the X11 answers' and the drags'
-    /// deadlines.
+    /// the test seams' waker, MCP's input and output, its encoders, its waiting calls and its
+    /// captures' timers, the throttle every program shares, the hidden windows', the X11
+    /// answers' and the drags' deadlines.
     pub fn serves_a_seat(self) -> bool {
         matches!(
             self,

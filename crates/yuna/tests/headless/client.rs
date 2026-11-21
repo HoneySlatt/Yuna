@@ -44,7 +44,7 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::dialog::v1::client::{xdg_dialog_v1, xdg_wm_dialog_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use yuna::{Compositor, OWNER_SEAT};
+use yuna::{ClientKey, Compositor, OWNER_SEAT};
 use yuna_types::SeatId;
 
 pub use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::Kind;
@@ -208,6 +208,15 @@ impl Client {
             .connect_client_to(seat)
             .expect("a client connects");
         Client::connect_through(compositor, stream)
+    }
+
+    /// Connects to `compositor` as a client of `seat`, as [`Client::connect_to`] does, with the
+    /// key that names it to `Compositor::window_of_surface`, a test seam (ADR-0149).
+    pub fn connect_keyed(compositor: &mut Compositor, seat: SeatId) -> (ClientKey, Client) {
+        let (key, stream) = compositor
+            .connect_client_keyed(seat)
+            .expect("a client connects");
+        (key, Client::connect_through(compositor, stream))
     }
 
     /// Connects as a client of `seat` that is shown every seat's and every output's globals,

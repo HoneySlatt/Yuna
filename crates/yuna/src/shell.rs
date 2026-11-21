@@ -22,7 +22,7 @@
 //! `already_constructed`, which Smithay does not send; one on a surface its client destroyed is
 //! ignored. Popups are in `popups.rs`; activation requests, in `activation.rs`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -41,12 +41,14 @@ use wayland_protocols::xdg::shell::server::{xdg_surface, xdg_toplevel};
 use wayland_server::Resource;
 use wayland_server::backend::ClientId;
 use wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
+use yuna_ipc::Refusal;
 use yuna_layout::geometry::{Rect, Size};
 use yuna_layout::{MAX_SIZE, OpenOptions};
 use yuna_motion::Change;
 use yuna_types::{OutputId, WindowId};
 
 use crate::activation::TokenOrigin;
+use crate::command::refusal;
 use crate::compositor::{WindowDescription, WindowShell};
 use crate::frames::waits_for_frame;
 use crate::seats::seat_of_surface;
@@ -342,7 +344,9 @@ impl State {
         self.schedule_for_commit(root, surface);
     }
 
-    /// What the layout needs to open the toplevel of `root`, from what its client asked.
+    /// What the layout needs to open the toplevel of `root`, from what its client asked, and
+    /// whether its seat opens windows floating, a test seam's
+    /// (`Compositor::set_seat_opens_floating`).
     fn open_options(&self, root: &WlSurface) -> OpenOptions {
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
             return OpenOptions::default();
@@ -353,7 +357,11 @@ impl State {
             .and_then(ToplevelSurface::parent)
             .and_then(|parent| self.toplevels.get(&parent.id()))
             .and_then(|parent| parent.window);
+        let floating = self
+            .seat(seat_of_surface(root))
+            .is_some_and(|seat| seat.opens_floating);
         OpenOptions {
+            floating,
             fullscreen: toplevel.wants_fullscreen,
             parent,
             min_size,
@@ -688,6 +696,77 @@ impl State {
                 self.close_x11(&x11);
             }
         }
+        Ok(())
+    }
+
+    /// The window whose own surface is the `wl_surface` of protocol id `surface` in `client`:
+    /// none for a client the display no longer serves, an id that names no `wl_surface` of it,
+    /// and a surface that is no mapped window's (`Compositor::window_of_surface`, a test seam).
+    pub(crate) fn window_of_client_surface(
+        &self,
+        client: &ClientId,
+        surface: u32,
+    ) -> Option<WindowId> {
+        let object = self
+            .display_handle
+            .backend_handle()
+            .object_for_protocol_id(client.clone(), WlSurface::interface(), surface)
+            .ok()?;
+        self.toplevels.get(&object)?.window
+    }
+
+    /// Moves floating `window` to (`x`, `y`), logical units from its output's top-left corner,
+    /// at the size it is drawn at, as [`Layout::set_floating_rect`] keeps enough of it on the
+    /// output to grab it (`Compositor::place_window`, a test seam). Its seat's outputs show it
+    /// there at their next refresh, without motion. Refused for an unknown or tiled window, and
+    /// one its output does not show: on a workspace not shown, or under a fullscreen window.
+    ///
+    /// [`Layout::set_floating_rect`]: yuna_layout::Layout::set_floating_rect
+    pub(crate) fn place_floating_window(
+        &mut self,
+        window: WindowId,
+        x: f64,
+        y: f64,
+    ) -> Result<(), Refusal> {
+        let info = self
+            .layout
+            .window(window)
+            .ok_or(Refusal::UnknownWindow(window))?;
+        if !info.floating {
+            return Err(Refusal::Refused("the window is tiled"));
+        }
+        let output = info
+            .output
+            .ok_or(Refusal::Refused("the window is on no output"))?;
+        let placed = self
+            .layout
+            .arrange(output)
+            .map_err(refusal)?
+            .into_iter()
+            .find(|placed| placed.window == window)
+            .ok_or(Refusal::Refused("the window is not shown"))?;
+        let output_rect = self.layout.output_rect(output).map_err(refusal)?;
+        // Floating rectangles are kept from the working area's corner, the output's own until
+        // layer shell's zones narrow it.
+        let working = self
+            .layout
+            .shown_workspaces(output)
+            .map_err(refusal)?
+            .main
+            .working;
+        // The size it is drawn at is its floating rectangle's while its client chooses its own
+        // size, as every window does today: the layout then counts no resize, asks no new size,
+        // and no configure follows.
+        let rect = Rect::new(
+            output_rect.x + x - working.x,
+            output_rect.y + y - working.y,
+            placed.rect.w,
+            placed.rect.h,
+        );
+        self.layout
+            .set_floating_rect(window, rect)
+            .map_err(refusal)?;
+        self.mark_layout_changed(Change::InstantFor(BTreeSet::from([info.seat])));
         Ok(())
     }
 

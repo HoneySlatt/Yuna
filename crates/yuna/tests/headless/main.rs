@@ -33,6 +33,7 @@ mod random_requests;
 mod rest;
 mod scale;
 mod screencopy;
+mod seams;
 mod seats;
 mod selection;
 mod selection_client;

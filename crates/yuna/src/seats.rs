@@ -115,6 +115,9 @@ pub(crate) struct SeatData {
     /// The commits of its clients' surfaces: a seat's accessibility call walks its trees again
     /// when they move, never for another seat's drawing.
     pub commits: u64,
+    /// Whether its clients' new xdg-shell windows open floating rather than tiled: a test
+    /// seam's, the WLCS shim's (`Compositor::set_seat_opens_floating`).
+    pub opens_floating: bool,
 }
 
 impl SeatData {
@@ -192,6 +195,7 @@ impl SeatData {
             clients: Vec::new(),
             refusals: Refusals::default(),
             commits: 0,
+            opens_floating: false,
         }
     }
 }
@@ -348,13 +352,14 @@ impl State {
     /// the processes above it, read in `/proc` now. The peer may have exited since it connected
     /// ([`ClientProcess`]). Refused for a seat that does not exist, and, before anything of the
     /// client is read, for one that serves [`MAX_CLIENTS_PER_SEAT`] clients already. With
-    /// `sees_every_seat`, it is shown every seat's globals, for tests alone.
+    /// `sees_every_seat`, it is shown every seat's globals, for tests alone. Returns the
+    /// client's id.
     pub(crate) fn insert_client(
         &mut self,
         seat: SeatId,
         stream: UnixStream,
         sees_every_seat: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<ClientId, Error> {
         if self.is_full(seat) {
             return Err(Error::Refused(format!(
                 "seat {} serves {MAX_CLIENTS_PER_SEAT} clients, the most a seat connects \
@@ -429,7 +434,7 @@ impl State {
         seat: SeatId,
         stream: UnixStream,
         sees_every_seat: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<ClientId, Error> {
         let pid = rustix::net::sockopt::socket_peercred(&stream)
             .ok()
             .map(|credentials| credentials.pid.as_raw_nonzero().get());
@@ -461,17 +466,17 @@ impl State {
         data.xwayland = Some(server);
         // Before it can bind a global, so that it never sees an output unscaled.
         data.compositor.set_client_scale(scale);
-        self.insert_client_state(stream, data)
+        self.insert_client_state(stream, data).map(drop)
     }
 
     /// Serves the client of `data`'s seat on `stream`, and records it on the seat and in the
     /// rest auditor, with a second descriptor of its socket, which names it when it wakes Yuna
-    /// (`rest.rs`). Out of descriptors, it is served without one, unnamed.
+    /// (`rest.rs`). Out of descriptors, it is served without one, unnamed. Returns its id.
     fn insert_client_state(
         &mut self,
         stream: UnixStream,
         mut data: ClientState,
-    ) -> Result<(), Error> {
+    ) -> Result<ClientId, Error> {
         let seat = data.seat;
         if self.seat(seat).is_none() {
             return Err(Error::Refused(format!("no seat {}", seat.0)));
@@ -498,7 +503,7 @@ impl State {
                 xwayland,
             });
         }
-        Ok(())
+        Ok(client.id())
     }
 
     /// The seat of the client `client`, while the display serves it.
