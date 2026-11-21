@@ -86,6 +86,14 @@
         # The keyboard's default keymap.
         XKB_CONFIG_ROOT = "${pkgs.xkeyboard_config}/share/X11/xkb";
 
+        # WLCS, the Wayland conformance suite, which runs Yuna through crates/yuna-wlcs
+        # (ADR-0149): nixpkgs' plain runner by its store path (the package installs no bin/, and
+        # its sanitizer builds are not used), and its headers, which the shim's ABI test compiles
+        # against. Taken from this nixpkgs, never another: the shim is loaded into WLCS's process,
+        # so both must load the same glibc and libstdc++.
+        YUNA_WLCS_RUNNER = "${pkgs.wlcs}/libexec/wlcs/wlcs";
+        YUNA_WLCS_INCLUDE = "${pkgs.wlcs}/include";
+
         # What the applications' tests give each application, so that it draws the same on every
         # machine, on the CPU (crates/yuna/tests/applications.rs, ADR-0025). Its PATH, of the
         # store alone: a terminal, GTK 4's demo (in GTK's development output), Qt's QML runner,
