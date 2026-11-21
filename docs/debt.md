@@ -862,7 +862,7 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
 - `yuna-ipc`'s `Refusal::Refused` carries as text the layout's reasons that have no variant of
   their own (no output, a pinned window made fullscreen, another window's fullscreen holding the
-  screen), where ADR-0146 asks a variant per reason: a caller tells them apart only by their
+  screen, and the others the layout gives as text), where ADR-0146 asks a variant per reason: a caller tells them apart only by their
   sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4 (the map, tasks,
   frames and events), where every public contract is listed with its version.
 - Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has

@@ -952,6 +952,10 @@ impl State {
                 }
                 keyed += 1;
             } else {
+                // What the keys sent goes out before the run's first piece, which nears 4 KiB.
+                if keyed > 0 {
+                    self.flush_clients();
+                }
                 keyed = 0;
             }
             let done = match step {
