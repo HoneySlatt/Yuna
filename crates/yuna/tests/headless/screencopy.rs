@@ -9,15 +9,15 @@
 
 use std::time::Duration;
 
-use smithay::utils::Rectangle;
 use yuna::{
     ClockMode, Compositor, Config, MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT,
     OWNER_SEAT, OutputMode,
 };
-use yuna_types::OutputId;
+use yuna_types::{OutputId, PixelRect};
 
 use crate::capture_client::{CaptureClient, FailureReason, Format};
 use crate::client::Client;
+use crate::on_output;
 use crate::{BLUE, RED, assert_rests, run_armed_deadlines};
 
 pub(crate) fn small_output() -> OutputMode {
@@ -53,7 +53,7 @@ pub(crate) fn compositor_with_a_window(colour: u32) -> (Compositor, Client) {
 /// Pixel (`x`, `y`) of output 1 as the renderer holds it: R, G, B, A.
 pub(crate) fn output_pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
     let pixel = compositor
-        .read_pixels(OutputId(1), Rectangle::new((x, y).into(), (1, 1).into()))
+        .read_pixels(OutputId(1), PixelRect::pixel(on_output(x), on_output(y)))
         .expect("a pixel");
     [pixel[0], pixel[1], pixel[2], pixel[3]]
 }

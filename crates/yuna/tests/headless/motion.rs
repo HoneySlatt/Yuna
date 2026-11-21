@@ -16,7 +16,6 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use smithay::utils::Rectangle;
 use yuna::mcp::Server;
 use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_motion::{Change, Drawn, Motion, Settings, SpringParams};
@@ -24,7 +23,7 @@ use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, ClockMode, Compositor, Config, OWNER_SEAT, OutputMode,
 };
 use yuna_ipc::{Caller, Command};
-use yuna_types::{Direction, OutputId, SeatId, WindowId};
+use yuna_types::{Direction, OutputId, PixelRect, SeatId, WindowId};
 
 use crate::client::{Client, Feedback, Parent, Placement, State};
 use crate::input_client::{InputClient, InputEvent};
@@ -924,10 +923,12 @@ fn a_windows_capture_mid_scroll_is_where_its_frame_drew_it() {
         ),
         (right - left, bottom - top)
     );
-    let region = Rectangle::new(
-        (left as i32, top as i32).into(),
-        ((right - left) as i32, (bottom - top) as i32).into(),
-    );
+    let region = PixelRect {
+        x: left as u32,
+        y: top as u32,
+        width: (right - left) as u32,
+        height: (bottom - top) as u32,
+    };
     let read = compositor
         .read_pixels(output, region)
         .expect("the pixels are read");
@@ -953,7 +954,7 @@ fn a_windows_capture_mid_scroll_is_where_its_frame_drew_it() {
 /// workspace's.
 fn pixel(compositor: &mut Compositor) -> [u8; 4] {
     let read = compositor
-        .read_pixels(OUTPUT, Rectangle::new((100, 100).into(), (1, 1).into()))
+        .read_pixels(OUTPUT, PixelRect::pixel(100, 100))
         .expect("the pixel is read");
     [read[0], read[1], read[2], read[3]]
 }
@@ -1542,7 +1543,7 @@ fn a_popup_mid_scroll_is_drawn_at_its_windows_drawn_rectangle() {
     client.map_popup(&mut compositor, Parent::Window(windows[1]), menu, GREEN);
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     let pixel = |compositor: &mut Compositor, x: f64, y: f64| {
-        let region = Rectangle::new((x as i32, y as i32).into(), (1, 1).into());
+        let region = PixelRect::pixel(x as u32, y as u32);
         let read = compositor
             .read_pixels(OUTPUT, region)
             .expect("the pixel is read");

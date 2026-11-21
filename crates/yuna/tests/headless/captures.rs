@@ -34,7 +34,7 @@ fn background(mcp: &mut Mcp, output: u64) -> [u8; 3] {
         .compositor()
         .read_pixels(
             yuna_types::OutputId(output),
-            smithay::utils::Rectangle::new((0, 0).into(), (1, 1).into()),
+            yuna_types::PixelRect::pixel(0, 0),
         )
         .expect("a pixel");
     [pixel[0], pixel[1], pixel[2]]

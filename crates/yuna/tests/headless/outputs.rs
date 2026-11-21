@@ -9,7 +9,7 @@ use yuna::{
     OutputMode, RETIRED_GLOBAL_LIFETIME,
 };
 use yuna_ipc::Command;
-use yuna_types::{OutputId, WindowId};
+use yuna_types::{OutputId, PixelRect, WindowId};
 
 use crate::client::{Client, Feedback, Kind};
 use crate::{
@@ -626,7 +626,7 @@ fn a_mode_the_layout_refuses_after_the_buffer_was_made_changes_nothing() {
         before
     );
     // The buffer is still 3840 × 2160: its last pixel reads, which a 16,384 × 1 one lacks.
-    let corner = smithay::utils::Rectangle::new((3839, 2159).into(), (1, 1).into());
+    let corner = PixelRect::pixel(3839, 2159);
     assert_eq!(
         compositor
             .read_pixels(OUTPUT, corner)

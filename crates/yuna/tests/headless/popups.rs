@@ -7,12 +7,12 @@
 
 use std::time::Duration;
 
-use smithay::utils::Rectangle;
 use yuna::{Compositor, MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW, OWNER_SEAT};
 use yuna_ipc::Command;
-use yuna_types::WindowId;
+use yuna_types::{PixelRect, WindowId};
 
 use crate::client::{Client, ConstraintAdjustment, Feedback, Kind, Parent, Placement};
+use crate::on_output;
 use crate::{
     BLUE, LEAD, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
     open_and_commit, owner, run_armed_deadlines,
@@ -31,7 +31,7 @@ fn menu() -> Placement {
 /// The pixel at (`x`, `y`) of the default output's last frame: R, G, B, A.
 pub(crate) fn pixel(compositor: &mut Compositor, x: i32, y: i32) -> [u8; 4] {
     let bytes = compositor
-        .read_pixels(OUTPUT, Rectangle::new((x, y).into(), (1, 1).into()))
+        .read_pixels(OUTPUT, PixelRect::pixel(on_output(x), on_output(y)))
         .expect("the pixel reads");
     bytes.try_into().expect("four bytes")
 }

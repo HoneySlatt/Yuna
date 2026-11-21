@@ -20,7 +20,7 @@ use yuna_ipc::{Caller, Command, Refusal};
 use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OpenOptions};
 use yuna_motion::{Change, Drawn, Settings};
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, PixelRect, SeatId, WindowId};
 
 use crate::Error;
 use crate::canary::ParityCanary;
@@ -1147,26 +1147,33 @@ impl Compositor {
     /// The pixels of `region` of `output`'s last frame, in physical pixels from its top-left
     /// corner, as bytes R, G, B, A, row by row from the top. Refused for a region not wholly on
     /// the output.
-    pub fn read_pixels(
-        &mut self,
-        output: OutputId,
-        region: Rectangle<i32, Physical>,
-    ) -> Result<Vec<u8>, Error> {
+    pub fn read_pixels(&mut self, output: OutputId, region: PixelRect) -> Result<Vec<u8>, Error> {
         let index = self
             .state
             .output_index(output)
             .ok_or_else(|| Error::Refused(format!("no output {}", output.0)))?;
         let virtual_output = &mut self.state.outputs[index];
         let (width, height) = (virtual_output.mode.width(), virtual_output.mode.height());
-        let fits = |start: i32, length: i32, side: u32| {
-            start >= 0 && length > 0 && i64::from(start) + i64::from(length) <= i64::from(side)
+        let fits = |start: u32, length: u32, side: u32| {
+            length > 0 && u64::from(start) + u64::from(length) <= u64::from(side)
         };
-        if !fits(region.loc.x, region.size.w, width) || !fits(region.loc.y, region.size.h, height) {
+        if !fits(region.x, region.width, width) || !fits(region.y, region.height, height) {
             return Err(Error::Refused(format!(
                 "the region {region:?} is not wholly on output {}",
                 output.0
             )));
         }
+        let edge = |value: u32| {
+            i32::try_from(value).map_err(|_| {
+                Error::Refused(format!(
+                    "the region {region:?} is past what the renderer reads"
+                ))
+            })
+        };
+        let region = Rectangle::<i32, Physical>::new(
+            (edge(region.x)?, edge(region.y)?).into(),
+            (edge(region.width)?, edge(region.height)?).into(),
+        );
         crate::render::read_pixels(&mut self.state.renderer, virtual_output, region)
     }
 

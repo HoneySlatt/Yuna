@@ -1,5 +1,5 @@
-//! Yuna's shared vocabulary: the ids of what the compositor names, and the directions and tilings
-//! a caller asks for.
+//! Yuna's shared vocabulary: the ids of what the compositor names, the directions and tilings a
+//! caller asks for, and a region of an output's pixels.
 //!
 //! This crate is level 0 of the crate map
 //! ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)'s
@@ -74,4 +74,30 @@ pub enum Tiling {
     Scrolling,
     /// Each new window splits the focused one's space (Hyprland).
     Dwindle,
+}
+
+/// A region of an output's buffer, in physical pixels from its top-left corner: unsigned, so
+/// that a region starts on the buffer or past it, never before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PixelRect {
+    /// The left edge.
+    pub x: u32,
+    /// The top edge.
+    pub y: u32,
+    /// The width.
+    pub width: u32,
+    /// The height.
+    pub height: u32,
+}
+
+impl PixelRect {
+    /// The one pixel at (`x`, `y`).
+    pub fn pixel(x: u32, y: u32) -> PixelRect {
+        PixelRect {
+            x,
+            y,
+            width: 1,
+            height: 1,
+        }
+    }
 }

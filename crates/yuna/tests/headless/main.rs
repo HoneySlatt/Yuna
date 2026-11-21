@@ -62,10 +62,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use client::{Client, Feedback, Kind, Mode, State};
-use smithay::utils::Rectangle;
 use yuna::{ClockMode, Compositor, Config, Counters, Error, OWNER_SEAT, OutputMode};
 use yuna_ipc::{Caller, Command};
-use yuna_types::{OutputId, Tiling, WindowId};
+use yuna_types::{OutputId, PixelRect, Tiling, WindowId};
 
 const TILE: (i32, i32) = (1256, 1408);
 const RED: u32 = 0xFF_FF_00_00;
@@ -80,6 +79,12 @@ const LEAD: Duration = Duration::from_millis(3);
 /// The caller the stories speak as: the owner's seat.
 fn owner() -> Caller {
     Caller::on_seat(OWNER_SEAT)
+}
+
+/// A coordinate on an output, in physical pixels, as `read_pixels` takes it: never before the
+/// output's corner.
+fn on_output(coordinate: i32) -> u32 {
+    u32::try_from(coordinate).expect("a pixel on the output, not before its corner")
 }
 
 fn manual_compositor() -> Compositor {
@@ -829,7 +834,7 @@ fn a_window_is_drawn_at_the_size_its_client_committed() {
     let (x, y) = ((rect.x * 1.5).round() as i32, (rect.y * 1.5).round() as i32);
     let mut pixel = |px: i32, py: i32| -> Vec<u8> {
         compositor
-            .read_pixels(OUTPUT, Rectangle::new((px, py).into(), (1, 1).into()))
+            .read_pixels(OUTPUT, PixelRect::pixel(on_output(px), on_output(py)))
             .expect("the pixel reads")
     };
     let red = vec![255, 0, 0, 255];
@@ -1136,7 +1141,7 @@ fn a_geometry_inside_its_surface_starts_at_the_tile_corner() {
     let (x, y) = ((rect.x * 1.5).round() as i32, (rect.y * 1.5).round() as i32);
     let mut pixel = |px: i32, py: i32| -> Vec<u8> {
         compositor
-            .read_pixels(OUTPUT, Rectangle::new((px, py).into(), (1, 1).into()))
+            .read_pixels(OUTPUT, PixelRect::pixel(on_output(px), on_output(py)))
             .expect("the pixel reads")
     };
     let red = vec![255, 0, 0, 255];

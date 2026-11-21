@@ -14,10 +14,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use rustix::fs::{SealFlags, fcntl_add_seals};
-use smithay::utils::{Physical, Rectangle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{self, Flags};
 use yuna::Compositor;
-use yuna_types::WindowId;
+use yuna_types::{PixelRect, WindowId};
 
 use crate::client::{
     Client, ProtocolError, memory_file, memory_file_sealed_with, sealed_memory_file, write_only,
@@ -378,7 +377,12 @@ fn a_dmabuf_in_a_file_sealed_against_shrinking_is_drawn() {
         let rect = placed[0].rect;
         assert_eq!((rect.x, rect.y, rect.w, rect.h), (16.0, 16.0, 256.0, 256.0));
         // That rectangle at scale 1.5, in physical pixels.
-        let window_pixels = Rectangle::new((24, 24).into(), (384, 384).into());
+        let window_pixels = PixelRect {
+            x: 24,
+            y: 24,
+            width: 384,
+            height: 384,
+        };
         assert_all_green(&mut compositor, window_pixels);
 
         let refused = file.set_len(0).expect_err("a sealed memfd never shrinks");
@@ -693,7 +697,7 @@ impl Refusals {
 }
 
 /// Asserts that every pixel of `region` of the output is `GREEN`.
-fn assert_all_green(compositor: &mut Compositor, region: Rectangle<i32, Physical>) {
+fn assert_all_green(compositor: &mut Compositor, region: PixelRect) {
     let pixels = compositor
         .read_pixels(OUTPUT, region)
         .expect("the region reads");

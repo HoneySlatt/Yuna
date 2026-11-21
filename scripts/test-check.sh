@@ -57,6 +57,8 @@ expect_stopped rules "a rust-version other than the toolchain's" "rust-version i
     "sed -i 's/^rust-version = .*/rust-version = \"1.0.0\"/' Cargo.toml"
 expect_stopped rules "a crate without the workspace's lints" "lacks the lines" \
     "sed -i '/^\[lints\]/,+1d' crates/yuna-motion/Cargo.toml"
+expect_stopped rules "a test naming Smithay" "name Smithay" \
+    "printf 'use smithay::utils::Rectangle;\\n' >> crates/yuna/tests/headless/commands.rs"
 expect_stopped format "code not formatted" "Diff in" \
     "printf 'fn  badly_formatted( ){}\n' >> crates/yuna-layout/src/lib.rs"
 expect_stopped lints "a warning" "unused variable" \

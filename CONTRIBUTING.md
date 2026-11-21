@@ -311,7 +311,8 @@ The timings are measured on an idle machine, one measurement at a time, and go t
 only <step>` runs one:
 
 1. `rules`, the workspace's own: `rust-version` in `Cargo.toml` equals the toolchain's version,
-   and every crate takes the workspace's lints;
+   every crate takes the workspace's lints, and no test or example of `yuna` names Smithay
+   ([ADR-0146](docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md));
 2. `format`, `cargo fmt --check`;
 3. `lints`, clippy over every target, warnings as errors, twice: the second time with the
    parity script's canaries (`--features yuna/parity-canary,…`), code no other build compiles;

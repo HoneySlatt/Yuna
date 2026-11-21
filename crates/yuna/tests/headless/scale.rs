@@ -6,13 +6,13 @@
 
 use std::time::Duration;
 
-use smithay::utils::Rectangle;
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
 use yuna_ipc::Command;
-use yuna_types::{OutputId, WindowId};
+use yuna_types::{OutputId, PixelRect, WindowId};
 
 use crate::client::{Client, Parent, Placement, ProtocolError, State};
+use crate::on_output;
 use crate::{
     BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor,
     open_and_commit, owner,
@@ -131,7 +131,15 @@ fn a_window_drawn_at_its_physical_size_sits_exactly_on_its_pixels() {
         (16.0, 16.0, 1256.0, 1408.0)
     );
     let window_pixels = compositor
-        .read_pixels(OUTPUT, Rectangle::new((24, 24).into(), (1884, 2112).into()))
+        .read_pixels(
+            OUTPUT,
+            PixelRect {
+                x: 24,
+                y: 24,
+                width: 1884,
+                height: 2112,
+            },
+        )
         .expect("the window's rectangle reads");
     let wrong: Vec<(usize, usize, [u8; 4])> = window_pixels
         .as_chunks::<4>()
@@ -152,11 +160,11 @@ fn a_window_drawn_at_its_physical_size_sits_exactly_on_its_pixels() {
     assert!(wrong.is_empty(), "pixels off the checkerboard: {wrong:?}");
     // One pixel outside each edge is background.
     let background = compositor
-        .read_pixels(OUTPUT, Rectangle::new((3839, 2159).into(), (1, 1).into()))
+        .read_pixels(OUTPUT, PixelRect::pixel(3839, 2159))
         .expect("the background reads");
     for (x, y) in [(23, 24), (24, 23), (1908, 2135), (1907, 2136)] {
         let pixel = compositor
-            .read_pixels(OUTPUT, Rectangle::new((x, y).into(), (1, 1).into()))
+            .read_pixels(OUTPUT, PixelRect::pixel(x, y))
             .expect("the pixel reads");
         assert_eq!(pixel, background, "pixel ({x}, {y}) beside the window");
     }
@@ -194,7 +202,7 @@ fn a_viewport_destination_is_the_windows_size() {
     let (x, y) = (rect.x as i32, rect.y as i32);
     let mut pixel = |px: i32, py: i32| -> Vec<u8> {
         compositor
-            .read_pixels(OUTPUT, Rectangle::new((px, py).into(), (1, 1).into()))
+            .read_pixels(OUTPUT, PixelRect::pixel(on_output(px), on_output(py)))
             .expect("the pixel reads")
     };
     let background = pixel(1919, 1079);
