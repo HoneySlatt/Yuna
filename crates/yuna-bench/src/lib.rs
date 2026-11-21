@@ -14,6 +14,8 @@
 //! Beside the bench, [`parity`] compares two builds of Yuna: in CI, on figures the machine's load
 //! does not move; once per milestone, on the GPU's memory and on timed figures, judged over pairs
 //! ([ADR-0142](../../../docs/adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
+//! And [`wlcs`] runs WLCS, the Wayland conformance suite, against Yuna's integration module,
+//! judging each test against the tracked file of its expected outcomes.
 //!
 //! It depends on nothing of the `yuna` crate: it measures Yuna as it measures the others, and
 //! builds alone.
@@ -39,6 +41,7 @@ pub mod sandbox;
 pub mod scenarios;
 pub mod sockets;
 pub mod still;
+pub mod wlcs;
 
 /// What the tests share.
 #[cfg(test)]

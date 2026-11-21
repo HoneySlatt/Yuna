@@ -1,0 +1,60 @@
+Note: Google Test filter = SelfTest.*:XdgToplevelStableTest.*:XdgShellStableSubsurfaces/SubsurfaceTest.place_above_simple/0:Anchors/LayerSurfaceErrorsTest.*/1
+[==========] Running 8 tests from 4 test suites.
+[----------] Global test environment set-up.
+[----------] 3 tests from SelfTest
+[ RUN      ] SelfTest.when_creating_second_client_nothing_bad_happens
+[       OK ] SelfTest.when_creating_second_client_nothing_bad_happens (41 ms)
+[ RUN      ] SelfTest.expected_missing_extension_is_xfail
+[          ] Missing extension: xdg_not_really_an_extension>= 1
+[     SKIP ] SelfTest.expected_missing_extension_is_xfail (12ms)
+[ RUN      ] SelfTest.acquiring_unsupported_extension_is_xfail
+/build/wlcs-1.8.1/tests/self_test.cpp:131: Failure
+Value of: extension_list
+  Actual: false
+Expected: true
+[          ] Missing extension: wlcs_non_existent_extension>= 1
+[     SKIP ] SelfTest.acquiring_unsupported_extension_is_xfail (15ms)
+[----------] 3 tests from SelfTest (68 ms total)
+
+[----------] 3 tests from XdgToplevelStableTest
+[ RUN      ] XdgToplevelStableTest.wm_capabilities_are_sent
+/build/wlcs-1.8.1/tests/xdg_toplevel_stable.cpp:1043: Failure
+Expected equality of these values:
+  capabilities.size()
+    Which is: 0
+  4
+[  FAILED  ] XdgToplevelStableTest.wm_capabilities_are_sent (23 ms)
+[ RUN      ] XdgToplevelStableTest.pointer_respects_window_geom_offset
+unknown file: Failure
+C++ exception with description "Timeout waiting for condition" thrown in the test body.
+[  FAILED  ] XdgToplevelStableTest.pointer_respects_window_geom_offset (10021 ms)
+[ RUN      ] XdgToplevelStableTest.touch_respects_window_geom_offset
+yuna-wlcs: unsupported: touch
+[       OK ] XdgToplevelStableTest.touch_respects_window_geom_offset (9 ms)
+[----------] 3 tests from XdgToplevelStableTest (10053 ms total)
+
+[----------] 1 test from XdgShellStableSubsurfaces/SubsurfaceTest
+[ RUN      ] XdgShellStableSubsurfaces/SubsurfaceTest.place_above_simple/0
+[       OK ] XdgShellStableSubsurfaces/SubsurfaceTest.place_above_simple/0 (30 ms)
+[----------] 1 test from XdgShellStableSubsurfaces/SubsurfaceTest (30 ms total)
+
+[----------] 1 test from Anchors/LayerSurfaceErrorsTest
+[ RUN      ] Anchors/LayerSurfaceErrorsTest.specifying_zero_size_without_corresponding_anchors_is_an_error/1
+/build/wlcs-1.8.1/tests/wlr_layer_shell_v1.cpp:286: Failure
+Value of: client.protocol_error_raised()
+  Actual: false
+Expected: true
+[  FAILED  ] Anchors/LayerSurfaceErrorsTest.specifying_zero_size_without_corresponding_anchors_is_an_error/1, where GetParam() = 28-byte object <00-00 00-00 00-00 00-00 01-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00> (4 ms)
+[----------] 1 test from Anchors/LayerSurfaceErrorsTest (4 ms total)
+
+[----------] Global test environment tear-down
+[==========] 8 tests from 4 test cases run. (10160ms total elapsed)
+[  PASSED  ] 3 tests
+[  SKIPPED ] 2 tests skipped:
+[  SKIPPED ] SelfTest.acquiring_unsupported_extension_is_xfail
+[  SKIPPED ] SelfTest.expected_missing_extension_is_xfail
+[  FAILED  ] 4 tests failed:
+[  FAILED  ] Anchors/LayerSurfaceErrorsTest.specifying_zero_size_without_corresponding_anchors_is_an_error/1
+[  FAILED  ] SelfTest.acquiring_unsupported_extension_is_xfail
+[  FAILED  ] XdgToplevelStableTest.pointer_respects_window_geom_offset
+[  FAILED  ] XdgToplevelStableTest.wm_capabilities_are_sent

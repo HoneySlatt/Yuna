@@ -1,0 +1,24 @@
+BadBufferTest.
+  test_truncated_shm_file
+  client_lies_about_buffer_size
+SecondBadBufferTest.
+  DISABLED_test_truncated_shm_file
+XdgToplevelStableConfigurationTest.
+  window_can_maximize_itself
+  window_can_unmaximize_itself
+  window_can_fullscreen_itself
+  window_can_unfullscreen_itself
+  DISABLED_window_stays_maximized_after_fullscreen
+  DISABLED_window_can_maximize_itself_while_fullscreen
+  activated_state_follows_pointer
+PointerCrossingSurfaceCorner/SurfacePointerMotionTest.
+  pointer_movement/0  # GetParam() = Top-left
+  pointer_movement/1  # GetParam() = Bottom-left
+  pointer_movement/2  # GetParam() = Bottom-right
+  pointer_movement/3  # GetParam() = Top-right
+Anchors/LayerSurfaceErrorsTest.
+  specifying_zero_size_without_corresponding_anchors_is_an_error/0  # GetParam() = 28-byte object <00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00>
+  specifying_zero_size_without_corresponding_anchors_is_an_error/1  # GetParam() = 28-byte object <00-00 00-00 00-00 00-00 01-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00 00-00>
+WpViewporterSrcParamsTest.
+  raises_protocol_error_on_invalid_value/src_width_must_be_non_negative  # GetParam() = (0, 0, -1, 0, 0x5555557f1208 pointing to "src_width_must_be_non_negative")
+  raises_protocol_error_on_invalid_value/src_height_must_be_non_negative  # GetParam() = (0, 0, 0, -1, 0x5555557f1228 pointing to "src_height_must_be_non_negative")

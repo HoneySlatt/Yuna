@@ -1,0 +1,7 @@
+Note: Google Test filter = XdgSurfaceStableTest.*
+[==========] Running 6 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 6 tests from XdgSurfaceStableTest
+[ RUN      ] XdgSurfaceStableTest.supports_xdg_shell_stable_protocol
+[       OK ] XdgSurfaceStableTest.supports_xdg_shell_stable_protocol (38 ms)
+[ RUN      ] XdgSurfaceStableTest.gets_configure_event

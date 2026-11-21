@@ -1,5 +1,6 @@
-//! The command line: `headless` runs the cases, `report` summarises run files, and the bench's
-//! own clients and launcher run as subcommands of the same program.
+//! The command line: `headless` runs the cases, `report` summarises run files, `parity` and
+//! `wlcs` hand over to their modules, and the bench's own clients and launcher run as
+//! subcommands of the same program.
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write as _};
@@ -23,6 +24,7 @@ through the same scenarios with the same clients, and reads their costs from out
   yuna-bench headless [options]     run the cases, write a run file and its summary
   yuna-bench report <file.json>...  print the summary of run files, in Markdown
   yuna-bench parity run [options]   compare two builds of Yuna (ADR-0142); parity --help
+  yuna-bench wlcs check|record      run WLCS against Yuna's integration module; wlcs --help
 
 Options of headless (each list separated by commas):
   --compositor <list>     sway, sway-vulkan, kwin, yuna, dwl, mango, umbriel, hyprland, mutter
@@ -416,6 +418,7 @@ pub fn main(arguments: &[String]) -> ExitCode {
         }),
         Some("report") => report(&arguments[1..]).map(|()| ExitCode::SUCCESS),
         Some("parity") => return crate::parity::main(&arguments[1..]),
+        Some("wlcs") => return crate::wlcs::main(&arguments[1..]),
         Some("client") => match arguments.get(1..).unwrap_or_default() {
             [still, flag, count] if still == "still" && flag == "--windows" => count
                 .parse()
