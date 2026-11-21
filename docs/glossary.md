@@ -59,7 +59,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Committed size**: the window geometry a client last committed; the layout draws the window at
   it, and places scrolling columns by it ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
 - **Congested client**: a client whose last flush returned `WouldBlock`, until a flush completes;
-  Yuna keeps one pending pointer motion for it instead of queuing each
+  from Stage 2a's M2.12, Yuna keeps one pending pointer motion for it instead of queuing each
   ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
 - **Core** and **stack** (bench): a compositor's core is its own process and its descendants, in
   the `core` control group of its sandbox; its stack is every process of the sandbox, its session
