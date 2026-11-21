@@ -608,6 +608,9 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   runner seen, past the job's 40-minute timeout. How to keep a move's push inside it is put to the
   owner before the first move. Paid before the baseline's first move: M2.2 made none; the next
   foreseen is M2.9 (Vulkan the default).
+- The parity script's thresholds come from the spreads of builds in sixteen codegen units; it
+  builds each side in one since ADR-0148, and their spreads are not measured yet. Paid at the
+  owner's go, with the timed tier's runs of M2.2.
 - The parity script has no scenario for popups, X11 windows, captures or subsurfaces, and the held
   captures take no X11 window: their *filtered* class tests the renderer's bilinear filter, not
   X11's area filter. Paid before the milestones that rewrite them: subsurfaces at M2.5 (the

@@ -24,6 +24,11 @@ the owner's go). The proofs are the tasks' local `.delegation/` folders (`m2.2-*
 - **A seat's closing under load** (`closing_a_seat_ends_its_program_and_its_child…`): with 16
   copies at once, 22 failures in 3,840 runs, the test counting a process its parent was reaping
   (`X` in `/proc`) as alive; after the fix, 0 in 1,600 under the same load.
+- **Codegen units and Yuna's own instructions** (desktop, 2026-11-21, quiet, valgrind alone):
+  `input`'s instructions a frame in `yuna`, `8e6dce1` against a head with the closing review's
+  fixes, none on the pointer's path: 565,886 and 577,989 (+2.14 %) built in the release
+  profile's sixteen codegen units; 541,964 and 542,024 (+0.01 %) built in one. The difference was
+  MCP's generic JSON code inlined in one build and called in the other ([ADR-0148](adr/0148-parity-builds-each-side-in-one-codegen-unit.md)).
 - Not measured: the memory a healthy client keeps after a `type` of 4,096 characters, with the
   flushes every 16 characters and without.
 

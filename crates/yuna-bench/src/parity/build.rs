@@ -6,7 +6,11 @@
 //! default shell of its own `flake.nix` (`nix develop <tree>`), so that each builds with its own
 //! toolchain and runs on its own Mesa, both recorded. Each is built for release with line tables
 //! (`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, which changes no code but names it in the
-//! profiles) in a target folder of its own, the paths of its tree and of its target folder
+//! profiles), in one codegen unit (`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1`,
+//! [ADR-0148](../../../../docs/adr/0148-parity-builds-each-side-in-one-codegen-unit.md)): split
+//! into the release profile's sixteen, a change anywhere in a crate moves which code is inlined
+//! on paths it never touched, and Yuna's own instructions moved by 2 % in a scenario whose code had
+//! not changed. Each is built in a target folder of its own, the paths of its tree and of its target folder
 //! remapped; then its programs are copied out of the target folder. One tree built twice gives the
 //! same binary, byte for byte. Two trees of one revision give the same code but not the same file:
 //! the development shell's linker wrapper writes the tree's own run path, `<tree>/outputs/out/lib`,
@@ -304,6 +308,7 @@ fn build_into(
             .envs(shell.iter().map(|(k, v)| (k, v)))
             .env("CARGO_TARGET_DIR", &target)
             .env("CARGO_PROFILE_RELEASE_DEBUG", "line-tables-only")
+            .env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1")
             .env(
                 "RUSTFLAGS",
                 format!(

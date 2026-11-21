@@ -168,3 +168,4 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | The crate map: motion on the layout, the configuration on the commands | Accepted; supersedes in part 0082 |
 | [0146](0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md) | The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller | Accepted |
 | [0147](0147-a-seat-connects-256-clients-at-most.md) | A seat connects 256 clients at most | Accepted |
+| [0148](0148-parity-builds-each-side-in-one-codegen-unit.md) | Parity builds each side in one codegen unit | Accepted |

@@ -900,8 +900,10 @@ A run of the script:
 
 1. **The builds** (`build.rs`). Each side is a revision, checked out as a git worktree in the
    work folder, or a folder built as it is. Each builds in its own development shell, `nix
-   develop <tree>`, with its own toolchain and Mesa, both recorded, for release with line tables,
-   in a target folder of its own, its paths remapped: one tree built twice gives the same binary,
+   develop <tree>`, with its own toolchain and Mesa, both recorded, for release with line tables
+   and in one codegen unit, so that a change elsewhere in a crate does not move what is inlined
+   ([ADR-0148](adr/0148-parity-builds-each-side-in-one-codegen-unit.md)), in a target folder of
+   its own, its paths remapped: one tree built twice gives the same binary,
    and two trees of one revision the same code (`.text`), their files differing only by the run
    path the shell's linker wrapper writes. `yuna` is built with rustix's `use-libc-auxv`, so that
    valgrind can run it. Each tree's thresholds file is read with it. The baseline files of the
