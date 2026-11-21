@@ -5,21 +5,20 @@
 use yuna_ipc::{Caller, Command, Refusal};
 use yuna_layout::{Layout, LayoutError};
 use yuna_motion::Change;
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{SeatId, WindowId};
 
 use crate::state::State;
 
 /// Runs `command` for `caller` (`Compositor::command`). What changed the layout arms every
 /// output's next refresh; a command refused before it changed anything arms nothing.
 pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result<(), Refusal> {
+    check_reach(&state.layout, caller.seat, &command)?;
     if let Command::CloseWindow(window) = command {
-        check_reach(&state.layout, caller.seat, &command)?;
         let window = target(&state.layout, caller.seat, window)?;
         return state
             .close_window(window)
             .map_err(|_| Refusal::UnknownWindow(window));
     }
-    check_reach(&state.layout, caller.seat, &command)?;
     let applied = apply_to_layout(&mut state.layout, caller.seat, command);
     if applied.changed {
         state.mark_layout_changed(Change::Animated);
@@ -28,8 +27,7 @@ pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result
 }
 
 /// What a command did to the layout: its answer, and whether the layout changed. A refused
-/// operation leaves the layout as it was, but a move of a window named focuses it first, and
-/// that focus stays when the move is refused.
+/// operation leaves the layout as it was.
 struct Applied {
     result: Result<(), Refusal>,
     changed: bool,
@@ -59,13 +57,13 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Appli
         Command::AddWorkspace { name, output } => layout.add_workspace(seat, &name, output),
         Command::RemoveWorkspace(name) => layout.remove_workspace(seat, &name),
         Command::MoveWindowToWorkspace { window, workspace } => {
-            return move_named(layout, window, |layout| {
+            return move_named(layout, seat, window, |layout| {
                 layout.move_to_workspace(seat, &workspace)
             });
         }
         Command::ToggleSpecial(name) => layout.toggle_special(seat, &name),
         Command::MoveWindowToSpecial { window, special } => {
-            return move_named(layout, window, |layout| {
+            return move_named(layout, seat, window, |layout| {
                 layout.move_to_special(seat, &special)
             });
         }
@@ -85,8 +83,8 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Appli
                 layout.set_floating(window, on)
             });
         }
-        // Not a change of the layout: answered by `run`.
-        Command::CloseWindow(_) => Ok(()),
+        // Answered by `run` before the layout is reached.
+        Command::CloseWindow(_) => Err(LayoutError::Refused("a window is closed by its client")),
         // `Command` is `#[non_exhaustive]` for the programs outside the workspace that match on
         // it; a variant added there is dispatched here in the same change, and tested.
         _ => Err(LayoutError::Refused("Yuna does not know this command")),
@@ -97,40 +95,17 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Appli
 /// Refuses a command that names a window or an output of another seat than `seat`'s, or one the
 /// layout does not hold, alike: a caller reaches its own seat alone (ADR-0138, ADR-0146).
 fn check_reach(layout: &Layout, seat: SeatId, command: &Command) -> Result<(), Refusal> {
-    if let Some(window) = named_window(command)
+    if let Some(window) = command.window()
         && layout.seat_of_window(window) != Some(seat)
     {
         return Err(Refusal::WindowNotOnSeat(window, seat));
     }
-    if let Some(output) = named_output(command)
+    if let Some(output) = command.output()
         && layout.seat_of_output(output) != Some(seat)
     {
         return Err(Refusal::OutputNotOnSeat(output, seat));
     }
     Ok(())
-}
-
-/// The window `command` names, if it names one.
-fn named_window(command: &Command) -> Option<WindowId> {
-    match *command {
-        Command::FocusWindow(window) => Some(window),
-        Command::MoveWindowToWorkspace { window, .. }
-        | Command::MoveWindowToSpecial { window, .. }
-        | Command::SetFullWidth { window, .. }
-        | Command::SetFullscreen { window, .. }
-        | Command::SetFloating { window, .. }
-        | Command::CloseWindow(window) => window,
-        _ => None,
-    }
-}
-
-/// The output `command` names, if it names one.
-fn named_output(command: &Command) -> Option<OutputId> {
-    match *command {
-        Command::FocusOutput(output) => Some(output),
-        Command::AddWorkspace { output, .. } => output,
-        _ => None,
-    }
 }
 
 /// Does `step` to the window a command names, or to the one `seat` focuses.
@@ -149,23 +124,29 @@ fn on_window(
     }
 }
 
-/// Focuses `window` when one is named, then moves the focused window with `step`.
+/// Focuses `window` when one is named, then moves the focused window with `step`; refused when
+/// none is named and `seat` focuses none. A window named is the caller's own (`check_reach`):
+/// once it is focused, the layout refuses its move only for an unknown seat, which that check
+/// excludes too, so a refused move never leaves the focus changed.
 fn move_named(
     layout: &mut Layout,
+    seat: SeatId,
     window: Option<WindowId>,
     step: impl FnOnce(&mut Layout) -> Result<(), LayoutError>,
 ) -> Applied {
     let focused = match window {
-        Some(window) => match layout.focus_window(window) {
-            Ok(()) => true,
-            Err(error) => return Applied::of(Err(error)),
-        },
-        None => false,
+        Some(window) => layout.focus_window(window),
+        None if layout.focused(seat).is_some() => Ok(()),
+        None => {
+            return Applied {
+                result: Err(Refusal::NoFocusedWindow),
+                changed: false,
+            };
+        }
     };
-    let moved = Applied::of(step(layout));
-    Applied {
-        changed: moved.changed || focused,
-        result: moved.result,
+    match focused {
+        Ok(()) => Applied::of(step(layout)),
+        Err(error) => Applied::of(Err(error)),
     }
 }
 

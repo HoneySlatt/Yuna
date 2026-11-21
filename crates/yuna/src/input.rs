@@ -68,20 +68,26 @@ use crate::xwayland::X11Toplevel;
 /// busy for long.
 pub const MAX_TYPED: usize = 4_096;
 
-/// The characters typed between two flushes of the clients: a character is a few key and
-/// modifier events, under 200 bytes, so that 16 stay under the 4,096 bytes a client's buffer
-/// starts at. wayland-rs grows a buffer rather than flush it when it is full, and never shrinks
-/// it: without these flushes a call of [`MAX_TYPED`] characters would leave its client a buffer
-/// of hundreds of KiB for its life (ADR-0147).
+/// The characters typed by their keys between two flushes of the clients: a character is a few
+/// key and modifier events, under 200 bytes, so that 16 stay under the 4,096 bytes a client's
+/// buffer starts at. wayland-rs grows a buffer rather than flush it when it is full, and never
+/// shrinks it: without these flushes a call of [`MAX_TYPED`] characters would leave its client a
+/// buffer of hundreds of KiB for its life (ADR-0147). Characters typed through an injected
+/// keymap go [`INJECTED_BETWEEN_FLUSHES`] at a time, and text committed to a field one piece of
+/// [`MAX_TEXT_BYTES`](crate::MAX_TEXT_BYTES) at a time, each followed by a flush.
 const TYPED_BETWEEN_FLUSHES: usize = 16;
+
+/// The characters typed through one injected keymap, a flush after each: a press and a release
+/// of 24 bytes each a character, so that 64 stay near 3 KiB with the keymap's own event.
+const INJECTED_BETWEEN_FLUSHES: usize = 64;
 
 /// The most wheel steps one scroll takes on each axis.
 pub const MAX_SCROLL_STEPS: f64 = 100.0;
 
 /// The most keys a seat's keyboard holds at once, Yuna's own and its clients' virtual keyboards'
 /// together. Each `wl_keyboard.enter` lists every key held, 4 bytes each, in one Wayland message
-/// of 4,096 bytes at most: past about 1,018 keys it cannot be sent, and the display ends the
-/// client it was for. 64 is far below that, and far above what hands, a chord or a game hold.
+/// of 4,096 bytes at most, all a client of wayland-rs reads: past about 1,018 keys it could not
+/// be read. 64 is far below that, and far above what hands, a chord or a game hold.
 pub const MAX_HELD_KEYS: usize = 64;
 
 /// The most buttons a seat's pointer holds at once: twice the eight of Linux's mouse range,
@@ -935,9 +941,18 @@ impl State {
         if !text.is_empty() && self.text_field_enabled(seat) {
             self.compose_text(seat, "")?;
         }
-        for (typed, step) in steps.into_iter().enumerate() {
-            if typed > 0 && typed % TYPED_BETWEEN_FLUSHES == 0 {
-                self.flush_clients();
+        // The characters typed by their keys since the last flush; a run committed or injected
+        // flushes after each of its pieces.
+        let mut keyed = 0;
+        for step in steps {
+            if matches!(step, Typed::Keys(_)) {
+                if keyed == TYPED_BETWEEN_FLUSHES {
+                    self.flush_clients();
+                    keyed = 0;
+                }
+                keyed += 1;
+            } else {
+                keyed = 0;
             }
             let done = match step {
                 Typed::Keys(chord) => {
@@ -959,7 +974,7 @@ impl State {
 
     /// Writes to their sockets the events each client was sent, as the loop's round does at its
     /// end; a client that cannot take them is ended there.
-    fn flush_clients(&mut self) {
+    pub(crate) fn flush_clients(&mut self) {
         if let Err(error) = self.display_handle.flush_clients() {
             tracing::debug!(%error, "flushing the clients failed");
         }
@@ -971,9 +986,11 @@ impl State {
             return;
         };
         let time = self.input_time();
-        // Its keymap has room for 247 keys, from keycode 9 to 255.
-        for chunk in keysyms.chunks(247) {
+        // An injected keymap has room for 247 keys, from keycode 9 to 255; fewer go through
+        // each, so that a flush follows every few KiB.
+        for chunk in keysyms.chunks(INJECTED_BETWEEN_FLUSHES) {
             keyboard.inject_text_keysyms(self, chunk, time);
+            self.flush_clients();
         }
     }
 

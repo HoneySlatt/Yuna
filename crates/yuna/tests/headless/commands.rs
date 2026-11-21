@@ -49,6 +49,7 @@ fn a_command_with_no_window_acts_on_the_focused_one() {
 #[test]
 fn a_command_on_the_focused_window_when_none_is_focused_is_refused() {
     let mut compositor = manual_compositor();
+    run_armed_deadlines(&mut compositor);
     for command in [
         Command::SetFullWidth {
             window: None,
@@ -59,6 +60,14 @@ fn a_command_on_the_focused_window_when_none_is_focused_is_refused() {
             on: true,
         },
         Command::CloseWindow(None),
+        Command::MoveWindowToWorkspace {
+            window: None,
+            workspace: "two".to_owned(),
+        },
+        Command::MoveWindowToSpecial {
+            window: None,
+            special: "scratch".to_owned(),
+        },
     ] {
         assert_eq!(
             compositor.command(owner(), command.clone()),
@@ -66,6 +75,11 @@ fn a_command_on_the_focused_window_when_none_is_focused_is_refused() {
             "{command:?}"
         );
     }
+    assert_eq!(
+        compositor.next_deadline(),
+        None,
+        "a refused command draws nothing"
+    );
     assert_eq!(Refusal::NoFocusedWindow.to_string(), "no window is focused");
 }
 
@@ -164,18 +178,23 @@ fn a_caller_reaches_neither_the_windows_nor_the_outputs_of_another_seat() {
         .add_output(agent, yuna::OutputMode::default())
         .expect("the agent's output");
     let as_agent = yuna_ipc::Caller::on_seat(agent);
+    let window = Some(owners_window);
     for command in [
         Command::FocusWindow(owners_window),
-        Command::CloseWindow(Some(owners_window)),
-        Command::SetFullscreen {
-            window: Some(owners_window),
-            on: true,
-        },
+        Command::CloseWindow(window),
+        Command::SetFullWidth { window, on: true },
+        Command::SetFullscreen { window, on: true },
+        Command::SetFloating { window, on: true },
         Command::MoveWindowToWorkspace {
-            window: Some(owners_window),
+            window,
             workspace: "spy".to_owned(),
         },
+        Command::MoveWindowToSpecial {
+            window,
+            special: "spy".to_owned(),
+        },
     ] {
+        assert_eq!(command.window(), window, "{command:?} names the window");
         assert_eq!(
             compositor.command(as_agent, command.clone()),
             Err(Refusal::WindowNotOnSeat(owners_window, agent)),
@@ -189,6 +208,11 @@ fn a_caller_reaches_neither_the_windows_nor_the_outputs_of_another_seat() {
             output: Some(owners_output),
         },
     ] {
+        assert_eq!(
+            command.output(),
+            Some(owners_output),
+            "{command:?} names the output"
+        );
         assert_eq!(
             compositor.command(as_agent, command.clone()),
             Err(Refusal::OutputNotOnSeat(owners_output, agent)),

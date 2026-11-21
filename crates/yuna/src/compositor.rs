@@ -1135,8 +1135,7 @@ impl Compositor {
     /// screen when animations are on. `CloseWindow` asks the window's client to close it: an
     /// `xdg_toplevel` is sent `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else
     /// its X11 client is ended (`KillClient`); the window stays until its client closes it. A
-    /// refused command changes nothing and arms no refresh, but for the focus a move of a named
-    /// window gives it first.
+    /// refused command changes nothing and arms no refresh.
     pub fn command(&mut self, caller: Caller, command: Command) -> Result<(), Refusal> {
         crate::command::run(&mut self.state, caller, command)
     }
@@ -1155,12 +1154,14 @@ impl Compositor {
             .layout
             .open_window(seat, window, OpenOptions::default())
             .map_err(crate::command::refusal);
-        self.state.mark_layout_changed(Change::Animated);
+        if held.is_ok() {
+            self.state.mark_layout_changed(Change::Animated);
+        }
         held
     }
 
     /// A test seam (ADR-0146): every output arranges the layout again at its next refresh,
-    /// nothing in it changed.
+    /// nothing in it changed. It breaks no invariant; it only draws what a change would have.
     #[doc(hidden)]
     pub fn rearrange(&mut self) {
         self.state.mark_layout_changed(Change::Animated);
@@ -1192,8 +1193,8 @@ impl Compositor {
     }
 
     /// The pixels of `region` of `output`'s last frame, in physical pixels from its top-left
-    /// corner, as bytes R, G, B, A, row by row from the top. Refused for a region not wholly on
-    /// the output.
+    /// corner, as bytes R, G, B, A, row by row from the top. Refused for an unknown output, an
+    /// empty region, and a region not wholly on the output.
     pub fn read_pixels(&mut self, output: OutputId, region: PixelRect) -> Result<Vec<u8>, Error> {
         let index = self
             .state
@@ -1201,8 +1202,13 @@ impl Compositor {
             .ok_or_else(|| Error::Refused(format!("no output {}", output.0)))?;
         let virtual_output = &mut self.state.outputs[index];
         let (width, height) = (virtual_output.mode.width(), virtual_output.mode.height());
+        if region.width == 0 || region.height == 0 {
+            return Err(Error::Refused(format!(
+                "the region {region:?} holds no pixel"
+            )));
+        }
         let fits = |start: u32, length: u32, side: u32| {
-            length > 0 && u64::from(start) + u64::from(length) <= u64::from(side)
+            u64::from(start) + u64::from(length) <= u64::from(side)
         };
         if !fits(region.x, region.width, width) || !fits(region.y, region.height, height) {
             return Err(Error::Refused(format!(
