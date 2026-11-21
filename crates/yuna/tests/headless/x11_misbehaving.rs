@@ -29,12 +29,12 @@ use x11rb::protocol::xproto::{
     UNMAP_NOTIFY_EVENT, UnmapNotifyEvent, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::yuna_layout::geometry::Rect;
 use yuna::{
     ClockMode, Compositor, Config, Counters, MAX_MENUS_PER_CLIENT, MAX_WINDOWS_PER_CLIENT,
     OutputMode, X11Display, XwaylandConfig,
 };
 use yuna_ipc::{Caller, Command};
+use yuna_layout::geometry::Rect;
 use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::client::Client;

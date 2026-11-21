@@ -94,8 +94,6 @@ pub use xwayland::{
 pub use xwayland::{MANAGER_STALL, STALL_RECHECK};
 #[cfg(debug_assertions)]
 pub use xwayland::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
-pub use yuna_layout;
-pub use yuna_motion;
 
 /// Why the compositor could not start, or refused a request.
 #[derive(Debug)]

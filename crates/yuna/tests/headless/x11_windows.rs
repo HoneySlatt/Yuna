@@ -23,14 +23,14 @@ use rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _, Window};
-use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_motion::{Change, Motion, Settings};
 use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, CapturedFrame, ClockMode, Compositor, Config,
     MAX_WINDOWS_PER_CLIENT, OutputMode, WindowDescription, WindowShell, X11_PING_TIMEOUT,
     X11_SYNC_TIMEOUT, X11Display, XwaylandConfig, axis_taps,
 };
 use yuna_ipc::{Caller, Command};
+use yuna_layout::geometry::Rect;
+use yuna_motion::{Change, Motion, Settings};
 use yuna_types::{Direction, OutputId, SeatId, WindowId};
 
 use crate::x11_client::{
@@ -671,7 +671,7 @@ fn typing_and_clicking_reach_an_x11_window() {
 }
 
 /// The windows of a frame that show on an output, with their rectangles, bottom to top.
-fn shown(drawn: &[yuna::yuna_motion::Drawn], output: Rect) -> Vec<(WindowId, Rect)> {
+fn shown(drawn: &[yuna_motion::Drawn], output: Rect) -> Vec<(WindowId, Rect)> {
     drawn
         .iter()
         .filter(|drawn| drawn.rect.overlaps(&output))
@@ -681,7 +681,7 @@ fn shown(drawn: &[yuna::yuna_motion::Drawn], output: Rect) -> Vec<(WindowId, Rec
 
 #[test]
 fn an_x11_window_slides_with_the_motion() {
-    let spring = yuna::yuna_motion::SpringParams::new(1.0, 800.0).expect("a valid spring");
+    let spring = yuna_motion::SpringParams::new(1.0, 800.0).expect("a valid spring");
     let settings = Settings {
         off: false,
         camera: spring,

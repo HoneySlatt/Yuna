@@ -12,9 +12,9 @@
 use std::time::{Duration, Instant};
 
 use x11rb::protocol::xproto::Window;
-use yuna::yuna_motion::Settings;
 use yuna::{CaptureSize, CaptureTarget, ClockMode, Compositor, DrawnX11Menu, OutputMode};
 use yuna_ipc::{Caller, Command};
+use yuna_motion::Settings;
 use yuna_types::{Direction, OutputId};
 
 use crate::x11_client::{Image, WindowSpec, X11Client, step};
@@ -236,7 +236,7 @@ fn clicking_an_x11_menu_reaches_it() {
 
 #[test]
 fn an_x11_menu_slides_with_its_window() {
-    let spring = yuna::yuna_motion::SpringParams::new(1.0, 800.0).expect("a valid spring");
+    let spring = yuna_motion::SpringParams::new(1.0, 800.0).expect("a valid spring");
     let settings = Settings {
         off: false,
         camera: spring,

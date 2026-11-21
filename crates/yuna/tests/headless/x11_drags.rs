@@ -35,10 +35,10 @@ use rustix::process::{Pid, Signal, kill_process};
 use wayland_client::protocol::wl_data_device_manager::DndAction;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
-use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_motion::Settings;
 use yuna::{BUTTON_LEFT, ClockMode, Compositor, OutputMode, X11_SYNC_TIMEOUT};
 use yuna_ipc::{Caller, Command};
+use yuna_layout::geometry::Rect;
+use yuna_motion::Settings;
 use yuna_types::{OutputId, WindowId};
 
 use crate::selection_client::{DragEvent, SelectionClient, SourceDragEvent};

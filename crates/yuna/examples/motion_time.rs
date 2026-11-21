@@ -94,11 +94,11 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::MakeWriter;
 use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
-use yuna::yuna_layout::geometry::Rect;
-use yuna::yuna_layout::{Layout, LayoutError};
-use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, OWNER_SEAT, OutputMode};
 use yuna_ipc::{Caller, Command};
+use yuna_layout::geometry::Rect;
+use yuna_layout::{Layout, LayoutError};
+use yuna_motion::Settings;
 use yuna_types::{Direction, OutputId, WindowId};
 
 /// The output's mode without `--output`: Yuna's default, an agent's output, and the mode

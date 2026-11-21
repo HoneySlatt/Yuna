@@ -106,8 +106,8 @@ One Cargo workspace; its crates live in `crates/`.
   found on `PATH`. The development shell and Yuna's package give all four (`flake.nix`).
 - The rules: `yuna-types`, `yuna-ipc`, `yuna-layout` and `yuna-motion` hold no Wayland or
   Smithay object;
-  `yuna-types` depends on nothing, and no crate re-exports its types: each names `yuna_types`
-  itself; `yuna-bench` depends on nothing of `yuna`, so that it measures Yuna as it measures the
+  `yuna-types` depends on nothing; no crate re-exports another's types: each names the crate
+  that defines them (ADR-0146); `yuna-bench` depends on nothing of `yuna`, so that it measures Yuna as it measures the
   others; `yuna` uses `yuna-bench` only in its tests and examples.
 
 ## The layout model
