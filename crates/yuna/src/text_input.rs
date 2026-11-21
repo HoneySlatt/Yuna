@@ -61,9 +61,6 @@ impl State {
             }
             let (piece, after) = rest.split_at(end);
             self.send_to_text_field(seat, |field| field.commit_string(Some(piece.to_owned())))?;
-            // Each piece written out before the next, so that a long text never grows the
-            // client's buffer past one piece (ADR-0147).
-            self.flush_clients();
             rest = after;
         }
         Ok(())
