@@ -4,6 +4,29 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.2 — The interface (2026-11-20/21)
+
+The high tier's desktop, shared with other sessions' work; no timed run (the timed tier waits for
+the owner's go). The proofs are the tasks' local `.delegation/` folders (`m2.2-*`).
+
+- **Parity, the CI tier**: every push of M2.2 against the pinned baseline `500e804`, on GitHub's
+  runner, no figure worse and none void. The `parity` job took 18 min 43 s (`74e5388`), 27 min
+  54 s (`d6eb217`), 19 min 9 s (`0cb5164`), 18 min 4 s (`e81d3f9`), 27 min 36 s (`682b0e2`),
+  22 min 11 s (`cf1872c`), and 17 min 55 s for the 1 MiB alone, in pull request 8. No move of
+  the baseline: the 1 MiB moved no figure, the parity scenarios sending a client under 4 KiB a
+  round.
+- **The parity job's time, decomposed** (run 44745258897, before M2.2): a side's build 119 s, its
+  97 runs 2,699 s of work on 4 runners, the job 1,709 s; a push that moves the baseline would add
+  the old baseline's build and runs, about 13 min, some 42 min on that runner, past the job's
+  40-minute timeout ([debt](debt.md)).
+- **A client that never reads** (`misbehaving.rs`): ended after 48,600 syncs, 97,200 events of 12
+  bytes, with each client's buffer at 1 MiB (`CLIENT_BUFFER_BYTES`), against 5,100 at 4 KiB.
+- **A seat's closing under load** (`closing_a_seat_ends_its_program_and_its_child…`): with 16
+  copies at once, 22 failures in 3,840 runs, the test counting a process its parent was reaping
+  (`X` in `/proc`) as alive; after the fix, 0 in 1,600 under the same load.
+- Not measured: the memory a healthy client keeps after a `type` of 4,096 characters, with the
+  flushes every 16 characters and without.
+
 ## M2.1 — The baselines (2026-11-19/20)
 
 The high tier's desktop (Ryzen 7 5800X, RX 6900 XT), shared with other sessions' work; the kernel

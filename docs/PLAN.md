@@ -26,10 +26,14 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   measurements and start it, the timed tier finishing at their go, against ADR-0139's "baselines
   first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
   the baseline. The timed tier's start scenario takes a full `TMPDIR`, so that it guards
-  `58f2e75`'s fix. Done: direct dependencies, ADR-0140's toggles and guard, the helpers the debt
-  placed here, a test's race on a reaped process. Decided: the crate map amended (ADR-0145), the
-  interface's shape (ADR-0146), 256 clients a seat (ADR-0147). Next: `yuna-types`, the commands,
-  `read_pixels`, the event bounds, the client bound, then 1 MiB.
+  `58f2e75`'s fix. Decided: the crate map amended (ADR-0145), the interface's shape (ADR-0146),
+  256 clients a seat (ADR-0147). Done, on `main`, CI's parity green at each push: direct
+  dependencies; ADR-0140's toggles and guard; the helpers the debt placed here; `yuna-types`;
+  `yuna-ipc`'s commands in place of `change_layout`, refused ones drawing nothing, another seat's
+  window or output refused; `read_pixels` on a `PixelRect`, and `check.sh` refusing Smithay in a
+  test; `yuna`'s re-exports gone; Yuna's events under 4 KiB; 256 clients a seat; then 1 MiB a
+  client, which moved no parity figure, so no move of the baseline. **Left**: the timed tier
+  comparing `4646b80` with the baseline, at the owner's go; the closing review.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -127,7 +131,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1's CI tier done; M2.2 under way |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1's CI tier done; M2.2's code done, its timed comparison left |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas

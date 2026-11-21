@@ -183,8 +183,7 @@ read again.
   pools, buffers, subsurfaces and unmapped windows are modelled at M2.6 (the queue and the store,
   alone) and bounded when wired, at M2.16 (the store, wired behind a switch).
 - A seat's 256 clients, all frozen, can make Yuna hold each one's outgoing buffer and the
-  descriptors its events carry: 4 KiB each today, up to 1 MiB each, some 256 MiB a seat, once M2.2
-  raises the buffer
+  descriptors its events carry: up to 1 MiB each, some 256 MiB a seat
   ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)). The owner
   accepted it until Stage 2a bounds it
   ([ADR-0147](adr/0147-a-seat-connects-256-clients-at-most.md)): M2.12 (seats and input) knows
@@ -598,16 +597,17 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 - A move of the parity baseline whose check fails, or is cancelled, has no repair path: a move is
   never changed or dropped, a second move to the same commit is refused, and a move to another
   commit is checked only against the failed one. Its repair, moving back to the old baseline first
-  or rewriting history, is the owner's decision when it first happens. Paid at Stage 2a, M2.2 (the
-  interface), at the baseline's first move.
+  or rewriting history, is the owner's decision when it first happens. Paid at the baseline's
+  first move: M2.2 made none, its 1 MiB moving no figure; the next foreseen is M2.9 (Vulkan the
+  default).
 - The parity script's `parity` job takes 18 to 29 minutes on GitHub's runner, over the method's
   bar of 20 for a CI job; its thresholds come from the desktop's spreads alone, and one run on the
   runner passed ([measurements](measurements.md)). The runs take most of it: a side's build takes
   1.4 to 2 minutes, so caching the baseline's build would save about 2. A push that moves the
   baseline also builds and runs the old baseline, about 13 minutes more: some 42 on the slowest
   runner seen, past the job's 40-minute timeout. How to keep a move's push inside it is put to the
-  owner before the first move. Paid at Stage 2a, M2.2 (the interface), before its first move of
-  the baseline.
+  owner before the first move. Paid before the baseline's first move: M2.2 made none; the next
+  foreseen is M2.9 (Vulkan the default).
 - The parity script has no scenario for popups, X11 windows, captures or subsurfaces, and the held
   captures take no X11 window: their *filtered* class tests the renderer's bilinear filter, not
   X11's area filter. Paid before the milestones that rewrite them: subsurfaces at M2.5 (the
