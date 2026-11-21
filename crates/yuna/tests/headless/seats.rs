@@ -837,8 +837,7 @@ fn a_long_injected_run_types_whole_through_keymaps_of_64() {
         .filter(|event| matches!(event, InputEvent::Keymap))
         .count();
     assert_eq!(
-        keymaps,
-        8,
+        keymaps, 8,
         "an injected keymap and the seat's, for each of the four runs of 64 at most"
     );
 }
