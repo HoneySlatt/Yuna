@@ -7,24 +7,12 @@
 //! item 14). A [`Command`] is relative to its [`Caller`]: it acts on the caller's seat, and a
 //! command on a window with no window named acts on the window the caller's seat focuses, as a key
 //! binding does. The compositor answers with a [`Refusal`] when it does not apply a command; a
-//! refused command changes nothing.
+//! refused command changes nothing, but for the focus a move of a named window gives it first.
 //!
-//! # What it promises
-//!
-//! - Data only: no behaviour beyond naming what a command targets ([`Command::window`],
-//!   [`Command::output`]), no wire format. Hollow's protocol is decided with Hollow's interface
-//!   (Stage 2c), the events at Stage 2a's M2.4.
-//! - A contract in 0.x
-//!   ([ADR-0079](../../../docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
-//!   once Hollow uses it, each change is announced in the changelog. Its enums are
-//!   `#[non_exhaustive]`, so that a command or a reason added is not a break for the programs that
-//!   match on them.
-//! - Level 1 of the crate map, on `yuna-types` alone
-//!   ([ADR-0145](../../../docs/adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md)).
-//!
-//! A command added states, in [`Command::window`] and [`Command::output`], the window and the
-//! output it names, which the compositor checks are its caller's seat's before running it; the
-//! compiler asks for it, since both list every variant.
+//! This crate holds data only: no behaviour, no wire format. Hollow's protocol is decided with
+//! Hollow's interface (Stage 2c), the events at Stage 2a's M2.4. It is level 1 of the crate map
+//! and depends on `yuna-types` alone (ADR-0145). Its enums are `#[non_exhaustive]`, so that a
+//! command or a reason added is not a break for the programs that match on them.
 
 #![forbid(unsafe_code)]
 
@@ -76,7 +64,7 @@ pub enum Command {
     /// Removes an empty named workspace.
     RemoveWorkspace(String),
     /// Moves a window to a workspace; a window named is focused first, as the move follows the
-    /// focus.
+    /// focus, and stays focused if the move is refused.
     MoveWindowToWorkspace {
         /// The window; the focused one when none.
         window: Option<WindowId>,
@@ -85,7 +73,8 @@ pub enum Command {
     },
     /// Shows a special workspace over the focused output's, or hides it.
     ToggleSpecial(String),
-    /// Moves a window to a special workspace; a window named is focused first.
+    /// Moves a window to a special workspace; a window named is focused first, and stays focused
+    /// if the move is refused.
     MoveWindowToSpecial {
         /// The window; the focused one when none.
         window: Option<WindowId>,
@@ -117,55 +106,6 @@ pub enum Command {
     },
     /// Asks a window's client to close it; the window stays until the client does.
     CloseWindow(Option<WindowId>),
-}
-
-impl Command {
-    /// The window the command names, if it names one: what the compositor checks is the
-    /// caller's seat's before it runs the command (ADR-0146). A command on the focused window
-    /// names none. The match lists every variant, so that a new one states its window here.
-    pub fn window(&self) -> Option<WindowId> {
-        match *self {
-            Command::FocusWindow(window) => Some(window),
-            Command::MoveWindowToWorkspace { window, .. }
-            | Command::MoveWindowToSpecial { window, .. }
-            | Command::SetFullWidth { window, .. }
-            | Command::SetFullscreen { window, .. }
-            | Command::SetFloating { window, .. }
-            | Command::CloseWindow(window) => window,
-            Command::Focus(_)
-            | Command::FocusOutput(_)
-            | Command::FocusWorkspace(_)
-            | Command::FocusWorkspaceRelative(_)
-            | Command::MoveFocused(_)
-            | Command::AddWorkspace { .. }
-            | Command::RemoveWorkspace(_)
-            | Command::ToggleSpecial(_)
-            | Command::SetTiling(_) => None,
-        }
-    }
-
-    /// The output the command names, if it names one, checked as [`Command::window`] is. The
-    /// match lists every variant, so that a new one states its output here.
-    pub fn output(&self) -> Option<OutputId> {
-        match *self {
-            Command::FocusOutput(output) => Some(output),
-            Command::AddWorkspace { output, .. } => output,
-            Command::FocusWindow(_)
-            | Command::Focus(_)
-            | Command::FocusWorkspace(_)
-            | Command::FocusWorkspaceRelative(_)
-            | Command::MoveFocused(_)
-            | Command::RemoveWorkspace(_)
-            | Command::MoveWindowToWorkspace { .. }
-            | Command::ToggleSpecial(_)
-            | Command::MoveWindowToSpecial { .. }
-            | Command::SetTiling(_)
-            | Command::SetFullWidth { .. }
-            | Command::SetFullscreen { .. }
-            | Command::SetFloating { .. }
-            | Command::CloseWindow(_) => None,
-        }
-    }
 }
 
 /// Why a command was refused. Its text is the sentence callers show, MCP's agents included.

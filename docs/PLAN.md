@@ -32,9 +32,11 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   `yuna-ipc`'s commands in place of `change_layout`, refused ones drawing nothing, another seat's
   window or output refused; `read_pixels` on a `PixelRect`, and `check.sh` refusing Smithay in a
   test; `yuna`'s re-exports gone; Yuna's events under 4 KiB; 256 clients a seat; then 1 MiB a
-  client, which moved no parity figure, so no move of the baseline. The closing review is done
-  and its findings fixed (`099012c` to `64effe7`). **Left**: the timed tier, and the GPU tier's
-  DRM memory, comparing M2.2's head with the baseline, at the owner's go; M2.2 closes then.
+  client, which moved no parity figure, so no move of the baseline. The closing review is done.
+  Its fixes (`099012c` to `64effe7`) made CI's parity flag the `input` scenario twice, though
+  none touches the pointer's path; they are reverted, as ADR-0139 asks, until the figure that
+  moved is known. **Left**: that figure, and the fixes landed again without it; the timed tier,
+  and the GPU tier's DRM memory, comparing M2.2's head with the baseline, at the owner's go.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.

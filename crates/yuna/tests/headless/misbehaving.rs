@@ -713,10 +713,7 @@ fn a_client_that_never_reads_is_dropped() {
             .expect("the compositor dispatches");
     }
     println!("dropped after {syncs} syncs, {} events", 2 * syncs);
-    assert!(
-        syncs > yuna::CLIENT_BUFFER_BYTES as u64 / 24 && syncs < 1_000_000,
-        "{syncs} syncs"
-    );
+    assert!(syncs > (1 << 20) / 24 && syncs < 1_000_000, "{syncs} syncs");
     the_others_go_on(&mut compositor, start, &mut sentinel);
 }
 

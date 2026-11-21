@@ -59,8 +59,9 @@ pub const AGENT_KEYBOARD_LAYOUT: &str = "us";
 /// at most once a second of real time, in a warning and to MCP's agents (`Refusals`). An
 /// in-process connection ([`Compositor::connect_client_to`](crate::Compositor::connect_client_to))
 /// is an error instead. The seat's own Xwayland is Yuna's: it is neither counted nor refused, so
-/// that the seat's X11 never breaks. A client frees its place once the display has ended it,
-/// before Yuna frees what it held at the round's end.
+/// that the seat's X11 never breaks. A client frees its place when Yuna frees it
+/// (`State::forget_client`), at the end of the round in which the display ended it; one the
+/// display ends while a round ends, once its clients are freed, at the next round's end.
 pub const MAX_CLIENTS_PER_SEAT: usize = 256;
 
 /// How often a seat's refusals past [`MAX_CLIENTS_PER_SEAT`] are told at most, on real time

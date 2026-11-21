@@ -813,31 +813,3 @@ fn each_seats_commits_are_counted_apart() {
     assert_eq!(after.1, before.1, "seat B counted seat A's commits");
     assert!(compositor.counters().commits >= after.0);
 }
-
-/// Text the seat's keymap cannot type goes through injected keymaps, 64 characters each, the
-/// clients flushed after each so that a long run never grows a client's buffer (ADR-0147): a run
-/// of 130 goes through three, one of 64 through one, each followed by the seat's keymap again,
-/// and the text arrives whole and in order.
-#[test]
-fn a_long_injected_run_types_whole_through_keymaps_of_64() {
-    let (mut compositor, a, _) = two_seats();
-    let mut client = InputClient::connect(&mut compositor, a, "agent-2");
-    open(&mut client, &mut compositor);
-    settle(&mut compositor);
-    client.roundtrip(&mut compositor);
-    client.take_events();
-    client.state.typed.clear();
-    let text = format!("ab{}cd{}", "😀".repeat(130), "ç".repeat(64));
-    compositor.type_text(a, &text).expect("text typed");
-    client.roundtrip(&mut compositor);
-    assert_eq!(client.state.typed, text);
-    let keymaps = client
-        .take_events()
-        .iter()
-        .filter(|event| matches!(event, InputEvent::Keymap))
-        .count();
-    assert_eq!(
-        keymaps, 8,
-        "an injected keymap and the seat's, for each of the four runs of 64 at most"
-    );
-}

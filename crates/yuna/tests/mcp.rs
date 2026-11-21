@@ -611,6 +611,8 @@ fn programs_running_and_remembered_are_bounded() {
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
+/// `yuna mcp` refuses a standard input that is not a pipe or a socket, rather than spinning on a
+/// file it cannot watch.
 /// A run that failed, or was killed, keeps its folder; a process id that comes round again gives
 /// the next run its name. The next `yuna mcp` must not start on what it left.
 #[test]
@@ -627,8 +629,6 @@ fn a_folder_a_failed_run_kept_is_emptied_before_yuna_starts() {
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
-/// `yuna mcp` refuses a standard input that is not a pipe or a socket, rather than spinning on a
-/// file it cannot watch.
 #[test]
 fn a_file_as_input_is_refused() {
     let folder = fresh_folder("mcp-file");

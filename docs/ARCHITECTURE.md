@@ -82,7 +82,7 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0145](adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | nothing |
+| `yuna-types` | the shared vocabulary: the ids, `Direction` and `Tiling`; level 0 of the map in [ADR-0145](adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | nothing |
 | `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |
@@ -305,27 +305,6 @@ An `xdg_toplevel` ([`shell.rs`](../crates/yuna/src/shell.rs),
 
 The command `CloseWindow` asks a window's client to close it: `xdg_toplevel.close`, or for an
 X11 window `WM_DELETE_WINDOW`, else its X11 client is ended.
-
-### A command
-
-A caller (a test, MCP's `workspaces` tool, later key bindings and Hollow) asks
-`Compositor::command(Caller, Command)` with `yuna-ipc`'s types
-([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md));
-[`command.rs`](../crates/yuna/src/command.rs) answers it:
-
-1. A window or an output the command names (`Command::window`, `Command::output`) must be the
-   caller's seat's: any other, another seat's or none, is refused with `WindowNotOnSeat` or
-   `OutputNotOnSeat`, alike, so that an agent neither reaches nor learns of another seat's.
-2. A window given as none is the one the caller's seat focuses: `NoFocusedWindow` when none is.
-3. `CloseWindow` asks the window's client to close it
-   ([A window's life](#a-windows-life)); every other command becomes the layout's operations for
-   the caller's seat, and the layout's refusal becomes a `Refusal` in its own words.
-4. A command that changed the layout arms every output's next refresh, animated; a refused one
-   arms nothing.
-
-A command added is a variant in `yuna-ipc`, its window and output in `Command::window` and
-`Command::output`, whose matches list every variant so that the compiler asks for them, and its
-dispatch here, with its story in `tests/headless/commands.rs`.
 
 ### Popups
 

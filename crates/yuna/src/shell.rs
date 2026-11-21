@@ -674,7 +674,7 @@ impl State {
         }
     }
 
-    /// Asks `window`'s client to close it, whichever its shell (the command `CloseWindow`).
+    /// Asks `window`'s client to close it, whichever its shell (`Compositor::close_window`).
     pub(crate) fn close_window(&mut self, window: WindowId) -> Result<(), crate::Error> {
         let toplevel = self
             .windows
