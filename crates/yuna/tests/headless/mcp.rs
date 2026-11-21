@@ -1471,8 +1471,9 @@ fn a_protocol_error_is_told_with_its_interface_code_and_message() {
 }
 
 /// A client that stops reading, as a frozen program does, while its seat types to it, fills its
-/// connection's buffers: the display closes it, and `events` tells `client_left` with reason
-/// `closed` and no error.
+/// connection's buffers, 1 MiB of them Yuna's (ADR-0136), a few calls of `type` of
+/// [`yuna::MAX_TYPED`] characters: the display closes it, and `events` tells `client_left` with
+/// reason `closed` and no error.
 #[test]
 fn a_client_that_reads_nothing_while_it_is_typed_to_is_told_closed() {
     let mut mcp = Mcp::new(ClockMode::Manual);

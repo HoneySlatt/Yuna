@@ -460,12 +460,12 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   manual-clock run depend on the machine's timing. `freeze`, `thaw` and `slow` act on the
   program's process group: a process it moved to a group of its own runs on. Paid at Stage 2a, M2.18
   (the agents' runtime).
-- A frozen program that is sent events is cut off once wayland-rs's 4 KiB buffer for its
-  connection and its socket's buffer are full: within one keyboard `type` of 4,096 characters,
-  8,192 key events of 24 bytes, in the test that types to such a client on the development
-  machine, whose socket buffers set the figure. Its windows close.
-  [ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md) decides it: 1 MiB,
-  at Stage 2a, M2.2 (the interface), and the pointer's motion merged, at M2.12 (seats and input).
+- A frozen program that is sent events is cut off once the 1 MiB Yuna keeps for its connection
+  and its socket's buffer are full (`CLIENT_BUFFER_BYTES`): within a few keyboard `type`s of
+  4,096 characters, and within 2 to 5 s of a pointer moving at 8,000 Hz over it. Its windows
+  close, and MCP tells it `closed`, as a client that left. Paid at Stage 2a, M2.12 (seats and
+  input): a congested client's motion merged, so that motion never ends it, and its departure
+  named ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
 - 64 programs run at most, counted by their first process: one that exits leaving its children
   frees its place. Paid at Stage 2a, M2.18 (the agents' runtime).
 - When Yuna stops or a seat closes, the processes are found through `/proc`, then signalled by
@@ -847,10 +847,18 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - A global, `OPENED_DISPLAYS` (`crates/yuna/src/render.rs`), keeps EGL displays alive because
   tests run several compositors in one process; Yuna's Vulkan core needs none. Paid at Stage 2a,
   M2.9 (Vulkan the default): it leaves with EGL.
-- wayland-rs bounds each client's outgoing buffer at 4,096 bytes and ends a client whose buffer
-  is full, where the rivals raise libwayland's to 1 MiB;
-  [ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md) sets it at 1 MiB,
-  at Stage 2a, M2.2 (the interface), and merges the pointer's motion, at M2.12 (seats and input).
+- wayland-rs grows a client's outgoing buffer, up to its 1 MiB, before it flushes it, and never
+  shrinks it, where libwayland flushes at 4 KiB and gives the room back: a healthy client keeps the
+  largest burst of events one round sent it, rounded up to a power of two. Yuna's own bursts, a
+  `type`'s keys, flush as they go. Kept: wayland-rs's; the queue of Stage 2's core sends what a
+  round makes, and a buffer of its own is a fork's (ADR-0136).
+- Every event Yuna sends stays under 4,096 bytes, which a client of wayland-rs cannot read past
+  however large the server's buffer; two can pass it: a `wl_display.error` that wayland-rs writes
+  for a `wl_registry.bind` of a long and malformed interface name, sent to that client alone as it
+  is ended, and none else, since a client's requests are read 4 KiB at most and an event forwards
+  one request's string at most. The number of MIME types a data source offers is unbounded: each
+  offer fits 4 KiB, but a source that offers many can fill a focused client's buffer. Paid at
+  Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
 - No crate forbids `unsafe` code; each `unsafe` block has its `// SAFETY:` comment, and
   `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, one in `yuna-bench`, none in
   `yuna-layout` and `yuna-motion`, on 2026-11-19. Paid at Stage 2a, M2.4 (the map, tasks, frames and

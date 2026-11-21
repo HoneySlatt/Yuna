@@ -37,6 +37,17 @@ use crate::selection::SelectionRead;
 use crate::state::{OWNER_SEAT, State};
 use crate::xwayland::{DrawnX11Menu, Selection, X11Display, Xwayland, XwaylandConfig};
 
+/// The most bytes of events Yuna keeps for one client that does not read them: 1 MiB, as KWin,
+/// Mutter, sway, Hyprland and niri give libwayland
+/// ([ADR-0136](../../../docs/adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
+/// A client whose next event passes it is ended by the display. The buffer starts at 4 KiB and
+/// grows by doubling when a round's events to the client pass what it holds, and wayland-rs never
+/// shrinks it: what a seat may hold is bounded by its clients, [`MAX_CLIENTS_PER_SEAT`]
+/// ([ADR-0147](../../../docs/adr/0147-a-seat-connects-256-clients-at-most.md)).
+///
+/// [`MAX_CLIENTS_PER_SEAT`]: crate::MAX_CLIENTS_PER_SEAT
+pub const CLIENT_BUFFER_BYTES: usize = 1 << 20;
+
 /// How long a seat's socket rests after `accept` failed, out of descriptors most often, before it
 /// listens again.
 pub const SOCKET_PAUSE: Duration = Duration::from_millis(100);
@@ -319,6 +330,11 @@ impl Compositor {
             EventLoop::try_new().map_err(|e| Error::EventLoop(e.to_string()))?;
         let mut display: Display<State> =
             Display::new().map_err(|e| Error::EventLoop(e.to_string()))?;
+        // Before any client, so that every one gets it: those of seats' sockets, in process, and
+        // Xwaylands.
+        display
+            .handle()
+            .set_default_max_buffer_size(CLIENT_BUFFER_BYTES);
         let mut state = State::new(
             display.handle(),
             config.clock,

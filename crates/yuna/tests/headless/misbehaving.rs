@@ -689,11 +689,11 @@ fn ten_thousand_commits_between_two_boundaries_draw_one_frame() {
 }
 
 /// A client that never reads its socket, and keeps asking for answers, fills its connection's
-/// buffers: the display drops it once the 4 KiB it buffers for the client cannot take the next
-/// event, and the others go on. Each `wl_display.sync` is answered by two events of 12 bytes,
-/// `wl_callback.done` and `wl_display.delete_id`. On the development machine the client was
-/// dropped after 5,100 syncs: 10,200 events, 122,400 bytes; the kernel's socket buffers set the
-/// figure, which the test prints, and which other machines may change.
+/// buffers: the display drops it once the 1 MiB it buffers for the client cannot take the next
+/// event (ADR-0136), and the others go on. Each `wl_display.sync` is answered by two events of 12
+/// bytes, `wl_callback.done` and `wl_display.delete_id`, so the client outlasts 1 MiB of answers,
+/// 43,690 syncs, beside what the kernel's socket buffers hold, which other machines may change.
+/// With a buffer of 4 KiB it was dropped after 5,100 syncs on the development machine.
 #[test]
 fn a_client_that_never_reads_is_dropped() {
     let mut compositor = manual_compositor();
@@ -713,7 +713,7 @@ fn a_client_that_never_reads_is_dropped() {
             .expect("the compositor dispatches");
     }
     println!("dropped after {syncs} syncs, {} events", 2 * syncs);
-    assert!(syncs > 4096 / 24 && syncs < 1_000_000, "{syncs} syncs");
+    assert!(syncs > (1 << 20) / 24 && syncs < 1_000_000, "{syncs} syncs");
     the_others_go_on(&mut compositor, start, &mut sentinel);
 }
 

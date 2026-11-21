@@ -432,8 +432,10 @@ bus.
   connection on the seat's socket is accepted and closed at once while the socket listens on; Yuna
   logs a warning and tells MCP's agents `client_refused`, both at most once a second of real time
   per seat, with the refusals since the last told. An in-process connection
-  (`Compositor::connect_client_to`) gets an error. A place is free once Yuna has freed the client
-  that left, at the end of the round.
+  (`Compositor::connect_client_to`) gets an error. A place is free once the display has ended
+  the client that left. Yuna keeps up to `CLIENT_BUFFER_BYTES`, 1 MiB, of events for a client that
+  does not read them; the display ends one whose next event passes it
+  ([ADR-0136](adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
 - **How it fails.** A seat's socket that fails to `accept`, most often out of descriptors, pauses
   `SOCKET_PAUSE` rather than stop Yuna, the owner's in `yuna --headless` too. The program raises
   its limit of open files at start ([The program](#the-program)).

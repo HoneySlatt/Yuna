@@ -51,7 +51,9 @@ zbus = { version = "6.3.0", default-features = false }
 # share one copy; each MIT. Each crate turns on the features it uses.
 #
 # The Wayland protocol's server side: the display, its clients and the core protocol's objects.
-wayland-server = "0.31.14"
+# `libwayland_1_23` gives the size of a client's outgoing buffer (ADR-0136): with wayland-rs's own
+# backend, which Yuna uses, it links nothing and adds no crate.
+wayland-server = { version = "0.31.14", features = ["libwayland_1_23"] }
 # The event loop every source of Yuna's runs on: sockets, timers, clients, programs' pipes.
 calloop = "0.14.5"
 # Keymaps: compiled for each seat, sent to clients, read by the tests' clients.
