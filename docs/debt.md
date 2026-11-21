@@ -192,7 +192,8 @@ read again.
   Stage 2's client identity
   ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
   item 15). The refusals past the bound are told an agent at most once a second, without a timer:
-  those after the last told wait for a later refusal, and are not told if none comes.
+  those after the last told wait for a later refusal, and are not told if none comes. Paid at
+  Stage 2a, M2.12 (seats and input), with the departures MCP names.
 - One commit of a window whose subsurfaces are synchronised in a deep chain costs Smithay a linear
   search of its transaction at each level (`transaction.rs:119`, `tree.rs:267` and `:277`, at
   `7ff0ede4`), about
@@ -601,8 +602,8 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   first move: M2.2 made none, its 1 MiB moving no figure; the next foreseen is M2.9 (Vulkan the
   default).
 - The parity script's `parity` job takes 18 to 29 minutes on GitHub's runner, over the method's
-  bar of 20 for a CI job; its thresholds come from the desktop's spreads alone, and one run on the
-  runner passed ([measurements](measurements.md)). The runs take most of it: a side's build takes
+  bar of 20 for a CI job, in 4 of M2.2's 8 runs; its thresholds come from the desktop's spreads
+  alone, and every run on the runner since M2.1 passed ([measurements](measurements.md)). The runs take most of it: a side's build takes
   1.4 to 2 minutes, so caching the baseline's build would save about 2. A push that moves the
   baseline also builds and runs the old baseline, about 13 minutes more: some 42 on the slowest
   runner seen, past the job's 40-minute timeout. How to keep a move's push inside it is put to the
@@ -856,16 +857,22 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   `type`'s keys, flush as they go. Kept: wayland-rs's; the queue of Stage 2's core sends what a
   round makes, and a buffer of its own is a fork's (ADR-0136).
 - Every event Yuna sends stays under 4,096 bytes, which a client of wayland-rs cannot read past
-  however large the server's buffer; two can pass it: a `wl_display.error` that wayland-rs writes
+  however large the server's buffer; one can pass it: a `wl_display.error` that wayland-rs writes
   for a `wl_registry.bind` of a long and malformed interface name, sent to that client alone as it
   is ended, and none else, since a client's requests are read 4 KiB at most and an event forwards
   one request's string at most. The number of MIME types a data source offers is unbounded: each
   offer fits 4 KiB, but a source that offers many can fill a focused client's buffer. Paid at
   Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
-- No crate forbids `unsafe` code; each `unsafe` block has its `// SAFETY:` comment, and
-  `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, one in `yuna-bench`, none in
-  `yuna-layout` and `yuna-motion`, on 2026-11-19. Paid at Stage 2a, M2.4 (the map, tasks, frames and
-  events), with the crate map's checks.
+- `yuna-ipc`'s `Refusal::Refused` carries as text the layout's reasons that have no variant of
+  their own (no output, a pinned window made fullscreen, another window's fullscreen holding the
+  screen, and the others the layout gives as text), where ADR-0146 asks a variant per reason: a caller tells them apart only by their
+  sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4 (the map, tasks,
+  frames and events), where every public contract is listed with its version.
+- Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
+  its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, one
+  in `yuna-bench`, none in `yuna-layout` and `yuna-motion`, on 2026-11-19. Nothing checks the new
+  crates' dependencies against ADR-0145's map yet; they match it. Paid at Stage 2a, M2.4 (the map,
+  tasks, frames and events), with the crate map's checks.
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated. Paid at Stage 2a, M2.16 (the store, wired behind a switch): the new store is

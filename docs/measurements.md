@@ -12,7 +12,8 @@ the owner's go). The proofs are the tasks' local `.delegation/` folders (`m2.2-*
 - **Parity, the CI tier**: every push of M2.2 against the pinned baseline `500e804`, on GitHub's
   runner, no figure worse and none void. The `parity` job took 18 min 43 s (`74e5388`), 27 min
   54 s (`d6eb217`), 19 min 9 s (`0cb5164`), 18 min 4 s (`e81d3f9`), 27 min 36 s (`682b0e2`),
-  22 min 11 s (`cf1872c`), and 17 min 55 s for the 1 MiB alone, in pull request 8. No move of
+  22 min 11 s (`cf1872c`), 17 min 55 s for the 1 MiB alone, in pull request 8, and 21 min 23 s
+  for it on main (`4646b80`). No move of
   the baseline: the 1 MiB moved no figure, the parity scenarios sending a client under 4 KiB a
   round.
 - **The parity job's time, decomposed** (run 44745258897, before M2.2): a side's build 119 s, its
