@@ -1,0 +1,23 @@
+[package]
+name = "yuna-wlcs"
+description = "The module WLCS, the Wayland conformance suite, loads to test Yuna headless"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# A test harness's module, never shipped: not in Yuna's package, never published.
+publish = false
+
+[lib]
+# The shared library WLCS loads; the Rust library its own tests link.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+yuna = { path = "../yuna" }
+yuna-types = { path = "../yuna-types" }
+# Yuna's log, to standard error, as Yuna's program writes it: the same crates and features.
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

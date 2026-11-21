@@ -985,6 +985,16 @@ name = "yuna-types"
 version = "0.1.0"
 
 [[package]]
+name = "yuna-wlcs"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "yuna",
+ "yuna-types",
+]
+
+[[package]]
 name = "zbus"
 version = "6.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

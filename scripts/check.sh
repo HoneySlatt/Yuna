@@ -34,11 +34,13 @@ check_rules() {
             return 1
         fi
     done
-    # The tests and examples drive Yuna through its interface, which names no type of Smithay's
-    # (ADR-0146): one that names Smithay would tie them to what Stage 2a replaces.
+    # The tests, the examples and WLCS's shim drive Yuna through its interface, which names no
+    # type of Smithay's (ADR-0146, ADR-0149): one that names Smithay would tie them to what
+    # Stage 2a replaces.
     local named
-    if named=$(grep -rn --include='*.rs' 'smithay::' crates/yuna/tests crates/yuna/examples); then
-        echo "the tests and examples name Smithay:"
+    if named=$(grep -rn --include='*.rs' 'smithay::' crates/yuna/tests crates/yuna/examples \
+        crates/yuna-wlcs); then
+        echo "the tests, the examples or WLCS's shim name Smithay:"
         echo "$named"
         return 1
     fi
