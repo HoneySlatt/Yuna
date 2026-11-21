@@ -22,7 +22,7 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   The timed and GPU tiers, at the owner's go on 2026-11-21: built, reviewed, their controls
   passing, the soak flat ([measurements](measurements.md)). **M2.1 is done.** Missing scenarios:
   popups, X11, captures, subsurfaces ([debt](debt.md)).
-- **M2.2, the interface**, under way since 2026-11-20. The owner chose that day to pause the
+- **M2.2, the interface**, done on 2026-11-21. The owner chose that day to pause the
   measurements and start it, the timed tier finishing at their go, against ADR-0139's "baselines
   first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
   the baseline. The timed tier's start scenario takes a full `TMPDIR`, so that it guards
@@ -36,7 +36,8 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   and its findings fixed; CI's parity found them worse in `input`, by the split of codegen units
   alone, and the parity script builds in one since (ADR-0148). The timed and GPU tiers compared
   M2.2's head, `c7ce632`, with the baseline on 2026-11-21: no figure worse
-  ([measurements](measurements.md)); M2.2 closes on that.
+  ([measurements](measurements.md)). **M2.2 is done.**
+- **Next: M2.3, WLCS**, in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -134,7 +135,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 done; M2.2's timed comparison done, its close next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 and M2.2 done; M2.3 next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
