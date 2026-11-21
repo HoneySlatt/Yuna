@@ -14,6 +14,7 @@ mod captures_held;
 mod client;
 mod colour;
 mod colour_client;
+mod commands;
 mod core_costs;
 mod dialogs;
 mod dmabuf;
@@ -62,8 +63,8 @@ use std::time::Duration;
 
 use client::{Client, Feedback, Kind, Mode, State};
 use smithay::utils::Rectangle;
-use yuna::yuna_layout::OpenOptions;
 use yuna::{ClockMode, Compositor, Config, Counters, Error, OWNER_SEAT, OutputMode};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{OutputId, Tiling, WindowId};
 
 const TILE: (i32, i32) = (1256, 1408);
@@ -75,6 +76,11 @@ const OUTPUT: OutputId = OutputId(1);
 /// The lead of an output whose drawings take no time, as on the manual clock: the floor, 2 ms,
 /// plus the margin, 1 ms (ADR-0031).
 const LEAD: Duration = Duration::from_millis(3);
+
+/// The caller the stories speak as: the owner's seat.
+fn owner() -> Caller {
+    Caller::on_seat(OWNER_SEAT)
+}
 
 fn manual_compositor() -> Compositor {
     Compositor::new(Config {
@@ -737,11 +743,15 @@ fn a_hidden_window_is_suspended_and_called_once_a_second() {
     client.commit(w);
     client.roundtrip(&mut compositor);
 
-    compositor.change_layout(|layout| {
-        layout
-            .move_to_special(OWNER_SEAT, "scratch")
-            .expect("the window moves");
-    });
+    compositor
+        .command(
+            owner(),
+            Command::MoveWindowToSpecial {
+                window: None,
+                special: "scratch".to_owned(),
+            },
+        )
+        .expect("the window moves");
     advance_to(&mut compositor, &mut client, boundary(start, 2));
     let hidden = client.window(w).configures.last().expect("a configure");
     assert_eq!((hidden.width, hidden.height), TILE);
@@ -777,11 +787,9 @@ fn a_hidden_window_is_suspended_and_called_once_a_second() {
     assert_eq!(client.window(w).frames.len(), 7);
     assert_eq!(compositor.next_deadline(), None);
 
-    compositor.change_layout(|layout| {
-        layout
-            .toggle_special(OWNER_SEAT, "scratch")
-            .expect("the special workspace shows");
-    });
+    compositor
+        .command(owner(), Command::ToggleSpecial("scratch".to_owned()))
+        .expect("the special workspace shows");
     // Past the next boundary: two boundaries are 4,166,666 or 4,166,667 ns apart.
     let past_next_boundary = compositor.now() + Duration::from_millis(5);
     advance_to(&mut compositor, &mut client, past_next_boundary);
@@ -1078,7 +1086,7 @@ fn a_window_the_layout_refuses_still_gets_frame_callbacks() {
     let mut compositor = manual_compositor();
     let mut client = Client::connect(&mut compositor);
     compositor
-        .change_layout(|layout| layout.open_window(OWNER_SEAT, WindowId(1), OpenOptions::default()))
+        .hold_window_id_in_layout(OWNER_SEAT, WindowId(1))
         .expect("the id is taken");
     let w = open_and_commit(&mut compositor, &mut client, RED);
     let committed_at = compositor.now();
@@ -1171,7 +1179,7 @@ fn a_refused_request_is_answered_at_once() {
     let mut client = Client::connect(&mut compositor);
     let start = compositor.now();
     compositor
-        .change_layout(|layout| layout.set_tiling(OWNER_SEAT, Tiling::Dwindle))
+        .command(owner(), Command::SetTiling(Tiling::Dwindle))
         .expect("the workspace tiles in dwindle");
     let game = open_and_commit(&mut compositor, &mut client, RED);
     client.set_fullscreen(game, true);

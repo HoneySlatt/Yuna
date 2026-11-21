@@ -10,12 +10,13 @@ use std::time::Duration;
 use yuna::colour::SurfaceRole;
 use yuna::colour::description::{NamedPrimaries, PG32UCDM, TransferFunction as Tf};
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_ipc::Command;
 use yuna_types::{OutputId, WindowId};
 
 use crate::colour_client::{
     ColourClient, Feature, Params, Primaries, RenderIntent, TransferFunction,
 };
-use crate::{RED, assert_rests, run_armed_deadlines};
+use crate::{RED, assert_rests, owner, run_armed_deadlines};
 
 const HDR_OUTPUT: OutputId = OutputId(1);
 const SDR_OUTPUT: OutputId = OutputId(2);
@@ -272,12 +273,24 @@ fn a_windows_preferred_description_follows_its_workspaces_output() {
 
         // Moved to a workspace of the SDR output: told once, with that output's identity.
         let name = format!("sdr-{version}");
-        compositor.change_layout(|layout| {
-            layout
-                .add_workspace(OWNER_SEAT, &name, Some(SDR_OUTPUT))
-                .expect("a workspace");
-            layout.move_to_workspace(OWNER_SEAT, &name).expect("moved");
-        });
+        compositor
+            .command(
+                owner(),
+                Command::AddWorkspace {
+                    name: name.clone(),
+                    output: Some(SDR_OUTPUT),
+                },
+            )
+            .expect("a workspace");
+        compositor
+            .command(
+                owner(),
+                Command::MoveWindowToWorkspace {
+                    window: None,
+                    workspace: name.clone(),
+                },
+            )
+            .expect("moved");
         run_armed_deadlines(&mut compositor);
         colour.roundtrip(&mut compositor);
         assert_eq!(colour.preferred_changes(feedback), [sdr]);
@@ -293,21 +306,31 @@ fn a_windows_preferred_description_follows_its_workspaces_output() {
         assert_eq!(info.tf_named, Some(TransferFunction::Gamma22 as u32));
 
         // Shown back on the HDR output: told again.
-        compositor.change_layout(|layout| {
-            layout
-                .focus_output(OWNER_SEAT, HDR_OUTPUT)
-                .expect("focused");
-        });
+        compositor
+            .command(owner(), Command::FocusOutput(HDR_OUTPUT))
+            .expect("focused");
         let back = format!("hdr-{version}");
-        compositor.change_layout(|layout| {
-            layout
-                .focus_output(OWNER_SEAT, SDR_OUTPUT)
-                .expect("focused");
-            layout
-                .add_workspace(OWNER_SEAT, &back, Some(HDR_OUTPUT))
-                .expect("a workspace");
-            layout.move_to_workspace(OWNER_SEAT, &back).expect("moved");
-        });
+        compositor
+            .command(owner(), Command::FocusOutput(SDR_OUTPUT))
+            .expect("focused");
+        compositor
+            .command(
+                owner(),
+                Command::AddWorkspace {
+                    name: back.clone(),
+                    output: Some(HDR_OUTPUT),
+                },
+            )
+            .expect("a workspace");
+        compositor
+            .command(
+                owner(),
+                Command::MoveWindowToWorkspace {
+                    window: None,
+                    workspace: back.clone(),
+                },
+            )
+            .expect("moved");
         run_armed_deadlines(&mut compositor);
         colour.roundtrip(&mut compositor);
         assert_eq!(colour.preferred_changes(feedback), [sdr, hdr]);

@@ -28,6 +28,7 @@ mod canary;
 mod capture;
 mod clock;
 pub mod colour;
+mod command;
 mod compositor;
 mod dbus;
 mod dialog;

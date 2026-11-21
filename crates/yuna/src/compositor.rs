@@ -16,8 +16,9 @@ use rustix::process::{Pid, WaitStatus};
 use smithay::utils::{Physical, Rectangle};
 use wayland_server::backend::DisconnectReason;
 use wayland_server::{BindError, Display, ListeningSocket};
-use yuna_layout::Layout;
+use yuna_ipc::{Caller, Command, Refusal};
 use yuna_layout::geometry::Rect;
+use yuna_layout::{Layout, OpenOptions};
 use yuna_motion::{Change, Drawn, Settings};
 use yuna_types::{OutputId, SeatId, WindowId};
 
@@ -1036,14 +1037,6 @@ impl Compositor {
         self.state.describe_x11_menus(output)
     }
 
-    /// Asks `window`'s client to close it, as a key binding would: an `xdg_toplevel` is sent
-    /// `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else its X11 client is ended
-    /// (`KillClient`). The window stays until its client closes it. Refused for a window the
-    /// layout does not hold.
-    pub fn close_window(&mut self, window: WindowId) -> Result<(), Error> {
-        self.state.close_window(window)
-    }
-
     /// The colours the surfaces of `window` declared through `color-management-v1`, at their
     /// last commit: its own surface's, its subsurfaces' and its popups'; those that declared
     /// none are left out, and an unknown window has none.
@@ -1089,12 +1082,40 @@ impl Compositor {
         self.state.is_modal(window)
     }
 
-    /// Changes the layout model, as a key binding would: every output arranges it again at its
-    /// next refresh, and what moved moves there on screen when animations are on.
-    pub fn change_layout<R>(&mut self, change: impl FnOnce(&mut Layout) -> R) -> R {
-        let result = change(&mut self.state.layout);
+    /// Runs `command` for `caller`, as a key binding of the caller's seat would
+    /// ([ADR-0146](../../../docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)):
+    /// every output arranges the layout again at its next refresh, and what moved moves there on
+    /// screen when animations are on. `CloseWindow` asks the window's client to close it: an
+    /// `xdg_toplevel` is sent `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else
+    /// its X11 client is ended (`KillClient`); the window stays until its client closes it. A
+    /// refused command changes nothing.
+    pub fn command(&mut self, caller: Caller, command: Command) -> Result<(), Refusal> {
+        crate::command::run(&mut self.state, caller, command)
+    }
+
+    /// A test seam (ADR-0146): puts `window` into `seat`'s layout with no client behind it, as
+    /// if it had opened, so that a test can make the layout refuse the next window given that id.
+    /// It breaks what [`Compositor::check_windows`] holds: a window of the layout has a toplevel.
+    #[doc(hidden)]
+    pub fn hold_window_id_in_layout(
+        &mut self,
+        seat: SeatId,
+        window: WindowId,
+    ) -> Result<(), Refusal> {
+        let held = self
+            .state
+            .layout
+            .open_window(seat, window, OpenOptions::default())
+            .map_err(crate::command::refusal);
         self.state.mark_layout_changed(Change::Animated);
-        result
+        held
+    }
+
+    /// A test seam (ADR-0146): every output arranges the layout again at its next refresh,
+    /// nothing in it changed.
+    #[doc(hidden)]
+    pub fn rearrange(&mut self) {
+        self.state.mark_layout_changed(Change::Animated);
     }
 
     /// What `output` drew in its last frame, bottom to top: each window at its rectangle and

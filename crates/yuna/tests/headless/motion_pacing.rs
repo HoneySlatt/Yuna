@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use yuna::yuna_motion::{Change, Drawn, Motion};
-use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna::{ClockMode, Compositor, Config, OutputMode};
+use yuna_ipc::Command;
 use yuna_types::Direction;
 
 use crate::client::{Client, Feedback};
@@ -28,7 +29,8 @@ use crate::motion::{
     operate_on_idle, settle, window_id,
 };
 use crate::{
-    BLUE, LEAD, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary, first_boundary_at_or_after,
+    BLUE, LEAD, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary,
+    first_boundary_at_or_after, owner,
 };
 
 /// The carrier: the client's first window, floating over the columns.
@@ -103,7 +105,13 @@ fn columns_under_the_carrier(mode: OutputMode) -> (Compositor, Client, Duration)
     let carrier = open(&mut compositor, &mut client, GREEN);
     assert_eq!(carrier, CARRIER);
     compositor
-        .change_layout(|layout| layout.set_floating(window_id(CARRIER), true))
+        .command(
+            owner(),
+            Command::SetFloating {
+                window: Some(window_id(CARRIER)),
+                on: true,
+            },
+        )
         .expect("the carrier floats");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     open_full_width_columns(&mut compositor, &mut client, &[RED, BLUE, RED]);
@@ -133,9 +141,9 @@ fn scroll(
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .focus(OWNER_SEAT, Direction::Left)
+        |compositor| {
+            compositor
+                .command(owner(), Command::Focus(Direction::Left))
                 .expect("the focus moves left");
         },
     );
@@ -418,9 +426,9 @@ fn drawings_that_vary_sample_a_later_boundary_at_each_frame() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .focus(OWNER_SEAT, Direction::Left)
+        |compositor| {
+            compositor
+                .command(owner(), Command::Focus(Direction::Left))
                 .expect("the focus moves left");
         },
     );
@@ -551,9 +559,17 @@ fn on_a_vrr_output_a_motion_alone_arms_a_refresh_each_shortest_refresh() {
     open_full_width_columns(&mut compositor, &mut client, &[RED, BLUE, RED]);
     let mut reference = Motion::new(animations());
     reference.update(compositor.layout(), compositor.now(), Change::Instant);
-    operate_on_idle(&mut compositor, &mut client, &mut reference, start, |l| {
-        l.focus(OWNER_SEAT, Direction::Left).expect("left");
-    });
+    operate_on_idle(
+        &mut compositor,
+        &mut client,
+        &mut reference,
+        start,
+        |compositor| {
+            compositor
+                .command(owner(), Command::Focus(Direction::Left))
+                .expect("left");
+        },
+    );
     let mut dues: Vec<Duration> = Vec::new();
     let mut unchanged = 0;
     loop {
@@ -629,7 +645,7 @@ fn on_a_vrr_output_the_frame_after_one_drawn_at_once_samples_a_later_time() {
     let operation = shown + Duration::from_millis(8);
     advance_to(&mut compositor, &mut client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     reference.update(compositor.layout(), operation, Change::Animated);
     assert_eq!(compositor.next_deadline(), Some(operation), "due at once");

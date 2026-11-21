@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use x11rb::protocol::xproto::Window;
 use yuna::yuna_motion::Settings;
 use yuna::{CaptureSize, CaptureTarget, ClockMode, Compositor, DrawnX11Menu, OutputMode};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{Direction, OutputId};
 
 use crate::x11_client::{Image, WindowSpec, X11Client, step};
@@ -299,7 +300,7 @@ fn an_x11_menu_slides_with_its_window() {
     // The right column moves left: the window slides, and its menu with it.
     let id = seat.seat;
     seat.compositor
-        .change_layout(|layout| layout.move_focused(id, Direction::Left))
+        .command(Caller::on_seat(id), Command::MoveFocused(Direction::Left))
         .expect("the column moves");
     let start: Option<f64> = seat
         .compositor

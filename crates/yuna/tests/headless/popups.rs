@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use smithay::utils::Rectangle;
 use yuna::{Compositor, MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW, OWNER_SEAT};
+use yuna_ipc::Command;
 use yuna_types::WindowId;
 
 use crate::client::{Client, ConstraintAdjustment, Feedback, Kind, Parent, Placement};
 use crate::{
     BLUE, LEAD, OUTPUT, PERIOD, RED, advance_to, assert_rests, boundary, manual_compositor, millis,
-    open_and_commit, run_armed_deadlines,
+    open_and_commit, owner, run_armed_deadlines,
 };
 
 const GREEN: u32 = 0xFF_00_FF_00;
@@ -273,11 +274,15 @@ fn a_hidden_windows_popups_are_called_back_once_a_second_and_go_with_it() {
     client.commit_popup(p);
     client.roundtrip(&mut compositor);
 
-    compositor.change_layout(|layout| {
-        layout
-            .move_to_special(OWNER_SEAT, "scratch")
-            .expect("the window moves");
-    });
+    compositor
+        .command(
+            owner(),
+            Command::MoveWindowToSpecial {
+                window: None,
+                special: "scratch".to_owned(),
+            },
+        )
+        .expect("the window moves");
     advance_to(&mut compositor, &mut client, boundary(start, 3));
     let drawn_when_hidden = compositor.counters().frames_drawn;
     let hidden_at = compositor.now();

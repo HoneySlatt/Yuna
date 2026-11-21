@@ -5,12 +5,13 @@
 use std::time::Duration;
 
 use yuna::{Compositor, MAX_KEPT_TOKENS_OF_CLIENTS_GONE, OWNER_SEAT, TOKEN_LIFETIME};
+use yuna_ipc::Command;
 use yuna_types::WindowId;
 
 use crate::client::{Client, Parent, Placement, State};
 use crate::{
-    BLUE, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, open_and_commit, tiled,
-    tiled_and,
+    BLUE, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, open_and_commit, owner,
+    tiled, tiled_and,
 };
 
 /// Opens windows a and b, b last and so focused, draws them at boundary 1, and gives the client
@@ -101,7 +102,9 @@ fn a_token_without_a_serial_only_marks_the_window_urgent() {
     assert_rests(&mut compositor);
 
     // The owner gives it the focus: its urgency ends at the boundary that tells it so.
-    compositor.change_layout(|layout| layout.focus_window(WindowId(1)).expect("a focuses"));
+    compositor
+        .command(owner(), Command::FocusWindow(WindowId(1)))
+        .expect("a focuses");
     let past_next_boundary = compositor.now() + Duration::from_millis(5);
     advance_to(&mut compositor, &mut client, past_next_boundary);
     assert!(!compositor.is_urgent(WindowId(1)));
@@ -196,7 +199,9 @@ fn a_fullscreen_window_keeps_the_focus_and_the_other_turns_urgent() {
         tiled_and(&[State::Fullscreen, State::Activated])
     );
 
-    compositor.change_layout(|layout| layout.focus_window(WindowId(2)).expect("it focuses"));
+    compositor
+        .command(owner(), Command::FocusWindow(WindowId(2)))
+        .expect("it focuses");
     advance_to(&mut compositor, &mut client, boundary(start, 3));
     assert!(!compositor.is_urgent(WindowId(2)));
     assert_eq!(compositor.layout().focused(OWNER_SEAT), Some(WindowId(2)));

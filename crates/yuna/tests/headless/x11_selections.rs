@@ -22,6 +22,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 use yuna::{ClockMode, MAX_X11_TRANSFERS, WindowShell, X11_TRANSFER_TIMEOUT};
+use yuna_ipc::{Caller, Command};
 use yuna_types::WindowId;
 
 use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};
@@ -105,10 +106,10 @@ pub(crate) fn open_wayland_window(seat: &mut X11Seat, wl: &mut SelectionClient) 
 
 /// Gives the seat's keyboard to `window` and waits until it has it.
 fn focus(seat: &mut X11Seat, window: WindowId) {
-    seat.compositor
-        .change_layout(|layout| layout.focus_window(window))
-        .expect("the window takes the focus");
     let seat_id = seat.seat;
+    seat.compositor
+        .command(Caller::on_seat(seat_id), Command::FocusWindow(window))
+        .expect("the window takes the focus");
     wait(&mut seat.compositor, "the keyboard moves", |compositor| {
         (compositor.keyboard_window(seat_id) == Some(window)).then_some(())
     });

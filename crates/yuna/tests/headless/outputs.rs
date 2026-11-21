@@ -8,11 +8,13 @@ use yuna::{
     CaptureSize, CaptureTarget, ClockMode, Compositor, Config, Error, MAX_OUTPUTS, OWNER_SEAT,
     OutputMode, RETIRED_GLOBAL_LIFETIME,
 };
+use yuna_ipc::Command;
 use yuna_types::{OutputId, WindowId};
 
 use crate::client::{Client, Feedback, Kind};
 use crate::{
-    BLUE, LEAD, OUTPUT, RED, advance_to, manual_compositor, open_and_commit, run_armed_deadlines,
+    BLUE, LEAD, OUTPUT, RED, advance_to, manual_compositor, open_and_commit, owner,
+    run_armed_deadlines,
 };
 
 /// 1 s / 60, to the nanosecond below.
@@ -49,7 +51,7 @@ fn a_removed_output_gives_its_windows_to_another_and_discards_its_feedback() {
         .output_named("HEADLESS-2")
         .expect("the new output is announced");
     compositor
-        .change_layout(|layout| layout.focus_output(OWNER_SEAT, second_output))
+        .command(owner(), Command::FocusOutput(second_output))
         .expect("the new output takes the focus");
     let second = open_and_commit(&mut compositor, &mut client, BLUE);
 

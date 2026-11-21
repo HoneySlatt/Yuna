@@ -82,10 +82,11 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-types` | the shared vocabulary: the ids, `Direction` and `Tiling`; level 0 of the map in [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | nothing |
+| `yuna-types` | the shared vocabulary: the ids, `Direction` and `Tiling`; level 0 of the map in [ADR-0145](adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | nothing |
+| `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |
-| `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-layout`, `yuna-motion`, `yuna-types`, and the crates below |
+| `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-ipc`, `yuna-layout`, `yuna-motion`, `yuna-types`, and the crates below |
 | `yuna-bench` | the rivals' bench and the parity script | nothing of Yuna's |
 
 - Each dependency's reason is a comment beside it, in the root [`Cargo.toml`](../Cargo.toml)'s
@@ -103,7 +104,8 @@ One Cargo workspace; its crates live in `crates/`.
 - At run time Yuna needs libxkbcommon, linked; libglvnd's EGL and Mesa, loaded; Xwayland, found
   on `PATH`; and `dbus-daemon` for the accessibility buses, named by `YUNA_DBUS_DAEMON`, else
   found on `PATH`. The development shell and Yuna's package give all four (`flake.nix`).
-- The rules: `yuna-types`, `yuna-layout` and `yuna-motion` hold no Wayland or Smithay object;
+- The rules: `yuna-types`, `yuna-ipc`, `yuna-layout` and `yuna-motion` hold no Wayland or
+  Smithay object;
   `yuna-types` depends on nothing, and no crate re-exports its types: each names `yuna_types`
   itself; `yuna-bench` depends on nothing of `yuna`, so that it measures Yuna as it measures the
   others; `yuna` uses `yuna-bench` only in its tests and examples.
@@ -173,6 +175,7 @@ an arrangement.
 | Module | Its job |
 |---|---|
 | [`compositor.rs`](../crates/yuna/src/compositor.rs) | `Compositor`, the public face: the event loop, the display and `State`; a round; seats and outputs added and removed |
+| [`command.rs`](../crates/yuna/src/command.rs) | `yuna-ipc`'s commands turned into the layout's operations for their caller's seat, or, to close a window, a request to its client |
 | [`state.rs`](../crates/yuna/src/state.rs) | `State`, and the handlers that are not the shell's: surfaces, shared memory, outputs, presentation time, cursors |
 | [`clock.rs`](../crates/yuna/src/clock.rs) | the clock and its deadlines |
 | [`output.rs`](../crates/yuna/src/output.rs) | virtual outputs: their mode, buffer, damage, refresh boundaries and removal |
@@ -300,7 +303,7 @@ An `xdg_toplevel` ([`shell.rs`](../crates/yuna/src/shell.rs),
 5. A commit without a buffer, or the destruction of the toplevel or of its surface, closes it. A
    client that leaves, or that the display ends, has its toplevels destroyed by the round's end.
 
-`Compositor::close_window` asks a window's client to close it: `xdg_toplevel.close`, or for an
+The command `CloseWindow` asks a window's client to close it: `xdg_toplevel.close`, or for an
 X11 window `WM_DELETE_WINDOW`, else its X11 client is ended.
 
 ### Popups

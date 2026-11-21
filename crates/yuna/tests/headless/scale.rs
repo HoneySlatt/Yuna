@@ -9,11 +9,13 @@ use std::time::Duration;
 use smithay::utils::Rectangle;
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_ipc::Command;
 use yuna_types::{OutputId, WindowId};
 
 use crate::client::{Client, Parent, Placement, ProtocolError, State};
 use crate::{
-    BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor, open_and_commit,
+    BLUE, OUTPUT, RED, TILE, advance_to, assert_rests, boundary, manual_compositor,
+    open_and_commit, owner,
 };
 
 /// `RED` and `BLUE` as `read_pixels` gives them: R, G, B, A.
@@ -245,14 +247,24 @@ fn moving_to_an_output_of_another_scale_tells_the_new_scale_once() {
     assert!(client.window(w).preferred_buffer_scales.is_empty());
 
     let configures = client.window(w).configures.len();
-    compositor.change_layout(|layout| {
-        layout
-            .add_workspace(OWNER_SEAT, "two", Some(OutputId(2)))
-            .expect("the workspace is added");
-        layout
-            .move_to_workspace(OWNER_SEAT, "two")
-            .expect("the window moves");
-    });
+    compositor
+        .command(
+            owner(),
+            Command::AddWorkspace {
+                name: "two".to_owned(),
+                output: Some(OutputId(2)),
+            },
+        )
+        .expect("the workspace is added");
+    compositor
+        .command(
+            owner(),
+            Command::MoveWindowToWorkspace {
+                window: None,
+                workspace: "two".to_owned(),
+            },
+        )
+        .expect("the window moves");
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 2));
     let info = compositor.layout().window(WindowId(1)).expect("the window");
     assert_eq!(info.output, Some(OutputId(2)));
@@ -328,28 +340,42 @@ fn a_subsurface_of_a_hidden_window_is_told_its_windows_last_scale() {
     client.commit(w);
     client.roundtrip(&mut compositor);
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 1));
-    compositor.change_layout(|layout| {
-        layout
-            .add_workspace(OWNER_SEAT, "two", Some(OutputId(2)))
-            .expect("the workspace is added");
-        layout
-            .move_to_workspace(OWNER_SEAT, "two")
-            .expect("the window moves");
-    });
+    compositor
+        .command(
+            owner(),
+            Command::AddWorkspace {
+                name: "two".to_owned(),
+                output: Some(OutputId(2)),
+            },
+        )
+        .expect("the workspace is added");
+    compositor
+        .command(
+            owner(),
+            Command::MoveWindowToWorkspace {
+                window: None,
+                workspace: "two".to_owned(),
+            },
+        )
+        .expect("the window moves");
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 2));
     assert_eq!(client.window(w).preferred_buffer_scales, vec![2]);
 
-    compositor.change_layout(|layout| {
-        layout
-            .add_workspace(OWNER_SEAT, "three", Some(OutputId(2)))
-            .expect("the workspace is added");
-        layout
-            .focus_workspace(OWNER_SEAT, "three")
-            .expect("the workspace is shown");
-        layout
-            .focus_output(OWNER_SEAT, OutputId(1))
-            .expect("the first output is active");
-    });
+    compositor
+        .command(
+            owner(),
+            Command::AddWorkspace {
+                name: "three".to_owned(),
+                output: Some(OutputId(2)),
+            },
+        )
+        .expect("the workspace is added");
+    compositor
+        .command(owner(), Command::FocusWorkspace("three".to_owned()))
+        .expect("the workspace is shown");
+    compositor
+        .command(owner(), Command::FocusOutput(OutputId(1)))
+        .expect("the first output is active");
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 3));
     let hidden = client.window(w).configures.last().expect("a configure");
     assert!(hidden.states.contains(&State::Suspended));
@@ -417,11 +443,9 @@ fn a_popup_is_told_its_windows_scale_not_the_active_outputs() {
     client.commit(w);
     client.roundtrip(&mut compositor);
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 1));
-    compositor.change_layout(|layout| {
-        layout
-            .focus_output(OWNER_SEAT, OutputId(2))
-            .expect("the second output is active");
-    });
+    compositor
+        .command(owner(), Command::FocusOutput(OutputId(2)))
+        .expect("the second output is active");
     advance_to(&mut compositor, &mut client, boundary_at_60_hz(start, 2));
     let info = compositor.layout().window(WindowId(1)).expect("the window");
     assert_eq!(info.output, Some(OutputId(1)));

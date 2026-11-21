@@ -98,6 +98,7 @@ use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_layout::{Layout, LayoutError};
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, Device, OWNER_SEAT, OutputMode};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{Direction, OutputId, WindowId};
 
 /// The output's mode without `--output`: Yuna's default, an agent's output, and the mode
@@ -363,21 +364,10 @@ impl Driver {
         child
     }
 
-    /// Changes the layout, as a key binding would: what moves is drawn moving.
-    fn change(
-        &mut self,
-        what: &str,
-        change: impl FnOnce(&mut Layout) -> Result<(), LayoutError>,
-    ) -> Result<(), String> {
-        self.compositor
-            .change_layout(change)
-            .map_err(|e| format!("{what}: the layout refused: {e}"))
-    }
-
     /// Gives `operation`, and logs it first: the frames after its line are its motion's.
     fn apply(&mut self, operation: Operation) -> Result<(), String> {
         log_operation(operation);
-        self.change(operation.name(), |layout| operation.apply(layout))
+        give(&mut self.compositor, operation.name(), operation.command())
     }
 
     /// When the output's motion ends, on the clock's scale; none at rest.
@@ -425,6 +415,14 @@ fn check_clients(clients: &mut Clients) -> Result<(), String> {
     Ok(())
 }
 
+/// Gives the owner's seat's `command`, as a key binding would: what moves is drawn moving. `what`
+/// names the command in the error.
+fn give(compositor: &mut Compositor, what: &str, command: Command) -> Result<(), String> {
+    compositor
+        .command(Caller::on_seat(OWNER_SEAT), command)
+        .map_err(|e| format!("{what}: the layout refused: {e}"))
+}
+
 /// Opens the six windows, sets the layout up, and waits until it rests.
 fn set_up(
     driver: &mut Driver,
@@ -438,22 +436,18 @@ fn set_up(
         clients.0.push(driver.start_vkcube(run, n, vulkan)?);
     }
     wait_for_windows(driver, clients, COLUMNS)?;
-    driver.change("the second workspace", |layout| {
-        show_second_workspace(layout, output)
-    })?;
+    show_second_workspace(&mut driver.compositor, output)?;
     clients
         .0
         .push(driver.start_vkcube(run, COLUMNS as u32, vulkan)?);
     wait_for_windows(driver, clients, COLUMNS + 1)?;
-    driver.change("the special workspace", show_special_workspace)?;
+    show_special_workspace(&mut driver.compositor)?;
     clients
         .0
         .push(driver.start_vkcube(run, COLUMNS as u32 + 1, vulkan)?);
     wait_for_windows(driver, clients, COLUMNS + 2)?;
     let windows = driver.window_ids();
-    driver.change("the set-up's end", |layout| {
-        finish_set_up(layout, output, &windows)
-    })?;
+    finish_set_up(&mut driver.compositor, output, &windows)?;
     let changed = driver.frames_drawn;
     turn_until(driver, clients, "the set-up's motion", |driver| {
         driver.frames_drawn > changed && driver.motion_end().is_none()
@@ -473,35 +467,65 @@ fn wait_for_windows(
 
 /// Before the second workspace's client starts: that workspace, below the first, shown, so that
 /// the client's window opens there.
-fn show_second_workspace(layout: &mut Layout, output: OutputId) -> Result<(), LayoutError> {
-    layout.add_workspace(OWNER_SEAT, SECOND_WORKSPACE, Some(output))?;
-    layout.focus_workspace(OWNER_SEAT, SECOND_WORKSPACE)
+fn show_second_workspace(compositor: &mut Compositor, output: OutputId) -> Result<(), String> {
+    let what = "the second workspace";
+    give(
+        compositor,
+        what,
+        Command::AddWorkspace {
+            name: SECOND_WORKSPACE.to_owned(),
+            output: Some(output),
+        },
+    )?;
+    give(
+        compositor,
+        what,
+        Command::FocusWorkspace(SECOND_WORKSPACE.to_owned()),
+    )
 }
 
 /// Before the special workspace's client starts: that workspace shown, its window opens there.
-fn show_special_workspace(layout: &mut Layout) -> Result<(), LayoutError> {
-    layout.toggle_special(OWNER_SEAT, SPECIAL_WORKSPACE)
+fn show_special_workspace(compositor: &mut Compositor) -> Result<(), String> {
+    give(
+        compositor,
+        "the special workspace",
+        Command::ToggleSpecial(SPECIAL_WORKSPACE.to_owned()),
+    )
 }
 
 /// Once every window has opened: each one's column as wide as the output, the special workspace
 /// hidden, the first workspace shown with its first column focused, where the round starts.
 fn finish_set_up(
-    layout: &mut Layout,
+    compositor: &mut Compositor,
     output: OutputId,
     windows: &[WindowId],
-) -> Result<(), LayoutError> {
+) -> Result<(), String> {
+    let what = "the set-up's end";
+    let refused = |e: LayoutError| format!("{what}: the layout refused: {e}");
     for &window in windows {
-        layout.set_full_width(window, true)?;
+        let command = Command::SetFullWidth {
+            window: Some(window),
+            on: true,
+        };
+        give(compositor, what, command)?;
     }
-    if layout.shown_special(output)?.is_some() {
-        layout.toggle_special(OWNER_SEAT, SPECIAL_WORKSPACE)?;
+    if compositor
+        .layout()
+        .shown_special(output)
+        .map_err(refused)?
+        .is_some()
+    {
+        let command = Command::ToggleSpecial(SPECIAL_WORKSPACE.to_owned());
+        give(compositor, what, command)?;
     }
-    let first_column = layout
-        .workspaces(output)?
+    let first_column = compositor
+        .layout()
+        .workspaces(output)
+        .map_err(refused)?
         .first()
         .and_then(|workspace| workspace.windows.first().copied())
-        .ok_or(LayoutError::Refused("the first workspace has no window"))?;
-    layout.focus_window(first_column)
+        .ok_or_else(|| refused(LayoutError::Refused("the first workspace has no window")))?;
+    give(compositor, what, Command::FocusWindow(first_column))
 }
 
 /// Checks that the layout is the one the round needs: the first workspace shown, with
@@ -675,18 +699,17 @@ impl Operation {
         }
     }
 
-    fn apply(self, layout: &mut Layout) -> Result<(), LayoutError> {
+    /// The command that gives it.
+    fn command(self) -> Command {
         match self {
-            Operation::FocusRight => layout.focus(OWNER_SEAT, Direction::Right),
-            Operation::FocusLeft => layout.focus(OWNER_SEAT, Direction::Left),
-            Operation::MoveColumnRight => layout.move_focused(OWNER_SEAT, Direction::Right),
-            Operation::MoveColumnLeft => layout.move_focused(OWNER_SEAT, Direction::Left),
-            Operation::WorkspaceDown => {
-                layout.focus_workspace_relative(OWNER_SEAT, Direction::Down)
-            }
-            Operation::WorkspaceUp => layout.focus_workspace_relative(OWNER_SEAT, Direction::Up),
+            Operation::FocusRight => Command::Focus(Direction::Right),
+            Operation::FocusLeft => Command::Focus(Direction::Left),
+            Operation::MoveColumnRight => Command::MoveFocused(Direction::Right),
+            Operation::MoveColumnLeft => Command::MoveFocused(Direction::Left),
+            Operation::WorkspaceDown => Command::FocusWorkspaceRelative(Direction::Down),
+            Operation::WorkspaceUp => Command::FocusWorkspaceRelative(Direction::Up),
             Operation::SpecialIn | Operation::SpecialOut => {
-                layout.toggle_special(OWNER_SEAT, SPECIAL_WORKSPACE)
+                Command::ToggleSpecial(SPECIAL_WORKSPACE.to_owned())
             }
         }
     }
@@ -1267,9 +1290,6 @@ mod tests {
     use std::io::{self, Write};
     use std::sync::{Arc, PoisonError};
 
-    use yuna::yuna_layout::geometry::Point;
-    use yuna::yuna_layout::{OpenOptions, OutputConfig};
-
     use super::*;
 
     fn frame(
@@ -1789,47 +1809,46 @@ mod tests {
         assert!(!reduced.contains("each with a retarget"), "{reduced}");
     }
 
-    /// The layout `set_up` makes, on a 4K output at scale 1.5, without Yuna.
-    fn set_up_layout() -> (Layout, OutputId, Vec<WindowId>) {
-        let output = OutputId(1);
-        let mut layout = Layout::new(yuna::yuna_layout::Options::default()).unwrap();
-        layout.add_seat(OWNER_SEAT).unwrap();
-        let config = OutputConfig {
-            position: Point { x: 0.0, y: 0.0 },
-            physical_width: 3840,
-            physical_height: 2160,
-            scale: 1.5,
-        };
-        layout.add_output(OWNER_SEAT, output, config).unwrap();
-        let open = |layout: &mut Layout, id| {
-            layout
-                .open_window(OWNER_SEAT, WindowId(id), OpenOptions::default())
+    /// The layout `set_up` makes, on a 4K output at scale 1.5, in a compositor on the manual
+    /// clock with no client: its windows are ids held in the layout.
+    fn set_up_layout() -> (Compositor, OutputId, Vec<WindowId>) {
+        let mut compositor = Compositor::new(Config {
+            clock: ClockMode::Manual,
+            listen: false,
+            ..Config::default()
+        })
+        .unwrap();
+        let output = compositor.output_descriptions()[0].id;
+        let open = |compositor: &mut Compositor, id| {
+            compositor
+                .hold_window_id_in_layout(OWNER_SEAT, WindowId(id))
                 .unwrap();
         };
         for id in 1..=COLUMNS as u64 {
-            open(&mut layout, id);
+            open(&mut compositor, id);
         }
-        show_second_workspace(&mut layout, output).unwrap();
-        open(&mut layout, COLUMNS as u64 + 1);
-        show_special_workspace(&mut layout).unwrap();
-        open(&mut layout, COLUMNS as u64 + 2);
+        show_second_workspace(&mut compositor, output).unwrap();
+        open(&mut compositor, COLUMNS as u64 + 1);
+        show_special_workspace(&mut compositor).unwrap();
+        open(&mut compositor, COLUMNS as u64 + 2);
         let windows: Vec<WindowId> = (1..=COLUMNS as u64 + 2).map(WindowId).collect();
-        (layout, output, windows)
+        (compositor, output, windows)
     }
 
     #[test]
     fn the_set_up_is_checked() {
-        let (mut layout, output, windows) = set_up_layout();
-        assert!(check_set_up(&layout, output, &windows).is_err());
-        finish_set_up(&mut layout, output, &windows).unwrap();
-        assert_eq!(check_set_up(&layout, output, &windows), Ok(()));
-        assert!(check_set_up(&layout, output, &windows[..COLUMNS]).is_err());
+        let (mut compositor, output, windows) = set_up_layout();
+        assert!(check_set_up(compositor.layout(), output, &windows).is_err());
+        finish_set_up(&mut compositor, output, &windows).unwrap();
+        let layout = compositor.layout();
+        assert_eq!(check_set_up(layout, output, &windows), Ok(()));
+        assert!(check_set_up(layout, output, &windows[..COLUMNS]).is_err());
     }
 
     #[test]
     fn each_operation_of_the_round_moves_the_view_and_the_round_comes_back() {
-        let (mut layout, output, windows) = set_up_layout();
-        finish_set_up(&mut layout, output, &windows).unwrap();
+        let (mut compositor, output, windows) = set_up_layout();
+        finish_set_up(&mut compositor, output, &windows).unwrap();
         let view = |layout: &Layout| {
             (
                 layout.arrange(output).unwrap(),
@@ -1837,19 +1856,19 @@ mod tests {
                 layout.focused(OWNER_SEAT),
             )
         };
-        let start = view(&layout);
+        let start = view(compositor.layout());
         for step in ROUND {
-            let before = view(&layout);
-            step.operation.apply(&mut layout).unwrap();
+            let before = view(compositor.layout());
+            give(&mut compositor, "the operation", step.operation.command()).unwrap();
             assert_ne!(
-                view(&layout),
+                view(compositor.layout()),
                 before,
                 "{} moves nothing",
                 step.operation.name()
             );
-            layout.check_invariants().unwrap();
+            compositor.layout().check_invariants().unwrap();
         }
-        assert_eq!(view(&layout), start);
-        assert_eq!(check_set_up(&layout, output, &windows), Ok(()));
+        assert_eq!(view(compositor.layout()), start);
+        assert_eq!(check_set_up(compositor.layout(), output, &windows), Ok(()));
     }
 }

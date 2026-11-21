@@ -13,6 +13,7 @@ use std::time::Duration;
 use wayland_client::protocol::{wl_shm, wl_surface};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use yuna::{Compositor, OWNER_SEAT};
+use yuna_ipc::Command;
 use yuna_types::WindowId;
 
 use crate::client::{Client, Parent, Placement, ProtocolError};
@@ -20,7 +21,7 @@ use crate::popups::pixel;
 use crate::selection_client::{SelectionClient, SelectionEvent};
 use crate::{
     BLUE, LEAD, OUTPUT, PERIOD, RED, TILE, advance_to, assert_rests, boundary,
-    first_boundary_at_or_after, manual_compositor, millis, open_and_commit,
+    first_boundary_at_or_after, manual_compositor, millis, open_and_commit, owner,
 };
 
 const GREEN: u32 = 0xFF_00_FF_00;
@@ -249,7 +250,9 @@ fn an_8192_pixel_window() {
     client.attach_black(&surface, 8192, 8192);
     client.commit(w);
     client.roundtrip(&mut compositor);
-    compositor.change_layout(|layout| layout.focus_window(WindowId(1)).expect("window 1 exists"));
+    compositor
+        .command(owner(), Command::FocusWindow(WindowId(1)))
+        .expect("window 1 exists");
     advance_to(&mut compositor, &mut client, boundary(start, 2));
     assert_eq!(drawn_at(&compositor, 2), (1288.0, 16.0, 8192.0, 8192.0));
     assert_eq!(pixel(&mut compositor, 1931, 24), BACKGROUND_PIXEL);

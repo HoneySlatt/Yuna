@@ -9,6 +9,7 @@
 //! holds the server; `tools/` the tools' schemas, arguments and results.
 
 use serde_json::{Map, Value, json};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{OutputId, SeatId, WindowId};
 
 use super::Server;
@@ -232,6 +233,7 @@ impl Server {
         if let Err(reason) = call.check_name() {
             return ToolResult::failed(reason);
         }
+        let caller = Caller::on_seat(seat);
         let changed = match call {
             WorkspacesCall::List { .. } => Ok(()),
             WorkspacesCall::Create { name, output, .. } => {
@@ -245,14 +247,14 @@ impl Server {
                     ));
                 }
                 self.compositor
-                    .change_layout(|layout| layout.add_workspace(seat, &name, output))
+                    .command(caller, Command::AddWorkspace { name, output })
             }
             WorkspacesCall::Remove { name, .. } => self
                 .compositor
-                .change_layout(|layout| layout.remove_workspace(seat, &name)),
+                .command(caller, Command::RemoveWorkspace(name)),
             WorkspacesCall::Focus { name, .. } => self
                 .compositor
-                .change_layout(|layout| layout.focus_workspace(seat, &name)),
+                .command(caller, Command::FocusWorkspace(name)),
             WorkspacesCall::MoveWindow {
                 window, workspace, ..
             } => {
@@ -268,10 +270,13 @@ impl Server {
                         window.0, seat.0
                     ));
                 }
-                self.compositor.change_layout(|layout| {
-                    layout.focus_window(window)?;
-                    layout.move_to_workspace(seat, &workspace)
-                })
+                self.compositor.command(
+                    caller,
+                    Command::MoveWindowToWorkspace {
+                        window: Some(window),
+                        workspace,
+                    },
+                )
             }
         };
         if let Err(error) = changed {

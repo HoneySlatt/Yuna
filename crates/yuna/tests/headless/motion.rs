@@ -18,18 +18,18 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use smithay::utils::Rectangle;
 use yuna::mcp::Server;
-use yuna::yuna_layout::Layout;
 use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_motion::{Change, Drawn, Motion, Settings, SpringParams};
 use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, ClockMode, Compositor, Config, OWNER_SEAT, OutputMode,
 };
+use yuna_ipc::{Caller, Command};
 use yuna_types::{Direction, OutputId, SeatId, WindowId};
 
 use crate::client::{Client, Feedback, Parent, Placement, State};
 use crate::input_client::{InputClient, InputEvent};
 use crate::{
-    BLUE, LEAD, OUTPUT, RED, advance_to, assert_rests, boundary, first_boundary_at_or_after,
+    BLUE, LEAD, OUTPUT, RED, advance_to, assert_rests, boundary, first_boundary_at_or_after, owner,
 };
 
 pub(crate) const GREEN: u32 = 0xFF_00_FF_00;
@@ -144,7 +144,13 @@ pub(crate) fn open_full_width_columns(
         .collect();
     for &window in &windows {
         compositor
-            .change_layout(|layout| layout.set_full_width(window_id(window), true))
+            .command(
+                owner(),
+                Command::SetFullWidth {
+                    window: Some(window_id(window)),
+                    on: true,
+                },
+            )
             .expect("full width");
     }
     settle(compositor, |compositor| client.roundtrip(compositor));
@@ -224,7 +230,7 @@ fn each_boundary_draws_the_motion_sampled_there_until_the_arrangement() {
     let operation = boundary(start, k) + Duration::from_micros(100);
     advance_to(&mut compositor, &mut client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     reference.update(compositor.layout(), operation, Change::Animated);
     let second_move = k + 10;
@@ -273,7 +279,7 @@ fn each_boundary_draws_the_motion_sampled_there_until_the_arrangement() {
         refresh_at = boundary(start, k + 1) - LEAD;
         if k == second_move {
             compositor
-                .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+                .command(owner(), Command::Focus(Direction::Left))
                 .expect("the focus moves left again");
             // Arranged at the motion's next refresh.
             reference.update(compositor.layout(), refresh_at, Change::Animated);
@@ -303,7 +309,7 @@ fn move_left_2_ms_after_a_boundary(
     let operation = boundary(start, k) + Duration::from_millis(2);
     advance_to(compositor, client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     reference.update(compositor.layout(), operation, Change::Animated);
     assert_eq!(compositor.next_deadline(), Some(operation));
@@ -429,7 +435,7 @@ fn an_at_once_frame_does_not_hold_the_next_boundary() {
     let operation = boundary(start, k) + Duration::from_millis(2);
     advance_to(&mut compositor, &mut client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     let mut drawn_before_each = Vec::new();
     for j in 1..=4 {
@@ -489,7 +495,7 @@ fn first_two_samples_after_a_slow_drawing(rest: Duration) -> (Option<u64>, Optio
     let operation = boundary(start, k) + Duration::from_millis(1);
     advance_to(&mut compositor, &mut client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     reference.update(compositor.layout(), operation, Change::Animated);
     assert_eq!(compositor.next_deadline(), Some(operation), "due at once");
@@ -550,12 +556,12 @@ fn a_switch_slides_both_workspaces_and_hides_the_one_left_once_it_ends() {
     let mut client = Client::connect(&mut compositor);
     let output = output_rect(&compositor, OUTPUT);
     compositor
-        .change_layout(|layout| layout.focus_workspace(OWNER_SEAT, "one"))
+        .command(owner(), Command::FocusWorkspace("one".to_owned()))
         .expect("workspace one");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     let shown = open(&mut compositor, &mut client, RED);
     compositor
-        .change_layout(|layout| layout.focus_workspace(OWNER_SEAT, "two"))
+        .command(owner(), Command::FocusWorkspace("two".to_owned()))
         .expect("workspace two");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     let left = open(&mut compositor, &mut client, BLUE);
@@ -577,7 +583,7 @@ fn a_switch_slides_both_workspaces_and_hides_the_one_left_once_it_ends() {
     let left_before = client.window(left).configures.len();
 
     compositor
-        .change_layout(|layout| layout.focus_workspace(OWNER_SEAT, "one"))
+        .command(owner(), Command::FocusWorkspace("one".to_owned()))
         .expect("back to workspace one");
     let mut first_refresh = true;
     let mut both_drawn = false;
@@ -655,7 +661,7 @@ fn moves_during_a_motion_configure_each_window_at_most_once_each() {
         let before = counts(&client);
         let configures = compositor.counters().configures;
         compositor
-            .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+            .command(owner(), Command::Focus(Direction::Left))
             .expect("the focus moves left");
         let arranged_at = compositor.next_deadline().expect("a refresh is armed");
         advance_to(&mut compositor, &mut client, arranged_at);
@@ -711,7 +717,7 @@ fn the_pointer_and_a_click_reach_the_window_drawn_under_them() {
     settle(&mut compositor, |compositor| input.roundtrip(compositor));
     let (first, second) = (WindowId(1), WindowId(2));
     compositor
-        .change_layout(|layout| layout.focus_window(first))
+        .command(Caller::on_seat(seat), Command::FocusWindow(first))
         .expect("the first window is focused");
     let rect_of = |compositor: &Compositor, window: WindowId| {
         let description = compositor
@@ -831,7 +837,7 @@ fn after_the_last_refresh_the_pointer_and_windows_see_the_rest() {
     let mut reference = Motion::new(animations());
     reference.update(compositor.layout(), compositor.now(), Change::Instant);
     compositor
-        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .command(Caller::on_seat(seat), Command::FocusWindow(WindowId(1)))
         .expect("the first window is focused");
     let arranged_at = compositor.next_deadline().expect("a refresh is armed");
     reference.update(compositor.layout(), arranged_at, Change::Animated);
@@ -874,7 +880,7 @@ fn a_windows_capture_mid_scroll_is_where_its_frame_drew_it() {
     }
     let second = WindowId(2);
     compositor
-        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .command(Caller::on_seat(seat), Command::FocusWindow(WindowId(1)))
         .expect("the first window is focused");
     for _ in 0..20 {
         let at = compositor.next_deadline().expect("the motion runs");
@@ -962,7 +968,13 @@ fn the_special_workspace_fades_in_and_out() {
     open(&mut compositor, &mut client, BLUE);
     let special = open(&mut compositor, &mut client, RED);
     compositor
-        .change_layout(|layout| layout.move_to_special(OWNER_SEAT, "scratch"))
+        .command(
+            owner(),
+            Command::MoveWindowToSpecial {
+                window: None,
+                special: "scratch".to_owned(),
+            },
+        )
         .expect("the window goes to the special workspace");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     assert_eq!(pixel(&mut compositor), [0, 0, 255, 255]);
@@ -976,7 +988,7 @@ fn the_special_workspace_fades_in_and_out() {
 
     for shown in [true, false] {
         compositor
-            .change_layout(|layout| layout.toggle_special(OWNER_SEAT, "scratch"))
+            .command(owner(), Command::ToggleSpecial("scratch".to_owned()))
             .expect("the special workspace toggles");
         let started = compositor.now();
         let mut mid_fade = None;
@@ -1025,7 +1037,7 @@ fn with_animations_off_a_scroll_draws_one_frame_and_rests() {
     }
     let frames = compositor.counters().frames_drawn;
     compositor
-        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .command(owner(), Command::FocusWindow(WindowId(1)))
         .expect("the first window is focused");
     let at = compositor.next_deadline().expect("a refresh is armed");
     advance_to(&mut compositor, &mut client, at);
@@ -1146,7 +1158,10 @@ fn mcp_windows_gives_the_drawn_rectangle_the_place_and_the_motions_end() {
 
     let compositor = mcp.server.compositor();
     compositor
-        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .command(
+            Caller::on_seat(SeatId(seat)),
+            Command::FocusWindow(WindowId(1)),
+        )
         .expect("the first window is focused");
     for _ in 0..10 {
         let at = compositor.next_deadline().expect("the motion runs");
@@ -1178,12 +1193,12 @@ pub(crate) fn operate_on_idle(
     client: &mut Client,
     reference: &mut Motion,
     start: Duration,
-    operation: impl FnOnce(&mut Layout),
+    operation: impl FnOnce(&mut Compositor),
 ) -> Duration {
     let k = first_boundary_at_or_after(start, compositor.now()) + 1;
     let at = boundary(start, k) + Duration::from_micros(100);
     advance_to(compositor, client, at);
-    compositor.change_layout(operation);
+    operation(compositor);
     reference.update(compositor.layout(), at, Change::Animated);
     at
 }
@@ -1257,7 +1272,7 @@ fn a_switch_turned_back_mid_way_is_the_references_frame_by_frame() {
     let output = output_rect(&compositor, OUTPUT);
     for (name, colour) in [("one", RED), ("two", BLUE)] {
         compositor
-            .change_layout(|layout| layout.focus_workspace(OWNER_SEAT, name))
+            .command(owner(), Command::FocusWorkspace(name.to_owned()))
             .expect("the workspace is shown");
         settle(&mut compositor, |compositor| client.roundtrip(compositor));
         open(&mut compositor, &mut client, colour);
@@ -1272,9 +1287,9 @@ fn a_switch_turned_back_mid_way_is_the_references_frame_by_frame() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .focus_workspace(OWNER_SEAT, "one")
+        |compositor| {
+            compositor
+                .command(owner(), Command::FocusWorkspace("one".to_owned()))
                 .expect("back to workspace one");
         },
     );
@@ -1288,7 +1303,7 @@ fn a_switch_turned_back_mid_way_is_the_references_frame_by_frame() {
                 return false;
             }
             compositor
-                .change_layout(|layout| layout.focus_workspace(OWNER_SEAT, "two"))
+                .command(owner(), Command::FocusWorkspace("two".to_owned()))
                 .expect("workspace two again");
             true
         },
@@ -1327,7 +1342,13 @@ fn special_workspace_hidden(settings: Settings) -> (Compositor, Client, Duration
     open(&mut compositor, &mut client, BLUE);
     let special = open(&mut compositor, &mut client, RED);
     compositor
-        .change_layout(|layout| layout.move_to_special(OWNER_SEAT, "scratch"))
+        .command(
+            owner(),
+            Command::MoveWindowToSpecial {
+                window: None,
+                special: "scratch".to_owned(),
+            },
+        )
         .expect("the window goes to the special workspace");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     (compositor, client, start, window_id(special))
@@ -1351,9 +1372,9 @@ fn the_special_fade_toggled_mid_way_is_the_references_frame_by_frame() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .toggle_special(OWNER_SEAT, "scratch")
+        |compositor| {
+            compositor
+                .command(owner(), Command::ToggleSpecial("scratch".to_owned()))
                 .expect("the special workspace is shown");
         },
     );
@@ -1367,7 +1388,7 @@ fn the_special_fade_toggled_mid_way_is_the_references_frame_by_frame() {
                 return false;
             }
             compositor
-                .change_layout(|layout| layout.toggle_special(OWNER_SEAT, "scratch"))
+                .command(owner(), Command::ToggleSpecial("scratch".to_owned()))
                 .expect("the special workspace is hidden");
             true
         },
@@ -1426,9 +1447,9 @@ fn under_reduced_motion_a_scroll_draws_one_frame_at_the_arrangement() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .focus(OWNER_SEAT, Direction::Left)
+        |compositor| {
+            compositor
+                .command(owner(), Command::Focus(Direction::Left))
                 .expect("the focus moves left");
         },
     );
@@ -1463,9 +1484,9 @@ fn under_reduced_motion_the_special_fade_runs_over_half_its_duration() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .toggle_special(OWNER_SEAT, "scratch")
+        |compositor| {
+            compositor
+                .command(owner(), Command::ToggleSpecial("scratch".to_owned()))
                 .expect("the special workspace is shown");
         },
     );
@@ -1533,7 +1554,7 @@ fn a_popup_mid_scroll_is_drawn_at_its_windows_drawn_rectangle() {
     assert_eq!(pixel(&mut compositor, 26.0, 27.0), blue_pixel);
 
     compositor
-        .change_layout(|layout| layout.focus_window(window_id(windows[0])))
+        .command(owner(), Command::FocusWindow(window_id(windows[0])))
         .expect("red is focused");
     let drawn_rect = |compositor: &Compositor| {
         compositor
@@ -1597,9 +1618,9 @@ fn a_window_closed_and_one_opened_mid_scroll_end_at_the_arrangement() {
         &mut client,
         &mut reference,
         start,
-        |layout| {
-            layout
-                .focus_window(window_id(windows[0]))
+        |compositor| {
+            compositor
+                .command(owner(), Command::FocusWindow(window_id(windows[0])))
                 .expect("the first window is focused");
         },
     );
@@ -1681,7 +1702,7 @@ fn an_agents_new_output_does_not_snap_the_owners_motion() {
     let mut client = Client::connect(&mut compositor);
     open_full_width_columns(&mut compositor, &mut client, &[RED, GREEN, BLUE]);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     for _ in 0..6 {
         let at = compositor.next_deadline().expect("the scroll runs");
@@ -1721,10 +1742,10 @@ fn an_agents_output_removed_ends_its_own_seats_motion_alone() {
     });
     // The owner's windows are 1 to 3, the agent's 4 to 6, its last focused.
     compositor
-        .change_layout(|layout| {
-            layout.focus(OWNER_SEAT, Direction::Left)?;
-            layout.focus_window(WindowId(4))
-        })
+        .command(Caller::on_seat(OWNER_SEAT), Command::Focus(Direction::Left))
+        .expect("both seats' focus moves");
+    compositor
+        .command(Caller::on_seat(seat), Command::FocusWindow(WindowId(4)))
         .expect("both seats' focus moves");
     for _ in 0..6 {
         let at = compositor.next_deadline().expect("the scrolls run");
@@ -1765,7 +1786,7 @@ fn an_agents_seat_removed_does_not_snap_the_owners_motion() {
     compositor.add_output(seat, full_hd()).expect("an output");
     settle(&mut compositor, |compositor| client.roundtrip(compositor));
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     for _ in 0..6 {
         let at = compositor.next_deadline().expect("the scroll runs");
@@ -1816,7 +1837,7 @@ fn after_rest_a_frame_drawn_at_once_across_a_boundary_samples_where_it_shows() {
     let operation = boundary(start, k) + Duration::from_millis(2);
     advance_to(&mut compositor, &mut client, operation);
     compositor
-        .change_layout(|layout| layout.focus(OWNER_SEAT, Direction::Left))
+        .command(owner(), Command::Focus(Direction::Left))
         .expect("the focus moves left");
     reference.update(compositor.layout(), operation, Change::Animated);
     assert_eq!(compositor.next_deadline(), Some(operation));

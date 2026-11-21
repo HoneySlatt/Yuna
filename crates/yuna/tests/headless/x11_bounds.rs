@@ -29,6 +29,7 @@ use yuna::{
 };
 #[cfg(debug_assertions)]
 use yuna::{PANIC_ON_X11_CLOSE, X11_OWED_BOUND};
+use yuna_ipc::{Caller, Command};
 
 use crate::client::Client;
 use crate::selection_client::SelectionClient;
@@ -1030,7 +1031,10 @@ fn a_panic_of_the_manager_ends_its_xwayland_alone() {
         open_drawn(&mut seat.compositor, client, &WindowSpec::named("doomed"));
     let first = xwayland_of(&seat).expect("Xwayland runs");
     seat.compositor
-        .close_window(doomed.id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(doomed.id)),
+        )
         .expect("Yuna asks the window to close");
     let at = seat.seat;
     wait(

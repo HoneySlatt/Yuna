@@ -8,6 +8,7 @@
 //! `agent-2` and `agent-3`, each with an output of 1920 × 1080 at scale 1.
 
 use yuna::{BUTTON_LEFT, Compositor, MAX_VIRTUAL_DEVICES_PER_CLIENT, OWNER_SEAT};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{SeatId, WindowId};
 
 use crate::input_client::{InputClient, InputEvent};
@@ -156,7 +157,7 @@ fn a_device_for_another_seat_does_nothing_and_motion_stays_on_its_seat() {
     let window_a = windows_of(&compositor, a)[0];
     let window_b = windows_of(&compositor, b)[0];
     compositor
-        .change_layout(|layout| layout.focus_window(window_b))
+        .command(Caller::on_seat(b), Command::FocusWindow(window_b))
         .expect("B's window has B's keyboard");
     settle(&mut compositor);
 

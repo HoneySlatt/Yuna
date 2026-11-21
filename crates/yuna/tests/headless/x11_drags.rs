@@ -38,6 +38,7 @@ use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
 use yuna::yuna_layout::geometry::Rect;
 use yuna::yuna_motion::Settings;
 use yuna::{BUTTON_LEFT, ClockMode, Compositor, OutputMode, X11_SYNC_TIMEOUT};
+use yuna_ipc::{Caller, Command};
 use yuna_types::{OutputId, WindowId};
 
 use crate::selection_client::{DragEvent, SelectionClient, SourceDragEvent};
@@ -2248,10 +2249,17 @@ fn a_moving_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
     let watcher = drag.seat.client();
     drag.seat
         .compositor
-        .change_layout(|layout| {
-            layout.focus_window(onto)?;
-            layout.set_fullscreen(onto, true)
-        })
+        .command(Caller::on_seat(drag.seat.seat), Command::FocusWindow(onto))
+        .expect("the window goes fullscreen");
+    drag.seat
+        .compositor
+        .command(
+            Caller::on_seat(drag.seat.seat),
+            Command::SetFullscreen {
+                window: Some(onto),
+                on: true,
+            },
+        )
         .expect("the window goes fullscreen");
     let client = geometry_becomes(&mut drag.seat.compositor, client, window, WHOLE_OUTPUT);
     let (client, ()) = step(&mut drag.seat.compositor, client, move |client| {
@@ -2263,7 +2271,10 @@ fn a_moving_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
     });
     drag.seat
         .compositor
-        .change_layout(|layout| layout.focus_window(neighbour))
+        .command(
+            Caller::on_seat(drag.seat.seat),
+            Command::FocusWindow(neighbour),
+        )
         .expect("the neighbour takes the focus");
     drag.until("the camera shows the neighbour", |drag| {
         (drag.drawn(onto).1.x == -968.0).then_some(())
@@ -2280,7 +2291,7 @@ fn a_moving_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
 
     drag.seat
         .compositor
-        .change_layout(|layout| layout.focus_window(onto))
+        .command(Caller::on_seat(drag.seat.seat), Command::FocusWindow(onto))
         .expect("the fullscreen window takes the focus");
     drag.until("the fullscreen window is mid-way", |drag| {
         (drag.drawn(onto).1.x > -700.0).then_some(())
@@ -2348,7 +2359,13 @@ fn a_centred_fullscreen_x11_windows_point_is_read_where_it_is_drawn() {
     let changed = drag.seat.compositor.now();
     drag.seat
         .compositor
-        .change_layout(|layout| layout.set_fullscreen(onto, true))
+        .command(
+            Caller::on_seat(drag.seat.seat),
+            Command::SetFullscreen {
+                window: Some(onto),
+                on: true,
+            },
+        )
         .expect("the window goes fullscreen");
     let centred = Rect::new(492.0, 16.0, 936.0, 1048.0);
     drag.until("the fullscreen window is drawn centred", |drag| {
@@ -3512,11 +3529,20 @@ fn an_x11_drag_released_onto_a_wayland_window_never_drops_into_a_hidden_window_i
     );
     drag.seat
         .compositor
-        .change_layout(|layout| layout.move_to_workspace(seat, "two"))
+        .command(
+            Caller::on_seat(seat),
+            Command::MoveWindowToWorkspace {
+                window: None,
+                workspace: "two".to_owned(),
+            },
+        )
         .expect("its own workspace");
     drag.seat
         .compositor
-        .change_layout(|layout| layout.focus_workspace(seat, "one"))
+        .command(
+            Caller::on_seat(seat),
+            Command::FocusWorkspace("one".to_owned()),
+        )
         .expect("the first workspace again");
     drag.until("the X11 window is hidden", |drag| {
         drag.seat

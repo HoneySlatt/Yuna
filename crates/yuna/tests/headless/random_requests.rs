@@ -38,11 +38,12 @@ use proptest::test_runner::{FileFailurePersistence, TestRunner, contextualize_co
 use wayland_client::protocol::wl_surface::WlSurface;
 use yuna::yuna_motion::Settings;
 use yuna::{ClockMode, Compositor, Config, OWNER_SEAT, OutputMode};
+use yuna_ipc::Command;
 use yuna_types::{Direction, OutputId, Tiling, WindowId};
 
 use crate::client::{Anchor, Client, ConstraintAdjustment, Gravity, Parent, Placement};
 use crate::selection_client::{SelectionClient, SelectionEvent};
-use crate::{LEAD, assert_rests, motion, run_armed_deadlines};
+use crate::{LEAD, assert_rests, motion, owner, run_armed_deadlines};
 
 /// The clients that send random requests, beside the sentinel.
 const CLIENTS: usize = 3;
@@ -261,15 +262,6 @@ enum Request {
     Disconnect,
 }
 
-/// A change of the layout, as a key binding of the owner's seat makes it.
-#[derive(Debug, Clone, Copy)]
-enum KeyBinding {
-    Focus(Direction),
-    FocusWorkspace(usize),
-    MoveToWorkspace(usize),
-    SetTiling(Tiling),
-}
-
 const WORKSPACES: [&str; 3] = ["1", "2", "3"];
 
 /// One step of a sequence.
@@ -281,7 +273,8 @@ enum Step {
     },
     /// Moves the clock by this many milliseconds.
     Advance(u64),
-    Layout(KeyBinding),
+    /// A command a key binding of the owner's seat gives.
+    Layout(Command),
     /// A key binding focuses a window the output holds, by an index taken modulo their count,
     /// and the clock moves to the next boundary, which gives that window the keyboard.
     FocusWindow(usize),
@@ -570,7 +563,8 @@ fn focused_request() -> impl Strategy<Value = Request> {
     ]
 }
 
-fn key_binding() -> impl Strategy<Value = KeyBinding> {
+/// A command a key binding of the owner's seat gives.
+fn key_binding() -> impl Strategy<Value = Command> {
     let direction = prop_oneof![
         Just(Direction::Left),
         Just(Direction::Right),
@@ -578,10 +572,13 @@ fn key_binding() -> impl Strategy<Value = KeyBinding> {
         Just(Direction::Down),
     ];
     prop_oneof![
-        direction.prop_map(KeyBinding::Focus),
-        (0..WORKSPACES.len()).prop_map(KeyBinding::FocusWorkspace),
-        (0..WORKSPACES.len()).prop_map(KeyBinding::MoveToWorkspace),
-        prop_oneof![Just(Tiling::Scrolling), Just(Tiling::Dwindle)].prop_map(KeyBinding::SetTiling),
+        direction.prop_map(Command::Focus),
+        (0..WORKSPACES.len()).prop_map(|name| Command::FocusWorkspace(WORKSPACES[name].to_owned())),
+        (0..WORKSPACES.len()).prop_map(|name| Command::MoveWindowToWorkspace {
+            window: None,
+            workspace: WORKSPACES[name].to_owned(),
+        }),
+        prop_oneof![Just(Tiling::Scrolling), Just(Tiling::Dwindle)].prop_map(Command::SetTiling),
     ]
 }
 
@@ -1038,19 +1035,8 @@ fn destroy(selection: &mut SelectionClient, object: Object) {
 }
 
 /// Applies a key binding of the owner's seat; the layout may refuse it.
-fn press(compositor: &mut Compositor, binding: KeyBinding) {
-    compositor.change_layout(|layout| {
-        let _ = match binding {
-            KeyBinding::Focus(direction) => layout.focus(OWNER_SEAT, direction),
-            KeyBinding::FocusWorkspace(name) => {
-                layout.focus_workspace(OWNER_SEAT, WORKSPACES[name])
-            }
-            KeyBinding::MoveToWorkspace(name) => {
-                layout.move_to_workspace(OWNER_SEAT, WORKSPACES[name])
-            }
-            KeyBinding::SetTiling(tiling) => layout.set_tiling(OWNER_SEAT, tiling),
-        };
-    });
+fn press(compositor: &mut Compositor, binding: Command) {
+    let _ = compositor.command(owner(), binding);
 }
 
 /// Focuses the window of the output's arrangement that `index` names, taken modulo their count,
@@ -1063,7 +1049,7 @@ fn focus_window(compositor: &mut Compositor, start: Duration, index: usize) {
     };
     let window = placed[i].window;
     // The layout may refuse it.
-    let _ = compositor.change_layout(|layout| layout.focus_window(window));
+    let _ = compositor.command(owner(), Command::FocusWindow(window));
     let next = next_frame_boundary(start, compositor.now());
     compositor
         .advance(next - compositor.now())
@@ -1356,7 +1342,7 @@ fn run(
             Step::Advance(millis) => compositor
                 .advance(Duration::from_millis(*millis))
                 .expect("the manual clock moves"),
-            Step::Layout(binding) => press(&mut compositor, *binding),
+            Step::Layout(binding) => press(&mut compositor, binding.clone()),
             Step::FocusWindow(window) => focus_window(&mut compositor, start, *window),
         }
         settle(&mut compositor, &mut sentinel, &mut clients);
@@ -1375,7 +1361,7 @@ fn run(
     // sentinel's frame callback, asked then, comes in the round that reads it; asked again, at
     // the next boundary's deadline exactly, not a nanosecond before (ADR-0031).
     compositor
-        .change_layout(|layout| layout.focus_window(WindowId(1)))
+        .command(owner(), Command::FocusWindow(WindowId(1)))
         .map_err(|error| TestCaseError::fail(format!("the sentinel cannot focus: {error}")))?;
     if animations == Animations::On {
         motion::settle(&mut compositor, |compositor| {
@@ -1569,7 +1555,7 @@ fn sequences_found_before() {
                     frame: false,
                 }),
                 by_first(Request::Destroy(Object::Surface(0))),
-                Step::Layout(KeyBinding::FocusWorkspace(0)),
+                Step::Layout(Command::FocusWorkspace(WORKSPACES[0].to_owned())),
                 Step::Advance(14),
                 Step::Client {
                     who: Who::Focused,

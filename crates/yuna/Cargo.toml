@@ -30,6 +30,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 x11rb.workspace = true
 zbus.workspace = true
+yuna-ipc = { path = "../yuna-ipc" }
 yuna-layout = { path = "../yuna-layout" }
 yuna-motion = { path = "../yuna-motion" }
 yuna-types = { path = "../yuna-types" }

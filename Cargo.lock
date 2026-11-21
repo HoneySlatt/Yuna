@@ -937,6 +937,7 @@ dependencies = [
  "x11rb",
  "xkbcommon",
  "yuna-bench",
+ "yuna-ipc",
  "yuna-layout",
  "yuna-motion",
  "yuna-types",
@@ -953,6 +954,13 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
+]
+
+[[package]]
+name = "yuna-ipc"
+version = "0.1.0"
+dependencies = [
+ "yuna-types",
 ]
 
 [[package]]

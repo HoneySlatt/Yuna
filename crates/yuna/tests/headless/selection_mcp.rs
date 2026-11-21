@@ -28,6 +28,7 @@ use yuna::{
     CLIPBOARD_TIMEOUT, ClockMode, Compositor, Config, MAX_CLIPBOARD_WRITES, X11Display,
     XwaylandConfig,
 };
+use yuna_ipc::{Caller, Command};
 use yuna_types::SeatId;
 
 use crate::mcp::{Mcp, modern};
@@ -994,7 +995,10 @@ fn an_agents_text_is_pasted_by_an_x11_window_from_either_selection() {
     );
     let compositor = x.mcp.server.compositor();
     compositor
-        .change_layout(|layout| layout.focus_window(described.id))
+        .command(
+            Caller::on_seat(SeatId(seat)),
+            Command::FocusWindow(described.id),
+        )
         .expect("the window takes the focus");
     let deadline = Instant::now() + PATIENCE;
     while compositor.keyboard_window(SeatId(seat)) != Some(described.id) {

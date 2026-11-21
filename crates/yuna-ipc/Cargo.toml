@@ -1,0 +1,14 @@
+[package]
+name = "yuna-ipc"
+description = "Yuna's commands: what a caller may ask of the compositor, and why it refuses one"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+yuna-types = { path = "../yuna-types" }
+
+[lints]
+workspace = true

@@ -16,13 +16,13 @@ use wayland_client::protocol::{
     wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
-use yuna::yuna_layout::OpenOptions;
 use yuna::yuna_layout::geometry::Size;
 use yuna::{Compositor, HIDDEN_FRAME_INTERVAL, MAX_WINDOWS_PER_CLIENT, OWNER_SEAT};
-use yuna_types::WindowId;
+use yuna_ipc::Command;
+use yuna_types::{Direction, WindowId};
 
 use crate::client::{Client, memory_file};
-use crate::{OUTPUT, manual_compositor};
+use crate::{OUTPUT, manual_compositor, owner};
 
 const GREY: u32 = 0xFF_80_80_80;
 
@@ -389,7 +389,7 @@ fn a_child_applied_after_the_surface_committed_still_gets_its_frame_callback() {
     let mut compositor = manual_compositor();
     // Its id taken, the layout refuses the window: no output shows it.
     compositor
-        .change_layout(|layout| layout.open_window(OWNER_SEAT, WindowId(1), OpenOptions::default()))
+        .hold_window_id_in_layout(OWNER_SEAT, WindowId(1))
         .expect("the id is taken");
     let mut client = Client::connect(&mut compositor);
     let window = client.open_window(&mut compositor);
@@ -464,9 +464,7 @@ fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
     let mut times = Vec::new();
     for _ in 0..5 {
         let started = Instant::now();
-        compositor.change_layout(|layout| {
-            let _ = layout.focus(OWNER_SEAT, yuna_types::Direction::Left);
-        });
+        let _ = compositor.command(owner(), Command::Focus(Direction::Left));
         compositor
             .advance(Duration::from_millis(20))
             .expect("the manual clock moves");
@@ -480,9 +478,7 @@ fn an_arrangement_looks_at_the_windows_in_the_layout_alone() {
     // Every window had its frame callbacks: one arrangement alone looks at windows now.
     assert_eq!(compositor.next_deadline(), None);
     let before = compositor.counters().windows_looked_at_for_hidden_frames;
-    compositor.change_layout(|layout| {
-        let _ = layout.focus(OWNER_SEAT, yuna_types::Direction::Left);
-    });
+    let _ = compositor.command(owner(), Command::Focus(Direction::Left));
     compositor
         .advance(Duration::from_millis(20))
         .expect("the manual clock moves");

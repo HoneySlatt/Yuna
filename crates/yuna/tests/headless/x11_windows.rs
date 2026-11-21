@@ -30,6 +30,7 @@ use yuna::{
     MAX_WINDOWS_PER_CLIENT, OutputMode, WindowDescription, WindowShell, X11_PING_TIMEOUT,
     X11_SYNC_TIMEOUT, X11Display, XwaylandConfig, axis_taps,
 };
+use yuna_ipc::{Caller, Command};
 use yuna_types::{Direction, OutputId, SeatId, WindowId};
 
 use crate::x11_client::{
@@ -143,7 +144,7 @@ impl X11Seat {
     pub(crate) fn open_on(&mut self, output: OutputId) {
         let seat = self.seat;
         self.compositor
-            .change_layout(|layout| layout.focus_output(seat, output))
+            .command(Caller::on_seat(seat), Command::FocusOutput(output))
             .expect("the output takes the focus");
     }
 
@@ -151,11 +152,21 @@ impl X11Seat {
     pub(crate) fn move_to(&mut self, output: OutputId) {
         let seat = self.seat;
         let name = format!("on-{}", output.0);
+        let _ = self.compositor.command(
+            Caller::on_seat(seat),
+            Command::AddWorkspace {
+                name: name.clone(),
+                output: Some(output),
+            },
+        );
         self.compositor
-            .change_layout(|layout| {
-                let _ = layout.add_workspace(seat, &name, Some(output));
-                layout.move_to_workspace(seat, &name)
-            })
+            .command(
+                Caller::on_seat(seat),
+                Command::MoveWindowToWorkspace {
+                    window: None,
+                    workspace: name,
+                },
+            )
             .expect("the window moves");
     }
 }
@@ -729,7 +740,7 @@ fn an_x11_window_slides_with_the_motion() {
         .expect("the clock moves");
     let id = seat.seat;
     seat.compositor
-        .change_layout(|layout| layout.move_focused(id, Direction::Left))
+        .command(Caller::on_seat(id), Command::MoveFocused(Direction::Left))
         .expect("the column moves");
     reference.update(seat.compositor.layout(), operation, Change::Animated);
 
@@ -824,7 +835,10 @@ fn closing_an_x11_window_sends_wm_delete_window() {
     let (client, window, described, _) =
         open_drawn(&mut seat.compositor, client, &WindowSpec::named("polite"));
     seat.compositor
-        .close_window(described.id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(described.id)),
+        )
         .expect("asked to close");
     let (client, ()) = step(&mut seat.compositor, client, move |client| {
         let atoms = client.atoms;
@@ -866,7 +880,10 @@ fn closing_an_x11_window_sends_wm_delete_window() {
     };
     let (rude, _, described, _) = open_drawn(&mut seat.compositor, rude, &spec);
     seat.compositor
-        .close_window(described.id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(described.id)),
+        )
         .expect("asked to close");
     step(&mut seat.compositor, rude, |client| {
         let deadline = Instant::now() + PATIENCE;
@@ -942,7 +959,13 @@ fn a_hidden_x11_window_is_told_hidden() {
         open_drawn(&mut seat.compositor, client, &WindowSpec::named("hidden"));
     let id = seat.seat;
     seat.compositor
-        .change_layout(|layout| layout.move_to_workspace(id, "two"))
+        .command(
+            Caller::on_seat(id),
+            Command::MoveWindowToWorkspace {
+                window: None,
+                workspace: "two".to_owned(),
+            },
+        )
         .expect("moved to a workspace of its own");
     let output = seat.output_rect(seat.outputs[0]);
     let client = geometry_becomes(&mut seat.compositor, client, window, x11_tile(output));
@@ -967,7 +990,10 @@ fn a_hidden_x11_window_is_told_hidden() {
 
     // Another workspace shown: the window is hidden, and told so, where it is.
     seat.compositor
-        .change_layout(|layout| layout.focus_workspace(id, "one"))
+        .command(
+            Caller::on_seat(id),
+            Command::FocusWorkspace("one".to_owned()),
+        )
         .expect("another workspace");
     let client = state_has_hidden(&mut seat.compositor, client, true);
     let (client, geometry) = step(&mut seat.compositor, client, move |client| {
@@ -982,7 +1008,10 @@ fn a_hidden_x11_window_is_told_hidden() {
     );
 
     seat.compositor
-        .change_layout(|layout| layout.focus_workspace(id, "two"))
+        .command(
+            Caller::on_seat(id),
+            Command::FocusWorkspace("two".to_owned()),
+        )
         .expect("its workspace again");
     state_has_hidden(&mut seat.compositor, client, false);
 }
@@ -1077,7 +1106,7 @@ fn a_fullscreen_x11_window_keeps_its_emulated_mode() {
         "the game's frame is the output's, pixel for pixel"
     );
     // Arrangements again keep it: its size stays the mode's.
-    seat.compositor.change_layout(|_| {});
+    seat.compositor.rearrange();
     let client = geometry_becomes(
         &mut seat.compositor,
         client,
@@ -1657,7 +1686,13 @@ fn a_resize_waits_for_the_sync_counter_and_never_past_the_timeout() {
     let changed = seat.compositor.now();
     let limit = changed + X11_SYNC_TIMEOUT - Duration::from_millis(10);
     seat.compositor
-        .change_layout(|layout| layout.set_full_width(id, true))
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::SetFullWidth {
+                window: Some(id),
+                on: true,
+            },
+        )
         .expect("full width");
     let pump = move |compositor: &mut Compositor| pump_before(compositor, limit);
     let (client, SyncSeen { value, size, held }) =
@@ -1722,7 +1757,13 @@ fn a_resize_waits_for_the_sync_counter_and_never_past_the_timeout() {
     let changed = seat.compositor.now();
     let limit = changed + X11_SYNC_TIMEOUT - Duration::from_millis(10);
     seat.compositor
-        .change_layout(|layout| layout.set_full_width(id, true))
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::SetFullWidth {
+                window: Some(id),
+                on: true,
+            },
+        )
         .expect("full width");
     let pump = move |compositor: &mut Compositor| pump_before(compositor, limit);
     let (client, SyncSeen { held, .. }) =
@@ -1812,7 +1853,10 @@ fn an_unanswered_ping_marks_the_window_unresponsive() {
     let answering_id = described.id;
     // Asked to close, it is pinged too; it answers, and keeps its window open.
     seat.compositor
-        .close_window(answering_id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(answering_id)),
+        )
         .expect("asked to close");
     let asked = seat.compositor.now();
     let (client, ()) = step(&mut seat.compositor, client, move |client| {
@@ -1847,7 +1891,10 @@ fn an_unanswered_ping_marks_the_window_unresponsive() {
     let (client, frozen, described, _) = open_drawn(&mut seat.compositor, client, &spec("frozen"));
     let frozen_id = described.id;
     seat.compositor
-        .close_window(frozen_id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(frozen_id)),
+        )
         .expect("asked to close");
     let asked = seat.compositor.now();
     let (client, ()) = step(&mut seat.compositor, client, move |client| {
@@ -1941,7 +1988,10 @@ fn a_startup_id_carries_an_activation_token() {
     // without the focus.
     let launcher_id = launcher_window.id;
     seat.compositor
-        .change_layout(|layout| layout.focus_window(launcher_id))
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::FocusWindow(launcher_id),
+        )
         .expect("the launcher focused");
     let spec = WindowSpec {
         transient_for: Some(parent),
@@ -1990,7 +2040,13 @@ fn a_sync_request_crossing_an_unmap_never_holds_the_window_mapped_again() {
     let id = described.id;
     let configures = seat.compositor.counters().configures;
     seat.compositor
-        .change_layout(|layout| layout.set_full_width(id, true))
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::SetFullWidth {
+                window: Some(id),
+                on: true,
+            },
+        )
         .expect("full width");
     // The clock alone moves, to the refresh that arranges it: no event of the manager is read.
     while seat.compositor.counters().configures == configures {
@@ -2031,7 +2087,10 @@ fn a_pinged_window_that_closes_leaves_no_deadline() {
     };
     let (client, window, described, _) = open_drawn(&mut seat.compositor, client, &spec);
     seat.compositor
-        .close_window(described.id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(described.id)),
+        )
         .expect("asked to close");
     let asked = seat.compositor.now();
     // Its client closes it, as asked, without answering the ping.
@@ -2068,7 +2127,10 @@ fn a_pinged_window_that_closes_leaves_no_deadline() {
     let client = seat.client();
     let (client, window, described, _) = open_drawn(&mut seat.compositor, client, &spec);
     seat.compositor
-        .close_window(described.id)
+        .command(
+            Caller::on_seat(seat.seat),
+            Command::CloseWindow(Some(described.id)),
+        )
         .expect("asked to close");
     let asked = seat.compositor.now();
     let (client, ()) = step(&mut seat.compositor, client, move |client| {

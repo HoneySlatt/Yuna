@@ -22,7 +22,6 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode, Window};
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::yuna_layout::OpenOptions;
 use yuna::{ClockMode, MAX_WINDOWS, MAX_WINDOWS_PER_CLIENT, OutputMode};
 use yuna_types::WindowId;
 
@@ -183,9 +182,7 @@ fn a_window_the_layout_refuses_after_its_commit_gets_its_frame_callbacks() {
     let (client, first, opened, _) = open_drawn(&mut seat.compositor, client, &grey("first"));
     let seat_id = seat.seat;
     seat.compositor
-        .change_layout(|layout| {
-            layout.open_window(seat_id, WindowId(opened.id.0 + 1), OpenOptions::default())
-        })
+        .hold_window_id_in_layout(seat_id, WindowId(opened.id.0 + 1))
         .expect("the layout takes the id");
 
     let (client, late) = map_with_serial_held_back(&mut seat, client, first);

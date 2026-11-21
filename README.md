@@ -57,6 +57,7 @@ tells how it fits:
 
 | Part | Folder | In ARCHITECTURE |
 |---|---|---|
+| The commands | [`crates/yuna-ipc`](crates/yuna-ipc/src/lib.rs) | [Crates and dependencies](docs/ARCHITECTURE.md#crates-and-dependencies) |
 | The shared ids and directions | [`crates/yuna-types`](crates/yuna-types/src/lib.rs) | [Crates and dependencies](docs/ARCHITECTURE.md#crates-and-dependencies) |
 | The layout model | [`crates/yuna-layout`](crates/yuna-layout/src/lib.rs) | [The layout model](docs/ARCHITECTURE.md#the-layout-model) |
 | Motion | [`crates/yuna-motion`](crates/yuna-motion/src/lib.rs) | [Motion](docs/ARCHITECTURE.md#motion) |
