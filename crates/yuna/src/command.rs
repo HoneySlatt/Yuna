@@ -5,7 +5,7 @@
 use yuna_ipc::{Caller, Command, Refusal};
 use yuna_layout::{Layout, LayoutError};
 use yuna_motion::Change;
-use yuna_types::{SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::state::State;
 
@@ -13,11 +13,13 @@ use crate::state::State;
 /// output's next refresh; a command refused before it changed anything arms nothing.
 pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result<(), Refusal> {
     if let Command::CloseWindow(window) = command {
+        check_reach(&state.layout, caller.seat, &command)?;
         let window = target(&state.layout, caller.seat, window)?;
         return state
             .close_window(window)
             .map_err(|_| Refusal::UnknownWindow(window));
     }
+    check_reach(&state.layout, caller.seat, &command)?;
     let applied = apply_to_layout(&mut state.layout, caller.seat, command);
     if applied.changed {
         state.mark_layout_changed(Change::Animated);
@@ -90,6 +92,45 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Appli
         _ => Err(LayoutError::Refused("Yuna does not know this command")),
     };
     Applied::of(done)
+}
+
+/// Refuses a command that names a window or an output of another seat than `seat`'s, or one the
+/// layout does not hold, alike: a caller reaches its own seat alone (ADR-0138, ADR-0146).
+fn check_reach(layout: &Layout, seat: SeatId, command: &Command) -> Result<(), Refusal> {
+    if let Some(window) = named_window(command)
+        && layout.seat_of_window(window) != Some(seat)
+    {
+        return Err(Refusal::WindowNotOnSeat(window, seat));
+    }
+    if let Some(output) = named_output(command)
+        && layout.seat_of_output(output) != Some(seat)
+    {
+        return Err(Refusal::OutputNotOnSeat(output, seat));
+    }
+    Ok(())
+}
+
+/// The window `command` names, if it names one.
+fn named_window(command: &Command) -> Option<WindowId> {
+    match *command {
+        Command::FocusWindow(window) => Some(window),
+        Command::MoveWindowToWorkspace { window, .. }
+        | Command::MoveWindowToSpecial { window, .. }
+        | Command::SetFullWidth { window, .. }
+        | Command::SetFullscreen { window, .. }
+        | Command::SetFloating { window, .. }
+        | Command::CloseWindow(window) => window,
+        _ => None,
+    }
+}
+
+/// The output `command` names, if it names one.
+fn named_output(command: &Command) -> Option<OutputId> {
+    match *command {
+        Command::FocusOutput(output) => Some(output),
+        Command::AddWorkspace { output, .. } => output,
+        _ => None,
+    }
 }
 
 /// Does `step` to the window a command names, or to the one `seat` focuses.

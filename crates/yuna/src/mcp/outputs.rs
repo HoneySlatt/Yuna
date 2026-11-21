@@ -236,19 +236,14 @@ impl Server {
         let caller = Caller::on_seat(seat);
         let changed = match call {
             WorkspacesCall::List { .. } => Ok(()),
-            WorkspacesCall::Create { name, output, .. } => {
-                let output = output.map(OutputId);
-                if let Some(output) = output
-                    && self.output_of(seat, output).is_none()
-                {
-                    return ToolResult::failed(format!(
-                        "no output {} on seat {}",
-                        output.0, seat.0
-                    ));
-                }
-                self.compositor
-                    .command(caller, Command::AddWorkspace { name, output })
-            }
+            // The dispatch refuses another seat's output or window, in MCP's words.
+            WorkspacesCall::Create { name, output, .. } => self.compositor.command(
+                caller,
+                Command::AddWorkspace {
+                    name,
+                    output: output.map(OutputId),
+                },
+            ),
             WorkspacesCall::Remove { name, .. } => self
                 .compositor
                 .command(caller, Command::RemoveWorkspace(name)),
@@ -257,27 +252,13 @@ impl Server {
                 .command(caller, Command::FocusWorkspace(name)),
             WorkspacesCall::MoveWindow {
                 window, workspace, ..
-            } => {
-                let window = WindowId(window);
-                let ours = self
-                    .compositor
-                    .windows()
-                    .iter()
-                    .any(|description| description.id == window && description.seat == seat);
-                if !ours {
-                    return ToolResult::failed(format!(
-                        "no window {} on seat {}",
-                        window.0, seat.0
-                    ));
-                }
-                self.compositor.command(
-                    caller,
-                    Command::MoveWindowToWorkspace {
-                        window: Some(window),
-                        workspace,
-                    },
-                )
-            }
+            } => self.compositor.command(
+                caller,
+                Command::MoveWindowToWorkspace {
+                    window: Some(WindowId(window)),
+                    workspace,
+                },
+            ),
         };
         if let Err(error) = changed {
             return ToolResult::failed(error.to_string());

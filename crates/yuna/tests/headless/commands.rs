@@ -80,11 +80,11 @@ fn a_refused_command_says_why_in_the_layouts_words() {
     assert_eq!(refused.to_string(), "no workspace named \"nowhere\"");
     assert_eq!(
         compositor.command(owner(), Command::FocusWindow(WindowId(99))),
-        Err(Refusal::UnknownWindow(WindowId(99)))
+        Err(Refusal::WindowNotOnSeat(WindowId(99), OWNER_SEAT))
     );
     assert_eq!(
         compositor.command(owner(), Command::CloseWindow(Some(WindowId(99)))),
-        Err(Refusal::UnknownWindow(WindowId(99)))
+        Err(Refusal::WindowNotOnSeat(WindowId(99), OWNER_SEAT))
     );
 }
 
@@ -146,4 +146,68 @@ fn a_refused_command_arms_no_refresh() {
     }
     assert_eq!(compositor.next_deadline(), None);
     assert_eq!(compositor.description_generation(), generation);
+}
+
+/// A caller reaches its own seat's windows and outputs alone: another seat's are refused as if
+/// they did not exist, so that an agent's seat never reaches the owner's nor learns what it holds
+/// ([ADR-0138](../../../../docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
+#[test]
+fn a_caller_reaches_neither_the_windows_nor_the_outputs_of_another_seat() {
+    let mut compositor = manual_compositor();
+    let mut owners = Client::connect(&mut compositor);
+    open_and_commit(&mut compositor, &mut owners, RED);
+    run_armed_deadlines(&mut compositor);
+    let owners_window = compositor.windows()[0].id;
+    let owners_output = compositor.outputs()[0];
+    let agent = compositor.add_seat().expect("an agent's seat");
+    let agents_output = compositor
+        .add_output(agent, yuna::OutputMode::default())
+        .expect("the agent's output");
+    let as_agent = yuna_ipc::Caller::on_seat(agent);
+    for command in [
+        Command::FocusWindow(owners_window),
+        Command::CloseWindow(Some(owners_window)),
+        Command::SetFullscreen {
+            window: Some(owners_window),
+            on: true,
+        },
+        Command::MoveWindowToWorkspace {
+            window: Some(owners_window),
+            workspace: "spy".to_owned(),
+        },
+    ] {
+        assert_eq!(
+            compositor.command(as_agent, command.clone()),
+            Err(Refusal::WindowNotOnSeat(owners_window, agent)),
+            "{command:?}"
+        );
+    }
+    for command in [
+        Command::FocusOutput(owners_output),
+        Command::AddWorkspace {
+            name: "spy".to_owned(),
+            output: Some(owners_output),
+        },
+    ] {
+        assert_eq!(
+            compositor.command(as_agent, command.clone()),
+            Err(Refusal::OutputNotOnSeat(owners_output, agent)),
+            "{command:?}"
+        );
+    }
+    assert_eq!(
+        Refusal::WindowNotOnSeat(owners_window, agent).to_string(),
+        format!("no window {} on seat {}", owners_window.0, agent.0)
+    );
+    let layout = compositor.layout();
+    assert!(
+        !layout
+            .window(owners_window)
+            .expect("still there")
+            .fullscreen
+    );
+    assert_eq!(layout.focused(OWNER_SEAT), Some(owners_window));
+    compositor
+        .command(as_agent, Command::FocusOutput(agents_output))
+        .expect("the agent's own output");
 }

@@ -120,6 +120,11 @@ pub enum Refusal {
     UnknownWindow(WindowId),
     /// The caller's seat has no workspace of this name.
     UnknownWorkspace(String),
+    /// The window is not one of the caller's seat: it is another seat's, or none at all, which
+    /// the caller is not told apart.
+    WindowNotOnSeat(WindowId, SeatId),
+    /// The output is not one of the caller's seat, another seat's or none.
+    OutputNotOnSeat(OutputId, SeatId),
     /// A command on the focused window, and the caller's seat focuses none.
     NoFocusedWindow,
     /// The name or id is already used.
@@ -139,6 +144,12 @@ impl fmt::Display for Refusal {
             Refusal::UnknownOutput(id) => write!(f, "no output {}", id.0),
             Refusal::UnknownWindow(id) => write!(f, "no window {}", id.0),
             Refusal::UnknownWorkspace(name) => write!(f, "no workspace named {name:?}"),
+            Refusal::WindowNotOnSeat(window, seat) => {
+                write!(f, "no window {} on seat {}", window.0, seat.0)
+            }
+            Refusal::OutputNotOnSeat(output, seat) => {
+                write!(f, "no output {} on seat {}", output.0, seat.0)
+            }
             Refusal::NoFocusedWindow => f.write_str("no window is focused"),
             Refusal::AlreadyExists => f.write_str("this id is already used"),
             Refusal::InvalidValue => f.write_str("a value is not finite or out of range"),

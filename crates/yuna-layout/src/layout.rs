@@ -1790,6 +1790,19 @@ impl Layout {
         }
     }
 
+    /// The seat whose workspaces hold `window`; none for a window the model does not hold. It
+    /// reads the window's record alone, whatever the number of windows.
+    pub fn seat_of_window(&self, window: WindowId) -> Option<SeatId> {
+        self.windows.get(&window).map(|record| record.seat)
+    }
+
+    /// The seat `output` belongs to; none for an output the model does not hold.
+    pub fn seat_of_output(&self, output: OutputId) -> Option<SeatId> {
+        self.output_index(output)
+            .ok()
+            .map(|(si, _)| self.seats[si].id)
+    }
+
     /// Where a window is and its state.
     pub fn window(&self, window: WindowId) -> Option<WindowInfo> {
         let (si, slot) = self.find_window(window).ok()?;

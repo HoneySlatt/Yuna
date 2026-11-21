@@ -74,3 +74,19 @@ fn a_seat_goes_only_once_its_windows_are_closed() {
     m.ok(|l| l.remove_seat(AGENT));
     assert!(m.layout.output_rect(AGENT_OUTPUT).is_err());
 }
+
+/// Whose a window and an output are, without walking the seats' workspaces: what a caller's
+/// command is checked against, at any number of windows (ADR-0146).
+#[test]
+fn a_window_and_an_output_name_their_seat() {
+    let mut m = owner_and_agent();
+    m.open_with(AGENT, 100, OpenOptions::default());
+    assert_eq!(m.layout.seat_of_window(w(1)), Some(OWNER));
+    assert_eq!(m.layout.seat_of_window(w(100)), Some(AGENT));
+    assert_eq!(m.layout.seat_of_window(w(999)), None);
+    assert_eq!(m.layout.seat_of_output(MAIN), Some(OWNER));
+    assert_eq!(m.layout.seat_of_output(AGENT_OUTPUT), Some(AGENT));
+    assert_eq!(m.layout.seat_of_output(OutputId(999)), None);
+    m.ok(|l| l.close_window(w(100)));
+    assert_eq!(m.layout.seat_of_window(w(100)), None);
+}
