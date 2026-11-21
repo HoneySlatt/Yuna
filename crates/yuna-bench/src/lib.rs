@@ -11,8 +11,9 @@
 //! the bench's virtual keyboard ([`keys`]). Each run writes a versioned JSON file ([`record`]);
 //! [`report`] summarises them in Markdown.
 //!
-//! Beside the bench, [`parity`] compares two builds of Yuna on figures the machine's load does
-//! not move ([ADR-0142](../../../docs/adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
+//! Beside the bench, [`parity`] compares two builds of Yuna: in CI, on figures the machine's load
+//! does not move; once per milestone, on the GPU's memory and on timed figures, judged over pairs
+//! ([ADR-0142](../../../docs/adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
 //!
 //! It depends on nothing of the `yuna` crate: it measures Yuna as it measures the others, and
 //! builds alone.

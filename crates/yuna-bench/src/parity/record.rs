@@ -29,7 +29,7 @@ pub struct RunFile {
     pub written_utc: Option<String>,
     /// The script's arguments.
     pub arguments: Vec<String>,
-    /// The tier: `ci`.
+    /// The tiers: `ci`, `gpu`, `timed` or `timed,gpu`.
     pub tier: String,
     /// The seed of the runs' random order.
     pub seed: u64,
@@ -52,6 +52,13 @@ pub struct RunFile {
     /// For each figure worse, whether the push moved it: the push before against the head.
     #[serde(default)]
     pub pushes: Vec<PushNote>,
+    /// The timed tier's soak: each side's readings.
+    #[serde(default)]
+    pub soak: Option<SoakRecord>,
+    /// The timed cases some of whose runs could not read the other programs' GPU load, as
+    /// `<group>: <n> of <m> runs`: a game on the GPU would not have marked them disturbed.
+    #[serde(default)]
+    pub gpu_load_unread: Vec<String>,
     /// Facts a reader needs beside the figures.
     pub notes: Vec<String>,
     /// The program's exit status: 0 no figure worse, 1 a figure worse, 2 a figure void or an
@@ -70,6 +77,22 @@ pub struct MoveCheck {
     pub worse: Vec<String>,
     /// Those no move names, or not measured against the old baseline: the run is void.
     pub unnamed: Vec<String>,
+}
+
+/// What the soak read of each side.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SoakRecord {
+    /// Its length after the instances settled, in seconds.
+    pub seconds: u64,
+    /// The instances of each side.
+    pub instances: usize,
+    /// The base's readings: minutes from the first, and the `Pss_Anon` of its instances, summed,
+    /// in KiB.
+    pub base: Vec<(f64, f64)>,
+    /// The head's.
+    pub head: Vec<(f64, f64)>,
+    /// Why a side could not be read to the end.
+    pub errors: Vec<String>,
 }
 
 /// Whether a push moved a worse figure.
@@ -99,6 +122,9 @@ pub struct RunRecord {
     pub digest: Option<String>,
     /// Facts a reader needs beside it.
     pub notes: Vec<String>,
+    /// For a timed run, why the machine's load disturbed it: its pair was dropped.
+    #[serde(default)]
+    pub disturbed: Option<String>,
 }
 
 impl RunRecord {
@@ -129,6 +155,7 @@ impl RunRecord {
             work,
             digest: outcome.digest.clone(),
             notes: outcome.notes.clone(),
+            disturbed: outcome.disturbed.clone(),
         }
     }
 }
@@ -160,10 +187,35 @@ pub struct FigureRecord {
     pub head_values: Vec<f64>,
     /// The larger of the two sides' spreads: range over median.
     pub spread: Option<f64>,
-    /// `no worse`, `worse`, `recorded` or `void`.
+    /// `no worse`, `worse`, `inconclusive`, `recorded` or `void`.
     pub verdict: String,
     /// Why it is void.
     pub reason: Option<String>,
+    /// Whether it is the timed tier's: judged over pairs, or the soak's.
+    #[serde(default)]
+    pub timed: bool,
+    /// For a timed figure, the interval it was judged on.
+    #[serde(default)]
+    pub judgement: Option<JudgementRecord>,
+}
+
+/// The interval a timed figure was judged on (`rule.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct JudgementRecord {
+    /// What it bounds: `ln(head / base)` over the quiet pairs, or the head's soak slope.
+    pub on: String,
+    /// The quiet pairs, or the soak's readings.
+    pub count: usize,
+    /// The pairs dropped as disturbed.
+    pub dropped: usize,
+    /// The mean.
+    pub mean: f64,
+    /// The values' standard deviation: the spread a threshold is set from.
+    pub deviation: f64,
+    /// The one-sided 95 % lower bound on the mean.
+    pub lower: f64,
+    /// The one-sided 95 % upper bound.
+    pub upper: f64,
 }
 
 impl FigureRecord {
@@ -190,6 +242,16 @@ impl FigureRecord {
             spread: figure.spread,
             verdict: figure.verdict.name().to_owned(),
             reason: figure.verdict.reason().map(str::to_owned),
+            timed: figure.kind.is_timed(),
+            judgement: figure.judgement.map(|judgement| JudgementRecord {
+                on: judgement.on.to_owned(),
+                count: judgement.interval.count,
+                dropped: judgement.dropped,
+                mean: judgement.interval.mean,
+                deviation: judgement.interval.deviation,
+                lower: judgement.interval.lower,
+                upper: judgement.interval.upper,
+            }),
         }
     }
 }

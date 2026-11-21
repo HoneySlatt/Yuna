@@ -903,21 +903,31 @@ fails the case rather than measure an empty scene.
 
 ## The parity script
 
-`yuna-bench parity run` compares two builds of Yuna, a *base* and a *head*, on figures the
-machine's load does not move, by the rule of
+`yuna-bench parity run` compares two builds of Yuna, a *base* and a *head*, by the rule of
 [ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md). Every step of
-Stage 2a must keep them ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
-CI runs it at each push, the head against the pinned baseline. Its modules are in
+Stage 2a must keep their figures
+([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)). CI runs it at each push,
+the head against the pinned baseline. Its modules are in
 [`crates/yuna-bench/src/parity/`](../crates/yuna-bench/src/parity/mod.rs); how to run it is in
 [CONTRIBUTING](../CONTRIBUTING.md#the-parity-script). It depends on nothing of `yuna`: it drives
 both builds through `yuna mcp`, whose tools are its contract with them.
 
-**The tiers.** Only the CI tier is built: callgrind's instructions, DHAT's allocations
-([ADR-0143](adr/0143-allocations-a-frame-counted-by-dhat.md)), memory, wakes and the layout's
-operations. The GPU tier (the kernel's DRM memory) and the timed tier (timed runs, start time,
-GPU memory, a soak, judged by an interval over pairs) are ADR-0142's, not built yet.
+**The tiers** (`--tier`), ADR-0142's three:
 
-A run of the script:
+- **CI** (`ci`, the default), at each push: figures the machine's load does not move, callgrind's
+  instructions, DHAT's allocations ([ADR-0143](adr/0143-allocations-a-frame-counted-by-dhat.md)),
+  memory, wakes and the layout's operations. The numbered steps below are its flow.
+- **GPU** (`gpu`), an agent's run on the desktop, never CI: each CI scenario natively on `yuna
+  mcp --gpu`, which opens the render node alone, and at rest after its measured periods the
+  kernel's DRM memory of Yuna's DRM clients, each client once: *GPU memory*, `resident` less
+  `shared`, every region summed (*parity*), and `shared` (*recorded*). Judged as the CI tier's
+  figures are.
+- **Timed** (`timed`), once per milestone, by an agent on the high tier's desktop under
+  [ADR-0115](adr/0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md)'s
+  rules: timed runs judged over pairs, cold starts, and a soak ([below](#the-timed-tier)).
+  `timed,gpu` runs both tiers, and the timed runs on the GPU too.
+
+A run of the CI tier:
 
 1. **The builds** (`build.rs`). Each side is a revision, checked out as a git worktree in the
    work folder, or a folder built as it is. Each builds in its own development shell, `nix
@@ -1004,14 +1014,86 @@ earlier one that holds the change, the figures it moves, why, and the ADR or the
 base that lacks a program the head has, an operations program for instance, makes its figures
 void.
 
-**The controls.** The base against itself, the *self control*, must pass. Each *canary*, built
-into the head with the `parity-canary` feature of `yuna`, `yuna-layout` or `yuna-motion` and
-turned on by `YUNA_PARITY_CANARY`, injects one cost about twice its figure's threshold, which
-must be flagged: `spin` (Yuna's own instructions), `spin-total` (the total's), `allocate`, `leak`,
-`memory`, `wake` (at rest), `frame-wake` (a wake and a context switch a frame, more than twice:
-one a frame is the least), `round`, `layout`, `motion`
-([`canary.rs`](../crates/yuna/src/canary.rs)). No shipped build has the feature;
-`scripts/check.sh` lints it.
+**The controls.** The base against itself, the *self control*, must pass, in every tier. Each
+*canary*, built into the head with the `parity-canary` feature of `yuna`, `yuna-layout` or
+`yuna-motion` and turned on by `YUNA_PARITY_CANARY`, injects one cost about twice its figure's
+threshold, which must be flagged: for the CI tier `spin` (Yuna's own instructions), `spin-total`
+(the total's), `allocate`, `leak`, `memory`, `wake` (at rest), `frame-wake` (a wake and a context
+switch a frame, more than twice: one a frame is the least), `round`, `layout`, `motion`; for the
+timed tier `spin-draw` (the processor kept busy inside each frame's drawing, which its time
+counts) and `start` (a sleep as Yuna starts) ([`canary.rs`](../crates/yuna/src/canary.rs)). No
+canary covers the GPU tier's memory yet. No shipped build has the feature; `scripts/check.sh`
+lints it.
+
+### The timed tier
+
+[`timed.rs`](../crates/yuna-bench/src/parity/timed.rs) runs its cases one run at a time, never
+beside another of the script's, after reading the machine's load for 3 s:
+
+- **Frames**: `partial` (1080p, a 64 × 64 square a frame), `scaled` (4K at scale 1.5, the same
+  square) and `full-4k` (4K at scale 1.5, two windows whole each frame), on the manual clock with
+  the lockstep client as in the CI tier, but with llvmpipe on its own threads, the agents' case,
+  and Yuna logging each frame at debug. Two figures: *a frame's drawing time*, the median of the
+  measured frames' `took_us`, which the log's `frame drawn` lines give; and *CPU time a frame*,
+  every thread of Yuna's process, llvmpipe's included, from each thread's `schedstat`. Every
+  run reads the shaders of a shader cache the whole parity run shares: LLVM compiles the same
+  shaders differently from start to start, and about one run in ten then drew 20 % faster with
+  40 % less of the processor. On llvmpipe, `full-4k`'s figures are *recorded*: ADR-0139 judges
+  the processor tier on its own budget, which no ROADMAP row or ADR sets yet.
+- **Starts** ([`start.rs`](../crates/yuna-bench/src/parity/start.rs)): `start-1080p` (1920 ×
+  1080 at 60 Hz) and `start-4k` (the seats' default, 3840 × 2160 at 240 Hz and scale 1.5). `yuna
+  mcp` starts alone in the run's namespaces, on the real clock, *cold*: a new home, so an empty
+  Mesa shader cache. The launcher writes the wall-clock time it starts Yuna to the log; the
+  script writes `seat create` at once, and times its reply as it reads it, and the seat's first
+  frame by Yuna's first `frame drawn` line on its output. As the owner chose on 2026-11-21, its
+  `TMPDIR` depends on what is judged:
+  - the *parity* figures, judged over pairs, take a `TMPDIR` of 40,000 files of no Yuna's, as a
+    busy `/tmp` holds, so that a start that reads each entry it sweeps shows (`58f2e75` fixed
+    one);
+  - the *budget* figures of
+    [ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md) are judged at that ADR's
+    conditions, an empty `TMPDIR`: after the pairs, the head alone starts until it has 20 quiet
+    starts, and the longest of exactly those 20 is judged against 100 ms to the reply, and 150 ms
+    to the first frame on llvmpipe, 100 on the GPU. A disturbed one is replaced until 20 were
+    dropped; fewer than 20 quiet ones make the budgets void.
+- **The soak** ([`soak.rs`](../crates/yuna-bench/src/parity/soak.rs)), after the pairs: ten `yuna
+  mcp` of each side, a seat and a lockstep client each, held at rest on the real clock for 10
+  minutes, both sides at once (an instance's anonymous memory is its own); each side's
+  `Pss_Anon`, summed, read every 30 s. Its figure is the head's least-squares slope, with
+  Student's one-sided bounds on it, against no growth
+  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
+  25): no worse when the upper bound is below the threshold's floor, in KiB a minute; worse when
+  the lower bound is above 0 and the slope above the floor; otherwise inconclusive.
+
+**Pairs.** A pair is a run of the base and a run of the head of one case. One warm-up run of each
+build comes first, discarded. Then each case's least pairs, every case's mixed in an order drawn
+from the run's seed, and each pair's two runs in an order drawn from it too. Each figure is then
+judged by the three verdicts of [`rule.rs`](../crates/yuna-bench/src/parity/rule.rs): over the
+quiet pairs, the mean of `ln(head / base)` and Student's one-sided 95 % bounds on it; *no worse*
+when the upper bound is below `ln(1 + T)`, *worse* when the lower bound is above 0 and the mean
+above `ln(1 + T)`, otherwise more pairs, a batch at a time, up to a cap, then *inconclusive*,
+which never passes. Frames take 10 pairs at least and 30 at most; starts 20 and 60. `T` is each
+figure's `relative` in the thresholds file, twice the widest standard deviation of `ln(head /
+base)` the tree against itself gave, so that the self control passes on its least pairs; the
+classes are the file's too, `full-4k`'s recorded and the longest starts' budgets.
+
+**Disturbed runs.** The machine is read each second of each run (`machine.rs`). A run is
+*disturbed* when the other programs used more than ADR-0115's limits, 2 cores or 10 % of the
+GPU's drawing engines, on average or in any second; or when Yuna's own threads (its main thread
+and its `yuna-…` ones) waited on the run queue for more than 5 % of the time they ran
+(`schedstat`'s second field): a quiet machine keeps it at 2 to 3 % in a frame's run, a fraction
+of a percent in a start. A pair with a disturbed run is dropped and replaced, until as many
+were dropped as the cap; a figure left with fewer quiet pairs than its least is *void*. The
+other programs' share of the GPU is read only where their DRM files can be: in an agent's
+sandbox, which hides them, it is unknown. On llvmpipe the run file (`gpu_load_unread`) and the
+report's headline then say so for each case it touched; a case on the GPU, which a game there
+would slow unseen, is void, unless `--gpu-load-unknown-ok` says by hand that the GPU was free. A
+run that fails voids its case's figures. The frames' runs must do equal work, as in the CI tier.
+
+A head from before the GPU and timed tiers, whose thresholds file has no entry for their kinds,
+is judged on them by the script's own file's entries, which the report says. A base from before
+them may not let the head loosen them unseen either: for each such kind, the head's entry is
+checked against the push before's, else the script's own.
 
 ## Where to start reading
 

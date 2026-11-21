@@ -9,12 +9,21 @@ use super::record::{FigureRecord, RunFile};
 pub fn markdown(file: &RunFile) -> String {
     let mut text = String::new();
     let verdict = match file.exit {
-        Some(0) => "**Parity holds**: no figure is worse, none void.",
+        Some(0) => "**Parity holds**: no figure is worse, none void or inconclusive.",
         Some(1) => "**Parity fails**: a figure is worse.",
-        Some(2) => "**Parity unknown**: a figure is void, or the run failed.",
+        Some(2) => "**Parity unknown**: a figure is void or inconclusive, or the run failed.",
         _ => "**Running**: not every run has ended.",
     };
     let _ = writeln!(text, "# Parity, tier {}\n\n{verdict}\n", file.tier);
+    if !file.gpu_load_unread.is_empty() {
+        let _ = writeln!(
+            text,
+            "**Caveat**: the other programs' GPU load could not be read in some timed runs ({}): \
+             a game on the GPU would not have marked them disturbed. On the GPU, such a case is \
+             void unless `--gpu-load-unknown-ok` was given.\n",
+            file.gpu_load_unread.join("; ")
+        );
+    }
     for side in &file.sides {
         let commit = side.commit.as_deref().map_or_else(
             || "no commit".to_owned(),
@@ -76,14 +85,26 @@ pub fn markdown(file: &RunFile) -> String {
         }
         text.push('\n');
     }
+    let disturbed = file
+        .runs
+        .iter()
+        .filter(|run| run.disturbed.is_some())
+        .count();
+    if disturbed > 0 {
+        let _ = writeln!(
+            text,
+            "{disturbed} timed runs were disturbed, their pairs dropped and replaced: the run \
+             file says why for each.\n"
+        );
+    }
     let flagged: Vec<&FigureRecord> = file
         .figures
         .iter()
-        .filter(|f| matches!(f.verdict.as_str(), "worse" | "void"))
+        .filter(|f| matches!(f.verdict.as_str(), "worse" | "void" | "inconclusive"))
         .collect();
     if !flagged.is_empty() {
-        let _ = writeln!(text, "## Worse or void\n");
-        table(&mut text, &flagged);
+        let _ = writeln!(text, "## Worse, void or inconclusive\n");
+        tables(&mut text, &flagged);
     }
     if let Some(check) = &file.move_check {
         let _ = writeln!(
@@ -117,8 +138,111 @@ pub fn markdown(file: &RunFile) -> String {
         text.push('\n');
     }
     let _ = writeln!(text, "## Every figure\n");
-    table(&mut text, &file.figures.iter().collect::<Vec<_>>());
+    tables(&mut text, &file.figures.iter().collect::<Vec<_>>());
+    if let Some(soak) = &file.soak {
+        let last = |readings: &[(f64, f64)]| {
+            readings.last().map_or_else(
+                || "none".to_owned(),
+                |(at, kib)| format!("{kib:.0} KiB at {at:.1} min"),
+            )
+        };
+        let _ = writeln!(
+            text,
+            "## The soak\n\n{} instances a side, {} s: the base from {} to {}, the head from {} \
+             to {}.\n",
+            soak.instances,
+            soak.seconds,
+            soak.base.first().map_or(0.0, |(_, kib)| *kib),
+            last(&soak.base),
+            soak.head.first().map_or(0.0, |(_, kib)| *kib),
+            last(&soak.head),
+        );
+        for error in &soak.errors {
+            let _ = writeln!(text, "- {error}");
+        }
+    }
     text
+}
+
+/// The tables of `figures`: the timed tier's apart, judged over pairs.
+fn tables(text: &mut String, figures: &[&FigureRecord]) {
+    let (timed, others): (Vec<&FigureRecord>, Vec<&FigureRecord>) =
+        figures.iter().partition(|figure| figure.timed);
+    if !others.is_empty() {
+        table(text, &others);
+    }
+    if !timed.is_empty() {
+        timed_table(text, &timed);
+    }
+}
+
+/// The timed tier's figures: for a figure judged over pairs, the ratio of head to base, its
+/// one-sided 95 % bounds and the deviation of its logs, the spread its threshold comes from.
+fn timed_table(text: &mut String, figures: &[&FigureRecord]) {
+    let _ = writeln!(
+        text,
+        "| figure | class | base | head | head / base, 95 % bounds | allowed | pairs (dropped) | \
+         σ of ln | verdict |\n|---|---|---:|---:|---|---:|---:|---:|---|"
+    );
+    let percent = |log: f64| format!("{:+.2} %", (log.exp() - 1.0) * 100.0);
+    for figure in figures {
+        let value = |v: Option<f64>| v.map_or_else(|| "—".to_owned(), number);
+        let (bounds, pairs, deviation) = match &figure.judgement {
+            // A budget judges the head's longest value, not the ratio: its pairs alone.
+            Some(j) if figure.class == "budget" => (
+                "—".to_owned(),
+                format!("{} ({})", j.count, j.dropped),
+                "—".to_owned(),
+            ),
+            Some(j) if j.on.starts_with("ln") => (
+                format!(
+                    "{} ({} to {})",
+                    percent(j.mean),
+                    percent(j.lower),
+                    percent(j.upper)
+                ),
+                format!("{} ({})", j.count, j.dropped),
+                format!("{:.2} %", j.deviation * 100.0),
+            ),
+            Some(j) => (
+                format!(
+                    "{}: {} ({} to {}) {}",
+                    j.on,
+                    number(j.mean),
+                    number(j.lower),
+                    number(j.upper),
+                    figure.unit
+                ),
+                format!("{} readings", j.count),
+                "—".to_owned(),
+            ),
+            None => ("—".to_owned(), "—".to_owned(), "—".to_owned()),
+        };
+        let allowed = match figure.class.as_str() {
+            "parity" if figure.unit == "KiB a minute" => {
+                format!("≤ {}", number(figure.threshold_absolute))
+            }
+            "parity" => format!("+{:.2} %", figure.threshold_relative * 100.0),
+            "budget" => figure
+                .budget
+                .map(|b| format!("≤ {}", number(b)))
+                .unwrap_or_default(),
+            _ => "—".to_owned(),
+        };
+        let verdict = match &figure.reason {
+            Some(reason) => format!("{}: {}", figure.verdict, reason.replace('|', "\\|")),
+            None => figure.verdict.clone(),
+        };
+        let _ = writeln!(
+            text,
+            "| {} | {} | {} | {} | {bounds} | {allowed} | {pairs} | {deviation} | {verdict} |",
+            figure.name,
+            figure.class,
+            value(figure.base),
+            value(figure.head),
+        );
+    }
+    text.push('\n');
 }
 
 fn table(text: &mut String, figures: &[&FigureRecord]) {
@@ -215,11 +339,61 @@ mod tests {
         };
         let text = markdown(&file);
         assert!(text.contains("**Parity fails**"), "{text}");
-        let worse = text.find("## Worse or void").unwrap();
+        let worse = text.find("## Worse, void or inconclusive").unwrap();
         let every = text.find("## Every figure").unwrap();
         assert!(worse < every);
         assert!(text[worse..every].contains("+5.56 %"), "{text}");
         assert!(!text[worse..every].contains("Pss_File"));
         assert!(text[worse..every].contains("its tree has no"), "{text}");
+    }
+
+    #[test]
+    fn a_timed_figure_shows_its_ratio_its_bounds_and_its_pairs() {
+        let file = RunFile {
+            tier: "timed".to_owned(),
+            exit: Some(2),
+            figures: vec![FigureRecord {
+                name: "partial: a frame's drawing time".to_owned(),
+                unit: "µs".to_owned(),
+                class: "parity".to_owned(),
+                threshold_relative: 0.05,
+                base: Some(180.0),
+                head: Some(181.0),
+                verdict: "inconclusive".to_owned(),
+                timed: true,
+                judgement: Some(super::super::record::JudgementRecord {
+                    on: "ln(head / base)".to_owned(),
+                    count: 30,
+                    dropped: 2,
+                    mean: 0.01_f64.ln_1p(),
+                    deviation: 0.04,
+                    lower: -0.01,
+                    upper: 0.06,
+                }),
+                ..FigureRecord::default()
+            }],
+            ..RunFile::default()
+        };
+        let text = markdown(&file);
+        assert!(text.contains("**Parity unknown**"), "{text}");
+        assert!(!text.contains("**Caveat**"), "{text}");
+        let unread = RunFile {
+            gpu_load_unread: vec!["partial: 22 of 22 runs".to_owned()],
+            ..file.clone()
+        };
+        let caveat = markdown(&unread);
+        let headline = caveat.find("**Caveat**").expect("the caveat");
+        assert!(
+            headline < caveat.find("## ").unwrap(),
+            "in the headline: {caveat}"
+        );
+        assert!(caveat.contains("(partial: 22 of 22 runs)"), "{caveat}");
+        let flagged = text.find("## Worse, void or inconclusive").unwrap();
+        let row = &text[flagged..];
+        assert!(row.contains("+1.00 % (-1.00 % to +6.18 %)"), "{text}");
+        assert!(
+            row.contains("| +5.00 % | 30 (2) | 4.00 % | inconclusive |"),
+            "{text}"
+        );
     }
 }

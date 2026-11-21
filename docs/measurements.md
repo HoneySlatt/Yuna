@@ -4,6 +4,48 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.1 — The timed and GPU tiers, and M2.2's head (2026-11-21)
+
+At the owner's go, the desktop quiet (others 0.04 to 1.8 cores at most in any second; 2 of 286
+pairs disturbed and replaced), Linux 7.3.4, each side built in one codegen unit (ADR-0148). Every
+run through the agents' exclusive lock, inside `agent-headless`; the proofs are the local
+`.delegation/m2.1-timed-2` and `m2.1-timed-3`.
+
+- **The CI tier, the tree against itself**, one series of five a side, every scenario: no figure
+  worse (50 min on 4 cores). Its spreads, recorded and not yet used to set thresholds
+  ([debt](debt.md)): Yuna's instructions a frame 0.224 % at most (full), motion 0.126 %; the total's
+  ranges 5,724 (idle) to 23,441 (input); allocations a frame 0, even in motion; heap growth 0.20
+  bytes a frame; `Pss_Anon` 212 KiB; the operations 0.02 to 2.2 %.
+- **Canaries**: `spin-total` flagged the total in every drawing scenario (+0.19 % in full to +31 %
+  in partial); `frame-wake` +1.00 wake and +1.00 context switch a frame everywhere; `full` against
+  itself passes, its heap growing 2.8 to 3.0 bytes a frame (54 before its warm-up).
+- **The timed tier, the tree against itself** (pairs in a seeded order, ln(head/base) judged by a
+  one-sided 95 % interval): no figure worse or inconclusive. Medians and the σ of ln a pair:
+
+| Case | Drawing, CPU a frame | σ of ln | Threshold T |
+|---|---|---|---|
+| partial (1080p) | 160 µs, 770 µs | 1.28 %, 1.99 % | 6.5 %, 4 % |
+| scaled (4K at 1.5) | 228 µs, 1,805 µs | 0.79 %, 0.71 % | 5 %, 6 % |
+| full-4k on llvmpipe (recorded, ADR-0139) | 8.0 ms, 82.5 ms | 1.50 %, 0.43 % | none |
+| start 1080p, reply and first frame (full `TMPDIR`) | 76 ms, 106 ms | 2.02 %, 1.84 % | 11 %, 9 % |
+| start 4K | 88 ms, 110 ms | 1.46 %, 1.51 % | 11.5 %, 10.5 % |
+
+- **Its canaries**: `spin-draw` (28 µs a frame) flagged worse, partial +17.6 %, scaled +12.0 %;
+  `start` (24 ms) worse on all four start figures, +22 to +31 %.
+- **The soak**: ten `yuna mcp`, a seat and a lockstep client each, 10 minutes: 0.00 KiB a minute on
+  both sides, about 491.7 MiB together.
+- **The GPU tier**: the tree against itself passes; DRM memory, `resident` less `shared`, 46,352 KiB
+  (idle, input), 48,400 (partial, full, many), 54,924 (motion), 119,864 (scaled); shared 0.
+- **The starts' budgets** ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)),
+  judged on 20 cold starts with an empty `TMPDIR` (the owner's choice, 2026-11-21); their parity
+  figures keep a `TMPDIR` of 40,000 files, which guards `58f2e75`. With the full one, about one
+  4K start in thirty took 95 to 101 ms to the reply ([debt](debt.md)). Longest of 20, empty
+  `TMPDIR`, three runs: 1080p reply 69.4 to 86.9 ms, first frame 101 to 107 ms; 4K reply 82.6 to
+  96.0 ms, first frame 104 to 117 ms; budgets 100 and 150 ms: met.
+- **M2.2's head, `c7ce632`, against the baseline `500e804`**: the timed tier no worse on every
+  figure (partial −0.25 % / +0.10 %, scaled −0.35 % / −0.01 %, full-4k +0.30 % recorded, starts
+  −0.71 to +0.82 %), the soak 0.00 KiB a minute, the GPU tier's memory identical in every scenario.
+
 ## M2.2 — The interface (2026-11-20/21)
 
 The high tier's desktop, shared with other sessions' work; no timed run (the timed tier waits for

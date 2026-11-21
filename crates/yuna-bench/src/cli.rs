@@ -183,11 +183,12 @@ pub fn cases(options: &Options, seed: u64) -> Vec<(Case, u32)> {
     cases
 }
 
-/// SplitMix64: a small generator whose sequence a seed fixes, for the cases' order.
-struct SplitMix(u64);
+/// SplitMix64: a small generator whose sequence a seed fixes, for the cases' order, and the
+/// parity script's.
+pub(crate) struct SplitMix(pub(crate) u64);
 
 impl SplitMix {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -198,7 +199,11 @@ impl SplitMix {
 
 /// Shuffles `items` by Fisher and Yates, from `seed`.
 pub(crate) fn shuffle<T>(items: &mut [T], seed: u64) {
-    let mut random = SplitMix(seed);
+    shuffle_with(items, &mut SplitMix(seed));
+}
+
+/// Shuffles `items` by Fisher and Yates, drawing from `random`.
+pub(crate) fn shuffle_with<T>(items: &mut [T], random: &mut SplitMix) {
     for i in (1..items.len()).rev() {
         let j = (random.next() % (i as u64 + 1)) as usize;
         items.swap(i, j);

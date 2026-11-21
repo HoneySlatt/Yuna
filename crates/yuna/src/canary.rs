@@ -19,14 +19,19 @@
 //! - `frame-wake`: one more wake of the event loop each frame drawn, after a sleep: 20 times the
 //!   threshold of a frame's wakes, 5 times that of its context switches, the least a frame's own
 //!   wake can be;
-//! - `round`: instructions in each round of the event loop.
+//! - `round`: instructions in each round of the event loop;
+//! - `spin-draw`: the timed tier's spin, a wait of [`DRAW_SPIN`] on the processor inside each
+//!   frame's drawing, which its time (`took_us`) counts;
+//! - `start`: a sleep of [`START_SLEEP`] as Yuna starts, before it reads any call.
 
 use std::hint::black_box;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// The turns of [`spin`] a frame for `spin`: about 2,600 of Yuna's instructions, 1.8 times the
-/// threshold of a frame's own instructions in `motion`, the widest; 3.6 times `partial`'s
-/// (`crates/yuna-bench/parity-thresholds.toml`).
+/// The turns of [`spin`] a frame for `spin`: about 2,600 of Yuna's instructions, 1.9 times the
+/// threshold of a frame's own instructions in `motion` (1,400), the widest of the scenarios that
+/// draw a frame each period; 3.6 to 3.8 times `partial`'s
+/// (`crates/yuna-bench/parity-thresholds.toml`). `input`'s is wider, 0.6 % of 542,000, but
+/// `input` draws no frame, so no spin.
 const SPIN_TURNS: u64 = 600;
 /// The turns of [`spin`] a frame for `spin-total`: about 160,000 instructions, twice the
 /// threshold of a frame's total in `full`, the widest of the scenarios that draw (0.1 % of 80.6
@@ -49,6 +54,13 @@ const LEAKED: usize = 64;
 const LEAK_EVERY: u64 = 16;
 /// What `memory` keeps.
 const BALLAST: usize = 1 << 20;
+/// How long `spin-draw` keeps the processor busy in each frame's drawing: 28 µs, on llvmpipe 2.6 times
+/// the threshold of `partial`'s drawing time (6.5 % of 167 µs) and 2.4 times `scaled`'s (5 % of
+/// 236 µs), the timed tier's (`crates/yuna-bench/parity-thresholds.toml`).
+const DRAW_SPIN: Duration = Duration::from_micros(28);
+/// How long `start` sleeps as Yuna starts: 24 ms, 2.1 to 2.9 times the thresholds of the starts'
+/// figures on llvmpipe (9 to 11.5 % of 70 to 105 ms).
+const START_SLEEP: Duration = Duration::from_millis(24);
 
 /// Which cost is injected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +73,8 @@ enum Kind {
     Wake,
     FrameWake,
     Round,
+    SpinDraw,
+    Start,
 }
 
 impl Kind {
@@ -74,6 +88,8 @@ impl Kind {
             "wake" => Kind::Wake,
             "frame-wake" => Kind::FrameWake,
             "round" => Kind::Round,
+            "spin-draw" => Kind::SpinDraw,
+            "start" => Kind::Start,
             _ => return None,
         })
     }
@@ -115,12 +131,21 @@ impl ParityCanary {
                 "a parity canary is on: this build measures nothing but it"
             );
         }
+        if canary.kind == Some(Kind::Start) {
+            std::thread::sleep(START_SLEEP);
+        }
         canary
     }
 
     /// Whether it wants a timer each second.
     pub(crate) fn wakes(&self) -> bool {
         self.kind == Some(Kind::Wake)
+    }
+
+    /// How long it keeps the processor busy at the end of each frame's drawing, if it does: run
+    /// by the drawing's hook, which the frame's time counts.
+    pub(crate) fn drawing_spin(&self) -> Option<Duration> {
+        (self.kind == Some(Kind::SpinDraw)).then_some(DRAW_SPIN)
     }
 
     /// After a round of the event loop, or an advance of the manual clock, that drew `frames`
@@ -159,6 +184,15 @@ impl ParityCanary {
     }
 }
 
+/// Keeps the processor busy for `time`, as a drawing that takes that much longer does, never
+/// sleeping: a sleep would let the processor rest, and the frame's CPU time would not see it.
+pub(crate) fn spin_for(time: Duration) {
+    let started = Instant::now();
+    while started.elapsed() < time {
+        std::hint::spin_loop();
+    }
+}
+
 /// Work the compiler cannot remove: about four instructions a turn.
 fn spin(turns: u64) {
     let mut sum = 0_u64;
@@ -180,7 +214,30 @@ mod tests {
             assert!(!canary.wakes());
         }
         assert_eq!(Kind::named("leak"), Some(Kind::Leak));
+        assert_eq!(Kind::named("spin-draw"), Some(Kind::SpinDraw));
+        assert_eq!(Kind::named("start"), Some(Kind::Start));
         assert_eq!(Kind::named("slow"), None);
+        assert_eq!(
+            canary.drawing_spin().is_some(),
+            canary.kind == Some(Kind::SpinDraw)
+        );
+    }
+
+    #[test]
+    fn draw_spins_for_its_time_in_each_drawing_and_the_others_do_not() {
+        let draw = ParityCanary {
+            kind: Some(Kind::SpinDraw),
+            ..ParityCanary::default()
+        };
+        assert_eq!(draw.drawing_spin(), Some(DRAW_SPIN));
+        let started = Instant::now();
+        spin_for(DRAW_SPIN);
+        assert!(started.elapsed() >= DRAW_SPIN);
+        let spin = ParityCanary {
+            kind: Some(Kind::Spin),
+            ..ParityCanary::default()
+        };
+        assert_eq!(spin.drawing_spin(), None);
     }
 
     #[test]

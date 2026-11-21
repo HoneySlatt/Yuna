@@ -373,8 +373,8 @@ end unless a run failed, the exit status is 2 (a figure void and none worse, or 
 same revision with no change. The revisions' worktrees are removed in every case, an error or a
 panic included. The work folder cannot be under `/tmp`: each run has a `/tmp` of its own. Each
 run is a user namespace, made by util-linux's `unshare` (the shell's `YUNA_UNSHARE`), which
-Ubuntu 24.04 refuses until `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. It
-runs nothing on a display or a GPU.
+Ubuntu 24.04 refuses until `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. The
+CI tier runs nothing on a display or a GPU.
 
 It exits 0 when no figure is worse, 1 when one is, 2 when one is void or the run failed: the
 report says which and why, its worse and void figures first. A worse figure also gets the push
@@ -434,9 +434,55 @@ twice the threshold of the total's instructions), `allocate` (an allocation each
 (64 bytes kept every 16 frames, 4 bytes a frame), `memory` (1 MiB kept), `wake` (a timer each
 second), `frame-wake` (a wake and a context switch more each frame), `round` (instructions each
 round of the event loop), `layout` (work in `Layout::focus`) and `motion` (work in an animated
-`Motion::update`). They are the `parity-canary` features of
-`yuna`, `yuna-layout` and `yuna-motion`, off in every shipped build; `YUNA_PARITY_CANARY` turns
+`Motion::update`); and for the timed tier, `spin-draw` (28 µs of the processor's time inside each
+frame's drawing) and `start` (24 ms of sleep as Yuna starts). They are the `parity-canary`
+features of `yuna`, `yuna-layout` and `yuna-motion`, off in every shipped build; `YUNA_PARITY_CANARY` turns
 Yuna's on, read once at its start.
+
+The GPU and timed tiers run on the owner's desktop, never in CI
+([ARCHITECTURE](docs/ARCHITECTURE.md#the-timed-tier)). The GPU tier compares the kernel's DRM
+memory of each scenario natively on the GPU; it opens the render node alone, and its figures do
+not follow the machine's load:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --tier gpu --head-path . --before HEAD
+```
+
+A milestone runs the timed tier once, the head against the pinned baseline, before its closing
+review. Its figures are timed, so it follows
+[ADR-0115](docs/adr/0115-priorities-uwui-first-the-owners-activity-measures-that-check-their-load.md):
+on the owner's machine, an agent runs it inside `agent-headless`, without `--net` once both
+builds are made, under the agents' lock of exclusive runs (`run.sh --exclusive`), which the
+script also takes itself before its first timed run, as the rivals' bench does:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --tier timed --head-path . --before HEAD
+```
+
+It reads the other programs' load before and during each run, and drops a pair a run of which
+they disturbed: a game, a build or another session's measures. It took 13 minutes on a fairly
+quiet machine, 10 of them the soak, the builds aside, and takes longer as pairs are dropped; a figure
+left with too few quiet pairs is void, and the run is made again later, every 20 to 30 minutes
+while the machine stays busy. `--scenario` picks its parts (`partial`, `scaled`, `full-4k`,
+`start-1080p`, `start-4k`, `soak`), `--pairs <n>` the least pairs of each figure (its cap
+three times it), `--soak <seconds>` the soak's length; `--tier timed,gpu` runs both tiers, and
+the frames and starts on the GPU too. The self control and the timed tier's canaries:
+
+```sh
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --tier timed --base-path . --head-path .
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --tier timed --base-path . --head-path . --canary spin-draw --scenario partial,scaled
+nix develop .#parity -c cargo run --release -p yuna-bench -- parity run --tier timed --base-path . --head-path . --canary start --scenario start-1080p,start-4k
+```
+
+The first must give 0, every figure no worse; the others 1. A timed figure's threshold, its
+`relative` in the thresholds file, is about twice the widest standard deviation of `ln(head /
+base)` the tree against itself gives over 20 quiet pairs (`--pairs 20`), which the report's `σ of
+ln` column shows. The starts' budgets are judged on the head's own 20 starts on an empty
+`TMPDIR`, ADR-0100's conditions; their parity figures on a `TMPDIR` of 40,000 files.
+
+Inside `agent-headless`, the other programs' GPU load cannot be read: the report's headline says
+so. A timed case on the GPU is then void; on a machine you know to be free of games, give
+`--gpu-load-unknown-ok` by hand.
 
 ## Continuous integration
 

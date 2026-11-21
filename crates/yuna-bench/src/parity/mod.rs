@@ -9,11 +9,17 @@
 //!   valgrind ([`valgrind`]).
 //! - [`operations`]: the layout's and motion's operations, counted by callgrind.
 //! - [`figures`]: the figures from the runs, their classes and thresholds; [`rule`]: the verdicts.
+//! - [`timed`]: the timed tier, its pairs and their disturbance; [`start`]: a timed start;
+//!   [`soak`]: ten instances a side held at rest.
 //! - [`baseline`]: the pinned baseline's file; [`record`]: the run's file; [`report`]: its
 //!   Markdown.
 //!
-//! The runs are drawn in a random order from a recorded seed and run several at a time: what
-//! valgrind counts does not depend on what else runs.
+//! Three tiers (`--tier`): `ci`, the default, CI's at each push; `gpu`, the CI tier's scenarios
+//! natively on the GPU, the kernel's DRM memory of Yuna; `timed`, timed runs judged over pairs,
+//! once per milestone; `timed,gpu`, both, the timed runs on the GPU too. The CI tier's and the GPU
+//! tier's runs are drawn in a random order from a recorded seed and run several at a time: what
+//! valgrind counts, and memory at rest, do not depend on what else runs. The timed tier's run one
+//! at a time, in pairs (`timed.rs`).
 
 pub mod baseline;
 pub mod build;
@@ -26,7 +32,10 @@ pub mod record;
 pub mod report;
 pub mod rule;
 pub mod scenario;
+pub mod soak;
+pub mod start;
 pub mod thresholds;
+pub mod timed;
 pub mod toml;
 pub mod valgrind;
 
@@ -37,17 +46,22 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use build::{Built, Canary, Source};
 use figures::{Finished, Job, Side, What};
 use record::{FigureRecord, RunFile, RunRecord};
-use scenario::{Build, Instrument, SCENARIOS, Tools};
+use rule::PairLimits;
+use scenario::{Build, Instrument, Outcome, SCENARIOS, Tools};
 use valgrind::Tool;
 
+use crate::machine::{Load, MachineWatch};
+use crate::sandbox::RENDER_NODE;
+
 const HELP: &str = "\
-yuna-bench parity: two builds of Yuna compared on figures the machine's load does not move
-(ADR-0142): callgrind's instructions, DHAT's allocations, memory, wakes, the layout's operations.
+yuna-bench parity: two builds of Yuna compared (ADR-0142): in CI, on figures the machine's load
+does not move, callgrind's instructions, DHAT's allocations, memory, wakes, the layout's
+operations; once per milestone, on the GPU's memory and on timed figures judged over pairs.
 
   yuna-bench parity run [options]
 
@@ -57,7 +71,11 @@ Options:
   --base-path <folder>        the base: a folder's tree, built as it is
   --head <revision>           the head (default: HEAD)
   --head-path <folder>        the head: a folder's tree, built as it is
-  --tier ci                   the figures CI compares at each push (the only tier so far)
+  --tier <tier>               ci: the figures CI compares at each push (the default);
+                              gpu: the CI tier's scenarios natively on the GPU, its DRM memory;
+                              timed: timed runs in pairs, starts and a soak, one run at a time,
+                              on a quiet machine (ADR-0115); timed,gpu: both, the timed runs on
+                              the GPU too
   --before <revision>         the push before the head's: the moves of the baseline its file
                               lacks are the head's own, and a figure worse is compared with it
                               too, to say whether this push moved it. CI passes the push before,
@@ -66,11 +84,20 @@ Options:
                               zeros: none)
   --canary <kind>             build the head with an injected cost, which must be flagged:
                               spin, spin-total, allocate, leak, memory, wake, frame-wake,
-                              round, layout, motion
-  --scenario <list>           idle, partial, full, motion, scaled, many, input, operations
-                              (default: all; idle is always run, the others subtract it)
-  --repeat <n>                measure each figure n times on each side (default: 1)
-  --jobs <n>                  runs at once (default: the processors, 4 at most)
+                              round, layout, motion; for the timed tier, spin-draw (a busy wait
+                              in each frame's drawing) and start (a sleep as Yuna starts)
+  --scenario <list>           ci and gpu: idle, partial, full, motion, scaled, many, input, and
+                              for ci operations (default: all; with ci, idle is always run, the
+                              others subtract it); timed: partial, scaled, full-4k,
+                              start-1080p, start-4k, soak (default: all)
+  --repeat <n>                ci and gpu: measure each figure n times on each side (default: 1)
+  --pairs <n>                 timed: each figure's least quiet pairs, its cap three times it
+                              (default: 10 for frames, 20 for starts)
+  --soak <seconds>            timed: how long the soak holds its instances (default: 600)
+  --gpu-load-unknown-ok       timed, on the GPU: judge a case whose other programs' GPU load
+                              could not be read (void without it), by hand alone
+  --jobs <n>                  ci and gpu: runs at once (default: the processors, 4 at most);
+                              the timed tier runs one at a time
   --seed <n>                  the runs' order (default: from the clock); recorded
   --work <folder>             the builds, the runs' files and sockets, never under /tmp
                               (default: target/parity/work-<pid>-<time>)
@@ -78,9 +105,71 @@ Options:
                               report, in Markdown, beside it
   --keep                      keep the work folder, which a failed or void run keeps anyway
 
-Exit status: 0 no figure worse; 1 a figure worse; 2 a figure void, or an error.
+Exit status: 0 no figure worse; 1 a figure worse; 2 a figure void or inconclusive, or an error.
 Run it in the parity shell: nix develop .#parity -c cargo run --release -p yuna-bench -- parity run
 ";
+
+/// The tiers a run measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tiers {
+    /// CI's: valgrind's counts, memory and wakes, on the manual clock.
+    pub ci: bool,
+    /// The CI tier's scenarios natively on the GPU: the kernel's DRM memory.
+    pub gpu: bool,
+    /// Timed runs in pairs, starts and a soak.
+    pub timed: bool,
+}
+
+impl Tiers {
+    /// The tiers named by `--tier`'s value: `ci`, `gpu`, `timed`, or `timed,gpu`.
+    fn named(value: &str) -> Result<Tiers, String> {
+        let mut tiers = Tiers {
+            ci: false,
+            gpu: false,
+            timed: false,
+        };
+        for name in value.split(',').map(str::trim) {
+            let tier = match name {
+                "ci" => &mut tiers.ci,
+                "gpu" => &mut tiers.gpu,
+                "timed" => &mut tiers.timed,
+                _ => return Err(format!("no tier {name:?}: ci, gpu, timed, or timed,gpu")),
+            };
+            *tier = true;
+        }
+        if tiers.ci && (tiers.gpu || tiers.timed) {
+            return Err("the CI tier runs alone: --tier ci, or gpu, timed, timed,gpu".to_owned());
+        }
+        Ok(tiers)
+    }
+
+    /// Their name, as the run file gives it.
+    pub fn name(self) -> String {
+        [(self.ci, "ci"), (self.timed, "timed"), (self.gpu, "gpu")]
+            .iter()
+            .filter(|(asked, _)| *asked)
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The scenarios and other parts they run, as `--scenario` names them.
+    fn parts(self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if self.ci {
+            parts.extend(every_part());
+        }
+        if self.gpu {
+            parts.extend(SCENARIOS.iter().map(|s| s.name.to_owned()));
+        }
+        if self.timed {
+            parts.extend(timed::PARTS.iter().map(|p| (*p).to_owned()));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        parts.retain(|part| seen.insert(part.clone()));
+        parts
+    }
+}
 
 /// What `parity run` asks.
 #[derive(Debug, Clone, PartialEq)]
@@ -94,10 +183,19 @@ pub struct Options {
     /// The push before the head's: the moves of the baseline its file lacks are the head's own;
     /// compared with the head on what flags, it says which push moved it.
     pub before: Option<String>,
-    /// The scenarios, and `operations`.
+    /// The tiers.
+    pub tiers: Tiers,
+    /// The scenarios, and `operations`; for the timed tier, its cases and `soak`.
     pub scenarios: Vec<String>,
     /// Measurements of each figure on each side.
     pub repeat: u32,
+    /// The timed tier's least pairs for every figure, when given.
+    pub pairs: Option<usize>,
+    /// How long the soak holds its instances.
+    pub soak: Duration,
+    /// Whether the timed tier judges a case on the GPU whose other programs' GPU load could not
+    /// be read.
+    pub gpu_load_unknown_ok: bool,
     /// Runs at once.
     pub jobs: usize,
     /// The order's seed.
@@ -126,8 +224,16 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
         head: Source::Revision("HEAD".to_owned()),
         canary: None,
         before: None,
-        scenarios: every_part(),
+        tiers: Tiers {
+            ci: true,
+            gpu: false,
+            timed: false,
+        },
+        scenarios: Vec::new(),
         repeat: 1,
+        pairs: None,
+        soak: Duration::from_secs(600),
+        gpu_load_unknown_ok: false,
         jobs: std::thread::available_parallelism().map_or(1, |n| n.get().min(4)),
         seed: None,
         work: None,
@@ -136,6 +242,7 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
     };
     let mut base_given = false;
     let mut head_given = false;
+    let mut scenarios = None;
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         let mut value = || {
@@ -169,14 +276,7 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
                 once(&mut head_given)?;
                 options.head = Source::Path(PathBuf::from(value()?));
             }
-            "--tier" => {
-                let tier = value()?;
-                if tier != "ci" {
-                    return Err(format!(
-                        "no tier {tier:?}: the CI tier, `ci`, is the only one so far"
-                    ));
-                }
-            }
+            "--tier" => options.tiers = Tiers::named(&value()?)?,
             "--before" => {
                 // Empty or zeros, as GitHub gives a push that makes a branch: none.
                 let before = value()?;
@@ -188,26 +288,8 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
                 options.canary =
                     Some(Canary::named(&name).ok_or_else(|| format!("no canary {name:?}"))?);
             }
-            "--scenario" => {
-                let parts = every_part();
-                options.scenarios = value()?
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|name| {
-                        parts
-                            .iter()
-                            .find(|part| *part == name)
-                            .cloned()
-                            .ok_or_else(|| format!("no scenario {name:?}"))
-                    })
-                    .collect::<Result<_, _>>()?;
-                if !options.scenarios.iter().any(|s| s == "idle")
-                    && options.scenarios.iter().any(|s| s != "operations")
-                {
-                    options.scenarios.insert(0, "idle".to_owned());
-                }
-            }
+            // Read once every option is: which names it takes depends on the tier.
+            "--scenario" => scenarios = Some(value()?),
             "--repeat" => {
                 options.repeat = value()?
                     .parse()
@@ -222,6 +304,25 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
                     .filter(|&n| n > 0)
                     .ok_or("--jobs takes a whole number above 0")?;
             }
+            "--pairs" => {
+                options.pairs = Some(
+                    value()?
+                        .parse()
+                        .ok()
+                        .filter(|&n| n >= 2)
+                        .ok_or("--pairs takes a whole number, 2 at least")?,
+                );
+            }
+            "--soak" => {
+                options.soak = Duration::from_secs(
+                    value()?
+                        .parse()
+                        .ok()
+                        .filter(|&n| n > 0)
+                        .ok_or("--soak takes a whole number of seconds above 0")?,
+                );
+            }
+            "--gpu-load-unknown-ok" => options.gpu_load_unknown_ok = true,
             "--seed" => options.seed = Some(value()?.parse().map_err(|_| "--seed takes a number")?),
             "--work" => options.work = Some(PathBuf::from(value()?)),
             "--out" => options.out = Some(PathBuf::from(value()?)),
@@ -229,7 +330,77 @@ pub fn read_options(arguments: &[String]) -> Result<Options, String> {
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
+    let parts = options.tiers.parts();
+    options.scenarios = match scenarios {
+        None => parts,
+        Some(list) => list
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|name| {
+                parts
+                    .iter()
+                    .find(|part| *part == name)
+                    .cloned()
+                    .ok_or_else(|| format!("no scenario {name:?} in tier {}", options.tiers.name()))
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    // The CI tier's allocations a frame subtract idle's.
+    if options.tiers.ci
+        && !options.scenarios.iter().any(|s| s == "idle")
+        && options.scenarios.iter().any(|s| s != "operations")
+    {
+        options.scenarios.insert(0, "idle".to_owned());
+    }
     Ok(options)
+}
+
+/// The timed tier's settings for `options`, drawn from `seed`.
+fn timed_settings(options: &Options, seed: u64) -> timed::Settings {
+    let asked = |default: PairLimits| match options.pairs {
+        Some(least) => PairLimits {
+            least,
+            most: 3 * least,
+            batch: least.div_ceil(2),
+        },
+        None => default,
+    };
+    timed::Settings {
+        frame_pairs: asked(timed::FRAME_PAIRS),
+        start_pairs: asked(timed::START_PAIRS),
+        seed,
+        gpu_load_unknown_ok: options.gpu_load_unknown_ok,
+    }
+}
+
+/// The GPU tier's runs: each scenario of `options` natively on the GPU, on both sides, each
+/// `repeat` times, in a random order from `seed`; none for a side that failed to build.
+fn plan_gpu(options: &Options, built: &[&Built; 2], seed: u64) -> Vec<Job> {
+    let mut jobs = Vec::new();
+    for (side, built) in [(Side::Base, built[0]), (Side::Head, built[1])] {
+        if built.info.error.is_some() {
+            continue;
+        }
+        for repeat in 1..=options.repeat {
+            for scenario in SCENARIOS
+                .iter()
+                .filter(|s| options.scenarios.iter().any(|name| name == s.name))
+            {
+                jobs.push(Job {
+                    side,
+                    what: What::Scenario {
+                        scenario,
+                        instrument: Instrument::Gpu,
+                        periods: scenario.periods,
+                    },
+                    repeat,
+                });
+            }
+        }
+    }
+    crate::cli::shuffle(&mut jobs, seed);
+    jobs
 }
 
 /// Every run the options ask for, on both sides, in a random order from `seed`; the operations'
@@ -358,8 +529,14 @@ fn run(arguments: &[String]) -> Result<u8, String> {
         .map(|revision| PushBefore::read(revision, &repository))
         .transpose()?;
     let moves = new_moves(head_file.as_ref(), options.base.is_none(), before.as_ref())?;
-    let valgrind = find_on_path("valgrind")
-        .ok_or("no valgrind on PATH: run the script in the parity shell, nix develop .#parity")?;
+    // The CI tier's alone: the others run Yuna natively.
+    let valgrind = find_on_path("valgrind");
+    if options.tiers.ci && valgrind.is_none() {
+        return Err(
+            "no valgrind on PATH: run the script in the parity shell, nix develop .#parity"
+                .to_owned(),
+        );
+    }
     // The shell's util-linux, never the host's: it makes each run's namespaces.
     let unshare = std::env::var_os("YUNA_UNSHARE")
         .map(PathBuf::from)
@@ -391,23 +568,32 @@ fn run(arguments: &[String]) -> Result<u8, String> {
     }
     let tools = Tools {
         program: std::env::current_exe().map_err(|e| format!("this program: {e}"))?,
-        valgrind,
+        valgrind: valgrind.clone().unwrap_or_default(),
         runtime: runtime.clone(),
         unshare,
+        shader_cache: work.join("shader-cache"),
+        full_tmpdir: work.join("full-tmp"),
     };
+    // Empty at each run: its timed runs' shaders are compiled by its own first runs.
+    let _ = fs::remove_dir_all(&tools.shader_cache);
     let mut file = RunFile {
         format: record::FORMAT,
         script_commit: crate::scenarios::commit(&[]),
         started_utc: crate::cli::utc(started),
         arguments: arguments.to_vec(),
-        tier: "ci".to_owned(),
+        tier: options.tiers.name(),
         seed,
-        machine: crate::machine::MachineInfo::read("", None),
-        valgrind: Command::new(&tools.valgrind)
-            .arg("--version")
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()),
+        machine: crate::machine::MachineInfo::read(
+            if options.tiers.ci { "" } else { RENDER_NODE },
+            None,
+        ),
+        valgrind: valgrind.as_ref().and_then(|valgrind| {
+            Command::new(valgrind)
+                .arg("--version")
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        }),
         ..RunFile::default()
     };
     if !inherited.is_empty() {
@@ -452,23 +638,49 @@ fn run(arguments: &[String]) -> Result<u8, String> {
     }
     file.notes
         .extend(side_notes(&base_built, &head_built, options.canary));
-    let (head_thresholds, base_thresholds) =
-        thresholds_of(&repository, &base_built, &head_built, &mut file.notes)?;
+    let (head_thresholds, base_thresholds) = thresholds_of(
+        &repository,
+        [&base_built, &head_built],
+        before
+            .as_ref()
+            .and_then(|before| before.thresholds.as_ref()),
+        &mut file.notes,
+    )?;
     let judging = figures::Judging {
         head: &head_thresholds,
         base: base_thresholds.as_ref(),
         moves: &moves.figures,
     };
     let built = [&base_built, &head_built];
-    let jobs = plan(&options, &built, seed);
-    file.order = jobs.iter().map(Job::label).collect();
-    record::write(&out, &mut file)?;
-
     let sides = BTreeMap::from([(Side::Base, &base_built), (Side::Head, &head_built)]);
-    let mut finished = run_jobs(&jobs, &sides, &tools, &work, options.jobs, &out, &mut file)?;
-    let judged = figures::judge_all(&finished, &built, judging);
     let failed_build = base_built.info.error.is_some() || head_built.info.error.is_some();
-    if options.base.is_none()
+    let mut finished = Vec::new();
+    let mut judged = Vec::new();
+    if options.tiers.ci {
+        let jobs = plan(&options, &built, seed);
+        file.order = jobs.iter().map(Job::label).collect();
+        record::write(&out, &mut file)?;
+        finished = run_jobs(&jobs, &sides, &tools, &work, options.jobs, &out, &mut file)?;
+        judged = figures::judge_all(&finished, &built, judging);
+    }
+    if options.tiers.gpu {
+        let jobs = plan_gpu(&options, &built, seed);
+        file.order.extend(jobs.iter().map(Job::label));
+        record::write(&out, &mut file)?;
+        let gpu = run_jobs(&jobs, &sides, &tools, &work, options.jobs, &out, &mut file)?;
+        judged.extend(figures::judge_gpu(&gpu, &built, judging));
+        finished.extend(gpu);
+    }
+    if options.tiers.timed && !failed_build {
+        let (timed_runs, timed_figures) =
+            run_timed(&options, &sides, &tools, &work, &out, &mut file, judging)?;
+        judged.extend(timed_figures);
+        finished.extend(timed_runs);
+    }
+    // The move's check against the old baseline, and the push before's against the head, rerun
+    // CI's scenarios: the CI tier's alone. A milestone's timed run is read by its lead.
+    if options.tiers.ci
+        && options.base.is_none()
         && !failed_build
         && let Some(old) = &moves.old
     {
@@ -488,6 +700,7 @@ fn run(arguments: &[String]) -> Result<u8, String> {
         .filter(|figure| figure.verdict == rule::Verdict::Worse)
         .collect();
     if let Some(before) = &before
+        && options.tiers.ci
         && !worse.is_empty()
     {
         file.pushes = which_push(
@@ -697,22 +910,33 @@ fn side_notes(base: &Built, head: &Built, canary: Option<Canary>) -> Vec<String>
 /// without it checks nothing; a file that does not read, or lacks a kind, fails the run.
 fn thresholds_of(
     repository: &Path,
-    base: &Built,
-    head: &Built,
+    [base, head]: [&Built; 2],
+    before: Option<&thresholds::Thresholds>,
     notes: &mut Vec<String>,
 ) -> Result<(thresholds::Thresholds, Option<thresholds::Thresholds>), String> {
-    let head_thresholds = match &head.thresholds {
+    let own = || -> Result<thresholds::Thresholds, String> {
+        let path = repository.join(thresholds::PATH);
+        let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        thresholds::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    let mut head_thresholds = match &head.thresholds {
         Some(read) => read.clone().map_err(|e| format!("the head's {e}"))?,
         None => {
             notes.push(format!(
                 "the head's tree has no {}: the script's own judges it",
                 thresholds::PATH
             ));
-            let path = repository.join(thresholds::PATH);
-            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            thresholds::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?
+            own()?
         }
     };
+    if later_kinds_lacking(&head_thresholds).next().is_some() {
+        let lacking = fill_later_kinds(&mut head_thresholds, &own()?);
+        notes.push(format!(
+            "the head's {} has no entry for {lacking:?}, the GPU and timed tiers' kinds, which \
+             came after it: the script's own judge them",
+            thresholds::PATH
+        ));
+    }
     head_thresholds
         .check(&figures::kind_names())
         .map_err(|e| format!("{}: {e}", thresholds::PATH))?;
@@ -720,22 +944,74 @@ fn thresholds_of(
         Some(read) => Some(read.clone().map_err(|e| format!("the base's {e}"))?),
         None => {
             notes.push(format!(
-                "the base's tree has no {}: no threshold is checked against it",
+                "the base's tree has no {}: the CI tier's thresholds are not checked against it",
                 thresholds::PATH
             ));
             None
         }
     };
-    Ok((head_thresholds, base_thresholds))
+    let (base_thresholds, filled) = base_reference(base_thresholds, before, &own()?);
+    if !filled.is_empty() {
+        notes.push(format!(
+            "the base's {} has no entry for {filled:?}, the GPU and timed tiers' kinds: the head \
+             may not loosen the push before's, or else the script's own",
+            thresholds::PATH
+        ));
+    }
+    Ok((head_thresholds, Some(base_thresholds)))
 }
 
-/// The push before the head's, `--before`: its commit and its baseline file.
+/// The entries the head may not loosen: the base's, and for the GPU and timed tiers' kinds the
+/// base's file lacks, a base from before them, the push before's (`before`), else the script's
+/// own: so that no later kind is loosened unseen. Gives them, and the kinds filled.
+fn base_reference(
+    base: Option<thresholds::Thresholds>,
+    before: Option<&thresholds::Thresholds>,
+    own: &thresholds::Thresholds,
+) -> (thresholds::Thresholds, Vec<&'static str>) {
+    let mut base = base.unwrap_or_default();
+    let lacking: Vec<&'static str> = later_kinds_lacking(&base).collect();
+    if let Some(before) = before {
+        fill_later_kinds(&mut base, before);
+    }
+    fill_later_kinds(&mut base, own);
+    (base, lacking)
+}
+
+/// The GPU and timed tiers' kinds that `thresholds` has no `*` for: a file from before them.
+fn later_kinds_lacking(thresholds: &thresholds::Thresholds) -> impl Iterator<Item = &'static str> {
+    figures::GPU_KINDS
+        .iter()
+        .chain(&figures::TIMED_KINDS)
+        .map(|kind| kind.name)
+        .filter(|kind| thresholds.lookup(kind, "*").is_none())
+}
+
+/// Gives `head` the entries of `own`, the script's own file, for the GPU and timed tiers' kinds
+/// it has none for; gives those kinds. A head's own entries are never replaced.
+fn fill_later_kinds(
+    head: &mut thresholds::Thresholds,
+    own: &thresholds::Thresholds,
+) -> Vec<&'static str> {
+    let lacking: Vec<&'static str> = later_kinds_lacking(head).collect();
+    head.entries.extend(
+        own.entries
+            .iter()
+            .filter(|entry| lacking.contains(&entry.figure.as_str()))
+            .cloned(),
+    );
+    lacking
+}
+
+/// The push before the head's, `--before`: its commit, its baseline file and its thresholds file.
 #[derive(Debug, Clone, PartialEq)]
 struct PushBefore {
     /// Its commit, in full.
     commit: String,
     /// Its tree's baseline file; none if its tree has none.
     baseline: Option<baseline::Baseline>,
+    /// Its tree's thresholds file; none if its tree has none.
+    thresholds: Option<thresholds::Thresholds>,
 }
 
 impl PushBefore {
@@ -751,7 +1027,21 @@ impl PushBefore {
             .map_err(|e| format!("the push before, {revision}: {e}"))?;
         let baseline = baseline::at(&Source::Revision(commit.clone()), repository)
             .map_err(|e| format!("the push before's {e}"))?;
-        Ok(PushBefore { commit, baseline })
+        let thresholds = build::git(
+            repository,
+            &["show", &format!("{commit}:{}", thresholds::PATH)],
+        )
+        .ok()
+        .map(|text| {
+            thresholds::parse(&text)
+                .map_err(|e| format!("the push before's {}: {e}", thresholds::PATH))
+        })
+        .transpose()?;
+        Ok(PushBefore {
+            commit,
+            baseline,
+            thresholds,
+        })
     }
 }
 
@@ -961,6 +1251,7 @@ fn which_push(
                     "it was as bad at the push before: an earlier push made it worse".to_owned()
                 }
                 Some(rule::Verdict::Void(reason)) => format!("unknown: {reason}"),
+                Some(rule::Verdict::Inconclusive) => "unknown: inconclusive".to_owned(),
                 Some(rule::Verdict::Recorded) | None => before_built
                     .info
                     .error
@@ -991,22 +1282,7 @@ fn run_jobs(
 ) -> Result<Vec<Finished>, String> {
     let builds: BTreeMap<Side, Build> = built
         .iter()
-        .map(|(side, built)| {
-            let build = Build {
-                yuna: built.programs.get("yuna").cloned().unwrap_or_default(),
-                environment: built.run_environment.clone(),
-                // Read by Yuna's own canaries alone: the layout's and motion's are built in,
-                // unasked.
-                canary: built
-                    .info
-                    .canary
-                    .as_deref()
-                    .and_then(Canary::named)
-                    .filter(|canary| canary.package() == "yuna")
-                    .map(|canary| canary.name().to_owned()),
-            };
-            (*side, build)
-        })
+        .map(|(side, built)| (*side, build_of(built)))
         .collect();
     let queue = Mutex::new(jobs.iter().cloned().enumerate().collect::<VecDeque<_>>());
     let done = Mutex::new((Vec::<Finished>::new(), file));
@@ -1047,10 +1323,14 @@ fn run_jobs(
                             Some(path) => {
                                 operations::run(path, &tools.valgrind, case, *repeats, &folder)
                             }
-                            None => scenario::Outcome {
+                            None => Outcome {
                                 error: Some(format!("no {program}")),
-                                ..scenario::Outcome::default()
+                                ..Outcome::default()
                             },
+                        },
+                        What::Start { .. } => Outcome {
+                            error: Some("a start is the timed tier's, run alone".to_owned()),
+                            ..Outcome::default()
                         },
                     };
                     let finished = Finished { job, outcome };
@@ -1080,6 +1360,181 @@ fn run_jobs(
         return Err(error);
     }
     Ok(done.into_inner().expect("the runs made").0)
+}
+
+/// What a side's runs take of its build.
+fn build_of(built: &Built) -> Build {
+    Build {
+        yuna: built.programs.get("yuna").cloned().unwrap_or_default(),
+        environment: built.run_environment.clone(),
+        // Read by Yuna's own canaries alone: the layout's and motion's are built in, unasked.
+        canary: built
+            .info
+            .canary
+            .as_deref()
+            .and_then(Canary::named)
+            .filter(|canary| canary.package() == "yuna")
+            .map(|canary| canary.name().to_owned()),
+    }
+}
+
+/// How long the machine's load is read before the timed runs start.
+const LOAD_BEFORE: Duration = Duration::from_secs(3);
+
+/// The timed tier: its pairs, one run at a time, in an order drawn from the run file's seed, then
+/// the soak when asked; every run made and every figure, judged. The run file is written after
+/// each run.
+fn run_timed(
+    options: &Options,
+    sides: &BTreeMap<Side, &Built>,
+    tools: &Tools,
+    work: &Path,
+    out: &Path,
+    file: &mut RunFile,
+    judging: figures::Judging,
+) -> Result<(Vec<Finished>, Vec<figures::Judged>), String> {
+    let builds = [build_of(sides[&Side::Base]), build_of(sides[&Side::Head])];
+    let cases = timed::cases(&options.scenarios, options.tiers.gpu);
+    let settings = timed_settings(options, file.seed);
+    if cases
+        .iter()
+        .any(|case| matches!(case, timed::Case::Start { .. }))
+    {
+        start::fill_tmpdir(&tools.full_tmpdir)?;
+    }
+    // One timed measure at a time on the machine, held until the soak ends.
+    let exclusive = crate::lock::take()?;
+    file.notes
+        .push(format!("the agents' exclusive lock: {}", exclusive.how));
+    eprintln!(
+        "yuna-bench parity: the machine's load over {} s before the timed runs",
+        LOAD_BEFORE.as_secs()
+    );
+    let watch = MachineWatch::start(RENDER_NODE);
+    std::thread::sleep(LOAD_BEFORE);
+    file.notes
+        .push(describe_load("before the timed runs", &watch.finish()));
+    let mut write_error = None;
+    let finished = timed::run_pairs(
+        &cases,
+        &settings,
+        judging,
+        |job| run_timed_job(job, &builds, tools, work),
+        |made| {
+            let label = made.job.label();
+            eprintln!(
+                "yuna-bench parity: [{}] {label}: {:.1} s{}{}",
+                file.runs.len() + 1,
+                made.outcome.seconds,
+                made.outcome
+                    .error
+                    .as_deref()
+                    .map(|e| format!(", failed: {e}"))
+                    .unwrap_or_default(),
+                made.outcome
+                    .disturbed
+                    .as_deref()
+                    .map(|why| format!(", disturbed: {why}"))
+                    .unwrap_or_default(),
+            );
+            file.order.push(label);
+            let mut record = RunRecord::of(made);
+            if made.job.repeat == 0 {
+                record.notes.push("a warm-up, discarded".to_owned());
+            }
+            file.runs.push(record);
+            if let Err(error) = record::write(out, file) {
+                write_error = Some(error);
+            }
+        },
+    );
+    if let Some(error) = write_error {
+        return Err(error);
+    }
+    file.gpu_load_unread = timed::gpu_load_unread(&cases, &finished);
+    let mut judged = timed::judge(&cases, &finished, &settings, judging);
+    if options.scenarios.iter().any(|part| part == "soak") {
+        eprintln!(
+            "yuna-bench parity: the soak, {} instances a side for {} s",
+            soak::INSTANCES,
+            options.soak.as_secs()
+        );
+        let watch = MachineWatch::start(RENDER_NODE);
+        let series = soak::run([&builds[0], &builds[1]], tools, work, options.soak);
+        file.notes
+            .push(describe_load("over the soak", &watch.finish()));
+        file.soak = Some(record::SoakRecord {
+            seconds: options.soak.as_secs(),
+            instances: soak::INSTANCES,
+            base: series[0].readings.clone(),
+            head: series[1].readings.clone(),
+            errors: [Side::Base, Side::Head]
+                .iter()
+                .zip(&series)
+                .filter_map(|(side, series)| {
+                    Some(format!("{}: {}", side.name(), series.error.as_ref()?))
+                })
+                .collect(),
+        });
+        judged.push(timed::judge_soak(&series, judging));
+    }
+    Ok((finished, judged))
+}
+
+/// One timed run of `job`, alone, the machine's load read over it.
+fn run_timed_job(job: &Job, builds: &[Build; 2], tools: &Tools, work: &Path) -> Finished {
+    let folder = work.join("runs").join(job.label().replace('/', "_"));
+    // Empty: a start is cold, and no file of an earlier run is read with this one's.
+    let _ = fs::remove_dir_all(&folder);
+    let build = &builds[job.side as usize];
+    let watch = MachineWatch::start(RENDER_NODE);
+    let mut outcome = match &job.what {
+        What::Scenario {
+            scenario,
+            instrument,
+            periods,
+        } => scenario::run(scenario, *instrument, *periods, build, tools, &folder, 0),
+        What::Start {
+            start,
+            device,
+            tmpdir,
+        } => start::run(start, (*device, *tmpdir), build, tools, &folder, 0),
+        What::Operation { .. } => Outcome {
+            error: Some("an operation is the CI tier's".to_owned()),
+            ..Outcome::default()
+        },
+    };
+    let load = watch.finish();
+    for (key, value) in [
+        ("others_cpu_cores_mean", load.others_cpu_cores_mean),
+        ("others_cpu_cores_max", load.others_cpu_cores_max),
+        ("others_gpu_percent_mean", load.others_gpu_percent_mean),
+        ("others_gpu_percent_max", load.others_gpu_percent_max),
+    ] {
+        if let Some(value) = value {
+            outcome.readings.insert(key.to_owned(), value);
+        }
+    }
+    Finished {
+        job: job.clone(),
+        outcome,
+    }
+}
+
+/// The other programs' load over a window, in a few words, for the run file's notes.
+fn describe_load(when: &str, load: &Load) -> String {
+    let figure = |value: Option<f64>, unit: &str| {
+        value.map_or_else(|| "unknown".to_owned(), |v| format!("{v:.2} {unit}"))
+    };
+    format!(
+        "the other programs' load {when}: {} on average, {} at most in a second; the GPU's \
+         drawing engines {} on average, {} at most ({} processes' GPU files read)",
+        figure(load.others_cpu_cores_mean, "cores"),
+        figure(load.others_cpu_cores_max, "cores"),
+        figure(load.others_gpu_percent_mean, "%"),
+        figure(load.others_gpu_percent_max, "%"),
+        load.others_gpu_processes,
+    )
 }
 
 /// `name`'s path on this process's `PATH`.
@@ -1136,7 +1591,7 @@ mod tests {
         );
         assert_eq!(read(&["--base", "baseline"]).unwrap().base, None);
         assert!(read(&["--base", "a", "--base-path", "b"]).is_err());
-        assert!(read(&["--tier", "timed"]).is_err());
+        assert!(read(&["--tier", "slow"]).is_err());
         assert!(read(&["--canary", "slow"]).is_err());
         assert!(read(&["--scenario", "sleep"]).is_err());
         assert!(read(&["--repeat", "0"]).is_err());
@@ -1166,6 +1621,7 @@ mod tests {
         PushBefore {
             commit: commit.repeat(40),
             baseline: file,
+            thresholds: None,
         }
     }
 
@@ -1398,6 +1854,131 @@ mod tests {
         assert!(!pushed.is(&head("a", true)));
         assert!(!pushed.is(&head("b", false)));
         assert!(!pushed.is(&build::SideInfo::default()));
+    }
+
+    #[test]
+    fn the_tiers_take_their_own_scenarios() {
+        let timed = read(&["--tier", "timed"]).unwrap();
+        assert_eq!(
+            timed.tiers,
+            Tiers {
+                ci: false,
+                gpu: false,
+                timed: true
+            }
+        );
+        assert_eq!(timed.scenarios, timed::PARTS);
+        // No idle added: the timed tier subtracts nothing.
+        let starts = read(&["--scenario", "start-4k", "--tier", "timed"]).unwrap();
+        assert_eq!(starts.scenarios, ["start-4k"]);
+        assert!(read(&["--tier", "timed", "--scenario", "operations"]).is_err());
+        assert!(
+            read(&["--scenario", "start-4k"]).is_err(),
+            "not a CI scenario"
+        );
+        let gpu = read(&["--tier", "gpu"]).unwrap();
+        assert_eq!(gpu.scenarios.len(), SCENARIOS.len());
+        assert_eq!(gpu.tiers.name(), "gpu");
+        let both = read(&["--tier", "timed,gpu", "--pairs", "4", "--soak", "60"]).unwrap();
+        assert_eq!(both.tiers.name(), "timed,gpu");
+        assert_eq!(both.soak, Duration::from_secs(60));
+        let settings = timed_settings(&both, 1);
+        assert_eq!(
+            settings.start_pairs,
+            PairLimits {
+                least: 4,
+                most: 12,
+                batch: 2
+            }
+        );
+        assert_eq!(timed_settings(&timed, 1).frame_pairs, timed::FRAME_PAIRS);
+        assert!(read(&["--tier", "ci,timed"]).is_err(), "CI's runs alone");
+        assert!(read(&["--pairs", "1"]).is_err());
+        assert!(read(&["--soak", "0"]).is_err());
+    }
+
+    #[test]
+    fn a_head_from_before_the_timed_tier_takes_its_kinds_from_the_scripts_file() {
+        let own = thresholds::parse(
+            &fs::read_to_string(crate::scenarios::workspace().join(thresholds::PATH)).unwrap(),
+        )
+        .unwrap();
+        // A head's file of the CI tier alone, its kinds' entries its own.
+        let mut head = own.clone();
+        head.entries.retain(|entry| {
+            !figures::GPU_KINDS
+                .iter()
+                .chain(&figures::TIMED_KINDS)
+                .any(|kind| kind.name == entry.figure)
+        });
+        let ci_entries = head.entries.len();
+        assert!(head.check(&figures::kind_names()).is_err());
+        let lacking = fill_later_kinds(&mut head, &own);
+        assert_eq!(
+            lacking.len(),
+            figures::GPU_KINDS.len() + figures::TIMED_KINDS.len()
+        );
+        head.check(&figures::kind_names()).unwrap();
+        assert_eq!(head.entries.len(), own.entries.len());
+        assert_eq!(head.entries[..ci_entries], own.entries[..ci_entries]);
+        // A head that has them keeps its own.
+        let mut whole = own.clone();
+        assert!(fill_later_kinds(&mut whole, &own).is_empty());
+        assert_eq!(whole, own);
+    }
+
+    #[test]
+    fn a_later_kind_the_base_lacks_is_not_loosened_unseen() {
+        let own = thresholds::parse(
+            &fs::read_to_string(crate::scenarios::workspace().join(thresholds::PATH)).unwrap(),
+        )
+        .unwrap();
+        let later = |kind: &str| {
+            figures::GPU_KINDS
+                .iter()
+                .chain(&figures::TIMED_KINDS)
+                .any(|k| k.name == kind)
+        };
+        // A base from before the timed tier: its file holds the CI tier's kinds alone.
+        let mut old = own.clone();
+        old.entries.retain(|entry| !later(&entry.figure));
+        // The head loosens partial's drawing time from the script's 6.5 % to 20 %.
+        let mut head = own.clone();
+        let entry = head
+            .entries
+            .iter_mut()
+            .find(|e| e.figure == "a frame's drawing time" && e.group == "partial")
+            .unwrap();
+        entry.threshold.relative = 0.2;
+        let loosened = |base: &thresholds::Thresholds| {
+            thresholds::loosened(
+                base,
+                &head,
+                "a frame's drawing time",
+                "partial",
+                "partial: a frame's drawing time",
+                &[],
+            )
+        };
+        assert_eq!(loosened(&old), None, "unseen against the base alone");
+        // Without a push before: against the script's own file.
+        let (reference, filled) = base_reference(Some(old.clone()), None, &own);
+        assert!(filled.contains(&"a frame's drawing time"));
+        assert!(loosened(&reference).unwrap().contains("loosened"));
+        // The push before's file, when it has the kind, rules: here as loose as the head, 20 %.
+        let (reference, _) = base_reference(Some(old.clone()), Some(&head), &own);
+        assert_eq!(loosened(&reference), None);
+        // A base without the file is checked on the later kinds all the same.
+        let (reference, filled) = base_reference(None, None, &own);
+        assert_eq!(
+            filled.len(),
+            figures::GPU_KINDS.len() + figures::TIMED_KINDS.len()
+        );
+        assert!(loosened(&reference).is_some());
+        // A base that has the kinds keeps its own entries.
+        let (reference, filled) = base_reference(Some(own.clone()), Some(&head), &own);
+        assert!(filled.is_empty());
+        assert_eq!(reference, own);
     }
 
     #[test]

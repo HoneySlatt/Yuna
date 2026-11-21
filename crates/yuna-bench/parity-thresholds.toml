@@ -9,6 +9,11 @@
 # twice, the scenarios' once more), on the owner's desktop (Ryzen 7 5800X), 2026-11-19 and 20
 # (.delegation/, local). A spread is a figure's range over its median, over a series' ten; each
 # threshold takes the widest of the series. Desktop only: not yet measured on GitHub's runner.
+#
+# Measured again on one-unit builds (ADR-0148), 2026-11-21: the tree against itself, one series of
+# five a side (docs/measurements.md). One series is too thin to set a threshold by: the CI tier's
+# thresholds stay M2.1's until two more series are measured. The timed and GPU tiers' entries,
+# after the CI tier's, come from that day's self controls.
 
 format = 2
 
@@ -449,3 +454,169 @@ class = "parity"
 relative = 0.017
 absolute = 100
 basis = "3 × 0.561 %, its spread; the layout's and motion's hash maps take random keys at each start"
+[[threshold]]
+figure = "GPU memory"
+group = "*"
+class = "parity"
+relative = 0
+absolute = 64
+basis = "spread 0, three runs a side of every scenario on the RX 6900 XT (2026-11-20); floor 64 KiB, four 64 × 64 textures"
+
+[[threshold]]
+figure = "GPU memory, shared"
+group = "*"
+class = "recorded"
+basis = "the buffers Yuna shares with another file, which a client's own may hold"
+
+# The timed tier: judged over pairs by an interval on ln(head / base) (`rule.rs`); `relative` is T,
+# the share of the base's value a figure may grow by, `absolute` unused but for the soak's slope,
+# judged against no growth: `absolute` KiB a minute, the ten instances together. Each T is twice
+# the widest σ of ln(head / base) over the quiet pairs of the tree against itself, two series of
+# 20 pairs on the owner's desktop shared with other sessions' work (Ryzen 7 5800X, llvmpipe of
+# Mesa 26.3.0, 2026-11-20, .delegation/m2.1-timed, local): with T at 2 σ the self control passes on
+# its least pairs, and a head slower by 1.5 T is shown worse on them. The GPU's groups
+# (`<case>-gpu`), not measured yet, take each kind's `*`, its widest group's.
+
+[[threshold]]
+figure = "a frame's drawing time"
+group = "*"
+class = "parity"
+relative = 0.065
+absolute = 0
+basis = "partial's, the widest: not measured on the GPU"
+
+[[threshold]]
+figure = "a frame's drawing time"
+group = "partial"
+class = "parity"
+relative = 0.065
+absolute = 0
+basis = "2 × 3.17 %, σ of 20 quiet pairs (series 2.74 %, 3.17 %)"
+
+[[threshold]]
+figure = "a frame's drawing time"
+group = "scaled"
+class = "parity"
+relative = 0.05
+absolute = 0
+basis = "2 × 2.37 %, σ of 20 quiet pairs (series 1.95 %, 2.37 %)"
+
+[[threshold]]
+figure = "a frame's drawing time"
+group = "full-4k"
+class = "recorded"
+basis = "ADR-0139: a full frame on the processor is judged on its own budget, none set yet; its σ 2.86 % over 20 quiet pairs"
+
+[[threshold]]
+figure = "CPU time a frame"
+group = "*"
+class = "parity"
+relative = 0.06
+absolute = 0
+basis = "scaled's, the widest: not measured on the GPU"
+
+[[threshold]]
+figure = "CPU time a frame"
+group = "partial"
+class = "parity"
+relative = 0.04
+absolute = 0
+basis = "2 × 1.96 %, σ of 20 quiet pairs (series 1.29 %, 1.96 %)"
+
+[[threshold]]
+figure = "CPU time a frame"
+group = "scaled"
+class = "parity"
+relative = 0.06
+absolute = 0
+basis = "2 × 2.92 %, σ of 20 quiet pairs (series 2.08 %, 2.92 %)"
+
+[[threshold]]
+figure = "CPU time a frame"
+group = "full-4k"
+class = "recorded"
+basis = "ADR-0139: a full frame on the processor is judged on its own budget, none set yet; its σ 0.78 % over 20 quiet pairs"
+
+[[threshold]]
+figure = "seat create's reply"
+group = "*"
+class = "parity"
+relative = 0.115
+absolute = 0
+basis = "start-4k's, the widest: not measured on the GPU"
+
+[[threshold]]
+figure = "seat create's reply"
+group = "start-1080p"
+class = "parity"
+relative = 0.11
+absolute = 0
+basis = "2 × 5.29 %, σ of 20 quiet pairs (series 3.22 %, 5.29 %): LLVM compiles at each cold start"
+
+[[threshold]]
+figure = "seat create's reply"
+group = "start-4k"
+class = "parity"
+relative = 0.115
+absolute = 0
+basis = "2 × 5.66 %, σ of 20 quiet pairs (series 5.66 %, 2.85 %): LLVM compiles at each cold start"
+
+[[threshold]]
+figure = "first frame"
+group = "*"
+class = "parity"
+relative = 0.105
+absolute = 0
+basis = "start-4k's, the widest: not measured on the GPU"
+
+[[threshold]]
+figure = "first frame"
+group = "start-1080p"
+class = "parity"
+relative = 0.09
+absolute = 0
+basis = "2 × 4.51 %, σ of 20 quiet pairs (series 2.45 %, 4.51 %)"
+
+[[threshold]]
+figure = "first frame"
+group = "start-4k"
+class = "parity"
+relative = 0.105
+absolute = 0
+basis = "2 × 5.08 %, σ of 20 quiet pairs (series 5.08 %, 2.46 %)"
+
+[[threshold]]
+figure = "seat create's reply, longest"
+group = "*"
+class = "budget"
+budget = 100
+basis = "ADR-0100: seat create answered within 100 ms, the longest of 20 cold starts"
+
+[[threshold]]
+figure = "first frame, longest"
+group = "*"
+class = "budget"
+budget = 150
+basis = "ADR-0100: the first frame within 150 ms on llvmpipe, the longest of 20 cold starts"
+
+[[threshold]]
+figure = "Pss_Anon growth"
+group = "*"
+class = "parity"
+relative = 0
+absolute = 4
+basis = "no growth: the tree against itself grew 0.00 KiB a minute; floor a page a minute over the ten"
+
+[[threshold]]
+figure = "first frame, longest"
+group = "start-1080p-gpu"
+class = "budget"
+budget = 100
+basis = "ADR-0100: the first frame within 100 ms on the GPU, the longest of 20 cold starts"
+
+[[threshold]]
+figure = "first frame, longest"
+group = "start-4k-gpu"
+class = "budget"
+budget = 100
+basis = "ADR-0100: the first frame within 100 ms on the GPU, the longest of 20 cold starts"

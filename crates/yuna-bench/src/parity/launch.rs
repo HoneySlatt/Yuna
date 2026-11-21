@@ -12,10 +12,19 @@
 //!
 //! Once the measured command ends, the client is killed: the run is over, and Yuna stopped with
 //! it still connected, as in every run. The launcher exits with the command's status.
+//!
+//! `--windows 0` starts no client: a start's run (`start.rs`) times Yuna alone. Just before it
+//! starts the command, the launcher writes the time on the wall clock to its standard error,
+//! which is the run's `yuna.log`, as [`SPAWNED`] then the nanoseconds since 1970: a start is
+//! timed from there, as Yuna's own log lines are, not from the namespaces' making.
 
 use std::fs::File;
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// What the launcher's line of the time it started the command begins with.
+pub const SPAWNED: &str = "parity launch: spawned_unix_ns=";
 
 /// The options `unshare` takes to make a run's namespaces: a user namespace, in which the user
 /// keeps its own id, and in it the PID, mount (for `/proc`) and network ones. The launcher keeps
@@ -76,10 +85,20 @@ fn launch(arguments: &[String]) -> Result<ExitCode, String> {
     rustix::thread::clear_ambient_capability_set()
         .map_err(|e| format!("the capabilities kept for the mount: {e}"))?;
     let program = std::env::current_exe().map_err(|e| format!("this program: {e}"))?;
+    let spawned = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    eprintln!("{SPAWNED}{spawned}");
     let mut measured = Command::new(&command[0])
         .args(&command[1..])
         .spawn()
         .map_err(|e| format!("{}: {e}", command[0]))?;
+    if windows == "0" {
+        let status = measured
+            .wait()
+            .map_err(|e| format!("{}: {e}", command[0]))?;
+        return Ok(exit_code(status));
+    }
     let client_log = File::create(Path::new(log)).map_err(|e| format!("{log}: {e}"))?;
     let mut client = Command::new(program);
     client
@@ -104,12 +123,17 @@ fn launch(arguments: &[String]) -> Result<ExitCode, String> {
         .map_err(|e| format!("{}: {e}", command[0]))?;
     let _ = client.kill();
     let _ = client.wait();
+    Ok(exit_code(status))
+}
+
+/// The launcher's status for the command's: its code, or 128 and the signal that ended it.
+fn exit_code(status: std::process::ExitStatus) -> ExitCode {
     use std::os::unix::process::ExitStatusExt;
-    Ok(match (status.code(), status.signal()) {
+    match (status.code(), status.signal()) {
         (Some(code), _) => ExitCode::from(code.clamp(0, 255) as u8),
         (None, Some(signal)) => ExitCode::from((128 + signal).clamp(0, 255) as u8),
         (None, None) => ExitCode::FAILURE,
-    })
+    }
 }
 
 /// Starts `client` beside `measured`; if it cannot start, ends `measured` and says why. No run

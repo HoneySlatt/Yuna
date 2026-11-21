@@ -12,13 +12,17 @@
 //! `--dump-before` or `--toggle-collect` name a function, and only Yuna's own functions (its
 //! `rest` tool's) are entered at the periods' ends alone, names Stage 2 changes; DHAT cuts nothing.
 //! A figure is compared only where both builds did the same work ([`equal_work`]).
+//!
+//! The GPU tier's figures ([`GPU_KINDS`]) are judged here as the CI tier's are ([`judge_gpu`]);
+//! the timed tier's kinds ([`TIMED_KINDS`]) are named here, and judged over pairs in `timed.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::build::Built;
-use super::rule::{self, Class, Measured, Threshold, Verdict};
-use super::scenario::{Instrument, Outcome, SCENARIOS, Scenario};
-use super::thresholds::Thresholds;
+use super::rule::{self, Class, Interval, Measured, Threshold, Verdict};
+use super::scenario::{Device, Instrument, Outcome, SCENARIOS, Scenario};
+use super::start::{Start, Tmpdir};
+use super::thresholds::{Entry, Thresholds};
 use super::valgrind::Tool;
 
 /// Which build.
@@ -83,6 +87,15 @@ pub enum What {
         /// Its repeats.
         repeats: u64,
     },
+    /// A timed start of `yuna mcp` (`start.rs`).
+    Start {
+        /// Its output's mode.
+        start: &'static Start,
+        /// What Yuna draws with.
+        device: Device,
+        /// Its temporary folder: full for the parity figures, empty for the budgets.
+        tmpdir: Tmpdir,
+    },
 }
 
 /// One run to make.
@@ -110,6 +123,22 @@ impl Job {
                 case,
                 repeats,
             } => format!("{program}/{case}-{repeats}"),
+            What::Start {
+                start,
+                device,
+                tmpdir,
+            } => {
+                let empty = if *tmpdir == Tmpdir::Empty {
+                    "-empty-tmp"
+                } else {
+                    ""
+                };
+                format!(
+                    "{}/{}{empty}",
+                    start.name,
+                    Instrument::Timed(*device).name()
+                )
+            }
         };
         format!("{}/{what}/{}", self.side.name(), self.repeat)
     }
@@ -139,6 +168,10 @@ enum From {
         reading: &'static str,
         per_period: bool,
     },
+    /// A GPU tier's run's DRM memory: its own, resident less shared, when `own`; else shared.
+    Gpu { own: bool },
+    /// A timed tier's figure, judged over pairs or on the soak's series (`timed.rs`).
+    Timed,
 }
 
 /// A kind of figure each scenario has.
@@ -282,6 +315,103 @@ pub const MOTION_OPERATION: Kind = Kind {
     },
 };
 
+/// The GPU tier's figures, of each scenario run natively on the GPU, at rest after its measured
+/// periods: the kernel's DRM memory of Yuna's clients, each client once; its own, resident less
+/// shared, parity, and its shared part, recorded, as the thresholds file says.
+pub const GPU_KINDS: [Kind; 2] = [
+    Kind {
+        name: "GPU memory",
+        unit: "KiB",
+        from: From::Gpu { own: true },
+    },
+    Kind {
+        name: "GPU memory, shared",
+        unit: "KiB",
+        from: From::Gpu { own: false },
+    },
+];
+
+/// A frame's drawing time, the median of a timed run's frames' `took_us`.
+pub const DRAWING_TIME: Kind = Kind {
+    name: "a frame's drawing time",
+    unit: "µs",
+    from: From::Timed,
+};
+
+/// Yuna's CPU time a frame, every thread of its process, llvmpipe's included.
+pub const FRAME_CPU: Kind = Kind {
+    name: "CPU time a frame",
+    unit: "µs",
+    from: From::Timed,
+};
+
+/// From `yuna mcp`'s spawn to its `seat create`'s reply.
+pub const REPLY: Kind = Kind {
+    name: "seat create's reply",
+    unit: "ms",
+    from: From::Timed,
+};
+
+/// From `yuna mcp`'s spawn to its seat's first frame.
+pub const FIRST_FRAME: Kind = Kind {
+    name: "first frame",
+    unit: "ms",
+    from: From::Timed,
+};
+
+/// The longest reply of the head's quiet starts: a budget, 100 ms (ADR-0100), in the thresholds
+/// file.
+pub const REPLY_LONGEST: Kind = Kind {
+    name: "seat create's reply, longest",
+    unit: "ms",
+    from: From::Timed,
+};
+
+/// The longest first frame of the head's quiet starts: a budget, 150 ms on llvmpipe, 100 ms on the
+/// GPU (ADR-0100), in the thresholds file.
+pub const FIRST_FRAME_LONGEST: Kind = Kind {
+    name: "first frame, longest",
+    unit: "ms",
+    from: From::Timed,
+};
+
+/// The soak's growth: the slope of the ten instances' `Pss_Anon`, against no growth.
+pub const SOAK_GROWTH: Kind = Kind {
+    name: "Pss_Anon growth",
+    unit: "KiB a minute",
+    from: From::Timed,
+};
+
+/// Every kind of the timed tier.
+pub const TIMED_KINDS: [Kind; 7] = [
+    DRAWING_TIME,
+    FRAME_CPU,
+    REPLY,
+    FIRST_FRAME,
+    REPLY_LONGEST,
+    FIRST_FRAME_LONGEST,
+    SOAK_GROWTH,
+];
+
+impl Kind {
+    /// Whether it is the timed tier's.
+    pub fn is_timed(&self) -> bool {
+        self.from == From::Timed
+    }
+}
+
+/// The interval a timed figure was judged on: on `ln(head / base)` over its quiet pairs, or on
+/// the slope of the head's soak.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Judgement {
+    /// The interval.
+    pub interval: Interval,
+    /// The pairs dropped as disturbed.
+    pub dropped: usize,
+    /// What it bounds: `ln(head / base)`, or the soak's slope in its figure's unit.
+    pub on: &'static str,
+}
+
 /// A figure, judged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Judged {
@@ -303,6 +433,8 @@ pub struct Judged {
     pub spread: Option<f64>,
     /// Its verdict.
     pub verdict: Verdict,
+    /// For a timed figure, the interval it was judged on.
+    pub judgement: Option<Judgement>,
 }
 
 /// What judging takes beside the runs: the head's classes and thresholds, which judge, and the
@@ -323,8 +455,49 @@ pub fn kind_names() -> Vec<&'static str> {
     KINDS
         .iter()
         .chain([&WAKES_BY_SOURCE, &OPERATION, &MOTION_OPERATION])
+        .chain(&GPU_KINDS)
+        .chain(&TIMED_KINDS)
         .map(|kind| kind.name)
         .collect()
+}
+
+/// Every figure of the GPU tier's runs `finished` on the builds `built` (base then head), judged
+/// as the CI tier's are: each side's median against the threshold.
+pub fn judge_gpu(finished: &[Finished], built: &[&Built; 2], judging: Judging) -> Vec<Judged> {
+    let scenarios: BTreeSet<&str> = finished
+        .iter()
+        .filter_map(|run| match &run.job.what {
+            What::Scenario {
+                scenario,
+                instrument: Instrument::Gpu,
+                ..
+            } => Some(scenario.name),
+            _ => None,
+        })
+        .collect();
+    let mut judged = Vec::new();
+    for scenario in SCENARIOS.iter().filter(|s| scenarios.contains(s.name)) {
+        let unequal = equal_work(finished, scenario.name);
+        for kind in GPU_KINDS {
+            let measure = |side: Side| -> Result<Vec<f64>, String> {
+                if let Some(error) = &built[side as usize].info.error {
+                    return Err(format!("its build failed: {error}"));
+                }
+                if let Some(reason) = &unequal {
+                    return Err(reason.clone());
+                }
+                values(finished, side, scenario, kind.from, None)
+            };
+            judged.push(judge_one(
+                format!("{}: {}", scenario.name, kind.name),
+                (scenario.name, scenario.name),
+                kind,
+                [measure(Side::Base), measure(Side::Head)],
+                judging,
+            ));
+        }
+    }
+    judged
 }
 
 /// Every figure of the runs `finished` on the builds `built` (base then head), judged.
@@ -334,7 +507,7 @@ pub fn judge_all(finished: &[Finished], built: &[&Built; 2], judging: Judging) -
         .iter()
         .filter_map(|run| match &run.job.what {
             What::Scenario { scenario, .. } => Some(scenario.name),
-            What::Operation { .. } => None,
+            What::Operation { .. } | What::Start { .. } => None,
         })
         .collect();
     for scenario in SCENARIOS.iter().filter(|s| scenarios.contains(s.name)) {
@@ -405,25 +578,9 @@ fn judge_one(
         (Err(reason), _) => Measured::Void(reason.clone()),
     };
     let entry = judging.head.lookup(kind.name, threshold_group);
-    let loosened = judging.base.and_then(|base| {
-        let moves: Vec<&[String]> = judging.moves.iter().map(Vec::as_slice).collect();
-        super::thresholds::loosened(
-            base,
-            judging.head,
-            kind.name,
-            threshold_group,
-            &name,
-            &moves,
-        )
-    });
-    let verdict = match (entry, loosened) {
-        (None, _) => Verdict::Void(format!(
-            "no threshold for {:?} in {}, which gives each figure its class too",
-            kind.name,
-            super::thresholds::PATH
-        )),
-        (_, Some(reason)) => Verdict::Void(reason),
-        (Some(entry), None) => rule::judge(
+    let verdict = match entry_of(kind, threshold_group, &name, judging) {
+        Err(reason) => Verdict::Void(reason),
+        Ok(entry) => rule::judge(
             entry.class,
             entry.threshold,
             &measured(&sides[0], medians[0]),
@@ -449,11 +606,38 @@ fn judge_one(
         group: group.to_owned(),
         kind,
         class: entry.map_or(Class::Parity, |e| e.class),
+        // Shown even when it made the figure void.
         threshold: entry.map(|e| (e.threshold, e.basis.clone())),
         values,
         medians,
         spread,
         verdict,
+        judgement: None,
+    }
+}
+
+/// The head's entry for the figure `name`, of `kind`, in `group`: its class, its threshold and
+/// their basis. Why the figure is void instead: no entry, which every figure needs for its class,
+/// or one the head made looser than the base's without a new move of the baseline naming it.
+pub fn entry_of<'a>(
+    kind: Kind,
+    group: &str,
+    name: &str,
+    judging: Judging<'a>,
+) -> Result<&'a Entry, String> {
+    let entry = judging.head.lookup(kind.name, group);
+    let loosened = judging.base.and_then(|base| {
+        let moves: Vec<&[String]> = judging.moves.iter().map(Vec::as_slice).collect();
+        super::thresholds::loosened(base, judging.head, kind.name, group, name, &moves)
+    });
+    match (entry, loosened) {
+        (None, _) => Err(format!(
+            "no threshold for {:?} in {}, which gives each figure its class too",
+            kind.name,
+            super::thresholds::PATH
+        )),
+        (_, Some(reason)) => Err(reason),
+        (Some(entry), None) => Ok(entry),
     }
 }
 
@@ -533,7 +717,7 @@ fn operation_values(
     };
     let repeats = |run: &Finished| match run.job.what {
         What::Operation { repeats, .. } => repeats,
-        What::Scenario { .. } => 0,
+        What::Scenario { .. } | What::Start { .. } => 0,
     };
     let shorter = runs(side).map(repeats).min().ok_or("not run")?;
     let mut values = Vec::new();
@@ -631,7 +815,7 @@ fn scenario_runs<'a>(
 fn periods_of(run: &Finished) -> u32 {
     match run.job.what {
         What::Scenario { periods, .. } => periods,
-        What::Operation { .. } => 0,
+        What::Operation { .. } | What::Start { .. } => 0,
     }
 }
 
@@ -645,6 +829,24 @@ fn values(
     source: Option<&str>,
 ) -> Result<Vec<f64>, String> {
     match from {
+        From::Timed => Err("a timed figure, judged over pairs (`timed.rs`)".to_owned()),
+        From::Gpu { own } => {
+            let runs: Vec<&Finished> =
+                scenario_runs(finished, side, scenario.name, Instrument::Gpu).collect();
+            if runs.is_empty() {
+                return Err("no run on the GPU".to_owned());
+            }
+            runs.iter()
+                .map(|run| {
+                    let shared = reading_of(&run.outcome, "gpu_shared_kib")?;
+                    if own {
+                        Ok(reading_of(&run.outcome, "gpu_resident_kib")? - shared)
+                    } else {
+                        Ok(shared)
+                    }
+                })
+                .collect()
+        }
         From::Native {
             reading,
             per_period,

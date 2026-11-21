@@ -23,6 +23,11 @@
 //! limit in its unit, in their place; a *recorded* figure gives neither. A figure takes its
 //! group's entry, else its kind's `*`. Every kind has a `*`.
 //!
+//! A timed figure (`timed.rs`) of class parity is judged over pairs: its `relative` is `T`, the
+//! share of the base's value its head may grow by, and its `absolute` is unused; but the soak's
+//! growth, judged against none, takes its `absolute`, in KiB a minute. A timed budget judges the
+//! head's longest quiet value against `budget`.
+//!
 //! Format 1, the file of M2.1's first parity script, had no `class`: the script held the classes,
 //! every kind parity but `Pss_File`, recorded. A file of format 1, a base's from before format 2,
 //! is read with those classes.
@@ -338,9 +343,23 @@ mod tests {
     #[test]
     fn the_tracked_file_in_format_1_is_read_as_it_is() {
         // The first baseline's file is the tracked one in format 1: the same thresholds, without
-        // the classes. Read, it judges every figure as the tracked file does.
+        // the classes. Read, it judges every figure as the tracked file does. The GPU and timed
+        // tiers' kinds came after format 1, with classes it cannot say: left out of both.
+        let after_format_1: Vec<&str> = crate::parity::figures::GPU_KINDS
+            .iter()
+            .chain(&crate::parity::figures::TIMED_KINDS)
+            .map(|kind| kind.name)
+            .collect();
         let tracked = std::fs::read_to_string(crate::scenarios::workspace().join(PATH))
-            .expect("the thresholds file");
+            .expect("the thresholds file")
+            .split("[[threshold]]")
+            .filter(|table| {
+                !after_format_1
+                    .iter()
+                    .any(|kind| table.contains(&format!("figure = {kind:?}\n")))
+            })
+            .collect::<Vec<_>>()
+            .join("[[threshold]]");
         let one = tracked
             .replace("format = 2", "format = 1")
             .replace("class = \"parity\"\n", "")

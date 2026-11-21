@@ -72,8 +72,8 @@ pub enum Source {
 /// controls), and the figure each must flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Canary {
-    /// Yuna's own instructions each frame: 1.8 times the threshold of Yuna's own figure in
-    /// `motion`, the widest, and more elsewhere.
+    /// Yuna's own instructions each frame: 1.9 times the threshold of Yuna's own figure in
+    /// `motion`, the widest of the scenarios that draw, and more in the others that do.
     Spin,
     /// Yuna's own instructions each frame: twice the threshold of the total's figure in `full`,
     /// the widest of the scenarios that draw, and more elsewhere.
@@ -95,11 +95,15 @@ pub enum Canary {
     Layout,
     /// Work in motion's animated update.
     Motion,
+    /// The timed tier's spin: the processor kept busy 28 µs inside each frame's drawing.
+    SpinDraw,
+    /// A sleep of 24 ms as Yuna starts.
+    Start,
 }
 
 impl Canary {
     /// Every canary.
-    pub const ALL: [Canary; 10] = [
+    pub const ALL: [Canary; 12] = [
         Canary::Spin,
         Canary::SpinTotal,
         Canary::Allocate,
@@ -110,6 +114,8 @@ impl Canary {
         Canary::Round,
         Canary::Layout,
         Canary::Motion,
+        Canary::SpinDraw,
+        Canary::Start,
     ];
 
     /// Its name, as `--canary` and `YUNA_PARITY_CANARY` take it.
@@ -125,6 +131,8 @@ impl Canary {
             Canary::Round => "round",
             Canary::Layout => "layout",
             Canary::Motion => "motion",
+            Canary::SpinDraw => "spin-draw",
+            Canary::Start => "start",
         }
     }
 

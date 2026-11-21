@@ -11,8 +11,11 @@
 //!
 //! A run is a warm-up, `rest`'s counts, the measured periods, `rest`'s counts again; a native run
 //! then lets Yuna come to rest and reads its wakes over [`REST_WINDOW`] of real time and its
-//! memory. `full`'s warm-up starts with square frames, so that its measured periods start with
-//! the drawings Yuna keeps at their most (`drawings_filled`).
+//! memory, and on the GPU (the GPU tier) the kernel's DRM memory. `full`'s warm-up starts with
+//! square frames, so that its measured periods start with the drawings Yuna keeps at their most
+//! (`drawings_filled`). A timed run (the timed tier, `timed.rs`) reads Yuna's threads' times over
+//! the measured periods instead, and its frames' drawing times from its log; the soak (`soak.rs`)
+//! holds a run started here at rest on the real clock. [`Instrument`] says which.
 //!
 //! **Real time.** On the manual clock, Yuna's own deadlines run only when the script advances the
 //! clock: what valgrind counts follows the periods, not the machine's speed. A timer on real time
@@ -181,10 +184,13 @@ pub fn named(name: &str) -> Option<&'static Scenario> {
 }
 
 /// The periods of warm-up before the measured ones: the windows placed, a first frame drawn,
-/// llvmpipe's shaders compiled; for `motion`, one whole cycle, after which each is the same.
-fn warm_up(scenario: &Scenario) -> u32 {
-    match scenario.action {
-        Action::Motion => 4 * MOTION_STEP + 8,
+/// llvmpipe's shaders compiled; for `motion`, one whole cycle, after which each is the same. A
+/// timed run warms up for [`TIMED_WARM_UP`] periods, so that the first frames' page faults and
+/// cold caches are not timed.
+fn warm_up(scenario: &Scenario, instrument: Instrument) -> u32 {
+    match (scenario.action, instrument) {
+        (Action::Motion, _) => 4 * MOTION_STEP + 8,
+        (_, Instrument::Timed(_)) => TIMED_WARM_UP,
         _ => 8,
     }
 }
@@ -211,6 +217,42 @@ fn drawings_filled(scenario: &Scenario) -> u32 {
     }
 }
 
+/// The periods a timed run warms up for: 100 ms at 240 Hz.
+pub const TIMED_WARM_UP: u32 = 24;
+
+/// The timed tier's full-damage frame at 4K: the scene of Yuna's default output that ADR-0139's
+/// processor tier names, both windows whole each frame. Not one of [`SCENARIOS`], which CI runs
+/// under valgrind.
+pub const FULL_4K: Scenario = Scenario {
+    name: "full-4k",
+    summary: "4K at scale 1.5, two windows at the preferred scale, both change whole each frame",
+    output: (3840, 2160, 1.5),
+    windows: 2,
+    animations: false,
+    action: Action::Full,
+    periods: 120,
+};
+
+/// What the soak holds: one seat at 1080p, two still windows, at rest.
+pub const SOAK: Scenario = Scenario {
+    name: "soak",
+    summary: "1080p, two still windows, held at rest on the real clock",
+    output: (1920, 1080, 1.0),
+    windows: 2,
+    animations: false,
+    action: Action::Idle,
+    periods: 0,
+};
+
+/// What Yuna draws with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Device {
+    /// Mesa's llvmpipe, on the processor.
+    Llvmpipe,
+    /// The GPU's render node (`yuna --gpu`).
+    Gpu,
+}
+
 /// How a run measures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Instrument {
@@ -218,6 +260,14 @@ pub enum Instrument {
     Native,
     /// Under a valgrind tool.
     Valgrind(Tool),
+    /// The timed tier: Yuna alone, llvmpipe on its own threads or the GPU, logging each frame:
+    /// a frame's drawing time, Yuna's CPU time, its own threads' wait on the run queue.
+    Timed(Device),
+    /// The GPU tier: as [`Instrument::Native`], on the GPU, the kernel's DRM memory of Yuna's
+    /// clients read at rest.
+    Gpu,
+    /// The soak: on the real clock, held at rest, its memory read from outside (`soak.rs`).
+    Soak,
 }
 
 impl Instrument {
@@ -226,7 +276,25 @@ impl Instrument {
         match self {
             Instrument::Native => "native",
             Instrument::Valgrind(tool) => tool.name(),
+            Instrument::Timed(Device::Llvmpipe) => "timed",
+            Instrument::Timed(Device::Gpu) => "timed-gpu",
+            Instrument::Gpu => "gpu",
+            Instrument::Soak => "soak",
         }
+    }
+
+    /// What Yuna draws with.
+    pub fn device(self) -> Device {
+        match self {
+            Instrument::Timed(device) => device,
+            Instrument::Gpu => Device::Gpu,
+            _ => Device::Llvmpipe,
+        }
+    }
+
+    /// Whether Yuna runs alone, not under valgrind: its process is then read from outside.
+    fn alone(self) -> bool {
+        !matches!(self, Instrument::Valgrind(_))
     }
 }
 
@@ -253,6 +321,12 @@ pub struct Tools {
     pub runtime: PathBuf,
     /// util-linux's `unshare`, which makes each run's namespaces.
     pub unshare: PathBuf,
+    /// The Mesa shader cache the timed tier's frames share, both sides' runs: filled by the
+    /// first run of each scenario, so that every later run draws with the same compiled shaders.
+    pub shader_cache: PathBuf,
+    /// The temporary folder the timed tier's starts share, full of entries of no Yuna's
+    /// (`start.rs`).
+    pub full_tmpdir: PathBuf,
 }
 
 /// The work a run did in its measured periods, which two builds must share for their costs to be
@@ -284,6 +358,8 @@ pub struct Outcome {
     pub notes: Vec<String>,
     /// For an operation's run, its program's digest of the work it did.
     pub digest: Option<String>,
+    /// For a timed run, why the machine's load disturbed it (`timed.rs`): its pair is dropped.
+    pub disturbed: Option<String>,
 }
 
 /// A run's readings, by name:
@@ -294,7 +370,13 @@ pub struct Outcome {
 ///   the heap held when Yuna was stopped);
 /// - native: over the measured periods, `wakes` and `wakes:<source>` from `rest`, `switches`
 ///   (voluntary context switches of Yuna's own threads); at rest, over [`REST_WINDOW`],
-///   `rest_wakes` and `rest_switches`; after it, `pss_anon_kib` and `pss_file_kib`.
+///   `rest_wakes` and `rest_switches`; after it, `pss_anon_kib` and `pss_file_kib`;
+/// - GPU: the native ones, and after them `gpu_resident_kib` and `gpu_shared_kib`, the kernel's
+///   DRM memory of Yuna's clients;
+/// - timed: over the measured periods, `cpu_ns` (every thread of Yuna's), `own_cpu_ns` and
+///   `own_wait_ns` (its own threads' time on a core and on a run queue, [`ThreadTimes`]),
+///   `frames_before` and `frames_after` (`rest`'s counts), and from the log `took_us`, the
+///   median of the measured frames' drawing times, and `took_frames`, their count.
 pub fn run(
     scenario: &Scenario,
     instrument: Instrument,
@@ -319,9 +401,59 @@ pub fn run(
         && let Err(error) = read_valgrind(tool, folder, &build.yuna, &mut outcome)
     {
         outcome.error = Some(error);
+    } else if let Instrument::Timed(_) = instrument
+        && let Err(error) = read_drawing_times(folder, &mut outcome)
+    {
+        outcome.error = Some(error);
     }
     outcome.seconds = started.elapsed().as_secs_f64();
     outcome
+}
+
+/// A timed run's frames' drawing times, from its log's `frame drawn` lines: the median of the
+/// measured periods' `took_us`, and how many there were. Each frame drawn has a line, in order, so
+/// that the measured ones are those between the two `rest` counts of frames.
+fn read_drawing_times(folder: &Path, outcome: &mut Outcome) -> Result<(), String> {
+    let log = fs::read_to_string(folder.join("yuna.log")).map_err(|e| format!("yuna.log: {e}"))?;
+    let reading = |name: &str| {
+        outcome
+            .readings
+            .get(name)
+            .map(|value| *value as usize)
+            .ok_or_else(|| format!("the run read no {name}"))
+    };
+    let (from, to) = (reading("frames_before")?, reading("frames_after")?);
+    let took = drawing_times(&log, from, to)?;
+    let median = super::rule::median(&took).ok_or("no frame was drawn in the measured periods")?;
+    outcome.readings.insert("took_us".to_owned(), median);
+    outcome
+        .readings
+        .insert("took_frames".to_owned(), took.len() as f64);
+    Ok(())
+}
+
+/// The `took_us` of the `frame drawn` lines of `log` from the `from`-th to before the `to`-th,
+/// counted from 0; fails if the log has fewer, or a line without its time.
+pub fn drawing_times(log: &str, from: usize, to: usize) -> Result<Vec<f64>, String> {
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(" frame drawn "))
+        .collect();
+    let measured = lines.get(from..to).ok_or_else(|| {
+        format!(
+            "the log has {} frame drawn lines, rest counted {to}: run at debug?",
+            lines.len()
+        )
+    })?;
+    measured
+        .iter()
+        .map(|line| {
+            line.split_whitespace()
+                .find_map(|word| word.strip_prefix("took_us="))
+                .and_then(|value| value.parse::<f64>().ok())
+                .ok_or_else(|| format!("a frame drawn line without took_us: {line}"))
+        })
+        .collect()
 }
 
 /// Sums the files `tool` wrote for every process that ran the build's `yuna`.
@@ -383,7 +515,7 @@ fn read_valgrind(
 }
 
 /// A running Yuna, its MCP client and its lockstep client.
-struct Run {
+pub(super) struct Run {
     /// `unshare`, whose child, the launcher, runs Yuna and the client in the run's namespaces.
     namespace: Child,
     /// The build's `yuna`: the processes measured natively run it.
@@ -410,7 +542,9 @@ struct Run {
 }
 
 impl Run {
-    fn start(
+    /// Starts Yuna for `scenario` under `instrument`, its seat and its lockstep client, whose
+    /// windows are then ready.
+    pub(super) fn start(
         scenario: &Scenario,
         instrument: Instrument,
         build: &Build,
@@ -450,11 +584,13 @@ impl Run {
         if let Instrument::Valgrind(tool) = instrument {
             command_line.extend(valgrind::command(&tools.valgrind, tool, folder));
         }
-        command_line.extend([
-            build.yuna.display().to_string(),
-            "mcp".to_owned(),
-            "--manual-clock".to_owned(),
-        ]);
+        command_line.extend([build.yuna.display().to_string(), "mcp".to_owned()]);
+        if instrument != Instrument::Soak {
+            command_line.push("--manual-clock".to_owned());
+        }
+        if instrument.device() == Device::Gpu {
+            command_line.push("--gpu".to_owned());
+        }
         if scenario.animations {
             command_line.push("--animations".to_owned());
         }
@@ -467,16 +603,34 @@ impl Run {
             .env("HOME", folder.join("home"))
             .env("TMPDIR", folder.join("tmp"))
             .env("XDG_RUNTIME_DIR", &runtime)
-            .env("YUNA_LOG", "info")
-            .env("LP_NUM_THREADS", LLVMPIPE_THREADS.to_string())
-            // No shader read from an earlier run's cache. A filled cache does not spare a run
-            // LLVM's work at Yuna's start, and its reads make the allocations vary
-            // (`figures.rs`, the total's floors).
-            .env("MESA_SHADER_CACHE_DISABLE", "true")
+            // A timed run reads each frame's time from the log's `frame drawn` lines, at debug.
+            .env(
+                "YUNA_LOG",
+                if matches!(instrument, Instrument::Timed(_)) {
+                    "debug"
+                } else {
+                    "info"
+                },
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(log)
             .process_group(0);
+        // A timed run, and the soak, draw as an agent's Yuna does, on llvmpipe's own threads.
+        if !matches!(instrument, Instrument::Timed(_) | Instrument::Soak) {
+            command.env("LP_NUM_THREADS", LLVMPIPE_THREADS.to_string());
+        }
+        if matches!(instrument, Instrument::Timed(_)) {
+            // LLVM compiles the same shaders differently from run to run, and some runs then
+            // draw 20 % faster with 40 % less of the processor: every timed run reads the
+            // shaders the first one compiled.
+            command.env("MESA_SHADER_CACHE_DIR", &tools.shader_cache);
+        } else {
+            // No shader read from an earlier run's cache. A filled cache does not spare a run
+            // LLVM's work at Yuna's start, and its reads make the allocations vary
+            // (`figures.rs`, the total's floors).
+            command.env("MESA_SHADER_CACHE_DISABLE", "true");
+        }
         if let Some(canary) = &build.canary {
             command.env("YUNA_PARITY_CANARY", canary);
         }
@@ -506,10 +660,7 @@ impl Run {
             run.kill();
             return Err(error);
         }
-        if matches!(
-            instrument,
-            Instrument::Native | Instrument::Valgrind(Tool::Dhat)
-        ) {
+        if instrument.alone() || instrument == Instrument::Valgrind(Tool::Dhat) {
             let found = measured_process(
                 &Proc::system(),
                 run.namespace.id(),
@@ -520,7 +671,7 @@ impl Run {
                 run.kill();
                 return Err("no process of the run runs its yuna".to_owned());
             };
-            if instrument == Instrument::Native {
+            if instrument.alone() {
                 run.native_pid = Some(pid);
             } else {
                 run.dhat_pid = Some(pid);
@@ -796,20 +947,23 @@ impl Run {
             self.step(&square)?;
             self.advance()?;
         }
-        for index in 0..warm_up(scenario) {
+        let first = warm_up(scenario, instrument);
+        for index in 0..first {
             self.period(scenario, index)?;
         }
-        let first = warm_up(scenario);
         let root = self.namespace.id();
         let yuna = self.yuna.clone();
         let switches = || own_switches(&Proc::system(), root, &yuna);
-        let native = instrument == Instrument::Native;
+        let native = matches!(instrument, Instrument::Native | Instrument::Gpu);
+        let timed = matches!(instrument, Instrument::Timed(_));
         let rest_before = self.call("rest", json!({}))?;
         let client_before = self.client_counts;
         let switches_before = if native { switches() } else { 0 };
+        let threads_before = timed.then(|| thread_times(&Proc::system(), root, &yuna));
         for index in first..first + periods {
             self.period(scenario, index)?;
         }
+        let threads_after = timed.then(|| thread_times(&Proc::system(), root, &yuna));
         let switches_after = if native { switches() } else { 0 };
         let rest_after = self.call("rest", json!({}))?;
         outcome.work = work(&rest_before, &rest_after)?;
@@ -820,6 +974,32 @@ impl Run {
             && outcome.work.causes.get("motion").copied().unwrap_or(0) == 0
         {
             return Err("no frame of the measured periods was drawn for a motion".to_owned());
+        }
+        if let (Some(before), Some(after)) = (threads_before, threads_after) {
+            let readings = &mut outcome.readings;
+            readings.insert(
+                "cpu_ns".to_owned(),
+                after.cpu_ns.saturating_sub(before.cpu_ns) as f64,
+            );
+            readings.insert(
+                "own_cpu_ns".to_owned(),
+                after.own_cpu_ns.saturating_sub(before.own_cpu_ns) as f64,
+            );
+            readings.insert(
+                "own_wait_ns".to_owned(),
+                after.own_wait_ns.saturating_sub(before.own_wait_ns) as f64,
+            );
+            // Which of the log's `frame drawn` lines are the measured periods': `rest` counts
+            // every frame drawn since Yuna started, as the log has a line for each.
+            readings.insert(
+                "frames_before".to_owned(),
+                count(&rest_before, "frames")? as f64,
+            );
+            readings.insert(
+                "frames_after".to_owned(),
+                count(&rest_after, "frames")? as f64,
+            );
+            return Ok(());
         }
         if !native {
             return Ok(());
@@ -849,6 +1029,11 @@ impl Run {
         let (anon, file) = memory(&Proc::system(), root, &yuna);
         readings.insert("pss_anon_kib".to_owned(), anon as f64);
         readings.insert("pss_file_kib".to_owned(), file as f64);
+        if instrument == Instrument::Gpu {
+            let (resident, shared) = gpu_memory(&Proc::system(), root, &yuna)?;
+            readings.insert("gpu_resident_kib".to_owned(), resident as f64);
+            readings.insert("gpu_shared_kib".to_owned(), shared as f64);
+        }
         Ok(())
     }
 
@@ -868,10 +1053,15 @@ impl Run {
         ))
     }
 
+    /// `Pss_Anon` and `Pss_File` of the run's Yuna, in KiB.
+    pub(super) fn memory(&self) -> (u64, u64) {
+        memory(&Proc::system(), self.namespace.id(), &self.yuna)
+    }
+
     /// Ends Yuna by closing its input, and waits for it: the launcher then ends the client, which
     /// stays connected and idle until Yuna has stopped, so that Yuna's last work is the same in
     /// every run.
-    fn stop(mut self) -> Result<(), String> {
+    pub(super) fn stop(mut self) -> Result<(), String> {
         let mut expected = 0;
         if let Some(pid) = self.dhat_pid {
             // A DHAT run ends by a signal Yuna does not handle, once Yuna sleeps after the last
@@ -959,7 +1149,7 @@ fn wait_until_asleep(pid: u32) -> Result<(), String> {
 }
 
 /// Waits up to `timeout` for `child` to end.
-fn wait(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
+pub(super) fn wait(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
     let until = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -971,7 +1161,7 @@ fn wait(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus
 }
 
 /// Kills `child`'s process group, which it leads, and reaps it.
-fn kill_group(child: &mut Child) {
+pub(super) fn kill_group(child: &mut Child) {
     if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
@@ -1120,6 +1310,59 @@ fn own_switches(proc: &Proc, root: u32, yuna: &Path) -> u64 {
         .sum()
 }
 
+/// The processor's times so far of every Yuna process under `root`, in nanoseconds, from each
+/// thread's `schedstat`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadTimes {
+    /// Every thread's time on a core, Mesa's and llvmpipe's included.
+    pub cpu_ns: u64,
+    /// Yuna's own threads' time on a core: each process's main thread and those it names
+    /// `yuna-…`, as `own_switches` counts them.
+    pub own_cpu_ns: u64,
+    /// Yuna's own threads' time on a run queue, ready to run and given no core: what the
+    /// machine's other work, or Yuna's own other threads, made them wait.
+    pub own_wait_ns: u64,
+}
+
+/// The [`ThreadTimes`] of every Yuna process under `root` now.
+pub fn thread_times(proc: &Proc, root: u32, yuna: &Path) -> ThreadTimes {
+    let mut times = ThreadTimes::default();
+    for pid in yuna_processes(proc, root, yuna) {
+        for thread in proc.threads(pid) {
+            times.cpu_ns += thread.cpu_ns;
+            if thread.tid == pid || thread.name.starts_with("yuna-") {
+                times.own_cpu_ns += thread.cpu_ns;
+                times.own_wait_ns += thread.wait_ns;
+            }
+        }
+    }
+    times
+}
+
+/// The kernel's DRM memory of every Yuna process under `root`, each DRM client once, in KiB: its
+/// `resident-*` and its `shared-*`, every region summed. Fails when Yuna holds no DRM file, or
+/// the kernel gives no resident memory.
+fn gpu_memory(proc: &Proc, root: u32, yuna: &Path) -> Result<(u64, u64), String> {
+    let pids = yuna_processes(proc, root, yuna);
+    let files = crate::drm::drm_files(proc, &pids);
+    if files.is_empty() {
+        return Err("Yuna holds no DRM file: is it on the GPU?".to_owned());
+    }
+    let memory = crate::drm::memory_kib(&files);
+    // None when no key of the kind is given at all, which is not 0.
+    let sum = |prefix: &str| -> Option<u64> {
+        let values: Vec<u64> = memory
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .map(|(_, kib)| *kib)
+            .collect();
+        (!values.is_empty()).then(|| values.iter().sum())
+    };
+    let resident = sum("resident-")
+        .ok_or("the kernel's DRM statistics give Yuna's clients no resident memory")?;
+    Ok((resident, sum("shared-").unwrap_or(0)))
+}
+
 /// `Pss_Anon` and `Pss_File`, in KiB, of every Yuna process under `root`.
 fn memory(proc: &Proc, root: u32, yuna: &Path) -> (u64, u64) {
     yuna_processes(proc, root, yuna)
@@ -1188,7 +1431,7 @@ mod tests {
         // motion's measured periods are whole cycles, so that the longer run repeats them.
         let motion = named("motion").unwrap();
         assert_eq!(motion.periods % (4 * MOTION_STEP), 0);
-        assert_eq!(warm_up(motion) % MOTION_STEP, 8);
+        assert_eq!(warm_up(motion, Instrument::Native) % MOTION_STEP, 8);
         // Every scenario that draws ends its shorter run with Yuna's drawings kept at their most,
         // as its longer run does, so that their difference holds none of the queue's growth;
         // `full`'s measured periods start so.
@@ -1196,7 +1439,8 @@ mod tests {
             .iter()
             .filter(|s| !matches!(s.action, Action::Idle | Action::Input))
         {
-            let before = PLACING_PERIODS + drawings_filled(scenario) + warm_up(scenario);
+            let before =
+                PLACING_PERIODS + drawings_filled(scenario) + warm_up(scenario, Instrument::Native);
             assert!(
                 before + scenario.periods >= DRAWINGS_KEPT,
                 "{}",
@@ -1204,7 +1448,10 @@ mod tests {
             );
         }
         let full = named("full").unwrap();
-        assert!(PLACING_PERIODS + drawings_filled(full) + warm_up(full) >= DRAWINGS_KEPT);
+        assert!(
+            PLACING_PERIODS + drawings_filled(full) + warm_up(full, Instrument::Native)
+                >= DRAWINGS_KEPT
+        );
         assert!(full.periods < DRAWINGS_KEPT, "the fill would be needless");
     }
 

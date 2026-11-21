@@ -19,9 +19,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   its canaries flagged on the desktop; allocations by DHAT (ADR-0143); motion's budget met, its clients on the GPU
   (ADR-0144); `yuna mcp`'s start budgets met; the traces, the held captures and the debt's tests;
   the 4K scene on lavapipe as fast as on llvmpipe ([measurements](measurements.md)).
-  **Left, at the owner's go when the machine is free**: the timed and GPU tiers. Their code is on
-  the branch `m2.1-timed` (`073ab79`), unfinished and unreviewed; then its self control, its `spin` and `start` canaries, the GPU tier and the soak are
-  run, the code reviewed and merged. Missing scenarios: popups, X11, captures, subsurfaces.
+  The timed and GPU tiers, at the owner's go on 2026-11-21: built, reviewed, their controls
+  passing, the soak flat ([measurements](measurements.md)). **M2.1 is done.** Missing scenarios:
+  popups, X11, captures, subsurfaces ([debt](debt.md)).
 - **M2.2, the interface**, under way since 2026-11-20. The owner chose that day to pause the
   measurements and start it, the timed tier finishing at their go, against ADR-0139's "baselines
   first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
@@ -34,9 +34,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   test; `yuna`'s re-exports gone; Yuna's events under 4 KiB; 256 clients a seat; then 1 MiB a
   client, which moved no parity figure, so no move of the baseline. The closing review is done
   and its findings fixed; CI's parity found them worse in `input`, by the split of codegen units
-  alone, and the parity script builds in one since (ADR-0148). **Left**: the timed tier, and the
-  GPU tier's DRM memory, comparing M2.2's head with the baseline, and the thresholds' spreads on
-  one-unit builds, at the owner's go; M2.2 closes then.
+  alone, and the parity script builds in one since (ADR-0148). The timed and GPU tiers compared
+  M2.2's head, `c7ce632`, with the baseline on 2026-11-21: no figure worse
+  ([measurements](measurements.md)); M2.2 closes on that.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -134,7 +134,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1's CI tier done; M2.2's code done, its timed comparison left |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 done; M2.2's timed comparison done, its close next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas

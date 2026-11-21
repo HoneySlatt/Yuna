@@ -406,6 +406,11 @@ impl Compositor {
             )
             .map_err(|e| Error::EventLoop(e.error.to_string()))?;
         }
+        if let Some(spin) = canary.drawing_spin() {
+            // The hook runs before Yuna reads the time a drawing ended at: the frame's time
+            // counts the spin. No shipped build has a canary, so no hook of the tests' is replaced.
+            state.draw_hook = Some(Box::new(move |_| crate::canary::spin_for(spin)));
+        }
         Ok(Compositor {
             xwayland,
             event_loop,

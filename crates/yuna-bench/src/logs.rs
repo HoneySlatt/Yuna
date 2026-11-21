@@ -5,7 +5,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The value at percentile `p` of `sorted`, by the nearest rank; none if it is empty.
 pub fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
@@ -166,6 +166,51 @@ pub fn gdctl_output(text: &str) -> Option<String> {
     Some(format!("{mode},{scale}"))
 }
 
+/// The time a line of Yuna's log begins with, on the wall clock, as its logger writes it in UTC to
+/// the microsecond: `2026-11-18T04:12:58.637080Z`. None for a line without one, or a date that is
+/// not one.
+pub fn yuna_log_time(line: &str) -> Option<SystemTime> {
+    let stamp = line.split_whitespace().next()?.strip_suffix('Z')?;
+    let (date, time) = stamp.split_once('T')?;
+    let numbers = |text: &str, separator: char| -> Option<Vec<u64>> {
+        text.split(separator).map(|n| n.parse().ok()).collect()
+    };
+    let [year, month, day] = numbers(date, '-')?[..] else {
+        return None;
+    };
+    let (clock, fraction) = time.split_once('.')?;
+    let [hours, minutes, seconds] = numbers(clock, ':')?[..] else {
+        return None;
+    };
+    let valid = (1970..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && hours < 24
+        && minutes < 60
+        && seconds <= 60
+        && (1..=9).contains(&fraction.len())
+        && fraction.bytes().all(|b| b.is_ascii_digit());
+    if !valid {
+        return None;
+    }
+    let nanos = fraction.parse::<u64>().ok()? * 10_u64.pow(9 - fraction.len() as u32);
+    let days = days_from_civil(year as i64, month as i64, day as i64);
+    let seconds = u64::try_from(days).ok()? * 86_400 + hours * 3_600 + minutes * 60 + seconds;
+    Some(UNIX_EPOCH + Duration::from_secs(seconds) + Duration::from_nanos(nanos))
+}
+
+/// The days from 1970-01-01 to a date of the Gregorian calendar: Howard Hinnant's
+/// `days_from_civil`, the inverse of the `civil_from_days` of [`crate::cli::utc`].
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    // Months from March, so that February, and its leap day, ends the year.
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// The frame counter's frames in `[from_ns, to_ns]`: its `frame <ns>` lines.
 pub fn counted_frames(log: &str, from_ns: u64, to_ns: u64) -> u64 {
     log.lines()
@@ -279,6 +324,38 @@ mod tests {
                    garbage\n";
         assert_eq!(kwin_frames(csv, 105, 250), (2, Some(4_166_666.0)));
         assert_eq!(kwin_frames(csv, 400, 500), (0, None));
+    }
+
+    #[test]
+    fn yunas_log_times_are_read_to_the_microsecond() {
+        let line = "2026-11-18T04:12:58.637080Z DEBUG yuna::frames: frame drawn output=1";
+        let at = yuna_log_time(line).expect("a time");
+        let since = at.duration_since(UNIX_EPOCH).unwrap();
+        assert_eq!(since.as_secs(), 1_794_975_178);
+        assert_eq!(since.subsec_micros(), 637_080);
+        // The bench's own writer, its inverse to the second.
+        assert_eq!(crate::cli::utc(at), "2026-11-18T04:12:58Z");
+        assert_eq!(yuna_log_time("1970-01-01T00:00:00.0Z x"), Some(UNIX_EPOCH));
+        // 29 February of a leap year, and the day after.
+        let leap = yuna_log_time("2000-02-29T00:00:00.0Z").unwrap();
+        let after = yuna_log_time("2000-03-01T00:00:00.5Z").unwrap();
+        assert_eq!(
+            after.duration_since(leap).unwrap(),
+            Duration::from_millis(86_400_500)
+        );
+        for malformed in [
+            "",
+            "frame drawn",
+            "2026-11-18 04:12:58.637080Z x",
+            "2026-11-18T04:12:58Z x",
+            "2026-13-18T04:12:58.1Z x",
+            "2026-11-18T24:12:58.1Z x",
+            "2026-11-18T04:12:58.1234567890Z x",
+            "2026-11-18T04:12:58.-1Z x",
+            "1969-12-31T23:59:59.9Z x",
+        ] {
+            assert_eq!(yuna_log_time(malformed), None, "{malformed:?}");
+        }
     }
 
     #[test]

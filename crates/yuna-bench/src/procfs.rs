@@ -24,6 +24,9 @@ pub struct ThreadSample {
     pub name: String,
     /// The time it ran on a core, in nanoseconds: the first field of `schedstat`.
     pub cpu_ns: u64,
+    /// The time it waited on a run queue, ready to run but given no core, in nanoseconds: the
+    /// second field of `schedstat`.
+    pub wait_ns: u64,
     /// Its voluntary context switches: each time it slept, waiting for something.
     pub voluntary: u64,
     /// Its involuntary context switches: each time the scheduler took its core from it.
@@ -68,13 +71,15 @@ impl Proc {
                 let tid = task.file_name().to_str()?.parse().ok()?;
                 let folder = task.path();
                 let name = fs::read_to_string(folder.join("comm")).ok()?;
-                let cpu_ns = parse_schedstat(&fs::read_to_string(folder.join("schedstat")).ok()?)?;
+                let (cpu_ns, wait_ns) =
+                    parse_schedstat(&fs::read_to_string(folder.join("schedstat")).ok()?)?;
                 let (voluntary, involuntary) =
                     parse_context_switches(&fs::read_to_string(folder.join("status")).ok()?)?;
                 Some(ThreadSample {
                     tid,
                     name: name.trim_end().to_owned(),
                     cpu_ns,
+                    wait_ns,
                     voluntary,
                     involuntary,
                 })
@@ -221,9 +226,11 @@ pub fn store_version(folder: &str) -> Option<&str> {
     Some(version.split_once("-bin").map_or(version, |(v, _)| v))
 }
 
-/// The CPU time in nanoseconds of a `schedstat`: its first field.
-pub fn parse_schedstat(text: &str) -> Option<u64> {
-    text.split_whitespace().next()?.parse().ok()
+/// A `schedstat`'s time on a core and time waiting on a run queue, in nanoseconds: its first two
+/// fields.
+pub fn parse_schedstat(text: &str) -> Option<(u64, u64)> {
+    let mut fields = text.split_whitespace().map(|field| field.parse().ok());
+    Some((fields.next()??, fields.next()??))
 }
 
 /// The voluntary and involuntary context switches of a thread's `status`.
@@ -315,9 +322,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schedstat_gives_the_time_on_a_core() {
-        assert_eq!(parse_schedstat("123456789 4567 89\n"), Some(123_456_789));
+    fn schedstat_gives_the_time_on_a_core_and_on_a_run_queue() {
+        assert_eq!(
+            parse_schedstat("123456789 4567 89\n"),
+            Some((123_456_789, 4567))
+        );
         assert_eq!(parse_schedstat(""), None);
+        assert_eq!(parse_schedstat("123456789\n"), None);
     }
 
     #[test]
@@ -430,6 +441,7 @@ mod tests {
                 tid: 101,
                 name: "sway:gdrv0".to_owned(),
                 cpu_ns: 5000,
+                wait_ns: 10,
                 voluntary: 4,
                 involuntary: 1,
             }]

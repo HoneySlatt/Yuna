@@ -80,7 +80,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   destroy it.
 - **Disturbed** (bench): said of a measured window during which the machine's other programs
   used more than 2 cores, or more than 10 % of the GPU's drawing, on average; a run with one is
-  shown, marked †, never ranked.
+  shown, marked †, never ranked. In the parity script's timed tier, a run is disturbed by the
+  same limits on average or in any second, or when Yuna's own threads waited on the run queue
+  more than 5 % of their time on a core; its pair is dropped.
 - **Dmabuf**: a buffer a client shares with Yuna by file descriptor, through `linux-dmabuf`,
   most often in GPU memory; Yuna offers the protocol only where its renderer imports dmabufs.
 - **Drag session**: what Yuna's loop knows and decides of one drag between a seat's X11 and
@@ -143,6 +145,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   at most one frame callback a second ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)).
 - **Home output**: the output a workspace goes back to when that output returns after being
   unplugged ([ADR-0018](adr/0018-workspaces.md)).
+- **Inconclusive** (parity): a timed figure whose pairs, at their cap, show it neither no worse
+  than its threshold nor worse; it never passes
+  ([ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
 - **Image description**: in `color-management-v1`, what a surface's pixel values mean or what an
   output expects: a transfer function, primaries, luminances and a target colour volume. Each
   has an **identity**, a number no other ever has, so that a client tells a copy from a new one
@@ -214,6 +219,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   `STALL_RECHECK` later, is stalled, and its Xwayland is ended, as one owed past the bound is.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the
   stack, not the core: Hyprland's headless dwl, which lends it a render node.
+- **Pair** (parity): in the timed tier, a run of the base and a run of the head of one case, in an
+  order drawn from the run's seed; each gives `ln(head / base)`, and a figure is judged over its
+  quiet pairs ([ARCHITECTURE](ARCHITECTURE.md#the-timed-tier)).
 - **Parity script** (Stage 2a): `yuna-bench parity`, which compares two builds on the baselines'
   figures, on the same machine, with its controls
   ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md),
@@ -292,8 +300,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Selection**: what a client offers to paste, as a list of MIME types: the clipboard or the
   primary selection. Each seat has its own.
 - **Self control** (parity): the parity script run with one tree as both base and head, which
-  must find no figure worse or void: proof that it flags nothing of its own. Its report says
-  whether the two builds have the same code (`.text`).
+  must find no figure worse, void or inconclusive: proof that it flags nothing of its own. Its
+  report says whether the two builds have the same code (`.text`).
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
   well-behaved client that joined first; its frame callbacks, at the exact deadline of its frame,
   show that the others did not stop its frames.
@@ -302,6 +310,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
 - **Sibling Yuna**: from Stage 2a, the headless Yuna `yuna mcp` starts for each seat an agent
   creates, one seat per Yuna ([ADR-0138](adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).
+- **Soak** (parity): the timed tier's ten `yuna mcp` of each side, a seat and a lockstep client
+  each, held at rest for 10 minutes; its figure is the slope of their `Pss_Anon`, against no
+  growth.
 - **Special workspace**: a hidden workspace shown over the current one by a key.
 - **State thread**: the thread that runs Yuna's event loop and owns its state; a panic there is
   fatal, unlike one on the X11 manager's or an encoder's thread.
