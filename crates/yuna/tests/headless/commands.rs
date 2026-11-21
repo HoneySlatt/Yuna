@@ -125,3 +125,25 @@ fn a_relative_focus_steps_through_the_outputs_workspaces() {
         .expect("the workspace above");
     assert_eq!(shown(&compositor).as_deref(), Some("one"));
 }
+
+/// A refused command changes nothing, so nothing is drawn for it: no refresh is armed, and the
+/// description agents read does not change.
+#[test]
+fn a_refused_command_arms_no_refresh() {
+    let mut compositor = manual_compositor();
+    run_armed_deadlines(&mut compositor);
+    assert_eq!(compositor.next_deadline(), None);
+    let generation = compositor.description_generation();
+    for command in [
+        Command::RemoveWorkspace("nowhere".to_owned()),
+        Command::FocusWindow(WindowId(99)),
+        Command::SetFloating {
+            window: None,
+            on: true,
+        },
+    ] {
+        assert!(compositor.command(owner(), command).is_err());
+    }
+    assert_eq!(compositor.next_deadline(), None);
+    assert_eq!(compositor.description_generation(), generation);
+}

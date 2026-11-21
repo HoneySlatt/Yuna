@@ -7,7 +7,7 @@
 //! item 14). A [`Command`] is relative to its [`Caller`]: it acts on the caller's seat, and a
 //! command on a window with no window named acts on the window the caller's seat focuses, as a key
 //! binding does. The compositor answers with a [`Refusal`] when it does not apply a command; a
-//! refused command changes nothing.
+//! refused command changes nothing, but for the focus a move of a named window gives it first.
 //!
 //! This crate holds data only: no behaviour, no wire format. Hollow's protocol is decided with
 //! Hollow's interface (Stage 2c), the events at Stage 2a's M2.4. It is level 1 of the crate map
@@ -64,7 +64,7 @@ pub enum Command {
     /// Removes an empty named workspace.
     RemoveWorkspace(String),
     /// Moves a window to a workspace; a window named is focused first, as the move follows the
-    /// focus.
+    /// focus, and stays focused if the move is refused.
     MoveWindowToWorkspace {
         /// The window; the focused one when none.
         window: Option<WindowId>,
@@ -73,7 +73,8 @@ pub enum Command {
     },
     /// Shows a special workspace over the focused output's, or hides it.
     ToggleSpecial(String),
-    /// Moves a window to a special workspace; a window named is focused first.
+    /// Moves a window to a special workspace; a window named is focused first, and stays focused
+    /// if the move is refused.
     MoveWindowToSpecial {
         /// The window; the focused one when none.
         window: Option<WindowId>,

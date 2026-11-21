@@ -1088,7 +1088,8 @@ impl Compositor {
     /// screen when animations are on. `CloseWindow` asks the window's client to close it: an
     /// `xdg_toplevel` is sent `close`; an X11 window `WM_DELETE_WINDOW` when it takes it, else
     /// its X11 client is ended (`KillClient`); the window stays until its client closes it. A
-    /// refused command changes nothing.
+    /// refused command changes nothing and arms no refresh, but for the focus a move of a named
+    /// window gives it first.
     pub fn command(&mut self, caller: Caller, command: Command) -> Result<(), Refusal> {
         crate::command::run(&mut self.state, caller, command)
     }

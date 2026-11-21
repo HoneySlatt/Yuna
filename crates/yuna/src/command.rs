@@ -9,7 +9,8 @@ use yuna_types::{SeatId, WindowId};
 
 use crate::state::State;
 
-/// Runs `command` for `caller` (`Compositor::command`).
+/// Runs `command` for `caller` (`Compositor::command`). What changed the layout arms every
+/// output's next refresh; a command refused before it changed anything arms nothing.
 pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result<(), Refusal> {
     if let Command::CloseWindow(window) = command {
         let window = target(&state.layout, caller.seat, window)?;
@@ -17,14 +18,34 @@ pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result
             .close_window(window)
             .map_err(|_| Refusal::UnknownWindow(window));
     }
-    let result = apply_to_layout(&mut state.layout, caller.seat, command);
-    state.mark_layout_changed(Change::Animated);
-    result
+    let applied = apply_to_layout(&mut state.layout, caller.seat, command);
+    if applied.changed {
+        state.mark_layout_changed(Change::Animated);
+    }
+    applied.result
+}
+
+/// What a command did to the layout: its answer, and whether the layout changed. A refused
+/// operation leaves the layout as it was, but a move of a window named focuses it first, and
+/// that focus stays when the move is refused.
+struct Applied {
+    result: Result<(), Refusal>,
+    changed: bool,
+}
+
+impl Applied {
+    /// One operation's answer: the layout changed if it was done.
+    fn of(result: Result<(), LayoutError>) -> Applied {
+        Applied {
+            changed: result.is_ok(),
+            result: result.map_err(refusal),
+        }
+    }
 }
 
 /// The layout's operations for `command` on `seat`'s behalf.
-fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Result<(), Refusal> {
-    let changed = match command {
+fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Applied {
+    let done = match command {
         Command::FocusWindow(window) => layout.focus_window(window),
         Command::Focus(direction) => layout.focus(seat, direction),
         Command::FocusOutput(output) => layout.focus_output(seat, output),
@@ -36,24 +57,31 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Resul
         Command::AddWorkspace { name, output } => layout.add_workspace(seat, &name, output),
         Command::RemoveWorkspace(name) => layout.remove_workspace(seat, &name),
         Command::MoveWindowToWorkspace { window, workspace } => {
-            focus_named(layout, window).and_then(|()| layout.move_to_workspace(seat, &workspace))
+            return move_named(layout, window, |layout| {
+                layout.move_to_workspace(seat, &workspace)
+            });
         }
         Command::ToggleSpecial(name) => layout.toggle_special(seat, &name),
         Command::MoveWindowToSpecial { window, special } => {
-            focus_named(layout, window).and_then(|()| layout.move_to_special(seat, &special))
+            return move_named(layout, window, |layout| {
+                layout.move_to_special(seat, &special)
+            });
         }
         Command::SetTiling(tiling) => layout.set_tiling(seat, tiling),
         Command::SetFullWidth { window, on } => {
-            let window = target(layout, seat, window)?;
-            layout.set_full_width(window, on)
+            return on_window(layout, seat, window, |layout, window| {
+                layout.set_full_width(window, on)
+            });
         }
         Command::SetFullscreen { window, on } => {
-            let window = target(layout, seat, window)?;
-            layout.set_fullscreen(window, on)
+            return on_window(layout, seat, window, |layout, window| {
+                layout.set_fullscreen(window, on)
+            });
         }
         Command::SetFloating { window, on } => {
-            let window = target(layout, seat, window)?;
-            layout.set_floating(window, on)
+            return on_window(layout, seat, window, |layout, window| {
+                layout.set_floating(window, on)
+            });
         }
         // Not a change of the layout: answered by `run`.
         Command::CloseWindow(_) => Ok(()),
@@ -61,12 +89,43 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Resul
         // it; a variant added there is dispatched here in the same change, and tested.
         _ => Err(LayoutError::Refused("Yuna does not know this command")),
     };
-    changed.map_err(refusal)
+    Applied::of(done)
 }
 
-/// Focuses `window` when one is named: a move of the focused window then moves it.
-fn focus_named(layout: &mut Layout, window: Option<WindowId>) -> Result<(), LayoutError> {
-    window.map_or(Ok(()), |window| layout.focus_window(window))
+/// Does `step` to the window a command names, or to the one `seat` focuses.
+fn on_window(
+    layout: &mut Layout,
+    seat: SeatId,
+    window: Option<WindowId>,
+    step: impl FnOnce(&mut Layout, WindowId) -> Result<(), LayoutError>,
+) -> Applied {
+    match target(layout, seat, window) {
+        Ok(window) => Applied::of(step(layout, window)),
+        Err(refused) => Applied {
+            result: Err(refused),
+            changed: false,
+        },
+    }
+}
+
+/// Focuses `window` when one is named, then moves the focused window with `step`.
+fn move_named(
+    layout: &mut Layout,
+    window: Option<WindowId>,
+    step: impl FnOnce(&mut Layout) -> Result<(), LayoutError>,
+) -> Applied {
+    let focused = match window {
+        Some(window) => match layout.focus_window(window) {
+            Ok(()) => true,
+            Err(error) => return Applied::of(Err(error)),
+        },
+        None => false,
+    };
+    let moved = Applied::of(step(layout));
+    Applied {
+        changed: moved.changed || focused,
+        result: moved.result,
+    }
 }
 
 /// The window a command names, or the one `seat` focuses.
