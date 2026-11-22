@@ -119,7 +119,7 @@ use yuna_types::SeatId;
 use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};
 use super::xdnd::{self, Xdnd};
-use crate::tasks::{self, Task};
+use crate::tasks::{self, Task, TaskThread};
 #[cfg(debug_assertions)]
 pub use commands::PANIC_ON_X11_CLOSE;
 pub(crate) use messages::{Command, ManagerEvent, NetState, StateAction, StateChange, Stop};
@@ -278,14 +278,15 @@ x11rb::atom_manager! {
 
 /// Starts the manager of seat `seat`'s Xwayland on a thread of its own, on `wm`, Xwayland's
 /// `-wm` socket, for a scale of `scale`. Its events go to `events`; `taken` pings Yuna's loop
-/// when it takes commands a watchdog waited on ([`Commands::watch`]).
+/// when it takes commands a watchdog waited on ([`Commands::watch`]). Returns Yuna's side of it,
+/// and its thread, which Yuna joins when it stops.
 pub(crate) fn start(
     seat: SeatId,
     wm: UnixStream,
     scale: f64,
     events: SyncSender<ManagerEvent>,
     taken: Ping,
-) -> io::Result<Commands> {
+) -> io::Result<(Commands, TaskThread)> {
     let owed = Arc::new(Mutex::new(Owed::bounded_at(owed::owed_bound())));
     #[cfg(debug_assertions)]
     let panic_on_close = commands::panic_on_close_asked();
@@ -293,8 +294,7 @@ pub(crate) fn start(
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
     let shared = Arc::clone(&owed);
-    // Detached: it ends once Yuna lets it go or Xwayland closes (`tasks.rs`).
-    tasks::spawn(Task::X11Manager(seat), move || {
+    let thread = tasks::spawn(Task::X11Manager(seat), move || {
         let stop = match run(
             wm,
             scale,
@@ -311,7 +311,7 @@ pub(crate) fn start(
         };
         let _ = events.send(ManagerEvent::Stopped(stop));
     })?;
-    Ok(Commands { owed, wake })
+    Ok((Commands { owed, wake }, thread))
 }
 
 /// Whether `failure` is Xwayland closing the connection.

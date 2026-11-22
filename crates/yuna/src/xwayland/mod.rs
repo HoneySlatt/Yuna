@@ -77,6 +77,7 @@ use crate::process::{End, find_program, kill, kill_and_reap, reap};
 use crate::render::Device;
 use crate::rest::{Source, Wake, insert_source};
 use crate::state::State;
+use crate::tasks::{Task, TaskThread};
 pub use answers::{X11_PING_TIMEOUT, X11_SYNC_TIMEOUT};
 pub(crate) use bridge::{MAX_MIME_TYPE_BYTES, MAX_MIME_TYPES, Selection};
 pub use bridge::{MAX_X11_TRANSFER_BYTES, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
@@ -319,6 +320,10 @@ struct XServer {
     /// Its `-wm` connection, until `-displayfd` says it is ready and the manager takes it.
     wm: Option<UnixStream>,
     manager: Option<Commands>,
+    /// Its manager's thread, from its start: joined, within its bound, only when Yuna stops.
+    /// While Yuna serves it never waits on it (M2.17 brings a join that does not block): the
+    /// thread ends once its commands are let go, and its handle goes when its Xwayland is reaped.
+    manager_thread: Option<TaskThread>,
     /// Whether its manager said why it stopped: an end without it is a panic.
     manager_stopped: bool,
     /// Its `-displayfd` and manager's sources.
@@ -720,6 +725,7 @@ impl Xwayland {
             ready: false,
             wm: Some(spawned.wm),
             manager: None,
+            manager_thread: None,
             manager_stopped: false,
             sources: Vec::new(),
             manager_events: None,
@@ -790,7 +796,10 @@ impl Xwayland {
                 .map_err(|error| format!("its manager's thread cannot start: {error}"))
         });
         match started {
-            Ok(commands) => xserver.manager = Some(commands),
+            Ok((commands, thread)) => {
+                xserver.manager = Some(commands);
+                xserver.manager_thread = Some(thread);
+            }
             Err(reason) => {
                 tracing::warn!(%reason, seat = xserver.seat.0, "Xwayland cannot start: it ends");
                 xserver.end(handle);
@@ -1020,11 +1029,23 @@ impl Xwayland {
 }
 
 impl Drop for Xwayland {
-    /// Ends every Xwayland and waits until each is reaped, with no loop left to watch them; the
-    /// displays' files go after.
+    /// The stop order at exit (`tasks.rs`): lets every manager go, ends every Xwayland and
+    /// reaps each, waiting at most `REAP_BOUND` for each, with no loop left to watch them; then
+    /// joins the managers' threads within their bound. The displays' files go after.
     fn drop(&mut self) {
-        for xserver in self.servers.values() {
+        for xserver in self.servers.values_mut() {
+            xserver.manager = None;
             kill_and_reap(&xserver.pidfd);
+        }
+        // One deadline for them all, from when the first is waited on.
+        let mut managers_by = None;
+        for xserver in self.servers.values_mut() {
+            if let Some(thread) = xserver.manager_thread.take() {
+                let task = Task::X11Manager(xserver.seat);
+                thread.join_by(
+                    *managers_by.get_or_insert_with(|| Instant::now() + task.join_bound()),
+                );
+            }
         }
     }
 }

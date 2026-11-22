@@ -645,6 +645,53 @@ fn headless_raises_its_open_files_limit_but_not_its_programs() {
     stop_cleanly(&mut running, &socket_path);
 }
 
+/// The stop order at exit (ADR-0152): an X11 connection starts the seat's Xwayland and its
+/// manager, a thread named `yuna-x11-1`; SIGTERM lets the manager go, ends Xwayland and joins
+/// the manager, each within its bound, and the log warns of none left behind.
+#[test]
+fn sigterm_ends_xwayland_and_joins_its_manager_within_their_bounds() {
+    let (mut running, log, socket_path) =
+        start_headless("stop-order", &["--output", "640x360@60,1"]);
+    let pid = running.child.id();
+    let display = x11_display_number(&mut running);
+    let address = SocketAddr::from_abstract_name(format!("/tmp/.X11-unix/X{display}"))
+        .expect("an abstract address");
+    let _x11 = UnixStream::connect_addr(&address).expect("the X display takes a connection");
+    let threads = || -> Vec<String> {
+        std::fs::read_dir(format!("/proc/{pid}/task"))
+            .map(|tasks| {
+                tasks
+                    .filter_map(|task| std::fs::read_to_string(task.ok()?.path().join("comm")).ok())
+                    .map(|name| name.trim_end().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !threads().iter().any(|name| name == "yuna-x11-1") {
+        assert!(
+            Instant::now() < deadline,
+            "no manager's thread: {:?}",
+            threads()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let stopping = Instant::now();
+    stop_cleanly(&mut running, &socket_path);
+    assert!(
+        stopping.elapsed() < Duration::from_secs(5),
+        "stopped in {:?}",
+        stopping.elapsed()
+    );
+    let log = log.join().expect("the log's reader").expect("the log");
+    for left in [
+        "not torn down within its bound",
+        "did not end within its bound",
+    ] {
+        assert!(!log.contains(left), "{left}:\n{log}");
+    }
+}
+
 #[test]
 fn an_unknown_argument_is_a_usage_error() {
     let output = run_yuna(&["--start"]);

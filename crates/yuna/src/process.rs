@@ -24,7 +24,9 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
+use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::io::{Errno, FdFlags};
 use rustix::process::{
     Resource, Rlimit, Signal, WaitId, WaitIdOptions, WaitStatus, getrlimit, setrlimit,
@@ -248,14 +250,41 @@ pub(crate) fn kill(pidfd: impl AsFd) {
     }
 }
 
-/// Ends the process of `pidfd` and waits until it is reaped: when its owner drops, with no
-/// loop left to watch it. SIGKILL cannot be ignored: the wait is the kernel's tearing down.
+/// How long [`kill_and_reap`] waits, at most, for a process it killed to be torn down.
+pub(crate) const REAP_BOUND: Duration = Duration::from_secs(1);
+
+/// Ends the process of `pidfd` and reaps it, waiting on its pidfd for at most [`REAP_BOUND`]:
+/// when its owner drops, with no loop left to watch it (ADR-0152). SIGKILL cannot be ignored, so
+/// the wait is the kernel's tearing down, which a process held in the kernel, by a driver or a
+/// dead mount, may prolong: past the bound it is left, to its pidfd's source while Yuna runs, or
+/// to Yuna's own end, and a warning says so.
 pub(crate) fn kill_and_reap(pidfd: &OwnedFd) {
     kill(pidfd);
+    if reap_within(pidfd.as_fd(), REAP_BOUND).is_none() {
+        tracing::warn!(
+            bound_ms = REAP_BOUND.as_millis(),
+            "a process Yuna ended was not torn down within its bound: it is left unreaped"
+        );
+    }
+}
+
+/// Reaps the process of `pidfd` once it ends, waiting on its pidfd, which a process's end makes
+/// readable, for at most `bound`: none if it still runs then.
+pub(crate) fn reap_within(pidfd: BorrowedFd<'_>, bound: Duration) -> Option<End> {
+    let deadline = Instant::now() + bound;
     loop {
-        match rustix::process::waitid(WaitId::PidFd(pidfd.as_fd()), WaitIdOptions::EXITED) {
-            Err(Errno::INTR) => continue,
-            _ => return,
+        if let Some(end) = reap(pidfd) {
+            return Some(end);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        let timeout = Timespec::try_from(left).ok()?;
+        if left.is_zero() {
+            return None;
+        }
+        let mut ended = [PollFd::from_borrowed_fd(pidfd, PollFlags::IN)];
+        match rustix::event::poll(&mut ended, Some(&timeout)) {
+            Ok(_) | Err(Errno::INTR) => {}
+            Err(_) => return None,
         }
     }
 }
@@ -263,6 +292,27 @@ pub(crate) fn kill_and_reap(pidfd: &OwnedFd) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_killed_is_reaped_and_one_still_running_left_at_the_bound() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep starts");
+        let pid = rustix::process::Pid::from_child(&child);
+        let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            .expect("its pidfd");
+        let began = Instant::now();
+        assert_eq!(reap_within(pidfd.as_fd(), Duration::from_millis(50)), None);
+        assert!(began.elapsed() >= Duration::from_millis(50));
+
+        let killed = Instant::now();
+        kill_and_reap(&pidfd);
+        assert!(killed.elapsed() < REAP_BOUND, "reaped within its bound");
+        // Reaped: the pid is no longer this process's child.
+        assert_eq!(reap(pidfd.as_fd()), Some(End::Unknown));
+        assert!(child.try_wait().is_err(), "reaped already");
+    }
 
     #[test]
     fn yuna_and_processes_outside_it_have_no_lineage() {
