@@ -1,7 +1,7 @@
 # Runs scripts/check.sh, every automated check of the definition of done (AGENTS.md), in the same Nix
-# development shell that agents and the owner use (ADR-0036), and builds Yuna's Nix package beside
-# it, a contract the owner's other projects use (ADR-0058, ADR-0089). Actions are pinned to commit
-# SHAs, their release in a comment.
+# development shell that agents and the owner use (ADR-0036); beside it, the parity script and
+# WLCS's whole suite; and builds Yuna's Nix package, a contract the owner's other projects use
+# (ADR-0058, ADR-0089). Actions are pinned to commit SHAs, their release in a comment.
 name: CI
 
 on:
@@ -73,6 +73,23 @@ jobs:
           --tier ci
           --before "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'schedule' && github.sha || github.event.before }}"
           --work /home/runner/parity
+
+  # WLCS, the Wayland conformance suite, against Yuna through crates/yuna-wlcs (ADR-0149): every
+  # test, judged against crates/yuna-wlcs/expected.txt, a test that newly passes included.
+  # scripts/check.sh runs only the tests expected to pass; this job runs them all, beside the
+  # others, so that a broad regression of WLCS never shares the checks' 20 minutes.
+  wlcs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: nix develop --no-update-lock-file --command cargo build --locked -p yuna-wlcs -p yuna-bench
+      - run: nix develop --no-update-lock-file --command cargo run --locked -p yuna-bench -- wlcs check --full
 
   # The package, built in a job of its own so that its release build runs beside the checks.
   package:

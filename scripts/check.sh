@@ -66,6 +66,22 @@ check_tests() {
     cargo test --workspace --locked
 }
 
+# WLCS's tests that crates/yuna-wlcs/expected.txt expects to pass, against the module built here
+# (ADR-0149): one that no longer passes, or a crash, a hang or a fault of the module in any of
+# them, stops the check. CI's `wlcs` job runs every test, a new pass included (ci.yml).
+# The module must be linked NODELETE (crates/yuna-wlcs/build.rs): unmapped as WLCS exits, it
+# crashed the process under a thread it had started.
+check_wlcs() {
+    step "WLCS: the tests expected to pass"
+    cargo build --locked -p yuna-wlcs
+    local module="${CARGO_TARGET_DIR:-target}/debug/libyuna_wlcs.so"
+    if ! readelf --dynamic "$module" | grep -q 'FLAGS_1.*NODELETE'; then
+        echo "WLCS's module is not linked NODELETE: $module"
+        return 1
+    fi
+    cargo run --locked -p yuna-bench -- wlcs check --listed
+}
+
 check_rustdoc() {
     step "Documentation, warnings as errors"
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
@@ -116,7 +132,7 @@ check_script_tests() {
 }
 
 DOCUMENT_STEPS=(links lengths indexes script-tests)
-CODE_STEPS=(rules format lints tests rustdoc dependencies)
+CODE_STEPS=(rules format lints tests wlcs rustdoc dependencies)
 
 run_step() {
     case "$1" in
@@ -124,6 +140,7 @@ run_step() {
     format) check_format ;;
     lints) check_lints ;;
     tests) check_tests ;;
+    wlcs) check_wlcs ;;
     rustdoc) check_rustdoc ;;
     dependencies) check_dependencies ;;
     links) check_links ;;

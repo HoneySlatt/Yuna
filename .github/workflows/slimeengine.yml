@@ -26,6 +26,8 @@ on:
       - "scripts/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docs.yml"
+      - ".github/workflows/wlcs-record.yml"
+      - "crates/yuna-wlcs/**"
       - "crates/yuna/examples/**"
       - "crates/yuna/tests/headless/**"
       - "crates/yuna/tests/fixtures/**"

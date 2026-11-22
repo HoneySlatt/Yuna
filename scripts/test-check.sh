@@ -61,6 +61,12 @@ expect_stopped rules "a test naming Smithay" "name Smithay" \
     "printf 'use smithay::utils::Rectangle;\\n' >> crates/yuna/tests/headless/commands.rs"
 expect_stopped rules "WLCS's shim naming Smithay" "name Smithay" \
     "printf 'use smithay::utils::Rectangle;\\n' >> crates/yuna-wlcs/src/lib.rs"
+expect_stopped wlcs "a WLCS test expected to pass that fails" "\\[pass\\] BadBufferTest" \
+    "sed -i 's/^fail BadBufferTest.test_truncated_shm_file$/pass BadBufferTest.test_truncated_shm_file/' crates/yuna-wlcs/expected.txt"
+expect_stopped wlcs "WLCS's outcomes recorded for another version" "\\[version\\]" \
+    "sed -i 's/^wlcs 1.8.1$/wlcs 1.8.0/' crates/yuna-wlcs/expected.txt"
+expect_stopped wlcs "WLCS's module not linked NODELETE" "not linked NODELETE" \
+    "sed -i 's/-z,nodelete/-z,now/' crates/yuna-wlcs/build.rs"
 expect_stopped format "code not formatted" "Diff in" \
     "printf 'fn  badly_formatted( ){}\n' >> crates/yuna-layout/src/lib.rs"
 expect_stopped lints "a warning" "unused variable" \

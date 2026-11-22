@@ -1,0 +1,44 @@
+# Records WLCS's outcomes on GitHub's runner (ADR-0149): every test, each in its own process, many
+# times, so that crates/yuna-wlcs/expected.txt is written from the machine CI judges on, merged
+# with a record on the desktop (CONTRIBUTING.md, "WLCS"). The record is printed at the end of the
+# log, between two marker lines, for `gh run view --log` to read; nothing is uploaded or pushed.
+# On demand, on any branch; and on a pull request that changes this file.
+name: WLCS record
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many times each test runs"
+        default: "20"
+  pull_request:
+    paths: [".github/workflows/wlcs-record.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: nix develop --no-update-lock-file --command cargo build --locked -p yuna-wlcs -p yuna-bench
+      # The count through the environment, never spliced into the script.
+      - env:
+          RUNS: ${{ github.event.inputs.runs || '20' }}
+        run: >-
+          nix develop --no-update-lock-file --command
+          cargo run --locked -p yuna-bench -- wlcs record
+          --runs "$RUNS" --out "$RUNNER_TEMP/record.json"
+      - if: always()
+        run: |
+          echo "----- WLCS record begins -----"
+          cat "$RUNNER_TEMP/record.json"
+          echo
+          echo "----- WLCS record ends -----"
