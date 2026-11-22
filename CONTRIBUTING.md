@@ -609,25 +609,27 @@ three days, as `.cargo/config.toml` says ([ADR-0103](docs/adr/0103-crates-update
 
 ## Contracts
 
-What other programs and projects rely on
-([ADR-0079](docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
+What other programs and projects rely on, each with its version
+([ADR-0079](docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md),
+[ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+item 13). Yuna's version is the workspace's, `0.1.0` today, which `yuna --version` prints; it is
+raised at each release.
 
-- the command line: `yuna --headless`, `yuna mcp`, their options, the `WAYLAND_DISPLAY=<socket>`
-  line printed at start, the environment Yuna reads and its exit statuses, all as `yuna --help`
-  gives them;
-- the environment Yuna gives its programs, as
-  [`crates/yuna/src/mcp/programs/environment.rs`](crates/yuna/src/mcp/programs/environment.rs)
-  lists it: `YUNA_SEAT`, their seat's throwaway home
-  ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), and the accessibility
-  variables;
-- the MCP server: its revisions, its tools' names, arguments and results; `tools/list` holds the
-  names, the arguments' schemas, and the results in each tool's description, so that a new field
-  of a result is written there, and the contract file rewritten;
-- the Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna`
-  draws with its own Mesa and finds Xwayland and dbus-daemon
-  ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md));
-- Hollow's interface, once it exists (Stage 2), under semantic versions in its own crate,
-  `yuna-ipc` ([ADR-0082](docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)).
+| Contract | Version | What holds it |
+|---|---|---|
+| The command line: `yuna --headless`, `yuna mcp`, their options, the `WAYLAND_DISPLAY=<socket>` line printed at start, the environment Yuna reads and its exit statuses, all as `yuna --help` gives them | Yuna's | [`crates/yuna/tests/contracts/help.txt`](crates/yuna/tests/contracts/help.txt) |
+| The environment Yuna gives its programs, as [`crates/yuna/src/mcp/programs/environment.rs`](crates/yuna/src/mcp/programs/environment.rs) lists it: `YUNA_SEAT`, their seat's throwaway home ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), and the accessibility variables | Yuna's | the tests of `crates/yuna/tests/mcp.rs` that read a program's variables |
+| The MCP server: its revisions, its tools' names, arguments and results; `tools/list` holds the names, the arguments' schemas, and the results in each tool's description, so that a new field of a result is written there, and the contract file rewritten | the revisions `2026-07-28` and, opened by `initialize`, `2025-11-25` ([`mcp/protocol.rs`](crates/yuna/src/mcp/protocol.rs)); the tools, Yuna's | [`crates/yuna/tests/contracts/tools-list.json`](crates/yuna/tests/contracts/tools-list.json) |
+| The Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna` draws with its own Mesa and finds Xwayland and dbus-daemon ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)) | Yuna's | CI's `package` job, which builds it and runs it from an empty environment |
+| `yuna-ipc`'s commands and refusals, the crate Hollow will use | the crate's, the workspace's `0.1.0`; its own semantic versions once Hollow depends on it (Stage 2c) | its unit tests, and the tests that drive every command through `Compositor::command` |
+
+None of them is a stored format: Yuna writes no file that another version reads, so no
+contract has a migration yet, and going back to an earlier build is a consumer pinning an earlier
+revision. ADR-0082 item 13's other contracts come with their code, each added to this table with
+its version, its tested migration and its way back: the configuration, the session-restore state,
+the theme file, Hollow's wire protocol (Stage 2c), the stores (remembered sizes, display profiles,
+crash reports), and the keeper's hand-over with Yuna. A file among them is read across versions
+keeping what it does not know, and a backup precedes any migration.
 
 Until 1.0 a contract may change, never silently: a change that breaks a consumer adds a
 `changed-…` or `removed-…` fragment to [`changelog.d/`](changelog.d/README.md) that says what to do
