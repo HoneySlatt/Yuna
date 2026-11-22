@@ -22,19 +22,16 @@ use crate::xwayland::properties::X11Rect;
 /// The variable that, in a debug build, makes an X11 manager's thread panic when Yuna asks it to
 /// close a window: what the test of a manager's panic uses
 /// ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
-/// It is read once, at the first close a manager of the process is asked, and holds for every
-/// manager of the process. A release build has neither the variable nor the panic.
+/// It is read as each manager starts, and passed down to it (`Manager::panic_on_close`). A
+/// release build has neither the variable nor the panic.
 #[cfg(debug_assertions)]
 pub const PANIC_ON_X11_CLOSE: &str = "YUNA_PANIC_ON_X11_CLOSE";
 
-/// Panics when [`PANIC_ON_X11_CLOSE`] is set: the manager's panic its test asks for, in a debug
-/// build alone.
+/// Whether [`PANIC_ON_X11_CLOSE`] is set, read as a manager starts, never kept in a global
+/// (ADR-0151).
 #[cfg(debug_assertions)]
-fn panic_if_asked() {
-    static ASKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ASKED.get_or_init(|| std::env::var_os(PANIC_ON_X11_CLOSE).is_some()) {
-        panic!("{PANIC_ON_X11_CLOSE} asks the X11 manager's thread to panic when a window closes");
-    }
+pub(super) fn panic_on_close_asked() -> bool {
+    std::env::var_os(PANIC_ON_X11_CLOSE).is_some()
 }
 
 impl Manager<'_> {
@@ -126,7 +123,11 @@ impl Manager<'_> {
             Command::Focus(window) => self.focus(window)?,
             Command::Close(window) => {
                 #[cfg(debug_assertions)]
-                panic_if_asked();
+                if self.panic_on_close {
+                    panic!(
+                        "{PANIC_ON_X11_CLOSE} asks the X11 manager's thread to panic when a window closes"
+                    );
+                }
                 // A window destroyed while the command was on its way: its id may already name
                 // another program's resource, which `KillClient` would end.
                 let Some(tracked) = self.windows.get(&window) else {

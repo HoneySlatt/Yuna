@@ -286,6 +286,8 @@ pub(crate) fn start(
     taken: Ping,
 ) -> io::Result<Commands> {
     let owed = Arc::new(Mutex::new(Owed::bounded_at(owed::owed_bound())));
+    #[cfg(debug_assertions)]
+    let panic_on_close = commands::panic_on_close_asked();
     let (wake, woken) = UnixStream::pair()?;
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
@@ -293,7 +295,16 @@ pub(crate) fn start(
     std::thread::Builder::new()
         .name(format!("yuna-x11-{}", seat.0))
         .spawn(move || {
-            let stop = match run(wm, scale, &events, &shared, taken, &woken) {
+            let stop = match run(
+                wm,
+                scale,
+                &events,
+                &shared,
+                taken,
+                &woken,
+                #[cfg(debug_assertions)]
+                panic_on_close,
+            ) {
                 Ok(()) => Stop::Released,
                 Err(failure) if is_closed(&*failure) => Stop::Closed,
                 Err(failure) => Stop::Failed(failure.to_string()),
@@ -325,6 +336,7 @@ fn run(
     owed: &Mutex<Owed>,
     taken: Ping,
     woken: &UnixStream,
+    #[cfg(debug_assertions)] panic_on_close: bool,
 ) -> Result<(), Failure> {
     let (stream, _) = DefaultStream::from_unix_stream(wm)?;
     // Xwayland has a single screen.
@@ -334,6 +346,10 @@ fn run(
         return Ok(());
     }
     let mut manager = Manager::new(&connection, atoms, own, proxy, events, owed, taken)?;
+    #[cfg(debug_assertions)]
+    {
+        manager.panic_on_close = panic_on_close;
+    }
     manager.serve(woken)
 }
 
@@ -580,6 +596,10 @@ struct Manager<'a> {
     bridge: Bridge<'a>,
     /// The seat's drags on X11's side.
     xdnd: Xdnd<'a>,
+    /// Whether it panics when Yuna asks it to close a window, for the test of a manager's panic
+    /// ([`PANIC_ON_X11_CLOSE`]): a debug build's alone.
+    #[cfg(debug_assertions)]
+    panic_on_close: bool,
 }
 
 /// Whether the manager goes on: false once Yuna's end of the events' channel has gone.
@@ -635,6 +655,8 @@ impl<'a> Manager<'a> {
             taken,
             bridge: Bridge::new(connection, events, atoms, root, own),
             xdnd: Xdnd::new(connection, events, atoms, own, proxy),
+            #[cfg(debug_assertions)]
+            panic_on_close: false,
         })
     }
 

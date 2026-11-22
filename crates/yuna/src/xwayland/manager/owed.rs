@@ -32,24 +32,20 @@ pub(crate) const MAX_OWED_BYTES: usize = 8 * 1024 * 1024;
 /// the bytes it gives, for the test of what happens at that bound, which a test could not
 /// otherwise reach before the manager's watchdog
 /// ([ADR-0080](../../../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)).
-/// It is read once, at the first manager of the process, and holds for every manager of the
-/// process; a value that is not a number, or not below the bound, changes nothing. A release
-/// build has neither the variable nor the lower bound.
+/// It is read as each manager starts, and passed down to it; a value that is not a number, or not
+/// below the bound, changes nothing. A release build has neither the variable nor the lower bound.
 #[cfg(debug_assertions)]
 pub const X11_OWED_BOUND: &str = "YUNA_X11_OWED_BOUND";
 
 /// The bound on what a manager is owed: [`MAX_OWED_BYTES`], or in a debug build the lower one
-/// [`X11_OWED_BOUND`] gives.
+/// [`X11_OWED_BOUND`] gives. Read as a manager starts, never kept in a global (ADR-0151).
 pub(super) fn owed_bound() -> usize {
     #[cfg(debug_assertions)]
     {
-        static BOUND: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        *BOUND.get_or_init(|| {
-            std::env::var(X11_OWED_BOUND)
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .map_or(MAX_OWED_BYTES, |bound| bound.min(MAX_OWED_BYTES))
-        })
+        std::env::var(X11_OWED_BOUND)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map_or(MAX_OWED_BYTES, |bound| bound.min(MAX_OWED_BYTES))
     }
     #[cfg(not(debug_assertions))]
     MAX_OWED_BYTES
