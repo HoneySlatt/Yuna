@@ -230,7 +230,7 @@ fn a_floating_window_placed_moves_with_no_configure() {
     let tiled_place = place(&compositor, tiled);
     assert_eq!(
         compositor.place_window(tiled, 10.0, 10.0),
-        Err(Refusal::Refused("the window is tiled"))
+        Err(Refusal::WindowTiled)
     );
     let unknown = WindowId(99);
     assert_eq!(

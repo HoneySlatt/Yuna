@@ -21,11 +21,52 @@ fn every_refusal_says_what_it_refuses() {
         ),
         (LayoutError::NotEmpty, "it still holds windows"),
         (
-            LayoutError::Refused("the window is tiled"),
-            "the window is tiled",
+            LayoutError::OutputOfAnotherSeat,
+            "the output belongs to another seat",
+        ),
+        (LayoutError::SeatWithoutOutput, "the seat has no output"),
+        (
+            LayoutError::WorkspaceWithoutOutput,
+            "the window's workspace has no output",
+        ),
+        (LayoutError::WindowTiled, "the window is tiled"),
+        (
+            LayoutError::PinnedNotFullscreen,
+            "a pinned window cannot be fullscreen",
+        ),
+        (
+            LayoutError::ScreenHeld,
+            "another window's fullscreen holds the screen",
+        ),
+        (
+            LayoutError::PinnedOutsideShownWorkspace,
+            "only a window of a shown workspace can be pinned",
+        ),
+        (
+            LayoutError::PinnedNotFloating,
+            "only a floating window can be pinned",
         ),
     ];
     for (error, text) in messages {
+        // Names every variant: one added fails to compile here, which points to the list above,
+        // where its words go.
+        match error {
+            LayoutError::UnknownSeat(_)
+            | LayoutError::UnknownOutput(_)
+            | LayoutError::UnknownWindow(_)
+            | LayoutError::UnknownWorkspace(_)
+            | LayoutError::AlreadyExists
+            | LayoutError::InvalidValue
+            | LayoutError::NotEmpty
+            | LayoutError::OutputOfAnotherSeat
+            | LayoutError::SeatWithoutOutput
+            | LayoutError::WorkspaceWithoutOutput
+            | LayoutError::WindowTiled
+            | LayoutError::PinnedNotFullscreen
+            | LayoutError::ScreenHeld
+            | LayoutError::PinnedOutsideShownWorkspace
+            | LayoutError::PinnedNotFloating => {}
+        }
         assert_eq!(error.to_string(), text);
     }
 }

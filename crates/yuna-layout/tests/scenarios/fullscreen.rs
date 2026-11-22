@@ -310,7 +310,7 @@ fn a_fullscreen_game_holds_the_screen_while_a_window_over_it_has_the_focus() {
     );
     m.ok(|l| l.focus_window(w(1)));
     m.ok(|l| l.set_fullscreen(w(1), true));
-    let held = yuna_layout::LayoutError::Refused("another window's fullscreen holds the screen");
+    let held = yuna_layout::LayoutError::ScreenHeld;
     // Its own dialog has the focus.
     m.open_with(OWNER, 4, dialog(1));
     assert_eq!(m.focused(), Some(4));

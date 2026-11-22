@@ -948,11 +948,10 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   one request's string at most. The number of MIME types a data source offers is unbounded: each
   offer fits 4 KiB, but a source that offers many can fill a focused client's buffer. Paid at
   Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
-- `yuna-ipc`'s `Refusal::Refused` carries as text the layout's reasons that have no variant of
-  their own (no output, a pinned window made fullscreen, another window's fullscreen holding the
-  screen, and the others the layout gives as text), where ADR-0146 asks a variant per reason: a caller tells them apart only by their
-  sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4a (the map's checks
-  and the contracts), where every public contract is listed with its version.
+- A refusal's sentence is written twice: in `yuna_layout::LayoutError`'s `Display` and in
+  `yuna_ipc::Refusal`'s, for the fifteen reasons both share, where ADR-0082 item 23 keeps Yuna's
+  text in one module. Tests hold both copies to the same words. Its place is put to the owner at
+  M2.4a's end.
 - Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
   its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, 2
   in `yuna-bench`, 23 in `yuna-wlcs` (ADR-0151), none in `yuna-layout` and `yuna-motion`, on

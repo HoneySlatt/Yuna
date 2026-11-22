@@ -646,9 +646,19 @@ fn seat_state(layout: &Layout, seat: SeatId) -> String {
     )
 }
 
-fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
+/// Why an operation was not done; either way it must leave the model as it was.
+#[derive(Debug, Clone, PartialEq)]
+enum NotDone {
+    /// The layout refused it.
+    Layout(LayoutError),
+    /// The layout declined a window's activation, which [`Layout::request_activation`] answers
+    /// with false rather than an error: a fullscreen window holds the seat's focus.
+    ActivationDeclined,
+}
+
+fn apply(layout: &mut Layout, op: &Op) -> Result<(), NotDone> {
     let s = SeatId;
-    match *op {
+    let done = match *op {
         Op::AddOutput {
             seat,
             output,
@@ -727,13 +737,16 @@ fn apply(layout: &mut Layout, op: &Op) -> Result<(), yuna_layout::LayoutError> {
         Op::SetSizeLimits { window, min, max } => {
             layout.set_size_limits(WindowId(window), min, max)
         }
-        // A refused activation is checked like a refused operation: it must change nothing.
-        Op::RequestActivation(w) => match layout.request_activation(WindowId(w)) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(LayoutError::Refused("activation refused")),
-            Err(error) => Err(error),
-        },
-    }
+        // A declined activation is checked like a refused operation: it must change nothing.
+        Op::RequestActivation(w) => {
+            return match layout.request_activation(WindowId(w)) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(NotDone::ActivationDeclined),
+                Err(error) => Err(NotDone::Layout(error)),
+            };
+        }
+    };
+    done.map_err(NotDone::Layout)
 }
 
 /// The options of an `Open` operation.
@@ -782,13 +795,16 @@ fn predicted_size(layout: &Layout, op: &Op) -> Option<Result<Size, LayoutError>>
 fn check_prediction(
     layout: &Layout,
     op: &Op,
-    result: &Result<(), LayoutError>,
+    result: &Result<(), NotDone>,
     predicted: Result<Size, LayoutError>,
 ) -> Result<(), TestCaseError> {
     let Op::Open { window, .. } = *op else {
         return Ok(());
     };
-    prop_assert_eq!(result.as_ref().err(), predicted.as_ref().err());
+    prop_assert_eq!(
+        result.clone().err(),
+        predicted.clone().err().map(NotDone::Layout)
+    );
     let shown = layout
         .window(WindowId(window))
         .and_then(|info| info.output)

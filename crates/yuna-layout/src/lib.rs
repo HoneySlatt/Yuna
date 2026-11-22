@@ -152,7 +152,9 @@ pub struct OpenOptions {
     pub committed: Option<Size>,
 }
 
-/// Why an operation was refused. The model is unchanged when an operation returns one.
+/// Why an operation was refused: one variant per reason, so that a caller tells them apart
+/// without reading a sentence. The model is unchanged when an operation returns one. Its text
+/// ([`Display`](std::fmt::Display)) is the sentence callers show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutError {
     /// No seat has this id.
@@ -169,8 +171,30 @@ pub enum LayoutError {
     InvalidValue,
     /// It still holds windows.
     NotEmpty,
-    /// The operation does not apply here; the reason says why.
-    Refused(&'static str),
+    /// The output named is another seat's: [`Layout::focus_output`], and
+    /// [`Layout::add_workspace`] given it as the workspace's home.
+    OutputOfAnotherSeat,
+    /// The seat has no output to show a special workspace on: [`Layout::toggle_special`].
+    SeatWithoutOutput,
+    /// The window's workspace is on no output, or its seat has none, so it cannot be shown:
+    /// [`Layout::focus_window`].
+    WorkspaceWithoutOutput,
+    /// The window is tiled, where the operation moves a floating one:
+    /// [`Layout::set_floating_rect`].
+    WindowTiled,
+    /// The window is pinned and was asked to be fullscreen: [`Layout::set_fullscreen`]. The
+    /// caller unpins it first, as in Hyprland.
+    PinnedNotFullscreen,
+    /// In dwindle, another window's fullscreen holds the screen, and the window asked to be
+    /// fullscreen or maximised may not take it: [`Layout::set_fullscreen`] and
+    /// [`Layout::set_full_width`] (ADR-0019).
+    ScreenHeld,
+    /// The window to pin or unpin is not on the workspace its output shows: on a special
+    /// workspace, a hidden one, or one without an output ([`Layout::set_pinned`]).
+    PinnedOutsideShownWorkspace,
+    /// The window to pin or unpin is not floating, fullscreen ones included
+    /// ([`Layout::set_pinned`]).
+    PinnedNotFloating,
 }
 
 impl std::fmt::Display for LayoutError {
@@ -183,7 +207,18 @@ impl std::fmt::Display for LayoutError {
             LayoutError::AlreadyExists => f.write_str("this id is already used"),
             LayoutError::InvalidValue => f.write_str("a value is not finite or out of range"),
             LayoutError::NotEmpty => f.write_str("it still holds windows"),
-            LayoutError::Refused(reason) => f.write_str(reason),
+            LayoutError::OutputOfAnotherSeat => f.write_str("the output belongs to another seat"),
+            LayoutError::SeatWithoutOutput => f.write_str("the seat has no output"),
+            LayoutError::WorkspaceWithoutOutput => {
+                f.write_str("the window's workspace has no output")
+            }
+            LayoutError::WindowTiled => f.write_str("the window is tiled"),
+            LayoutError::PinnedNotFullscreen => f.write_str("a pinned window cannot be fullscreen"),
+            LayoutError::ScreenHeld => f.write_str("another window's fullscreen holds the screen"),
+            LayoutError::PinnedOutsideShownWorkspace => {
+                f.write_str("only a window of a shown workspace can be pinned")
+            }
+            LayoutError::PinnedNotFloating => f.write_str("only a floating window can be pinned"),
         }
     }
 }

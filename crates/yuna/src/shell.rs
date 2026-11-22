@@ -683,12 +683,12 @@ impl State {
     }
 
     /// Asks `window`'s client to close it, whichever its shell (the command `CloseWindow`).
-    pub(crate) fn close_window(&mut self, window: WindowId) -> Result<(), crate::Error> {
+    pub(crate) fn close_window(&mut self, window: WindowId) -> Result<(), Refusal> {
         let toplevel = self
             .windows
             .get(&window)
             .and_then(|surface| self.toplevels.get(surface))
-            .ok_or_else(|| crate::Error::Refused(format!("no window {}", window.0)))?;
+            .ok_or(Refusal::UnknownWindow(window))?;
         match &toplevel.shell {
             Shell::Xdg(surface) => surface.send_close(),
             Shell::X11(x11) => {
@@ -733,18 +733,16 @@ impl State {
             .window(window)
             .ok_or(Refusal::UnknownWindow(window))?;
         if !info.floating {
-            return Err(Refusal::Refused("the window is tiled"));
+            return Err(Refusal::WindowTiled);
         }
-        let output = info
-            .output
-            .ok_or(Refusal::Refused("the window is on no output"))?;
+        let output = info.output.ok_or(Refusal::WindowWithoutOutput)?;
         let placed = self
             .layout
             .arrange(output)
             .map_err(refusal)?
             .into_iter()
             .find(|placed| placed.window == window)
-            .ok_or(Refusal::Refused("the window is not shown"))?;
+            .ok_or(Refusal::WindowNotShown)?;
         let output_rect = self.layout.output_rect(output).map_err(refusal)?;
         // Floating rectangles are kept from the working area's corner, the output's own until
         // layer shell's zones narrow it.

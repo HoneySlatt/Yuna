@@ -217,7 +217,7 @@ fn a_background_window_cannot_take_a_fullscreen_games_screen() {
     m.open(1);
     m.ok(|l| l.set_fullscreen(w(1), true));
     m.open(2);
-    let held = yuna_layout::LayoutError::Refused("another window's fullscreen holds the screen");
+    let held = yuna_layout::LayoutError::ScreenHeld;
     m.refused(held.clone(), |l| l.set_full_width(w(2), true));
     m.refused(held, |l| l.set_fullscreen(w(2), true));
     m.open_with(

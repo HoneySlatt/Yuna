@@ -524,7 +524,7 @@ fn finish_set_up(
         .map_err(refused)?
         .first()
         .and_then(|workspace| workspace.windows.first().copied())
-        .ok_or_else(|| refused(LayoutError::Refused("the first workspace has no window")))?;
+        .ok_or_else(|| format!("{what}: the first workspace has no window"))?;
     give(compositor, what, Command::FocusWindow(first_column))
 }
 

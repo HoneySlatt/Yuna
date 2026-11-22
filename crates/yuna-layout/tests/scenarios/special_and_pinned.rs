@@ -155,22 +155,17 @@ fn a_pinned_window_follows_the_workspaces_its_output_shows_without_taking_focus(
 fn only_a_floating_window_is_pinned_and_a_pinned_one_is_not_fullscreen() {
     let mut m = Model::new();
     m.open(1);
-    m.refused(
-        LayoutError::Refused("only a floating window can be pinned"),
-        |l| l.set_pinned(w(1), true),
-    );
+    m.refused(LayoutError::PinnedNotFloating, |l| l.set_pinned(w(1), true));
     m.open_with(OWNER, 2, floating());
     m.ok(|l| l.set_pinned(w(2), true));
-    m.refused(
-        LayoutError::Refused("a pinned window cannot be fullscreen"),
-        |l| l.set_fullscreen(w(2), true),
-    );
+    m.refused(LayoutError::PinnedNotFullscreen, |l| {
+        l.set_fullscreen(w(2), true)
+    });
     m.ok(|l| l.toggle_special(OWNER, "scratch"));
     m.open_with(OWNER, 3, floating());
-    m.refused(
-        LayoutError::Refused("only a window of a shown workspace can be pinned"),
-        |l| l.set_pinned(w(3), true),
-    );
+    m.refused(LayoutError::PinnedOutsideShownWorkspace, |l| {
+        l.set_pinned(w(3), true)
+    });
 }
 
 /// niri's rule over Hyprland's: while a fullscreen window holds the focus, floating and pinned

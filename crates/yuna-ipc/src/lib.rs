@@ -168,7 +168,10 @@ impl Command {
     }
 }
 
-/// Why a command was refused. Its text is the sentence callers show, MCP's agents included.
+/// Why a command was refused: one variant per reason, so that a caller tells them apart without
+/// reading a sentence. Its text ([`Display`](fmt::Display)) is the sentence callers show, MCP's
+/// agents included. Each reason the layout gives has its variant, whether a command reaches it
+/// today or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Refusal {
@@ -193,8 +196,37 @@ pub enum Refusal {
     InvalidValue,
     /// The workspace still holds windows.
     NotEmpty,
-    /// The command does not apply here; the reason says why.
-    Refused(&'static str),
+    /// The output named is another seat's.
+    OutputOfAnotherSeat,
+    /// The caller's seat has no output, where a special workspace is shown on its active one
+    /// ([`Command::ToggleSpecial`]).
+    SeatWithoutOutput,
+    /// The window's workspace is on no output, or its seat has none, so the window cannot be
+    /// focused ([`Command::FocusWindow`], and the moves of a window named, which focus it first).
+    WorkspaceWithoutOutput,
+    /// The window is tiled, where only a floating window can be placed.
+    WindowTiled,
+    /// The window is pinned and was asked to be fullscreen; the caller unpins it first, as in
+    /// Hyprland.
+    PinnedNotFullscreen,
+    /// In dwindle, another window's fullscreen holds the screen, and the window asked to be
+    /// fullscreen or maximised may not take it ([`Command::SetFullscreen`],
+    /// [`Command::SetFullWidth`]).
+    ScreenHeld,
+    /// The window to pin or unpin is not on the workspace its output shows: it is on a special
+    /// workspace, a hidden one, or one without an output.
+    PinnedOutsideShownWorkspace,
+    /// The window to pin or unpin is not floating; a fullscreen window is tiled.
+    PinnedNotFloating,
+    /// The window is on no output, where it is placed on its output.
+    WindowWithoutOutput,
+    /// The window's output does not show it: its workspace is not shown, or a fullscreen window
+    /// covers it.
+    WindowNotShown,
+    /// The compositor has no dispatch for this command. Yuna dispatches each of its commands, so
+    /// none gives it today; [`Command`] being `#[non_exhaustive]`, the dispatch still answers for
+    /// a command it does not know.
+    UnknownCommand,
 }
 
 impl fmt::Display for Refusal {
@@ -214,7 +246,19 @@ impl fmt::Display for Refusal {
             Refusal::AlreadyExists => f.write_str("this id is already used"),
             Refusal::InvalidValue => f.write_str("a value is not finite or out of range"),
             Refusal::NotEmpty => f.write_str("it still holds windows"),
-            Refusal::Refused(reason) => f.write_str(reason),
+            Refusal::OutputOfAnotherSeat => f.write_str("the output belongs to another seat"),
+            Refusal::SeatWithoutOutput => f.write_str("the seat has no output"),
+            Refusal::WorkspaceWithoutOutput => f.write_str("the window's workspace has no output"),
+            Refusal::WindowTiled => f.write_str("the window is tiled"),
+            Refusal::PinnedNotFullscreen => f.write_str("a pinned window cannot be fullscreen"),
+            Refusal::ScreenHeld => f.write_str("another window's fullscreen holds the screen"),
+            Refusal::PinnedOutsideShownWorkspace => {
+                f.write_str("only a window of a shown workspace can be pinned")
+            }
+            Refusal::PinnedNotFloating => f.write_str("only a floating window can be pinned"),
+            Refusal::WindowWithoutOutput => f.write_str("the window is on no output"),
+            Refusal::WindowNotShown => f.write_str("the window is not shown"),
+            Refusal::UnknownCommand => f.write_str("Yuna does not know this command"),
         }
     }
 }
@@ -241,5 +285,91 @@ mod tests {
             "no workspace named \"two\""
         );
         assert_eq!(Refusal::NoFocusedWindow.to_string(), "no window is focused");
+    }
+
+    /// The sentence of every reason, which MCP's agents read: changing one changes the contract.
+    #[test]
+    fn every_refusal_has_its_sentence() {
+        let sentences = [
+            (Refusal::UnknownSeat(SeatId(3)), "no seat 3"),
+            (Refusal::UnknownOutput(OutputId(2)), "no output 2"),
+            (Refusal::UnknownWindow(WindowId(7)), "no window 7"),
+            (
+                Refusal::UnknownWorkspace("two".to_owned()),
+                "no workspace named \"two\"",
+            ),
+            (
+                Refusal::WindowNotOnSeat(WindowId(7), SeatId(3)),
+                "no window 7 on seat 3",
+            ),
+            (
+                Refusal::OutputNotOnSeat(OutputId(2), SeatId(3)),
+                "no output 2 on seat 3",
+            ),
+            (Refusal::NoFocusedWindow, "no window is focused"),
+            (Refusal::AlreadyExists, "this id is already used"),
+            (
+                Refusal::InvalidValue,
+                "a value is not finite or out of range",
+            ),
+            (Refusal::NotEmpty, "it still holds windows"),
+            (
+                Refusal::OutputOfAnotherSeat,
+                "the output belongs to another seat",
+            ),
+            (Refusal::SeatWithoutOutput, "the seat has no output"),
+            (
+                Refusal::WorkspaceWithoutOutput,
+                "the window's workspace has no output",
+            ),
+            (Refusal::WindowTiled, "the window is tiled"),
+            (
+                Refusal::PinnedNotFullscreen,
+                "a pinned window cannot be fullscreen",
+            ),
+            (
+                Refusal::ScreenHeld,
+                "another window's fullscreen holds the screen",
+            ),
+            (
+                Refusal::PinnedOutsideShownWorkspace,
+                "only a window of a shown workspace can be pinned",
+            ),
+            (
+                Refusal::PinnedNotFloating,
+                "only a floating window can be pinned",
+            ),
+            (Refusal::WindowWithoutOutput, "the window is on no output"),
+            (Refusal::WindowNotShown, "the window is not shown"),
+            (Refusal::UnknownCommand, "Yuna does not know this command"),
+        ];
+        for (refusal, sentence) in sentences {
+            // Names every variant: one added fails to compile here, which points to the list
+            // above, where its sentence goes.
+            match refusal {
+                Refusal::UnknownSeat(_)
+                | Refusal::UnknownOutput(_)
+                | Refusal::UnknownWindow(_)
+                | Refusal::UnknownWorkspace(_)
+                | Refusal::WindowNotOnSeat(..)
+                | Refusal::OutputNotOnSeat(..)
+                | Refusal::NoFocusedWindow
+                | Refusal::AlreadyExists
+                | Refusal::InvalidValue
+                | Refusal::NotEmpty
+                | Refusal::OutputOfAnotherSeat
+                | Refusal::SeatWithoutOutput
+                | Refusal::WorkspaceWithoutOutput
+                | Refusal::WindowTiled
+                | Refusal::PinnedNotFullscreen
+                | Refusal::ScreenHeld
+                | Refusal::PinnedOutsideShownWorkspace
+                | Refusal::PinnedNotFloating
+                | Refusal::WindowWithoutOutput
+                | Refusal::WindowNotShown
+                | Refusal::UnknownCommand => {}
+            }
+            assert_eq!(refusal.to_string(), sentence);
+        }
     }
 }

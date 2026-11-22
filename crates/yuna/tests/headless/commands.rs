@@ -162,6 +162,22 @@ fn a_refused_command_arms_no_refresh() {
     assert_eq!(compositor.description_generation(), generation);
 }
 
+/// Closing a window the layout holds but no client shows is refused as an unknown window: the
+/// close is asked of a client, and there is none to ask. Nothing is drawn for it.
+#[test]
+fn closing_a_window_with_no_client_is_refused_as_unknown() {
+    let mut compositor = manual_compositor();
+    compositor
+        .hold_window_id_in_layout(OWNER_SEAT, WindowId(1))
+        .expect("the id is free");
+    run_armed_deadlines(&mut compositor);
+    assert_eq!(
+        compositor.command(owner(), Command::CloseWindow(Some(WindowId(1)))),
+        Err(Refusal::UnknownWindow(WindowId(1)))
+    );
+    assert_eq!(compositor.next_deadline(), None);
+}
+
 /// A caller reaches its own seat's windows and outputs alone: another seat's are refused as if
 /// they did not exist, so that an agent's seat never reaches the owner's nor learns what it holds
 /// ([ADR-0138](../../../../docs/adr/0138-agents-seats-one-seat-per-yuna-from-stage-2s-core.md)).

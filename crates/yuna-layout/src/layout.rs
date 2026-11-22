@@ -628,7 +628,7 @@ impl Layout {
         let si = self.seat_index(seat)?;
         let (owner, oi) = self.output_index(output)?;
         if owner != si {
-            return Err(LayoutError::Refused("the output belongs to another seat"));
+            return Err(LayoutError::OutputOfAnotherSeat);
         }
         self.seats[si].active = oi;
         Ok(())
@@ -653,7 +653,7 @@ impl Layout {
         }
         let home_index = match output.map(|o| self.output_index(o)) {
             Some(Ok((owner, _))) if owner != si => {
-                return Err(LayoutError::Refused("the output belongs to another seat"));
+                return Err(LayoutError::OutputOfAnotherSeat);
             }
             Some(Ok((_, oi))) => Some(oi),
             Some(Err(_)) | None => None,
@@ -767,7 +767,7 @@ impl Layout {
         let seat_ref = &mut self.seats[si];
         let active = seat_ref.active;
         if active >= seat_ref.outputs.len() {
-            return Err(LayoutError::Refused("the seat has no output"));
+            return Err(LayoutError::SeatWithoutOutput);
         }
         if seat_ref.outputs[active]
             .special
@@ -1309,7 +1309,7 @@ impl Layout {
     pub fn focus_window(&mut self, window: WindowId) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
         if matches!(slot, Slot::Detached(_)) || self.seats[si].outputs.is_empty() {
-            return Err(LayoutError::Refused("the window's workspace has no output"));
+            return Err(LayoutError::WorkspaceWithoutOutput);
         }
         if let Slot::Output { output, .. } = slot {
             self.hide_special(si, output);
@@ -1372,7 +1372,7 @@ impl Layout {
         let (si, slot) = self.find_window(window)?;
         let (workspace, area) = self.workspace_mut(si, slot);
         let Some(before) = workspace.floating.rect(window) else {
-            return Err(LayoutError::Refused("the window is tiled"));
+            return Err(LayoutError::WindowTiled);
         };
         workspace.floating.set_rect(window, rect, area.as_ref());
         // Compared once fitted, so that a move alone never counts as a resize.
@@ -1502,10 +1502,10 @@ impl Layout {
     ) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
         if fullscreen && self.workspace(si, slot).floating.is_pinned(window) {
-            return Err(LayoutError::Refused("a pinned window cannot be fullscreen"));
+            return Err(LayoutError::PinnedNotFullscreen);
         }
         if fullscreen && screen_held_by_another(self.workspace(si, slot), window) {
-            return Err(LayoutError::Refused(SCREEN_HELD));
+            return Err(LayoutError::ScreenHeld);
         }
         let default_width = self.options.default_width;
         let record = self.windows.get(&window).cloned();
@@ -1567,7 +1567,7 @@ impl Layout {
     ) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
         if full_width && screen_held_by_another(self.workspace(si, slot), window) {
-            return Err(LayoutError::Refused(SCREEN_HELD));
+            return Err(LayoutError::ScreenHeld);
         }
         let (workspace, area) = self.workspace_mut(si, slot);
         match &mut workspace.tiling {
@@ -1623,18 +1623,14 @@ impl Layout {
     pub fn set_pinned(&mut self, window: WindowId, pinned: bool) -> Result<(), LayoutError> {
         let (si, slot) = self.find_window(window)?;
         let Slot::Output { output, index } = slot else {
-            return Err(LayoutError::Refused(
-                "only a window of a shown workspace can be pinned",
-            ));
+            return Err(LayoutError::PinnedOutsideShownWorkspace);
         };
         if self.seats[si].outputs[output].shown != index {
-            return Err(LayoutError::Refused(
-                "only a window of a shown workspace can be pinned",
-            ));
+            return Err(LayoutError::PinnedOutsideShownWorkspace);
         }
         let (workspace, _) = self.workspace_mut(si, slot);
         if !workspace.floating.set_pinned(window, pinned) {
-            return Err(LayoutError::Refused("only a floating window can be pinned"));
+            return Err(LayoutError::PinnedNotFloating);
         }
         self.tidy(si);
         Ok(())
@@ -2113,9 +2109,6 @@ fn check_fullscreen(p: &Placed, area: &Area) -> Result<(), String> {
     }
     Ok(())
 }
-
-/// Why a window may not take the screen: another window's fullscreen holds it.
-const SCREEN_HELD: &str = "another window's fullscreen holds the screen";
 
 /// Whether, in dwindle, another window than `window` is fullscreen: it holds the screen, a client
 /// may then not take it (the owner's choice: games first, ADR-0019). In dwindle a fullscreen

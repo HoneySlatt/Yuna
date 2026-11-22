@@ -166,10 +166,9 @@ fn a_window_on_a_hidden_special_workspace_cannot_be_focused_without_an_output() 
     m.ok(|l| l.move_to_special(OWNER, "scratch"));
     assert_eq!(m.info(1).output, None);
     m.ok(|l| l.remove_output(MAIN));
-    m.refused(
-        LayoutError::Refused("the window's workspace has no output"),
-        |l| l.focus_window(w(1)),
-    );
+    m.refused(LayoutError::WorkspaceWithoutOutput, |l| {
+        l.focus_window(w(1))
+    });
 }
 
 /// The outputs a mode change moves are those whose left edge lies right of the changed output's:

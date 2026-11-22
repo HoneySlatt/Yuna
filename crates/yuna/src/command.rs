@@ -13,11 +13,10 @@ use crate::state::State;
 /// output's next refresh; a command refused before it changed anything arms nothing.
 pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result<(), Refusal> {
     check_reach(&state.layout, caller.seat, &command)?;
+    // Asked of the window's client: the layout changes when the client closes it.
     if let Command::CloseWindow(window) = command {
         let window = target(&state.layout, caller.seat, window)?;
-        return state
-            .close_window(window)
-            .map_err(|_| Refusal::UnknownWindow(window));
+        return state.close_window(window);
     }
     let applied = apply_to_layout(&mut state.layout, caller.seat, command);
     if applied.changed {
@@ -83,11 +82,15 @@ fn apply_to_layout(layout: &mut Layout, seat: SeatId, command: Command) -> Appli
                 layout.set_floating(window, on)
             });
         }
-        // Answered by `run` before the layout is reached.
-        Command::CloseWindow(_) => Err(LayoutError::Refused("a window is closed by its client")),
-        // `Command` is `#[non_exhaustive]` for the programs outside the workspace that match on
-        // it; a variant added there is dispatched here in the same change, and tested.
-        _ => Err(LayoutError::Refused("Yuna does not know this command")),
+        // `CloseWindow` is answered by `run` before the layout is reached. `Command` is
+        // `#[non_exhaustive]` for the programs outside the workspace that match on it; a variant
+        // added there is dispatched here in the same change, and tested.
+        _ => {
+            return Applied {
+                result: Err(Refusal::UnknownCommand),
+                changed: false,
+            };
+        }
     };
     Applied::of(done)
 }
@@ -158,7 +161,9 @@ fn target(layout: &Layout, seat: SeatId, window: Option<WindowId>) -> Result<Win
     }
 }
 
-/// The refusal a caller sees for what the layout refused.
+/// The refusal a caller sees for what the layout refused: each of the layout's reasons has its
+/// own. The match has no catch-all arm, so that a reason added to the layout fails to compile
+/// here until it has its refusal.
 pub(crate) fn refusal(error: LayoutError) -> Refusal {
     match error {
         LayoutError::UnknownSeat(seat) => Refusal::UnknownSeat(seat),
@@ -168,6 +173,13 @@ pub(crate) fn refusal(error: LayoutError) -> Refusal {
         LayoutError::AlreadyExists => Refusal::AlreadyExists,
         LayoutError::InvalidValue => Refusal::InvalidValue,
         LayoutError::NotEmpty => Refusal::NotEmpty,
-        LayoutError::Refused(reason) => Refusal::Refused(reason),
+        LayoutError::OutputOfAnotherSeat => Refusal::OutputOfAnotherSeat,
+        LayoutError::SeatWithoutOutput => Refusal::SeatWithoutOutput,
+        LayoutError::WorkspaceWithoutOutput => Refusal::WorkspaceWithoutOutput,
+        LayoutError::WindowTiled => Refusal::WindowTiled,
+        LayoutError::PinnedNotFullscreen => Refusal::PinnedNotFullscreen,
+        LayoutError::ScreenHeld => Refusal::ScreenHeld,
+        LayoutError::PinnedOutsideShownWorkspace => Refusal::PinnedOutsideShownWorkspace,
+        LayoutError::PinnedNotFloating => Refusal::PinnedNotFloating,
     }
 }
