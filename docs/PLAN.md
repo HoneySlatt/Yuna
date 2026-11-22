@@ -20,8 +20,10 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   commands, 256 clients a seat, 1 MiB a client; the parity script builds in one codegen unit.
 - **M2.3, WLCS**, done on 2026-11-22 (ADR-0149, ADR-0150): `yuna-wlcs`, its expected outcomes
   (149 tests pass of 1,225), `check.sh`'s step and CI's `wlcs` job.
-- **M2.4's design** done on 2026-11-22: the owner split it in four, in this order, and chose
-  ADR-0151 to ADR-0155. **Next: M2.4a, the map's checks and the contracts**, in a new session.
+- **M2.4's design** done on 2026-11-22: the owner split it in four and chose ADR-0151 to ADR-0155.
+- **M2.4a, the map's checks and the contracts**, done on 2026-11-22: `crates/map.toml` and
+  `check.sh`'s `map` step, `unsafe_code` denied, the contracts listed with their versions, a
+  `Refusal` variant per reason. **Next: M2.4b, the table of tasks**, in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -141,7 +143,7 @@ M2.18 may run any time after M2.4d. A milestone that turns out too large is spli
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.3 done; M2.4a next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4a done; M2.4b next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
@@ -167,6 +169,8 @@ M2.18 may run any time after M2.4d. A milestone that turns out too large is spli
 
 - A second Xwayland at scale 1 for games, on its own display, so that a game on an output of a
   smaller scale always draws at its mode ([ADR-0069](adr/0069-fullscreen-x11-games-gamescope-and-xwaylands-emulated-modes-kept.md)).
+- Each of `yuna`'s entries in `crates/map.toml` naming its ADR, which the map's script checks
+  exists, so that the check refuses an entry added without one.
 
 ## Known debt
 
