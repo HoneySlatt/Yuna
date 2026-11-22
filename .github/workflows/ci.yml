@@ -73,6 +73,9 @@ jobs:
           --tier ci
           --before "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'schedule' && github.sha || github.event.before }}"
           --work /home/runner/parity
+      # The report's verdicts in the log, so that a figure flagged here can be read.
+      - if: failure()
+        run: cat target/parity/parity-*.md
 
   # WLCS, the Wayland conformance suite, against Yuna through crates/yuna-wlcs (ADR-0149): every
   # test, judged against crates/yuna-wlcs/expected.txt, a test that newly passes included.
