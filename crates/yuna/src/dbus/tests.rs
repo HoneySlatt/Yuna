@@ -2,6 +2,11 @@
 //! random bytes that never make it panic, and its connection against a real `dbus-daemon`, the
 //! development shell's.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::DirBuilderExt;

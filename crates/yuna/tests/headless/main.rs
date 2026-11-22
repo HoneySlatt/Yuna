@@ -7,6 +7,11 @@
 //! created, which is the clock's start: the manual clock does not move until a test moves it.
 //! `scale.rs` and `dmabuf.rs` hold the stories of viewporter, fractional scale and linux-dmabuf.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 mod activation;
 mod capture_client;
 mod captures;

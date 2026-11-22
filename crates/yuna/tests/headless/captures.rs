@@ -840,15 +840,17 @@ fn assert_still_waiting(answers: &HashMap<u64, (Instant, Value)>, id: u64, asked
     );
 }
 
-/// Never more than [`MAX_ENCODERS`] captures encode at once, however many a round copies: one
-/// more seat than that asks a capture in the same round, each copied at once from its output at
-/// rest; four encoders start, the last capture's frame waits for one of them to end, and every
-/// capture is answered with its image. On the real clock, since a manual-clock Yuna holds one
-/// seat.
+/// Never more than the encoders' limit encode at once, however many a round copies: one more
+/// seat than that asks a capture in the same round, each copied at once from its output at rest;
+/// the limit's encoders start, [`MAX_ENCODERS`] or the cores less one, the last capture's frame
+/// waits for one of them to end, and every capture is answered with its image. On the real
+/// clock, since a manual-clock Yuna holds one seat.
 #[test]
-fn captures_copied_in_one_round_encode_four_at_a_time() {
+fn captures_copied_in_one_round_encode_the_limit_at_a_time() {
     let mut mcp = Mcp::new(ClockMode::Real);
-    let seats: Vec<u64> = (0..=MAX_ENCODERS)
+    let limit = mcp.server.encoder_limit();
+    assert!((1..=MAX_ENCODERS).contains(&limit), "{limit}");
+    let seats: Vec<u64> = (0..=limit)
         .map(|_| {
             let created = mcp.call(
                 "seat",
@@ -885,7 +887,7 @@ fn captures_copied_in_one_round_encode_four_at_a_time() {
         most = most.max(mcp.server.encoders_running());
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(most, MAX_ENCODERS);
+    assert_eq!(most, limit);
     for id in ids {
         let (width, height, _) = image_of(&answers[&id]);
         assert_eq!((width, height), (640, 360));

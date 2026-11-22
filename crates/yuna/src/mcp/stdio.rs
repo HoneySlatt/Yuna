@@ -108,6 +108,10 @@ impl OutputQueue {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
 mod tests {
     use super::*;
     use serde_json::json;

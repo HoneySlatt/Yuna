@@ -3,9 +3,19 @@
 # own insertion is refused everywhere else. The crates that do not use calloop cannot resolve the
 # path, which is allowed; `rest::insert_source` expects the lint, so that a path that stopped
 # resolving fails the lints there.
+#
+# Every thread of Yuna's starts through `tasks::spawn` (crates/yuna/src/tasks.rs), which names it
+# `yuna-…` and is the table of tasks (ADR-0152): `std::thread`'s spawns are refused everywhere
+# else. The tests, the examples and `yuna-bench` allow them at their roots, and the test modules
+# inside `src/` expect them at theirs: their threads are not Yuna's. WLCS's module's one thread
+# expects the lint where it starts. A library's own threads, Mesa's, are not seen.
 disallowed-methods = [
     { path = "calloop::LoopHandle::insert_source", allow-invalid = true, reason = "insert it through `rest::insert_source`, which names and counts what wakes Yuna" },
     { path = "calloop::LoopHandle::register_dispatcher", allow-invalid = true, reason = "insert it through `rest::insert_source`, which names and counts what wakes Yuna" },
+    { path = "std::thread::spawn", reason = "start it through `tasks::spawn`, which names it and lists it in the table of tasks (ADR-0152)" },
+    { path = "std::thread::Builder::spawn", reason = "start it through `tasks::spawn`, which names it and lists it in the table of tasks (ADR-0152)" },
+    { path = "std::thread::Builder::spawn_scoped", reason = "start it through `tasks::spawn`, which names it and lists it in the table of tasks (ADR-0152)" },
+    { path = "std::thread::Scope::spawn", reason = "start it through `tasks::spawn`, which names it and lists it in the table of tasks (ADR-0152)" },
 ]
 
 # A `thread_local!` is a global of each thread, which no state passed down replaces (ADR-0151):

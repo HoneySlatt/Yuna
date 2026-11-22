@@ -119,6 +119,7 @@ use yuna_types::SeatId;
 use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};
 use super::xdnd::{self, Xdnd};
+use crate::tasks::{self, Task};
 #[cfg(debug_assertions)]
 pub use commands::PANIC_ON_X11_CLOSE;
 pub(crate) use messages::{Command, ManagerEvent, NetState, StateAction, StateChange, Stop};
@@ -292,25 +293,24 @@ pub(crate) fn start(
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
     let shared = Arc::clone(&owed);
-    std::thread::Builder::new()
-        .name(format!("yuna-x11-{}", seat.0))
-        .spawn(move || {
-            let stop = match run(
-                wm,
-                scale,
-                &events,
-                &shared,
-                taken,
-                &woken,
-                #[cfg(debug_assertions)]
-                panic_on_close,
-            ) {
-                Ok(()) => Stop::Released,
-                Err(failure) if is_closed(&*failure) => Stop::Closed,
-                Err(failure) => Stop::Failed(failure.to_string()),
-            };
-            let _ = events.send(ManagerEvent::Stopped(stop));
-        })?;
+    // Detached: it ends once Yuna lets it go or Xwayland closes (`tasks.rs`).
+    tasks::spawn(Task::X11Manager(seat), move || {
+        let stop = match run(
+            wm,
+            scale,
+            &events,
+            &shared,
+            taken,
+            &woken,
+            #[cfg(debug_assertions)]
+            panic_on_close,
+        ) {
+            Ok(()) => Stop::Released,
+            Err(failure) if is_closed(&*failure) => Stop::Closed,
+            Err(failure) => Stop::Failed(failure.to_string()),
+        };
+        let _ = events.send(ManagerEvent::Stopped(stop));
+    })?;
     Ok(Commands { owed, wake })
 }
 

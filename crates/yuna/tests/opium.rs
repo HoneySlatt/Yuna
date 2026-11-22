@@ -31,6 +31,11 @@
 //! downloads' keyring are unavailable, and that Opium Connect cannot look for devices, the
 //! network being unreachable.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 #[path = "common/application_environment.rs"]
 mod application_environment;
 #[path = "common/base64.rs"]

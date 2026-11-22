@@ -1,12 +1,13 @@
 //! The `capture` tool: a PNG of a seat's output, a region of it or a window
 //! ([ADR-0034](../../../../docs/adr/0034-captures.md)), and the encoders that make its image on
-//! threads of their own, at most [`MAX_ENCODERS`] at once.
+//! threads of their own, at most [`encoder_limit`] at once.
 //!
 //! Apart because a capture spans rounds: it waits for its frame, then for its encoder, then for
 //! its frame's boundary. Its neighbours: `image.rs` makes the PNG; `input.rs` maps a point of a
 //! capture's image to its output, for `pointer`; `waits.rs` ends a capture whose frame did not
 //! come, that is cancelled, or whose seat closes.
 
+use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use calloop::RegistrationToken;
@@ -19,16 +20,27 @@ use super::image::{self, Encoded, MAX_IMAGE_SIDE};
 use super::protocol::Revision;
 use super::tools::{self, CaptureCall, CopiedCapture, MAX_WAIT, ToolResult};
 use crate::rest::{Source, Wake, insert_source};
+use crate::tasks::{self, Task};
 use crate::{CaptureTicket, ClockMode};
 
 /// How many of a seat's captures `pointer` may name: its last ones
 /// ([ADR-0038](../../../../docs/adr/0038-captures-coordinates-windows-and-wayland.md)).
 pub const RECENT_CAPTURES: usize = 16;
 
-/// How many captures' images may be encoded at once, each on a thread of its own with its
-/// pixels, about 33 MB at 4K's physical size. An encoder is counted when it starts: a capture
-/// copied while this many run waits for one to end, and a capture asked meanwhile is refused.
+/// The most captures' images encoded at once, each on a thread of its own with its pixels, about
+/// 33 MB at 4K's physical size; a machine of fewer than five cores encodes fewer
+/// (`encoder_limit`). An
+/// encoder is counted when it starts: a capture copied while the limit runs waits for one to
+/// end, and a capture asked meanwhile is refused.
 pub const MAX_ENCODERS: usize = 4;
+
+/// How many encoders may run at once on a machine of `cores` (unknown: none): the smaller of
+/// [`MAX_ENCODERS`] and the cores less one, at least one, so that a machine of two cores keeps
+/// one for the state thread (ADR-0152). Encoders run at the normal class, as their Yuna does.
+pub(super) fn encoder_limit(cores: Option<NonZeroUsize>) -> usize {
+    let cores = cores.map_or(1, NonZeroUsize::get);
+    cores.saturating_sub(1).clamp(1, MAX_ENCODERS)
+}
 
 /// A `capture` call, until it is answered.
 #[derive(Debug)]
@@ -76,9 +88,10 @@ impl Server {
             Err(failed) => return Some(failed),
         };
         // A capture cancelled while encoding leaves its encoder running, out of `captures`.
-        if self.encoders_running >= MAX_ENCODERS {
+        if self.encoders_running >= self.encoder_limit {
+            let limit = self.encoder_limit;
             return Some(ToolResult::failed(format!(
-                "{MAX_ENCODERS} captures are being encoded: wait for them"
+                "{limit} captures are being encoded: wait for them"
             )));
         }
         if self.captures.iter().any(|capture| capture.seat == seat) {
@@ -116,7 +129,7 @@ impl Server {
     }
 
     /// Starts encoding each capture whose pixels the compositor copied, on a thread of its own,
-    /// or queues its frame while [`MAX_ENCODERS`] run; answers those it failed.
+    /// or queues its frame while [`encoder_limit`] run; answers those it failed.
     pub(super) fn encode_copied_captures(&mut self) {
         for (ticket, copied) in self.compositor.take_captures() {
             let Some(index) = self.captures.iter().position(|capture| {
@@ -157,38 +170,42 @@ impl Server {
     }
 
     /// Starts an encoder for each frame waiting, oldest first, while fewer than
-    /// [`MAX_ENCODERS`] run: each is counted as it starts, so that never more run, however many
+    /// [`encoder_limit`] run: each is counted as it starts, so that never more run, however many
     /// captures a round copies.
     fn start_encoders(&mut self) {
-        while self.encoders_running < MAX_ENCODERS
+        // The threads that have ended are let go, never waited for here: those kept are at most
+        // the limit running, and the limit whose image came as they end.
+        self.encoders.retain(|encoder| !encoder.is_finished());
+        while self.encoders_running < self.encoder_limit
             && let Some((key, frame)) = self.waiting_encoders.pop_front()
         {
             let results = self.encoder_results.clone();
             let panic_asked = self.encoder_panic_asked();
-            let started = std::thread::Builder::new()
-                .name("yuna-capture".to_owned())
-                .spawn(move || {
-                    let began = Instant::now();
-                    // A panic here is a bug of Yuna's; it fails this capture, not the seat's
-                    // next ones, which would wait on it for ever.
-                    let encoded = std::panic::catch_unwind(|| {
-                        if panic_asked {
-                            panic!("a test asks this capture's encoder to panic");
-                        }
-                        image::encode(&frame)
-                    })
-                    .unwrap_or_else(|_| Err("the capture's encoder failed".to_owned()));
-                    tracing::debug!(
-                        width = frame.mapping.width,
-                        height = frame.mapping.height,
-                        took_us = began.elapsed().as_micros(),
-                        "capture encoded"
-                    );
-                    // A capture cancelled meanwhile, or a server gone, takes nothing.
-                    let _ = results.send((key, encoded));
-                });
+            let started = tasks::spawn(Task::Encoder, move || {
+                let began = Instant::now();
+                // A panic here is a bug of Yuna's; it fails this capture, not the seat's
+                // next ones, which would wait on it for ever.
+                let encoded = std::panic::catch_unwind(|| {
+                    if panic_asked {
+                        panic!("a test asks this capture's encoder to panic");
+                    }
+                    image::encode(&frame)
+                })
+                .unwrap_or_else(|_| Err("the capture's encoder failed".to_owned()));
+                tracing::debug!(
+                    width = frame.mapping.width,
+                    height = frame.mapping.height,
+                    took_us = began.elapsed().as_micros(),
+                    "capture encoded"
+                );
+                // A capture cancelled meanwhile, or a server gone, takes nothing.
+                let _ = results.send((key, encoded));
+            });
             match started {
-                Ok(_) => self.encoders_running += 1,
+                Ok(encoder) => {
+                    self.encoders_running += 1;
+                    self.encoders.push(encoder);
+                }
                 Err(error) => {
                     if let Some(index) = self.captures.iter().position(|c| c.key == key) {
                         self.answer_capture(
@@ -305,5 +322,22 @@ impl Server {
             CaptureStage::Encoded { .. } => {}
         }
         capture
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoders_leave_a_core_to_the_state_thread_up_to_four() {
+        let on = |cores: usize| encoder_limit(NonZeroUsize::new(cores));
+        assert_eq!(encoder_limit(None), 1, "unknown: one");
+        assert_eq!(on(1), 1, "one core: one all the same");
+        assert_eq!(on(2), 1);
+        assert_eq!(on(3), 2);
+        assert_eq!(on(4), 3);
+        assert_eq!(on(5), MAX_ENCODERS);
+        assert_eq!(on(64), MAX_ENCODERS);
     }
 }

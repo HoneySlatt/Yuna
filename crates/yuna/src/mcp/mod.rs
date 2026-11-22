@@ -70,7 +70,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use calloop::channel::{self, Sender};
+use calloop::channel::{self, SyncSender};
 use calloop::generic::Generic;
 use calloop::{Interest, Mode, PostAction, RegistrationToken};
 use rustix::fs::OFlags;
@@ -82,6 +82,7 @@ use crate::compositor::Compositor;
 use crate::output::OutputMode;
 use crate::rest::{Source, Wake, insert_source};
 use crate::state::OWNER_SEAT;
+use crate::tasks::{Task, TaskThread};
 use crate::{CaptureMapping, CapturedFrame, Error};
 use accessibility::Accessibility;
 use captures::CaptureWait;
@@ -218,8 +219,9 @@ pub struct Server {
     last_seat: SeatId,
     captures: Vec<CaptureWait>,
     clipboard_reads: Vec<ClipboardRead>,
-    /// Where the encoders send the captures' images, by key.
-    encoder_results: Sender<(u64, Result<Encoded, String>)>,
+    /// Where the encoders send the captures' images, by key: bounded by [`MAX_ENCODERS`], since
+    /// each encoder sends one and no more run.
+    encoder_results: SyncSender<(u64, Result<Encoded, String>)>,
     /// Each seat's last captures, newest last, by id, which `pointer` takes.
     recent_captures: HashMap<SeatId, VecDeque<(u64, CaptureMapping)>>,
     /// The next capture's id: ids increase and are never reused.
@@ -227,7 +229,11 @@ pub struct Server {
     /// The encoders' threads running, those of captures cancelled included: counted when each
     /// starts, until its image comes back.
     encoders_running: usize,
-    /// The frames of captures copied while [`MAX_ENCODERS`] encoders ran, by capture key, oldest
+    /// How many encoders may run at once on this machine ([`captures::encoder_limit`]).
+    encoder_limit: usize,
+    /// The encoders' threads not yet seen ended, joined within a bound when the server finishes.
+    encoders: Vec<TaskThread>,
+    /// The frames of captures copied while the limit of encoders ran, by capture key, oldest
     /// first: each starts its encoder when one ends. One a seat at most, as its capture.
     waiting_encoders: VecDeque<(u64, CapturedFrame)>,
     /// The mode of a new seat's output, unless `seat create` says.
@@ -347,7 +353,7 @@ impl Server {
                 Some((programs, children))
             }
         };
-        let (encoder_results, encoded) = channel::channel();
+        let (encoder_results, encoded) = channel::sync_channel(MAX_ENCODERS);
         let noted = events.clone();
         insert_source(
             &handle,
@@ -396,6 +402,8 @@ impl Server {
             recent_captures: HashMap::new(),
             next_capture: 1,
             encoders_running: 0,
+            encoder_limit: captures::encoder_limit(std::thread::available_parallelism().ok()),
+            encoders: Vec::new(),
             waiting_encoders: VecDeque::new(),
             seat_output: OutputMode::default(),
             programs,
@@ -439,6 +447,13 @@ impl Server {
     #[doc(hidden)]
     pub fn encoders_running(&self) -> usize {
         self.encoders_running
+    }
+
+    /// How many encoders may run at once on this machine: [`MAX_ENCODERS`], or fewer on a
+    /// machine of fewer than five cores. For tests.
+    #[doc(hidden)]
+    pub fn encoder_limit(&self) -> usize {
+        self.encoder_limit
     }
 
     /// How many times the server described the compositor's windows and outputs to tell their
@@ -564,8 +579,8 @@ impl Server {
     }
 
     /// Ends the server: writes, for up to a second, the replies the client has not read, gives
-    /// its output back its flags, ends every program and removes their folder. Returns why it
-    /// stopped.
+    /// its output back its flags, ends every program and removes their folder, and joins the
+    /// encoders still running within their bound (`tasks.rs`). Returns why it stopped.
     pub fn finish(mut self) -> Stop {
         let handle = self.compositor.loop_handle();
         // Nothing more is read; what is left to write is written here.
@@ -617,6 +632,10 @@ impl Server {
         if let Some((mut programs, children)) = self.programs.take() {
             self.end_programs(&mut programs, &children);
             programs.remove_folder();
+        }
+        let encoders_by = Instant::now() + Task::Encoder.join_bound();
+        for encoder in std::mem::take(&mut self.encoders) {
+            encoder.join_by(encoders_by);
         }
         let stop = self.stopping.take().unwrap_or(Stop::Signal);
         tracing::info!(reason = ?stop, "the MCP server stops");

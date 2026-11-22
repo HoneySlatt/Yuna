@@ -7,6 +7,11 @@
 //! processes ended when Yuna stops, and the accessibility trees of GTK 4 and Qt programs on their
 //! seat's accessibility bus, which `yuna mcp` starts and serves as the AT-SPI registry.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 #[path = "common/application_environment.rs"]
 mod application_environment;
 #[path = "common/folders.rs"]

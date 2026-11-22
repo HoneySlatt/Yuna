@@ -703,9 +703,7 @@ Yuna's code were not traced.
 - The parity script's "allocations a frame through Yuna's binary" counts the blocks whose stack,
   within DHAT's 12 frames, passes through Yuna's binary, Mesa's allocations called from Yuna
   included; ADR-0140's target needs the innermost frame outside the allocator. Paid at
-  Stage 2a, M2.9 (Vulkan the default), whose target it is. Its context switches count only Yuna's
-  main thread and its threads named `yuna-…`. Paid at Stage 2a, M2.4b (the table of tasks), where
-  every thread is named so.
+  Stage 2a, M2.9 (Vulkan the default), whose target it is.
 - Two X11 stories absorb a race between the manager's thread and the story by retrying:
   `a_surface_committed_after_its_windows_serial_is_paired_with_it` (three tries, a 500 ms sleep)
   and the managers' burst in `x11_bounds.rs` (up to eight). Paid at Stage 2a, M2.17 (the X11 manager, a

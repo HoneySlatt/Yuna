@@ -244,6 +244,12 @@ impl Server {
         let (requests, received) = sync_channel(1);
         let (ready, started) = sync_channel(1);
         let (ended_sender, ended) = sync_channel(0);
+        // A harness's thread, outside the table of tasks (crates/yuna/src/tasks.rs); Linux keeps
+        // its name's first 15 bytes, `yuna-wlcs-serve`.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "WLCS's module is a test harness, not Yuna's core: its thread is no task (ADR-0152)"
+        )]
         let thread = std::thread::Builder::new()
             .name("yuna-wlcs-server".to_owned())
             .spawn(move || serve(&received, &ready, ended_sender))

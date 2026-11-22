@@ -84,6 +84,11 @@ expect_stopped lints "an expect of a lint without its reason" "allow_attributes_
     "printf '\\n/// Nothing.\\n#[expect(dead_code)]\\nfn unused() {}\\n' >> crates/yuna/src/lib.rs"
 expect_stopped lints "a thread_local! under another name (ADR-0151)" "disallowed macro .std::thread_local." \
     "printf '\nuse std::thread_local as per_thread;\nper_thread! {\n    /// A mark.\n    pub static MARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n' >> crates/yuna/src/lib.rs"
+# Every thread of Yuna's starts through `tasks::spawn` (ADR-0152).
+expect_stopped lints "a thread started outside the table of tasks (ADR-0152)" "disallowed method .std::thread::spawn." \
+    "printf '\n/// Starts a thread.\npub fn starts() { let _ = std::thread::spawn(|| ()); }\n' >> crates/yuna/src/lib.rs"
+expect_stopped lints "a thread started outside the table of tasks, its builder aliased (ADR-0152)" "disallowed method .std::thread::Builder::spawn." \
+    "printf '\nuse std::thread::Builder as Starter;\n/// Starts a thread.\npub fn starts() { let _ = Starter::new().spawn(|| ()); }\n' >> crates/yuna/src/lib.rs"
 # The crate map (ADR-0151). A manifest edited here leaves Cargo.lock behind: `cargo metadata
 # --no-deps` reads the manifests alone, so the map's reason is found and printed, and clippy then
 # refuses the stale lock, which the step reports too.

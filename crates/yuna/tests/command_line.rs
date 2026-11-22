@@ -1,5 +1,10 @@
 //! The program run as a user runs it: its output and its exit status.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 #[path = "common/folders.rs"]
 mod folders;
 

@@ -16,9 +16,10 @@
 //! on a client, a program's pipe or an X server: each source only notes what came, and the loop
 //! reads it when it is ready. Beside it run one X11 window manager for each running Xwayland, on
 //! a thread of its own (`yuna-x11-<seat>`, `xwayland/manager/`), which waits on X11 so that the
-//! loop never does; and, in `yuna mcp`, up to `MAX_ENCODERS` threads that encode captures
-//! (`yuna-capture`, `mcp/captures.rs`). A panic of the state thread is fatal; one of another
-//! thread ends that thread's work alone (`fatal.rs`).
+//! loop never does; and, in `yuna mcp`, the threads that encode captures (`yuna-capture`,
+//! `mcp/captures.rs`). A panic of the state thread is fatal; one of another thread ends that
+//! thread's work alone (`fatal.rs`). Every thread starts through one spawner, and the table of
+//! tasks in `tasks.rs` gives each its owner, its inbox, its stop and its failure.
 //!
 //! Each module has one job; `docs/ARCHITECTURE.md` lists them (*Modules*) and gives the flows
 //! across them.
@@ -48,6 +49,7 @@ mod seats;
 mod selection;
 mod shell;
 mod state;
+mod tasks;
 mod text_input;
 mod virtual_input;
 mod vrr;

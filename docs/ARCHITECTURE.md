@@ -61,10 +61,13 @@ limits are in its code's documentation, linked from here; why each decision was 
   it.
 
 **What runs on which thread**
-([`lib.rs`](../crates/yuna/src/lib.rs) gives each): the *state thread* runs the event loop and
-everything `State` holds, and in `yuna mcp` the server, and never waits on a client, a pipe or an
-X server; each running Xwayland's X11 window manager waits on X11 on a thread of its own; in
-`yuna mcp`, encoder threads make the captures' PNGs.
+(the table of tasks, [`tasks.rs`](../crates/yuna/src/tasks.rs), gives each its owner, inbox, stop
+and failure): the *state thread* runs the event loop and everything `State` holds, and in `yuna
+mcp` the server, and never waits on a client, a pipe or an X server; each running Xwayland's X11
+window manager waits on X11 on a thread of its own; in `yuna mcp`, encoder threads make the
+captures' PNGs, at most the cores less one. Every thread starts through `tasks::spawn`, which
+names it `yuna-…`
+([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 
 **What survives which failure** ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)):
 
@@ -119,7 +122,9 @@ One Cargo workspace; its crates live in `crates/`.
   `cargo metadata` and with rustc's `unsafe_code` lint. The workspace denies `unsafe` code; a
   module allowed it expects the lint, and the pure crates forbid it. Clippy refuses
   `thread_local!`, but in `yuna`'s program, whose root expects the lint for `fatal.rs`'s mark
-  ([debt](debt.md)); there the map's list of statics refuses a second one. `yuna` is the
+  ([debt](debt.md)); there the map's list of statics refuses a second one. Clippy refuses
+  `std::thread`'s spawns outside `tasks::spawn`; the tests, the examples and `yuna-bench` allow
+  them at their roots, and WLCS's module's one thread expects the lint. `yuna` is the
   transitional crate until M2.19: the check keeps its lists exact, and review keeps them
   shrinking.
 
@@ -614,7 +619,7 @@ place pixels are read back, on the state thread ([debt](debt.md#captures)).
 - **An agent's capture**, MCP's `capture`: the pixels of the whole output, a region in logical
   units, or the rectangle a window was drawn at, are read on the state thread when their frame is
   drawn. Its *capture mapping* says where the image lies in the output's logical units. The server
-  encodes the PNG on its encoder threads, `MAX_ENCODERS` at most
+  encodes the PNG on its encoder threads, `MAX_ENCODERS` (4) or the cores less one at most
   ([`mcp/captures.rs`](../crates/yuna/src/mcp/captures.rs)), and answers once the clock has
   reached the frame's boundary.
 - **A client's capture**, through `ext-image-copy-capture-v1`

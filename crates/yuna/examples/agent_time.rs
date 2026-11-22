@@ -28,6 +28,11 @@
 //! `--calls <n>`, 1,000 by default, the calls of each kind; `--seconds <n>`, 10 by default, each
 //! window. It stops what it started when it ends, and keeps its folder of logs when it fails.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "an example's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 mod common;
 #[path = "common/vkcube_environment.rs"]
 mod vkcube_environment;

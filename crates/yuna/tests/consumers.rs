@@ -17,6 +17,11 @@
 //! test loads it with that check answering none; and it checks that `sway` and `swaymsg` are on
 //! the `PATH`, which `--display` never runs, so the test puts two that fail if run.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 #[path = "common/application_environment.rs"]
 mod application_environment;
 #[path = "common/dies_with_test.rs"]

@@ -40,6 +40,11 @@
 //! Yuna takes it; `--seconds <s>`, the measured window, 10 by default. The figures go to
 //! `docs/measurements.md` with the machine, its load and the commit.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "an example's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 mod common;
 #[path = "common/usage.rs"]
 mod usage;

@@ -55,6 +55,11 @@
 //! logs when it fails. Killed outright, it leaves nothing running: each `yuna mcp` stops when its
 //! input closes, and ends its programs.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "an example's threads are not Yuna's tasks (ADR-0152)"
+)]
+
 mod common;
 #[path = "common/load.rs"]
 mod load;

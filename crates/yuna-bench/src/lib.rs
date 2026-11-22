@@ -22,6 +22,11 @@
 //!
 //! The binary's commands are in [`cli`]; `CONTRIBUTING.md` says how to run it.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the bench measures Yuna from outside: its threads are not Yuna's tasks (ADR-0152)"
+)]
+
 pub mod capture;
 pub mod cgroup;
 pub mod cli;
