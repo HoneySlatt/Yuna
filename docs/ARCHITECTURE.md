@@ -1117,8 +1117,8 @@ start with a thread, `yuna-wlcs-server`, that owns a `Compositor`:
 
 WLCS's hooks run on its test thread. Each sends one request through a channel of one message,
 wakes the compositor with its `Waker`, and waits for the answer. The thread lets Yuna settle,
-applies the request, lets Yuna settle again, then answers. Settling means no refresh due within
-one refresh period. Yuna gives keyboard focus and activation at a refresh, and WLCS asserts right
+applies the request, lets Yuna settle again, then answers. Settling means no deadline due within
+two refresh periods: a frame asked just after another aims at the boundary after next. Yuna gives keyboard focus and activation at a refresh, and WLCS asserts right
 after one roundtrip, so an answer before the refresh would make its tests race.
 
 **The seams it uses.** These are hidden from the documentation:

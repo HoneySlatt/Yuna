@@ -317,7 +317,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   `FrameSubmission` and `XdgSurfaceStableTest`; one expected to pass that fails stops the run as
   a broad failure.
 - **Settle** (WLCS): what `yuna-wlcs` does before and after each of WLCS's requests: run Yuna until
-  no refresh is due within one refresh period, at most 0.5 s, so that a focus or an activation
+  no deadline is due within two refresh periods, at most 0.5 s, so that a focus or an activation
   Yuna gives at a refresh has reached the client before WLCS asserts it.
 - **Share picker**: the selection Yuna draws when an application asks to share the screen, the same
   as for captures; choosing is the consent

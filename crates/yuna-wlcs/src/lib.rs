@@ -14,7 +14,7 @@
 //! [`Compositor`](yuna::Compositor) and sleeps in its loop (`server.rs`). Hooks run on WLCS's
 //! threads: each sends its request through a channel of one, wakes the server's thread
 //! ([`Waker`](yuna::Waker)) and waits for the reply. The thread lets Yuna settle, applies the
-//! request, lets Yuna settle again, and replies: settled is no deadline due within one refresh,
+//! request, lets Yuna settle again, and replies: settled is no deadline due within two refreshes,
 //! and each of the two settles waits 0.5 s at most ([`compositor::WlcsCompositor::settle`]). A
 //! reply not given in 10 s, and Yuna not started in as long, abort the process, naming what went
 //! unanswered; `stop` returns once the thread has ended, in 5 s, else the process is aborted.

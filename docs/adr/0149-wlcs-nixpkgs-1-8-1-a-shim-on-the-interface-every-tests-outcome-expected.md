@@ -80,8 +80,9 @@ The owner chose, on 2026-11-21:
   - Each WLCS compositor is one thread that owns a `Compositor`: on the processor, on the real clock
     (WLCS's tests wait for real frame callbacks), with no socket, no Xwayland and no animations,
     one agent's seat, and one 1920×1080 output at (0, 0).
-  - **Every request settles**: the module waits for Yuna to have no refresh due within one
-    refresh period, before and after the request, at most 0.5 s each, and only then answers WLCS.
+  - **Every request settles**: the module waits for Yuna to have no deadline due within two
+    refresh periods, before and after the request, at most 0.5 s each, and only then answers
+    WLCS. Two, because a frame asked just after another aims at the boundary after next.
   - A hook unanswered in 10 s, or a panic, aborts the process with its message.
 - **Hidden test seams on `Compositor`**, each documented with what it may break:
   - a `Waker`, whose wake is a named source of the rest tool;

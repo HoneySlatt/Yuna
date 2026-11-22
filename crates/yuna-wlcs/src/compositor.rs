@@ -59,7 +59,7 @@ pub struct WlcsCompositor {
     compositor: Compositor,
     seat: SeatId,
     output: OutputId,
-    /// One refresh of the output: what [`WlcsCompositor::settle`] waits past.
+    /// One refresh of the output: [`WlcsCompositor::settle`] waits for every deadline within two.
     refresh: Duration,
     /// Each client connected, by the descriptor WLCS was given for it, which its `wl_display`
     /// reads back. WLCS closes a descriptor when its client goes, and the number may come back
@@ -150,20 +150,22 @@ impl WlcsCompositor {
     }
 
     /// Lets Yuna settle, before and after a request: one round at once, which sends what Yuna
-    /// wrote, then rounds until no deadline is due within one refresh, for [`SETTLE_LIMIT`] at
+    /// wrote, then rounds until no deadline is due within two refreshes, for [`SETTLE_LIMIT`] at
     /// most, and the length of the round that ends it. Yuna draws what clients committed, and a
     /// window where it was placed, at the next refresh, and hit tests read the last frame drawn;
-    /// it gives the keyboard's focus
-    /// and a window's activation at the refresh after a click. WLCS checks right after a hook and
-    /// one roundtrip, so a hook's request waits for the frame before it, and its answer for the
-    /// frame after it. A deadline beyond one refresh, a hidden window's frame callbacks for
-    /// instance, is not waited for.
+    /// it gives the keyboard's focus and a window's activation at the refresh after a click. WLCS
+    /// checks right after a hook and one roundtrip, so a hook's request waits for the frame
+    /// before it, and its answer for the frame after it. Two refreshes, not one: a frame asked
+    /// just after another was drawn aims at the boundary after next, its deadline up to two
+    /// refreshes away, which one refresh missed under load (20.7 ms at 60 Hz, a placed window
+    /// then hit-tested where it had opened). A deadline beyond two refreshes, a hidden window's
+    /// frame callbacks for instance, is not waited for.
     pub fn settle(&mut self) -> Result<(), Error> {
         let started = Instant::now();
         self.compositor.dispatch(Some(Duration::ZERO))?;
         while let Some(due) = self.compositor.next_deadline() {
             let now = self.compositor.now();
-            if due > now + self.refresh {
+            if due > now + 2 * self.refresh {
                 break;
             }
             let Some(left) = SETTLE_LIMIT.checked_sub(started.elapsed()) else {
