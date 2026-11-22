@@ -10,10 +10,14 @@
 # (.delegation/, local). A spread is a figure's range over its median, over a series' ten; each
 # threshold takes the widest of the series. Desktop only: not yet measured on GitHub's runner.
 #
-# Measured again on one-unit builds (ADR-0148), 2026-11-21: the tree against itself, one series of
-# five a side (docs/measurements.md). One series is too thin to set a threshold by: the CI tier's
-# thresholds stay M2.1's until two more series are measured. The timed and GPU tiers' entries,
-# after the CI tier's, come from that day's self controls.
+# Measured again on one-unit builds (ADR-0148), 2026-11-21: the tree against itself, three series
+# of five a side (docs/measurements.md). Each passed. The CI tier's thresholds stay M2.1's, by the
+# owner's choice of 2026-11-21. The script judges the difference of the two sides' medians, which
+# stayed under 19 % of every threshold in the last two series. Three times the widest range of ten
+# would exceed 19 of them, by 1.03 to 3.2 times, mostly from one run apart from the other nine, which
+# a median sets aside. A threshold is set again if a self control or a push of unchanged code
+# flags its figure. The timed and GPU tiers' entries, after the CI tier's, come from that day's
+# self controls.
 
 format = 2
 

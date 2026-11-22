@@ -609,12 +609,6 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   runner seen, past the job's 40-minute timeout. How to keep a move's push inside it is put to the
   owner before the first move. Paid before the baseline's first move: M2.2 made none; the next
   foreseen is M2.9 (Vulkan the default).
-- The parity script's CI thresholds come from the spreads of builds in sixteen codegen units; it
-  builds each side in one since ADR-0148. One series of five a side on one-unit builds
-  (2026-11-21) is recorded, too thin to set thresholds by: the hash-randomised operations' spreads
-  moved by 0.3 to 2.9 times from M2.1's, and `switch-tiling@1000-scrolling`'s range reached 95 % of
-  its threshold. Two more series set them; a threshold loosened past the baseline's file needs a
-  move. Paid at the owner's go, before M2.3 closes.
 - The parity script's timed tier has no control for a frame's CPU time (`spin-draw` moves it 3 %
   against 4 % in `partial`), the GPU tier's memory or the soak; inside `agent-headless` the other
   programs' GPU load cannot be read, so a timed case on the GPU is void unless asked by hand. Paid
