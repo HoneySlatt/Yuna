@@ -417,6 +417,11 @@ the move. Run it again by hand, with `--before` the commit before the move, and 
 top of a red or cancelled move check. No later push can correct a move; if the check fails by
 hand too, the owner decides how to repair it.
 
+When CI's `parity` job fails, it prints the report and, from the DHAT files its work folder kept,
+where the head allocates more a frame than the base, site by site
+([`scripts/parity-alloc-sites.py`](scripts/parity-alloc-sites.py)); the same reads a local work
+folder kept with `--keep`.
+
 The controls prove that the script sees what it watches. The tree against itself, the *self
 control*, must give 0:
 
