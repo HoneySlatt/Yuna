@@ -102,7 +102,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0079](0079-yunas-contracts-in-0-x-changes-announced-never-silent.md) | Yuna's contracts in 0.x: changes announced, never silent | Accepted |
 | [0080](0080-what-survives-a-failure-and-yunas-own-panics.md) | What survives a failure, and Yuna's own panics | Accepted; supersedes 0007; supersedes in part 0058 and 0073 |
 | [0081](0081-stage-2-in-three-gated-parts-and-the-path-off-smithay.md) | Stage 2 in three gated parts, and the path off Smithay | Superseded by 0139; supersedes in part 0039 |
-| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074; superseded in part by 0135, 0137 and 0145 |
+| [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) | The requirements of Stage 2's core, its bets made rules or deferred | Accepted; supersedes 0074; superseded in part by 0135, 0137, 0145, 0151 and 0153 |
 | [0083](0083-a-windows-last-wl-shm-buffer-kept-until-its-next.md) | A window's last `wl_shm` buffer kept until its next | Accepted; supersedes in part 0077 |
 | [0084](0084-uwui-hosted-on-its-own-task-commands-and-images.md) | uwui hosted on its own task, commands and images | Superseded by 0106; supersedes in part 0073 |
 | [0085](0085-outside-contributions-issues-now-pull-requests-from-0-1.md) | Outside contributions: issues now, pull requests from 0.1 | Accepted |
@@ -113,7 +113,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0090](0090-an-outputs-mode-and-scale-changed-whole-through-mcp.md) | An output's mode and scale changed whole, through MCP | Accepted |
 | [0091](0091-the-clipboard-between-x11-and-wayland-who-reads-and-its-bounds.md) | The clipboard between X11 and Wayland: who reads it, and its bounds | Accepted |
 | [0092](0092-a-programs-protocol-trace-its-errors-and-its-log-through-mcp.md) | A program's protocol trace, its errors and its log through MCP | Accepted |
-| [0093](0093-a-call-that-waits-for-the-seats-events.md) | A call that waits for the seat's events, and programs made stuck or slow | Accepted |
+| [0093](0093-a-call-that-waits-for-the-seats-events.md) | A call that waits for the seat's events, and programs made stuck or slow | Accepted; superseded in part by 0153 |
 | [0094](0094-the-accessibility-tree-yuna-as-the-registry-of-each-seats-bus.md) | The accessibility tree: Yuna as the registry of each seat's bus | Accepted |
 | [0095](0095-an-agents-seat-through-mcp-its-tools-input-keyboard-layouts-and-closing.md) | An agent's seat through MCP: its tools, its input, its keyboard and layouts, its closing | Superseded by 0117; supersedes 0037; supersedes in part 0043 |
 | [0096](0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md) | A rest auditor naming what wakes Yuna or makes it draw | Accepted |
@@ -170,4 +170,9 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0147](0147-a-seat-connects-256-clients-at-most.md) | A seat connects 256 clients at most | Accepted |
 | [0148](0148-parity-builds-each-side-in-one-codegen-unit.md) | Parity builds each side in one codegen unit | Accepted |
 | [0149](0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md) | WLCS: nixpkgs' 1.8.1, a shim on the interface, every test's outcome expected | Accepted |
-| [0150](0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md) | The crate map: `yuna-wlcs` owns WLCS's interface | Accepted; supersedes 0145 |
+| [0150](0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md) | The crate map: `yuna-wlcs` owns WLCS's interface | Superseded by 0151; supersedes 0145 |
+| [0151](0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | The crate map, checked by rustc and a script; `yuna` transitional until M2.19 | Accepted; supersedes 0150; supersedes in part 0082 |
+| [0152](0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md) | The table of tasks: one spawner, one class, the X11 manager inline at M2.17 | Accepted |
+| [0153](0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md) | One event stream: marks where state changes, MCP's log per seat its bound | Accepted; supersedes in part 0082 and 0093 |
+| [0154](0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md) | A client's pidfd at accept, through `SO_PEERPIDFD` | Accepted |
+| [0155](0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md) | A frame's identity: an opaque id, numbered rings, and a `frames` tool | Accepted |

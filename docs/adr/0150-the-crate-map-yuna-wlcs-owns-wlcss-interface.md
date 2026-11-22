@@ -1,6 +1,6 @@
 # 0150. The crate map: `yuna-wlcs` owns WLCS's interface
 
-- Status: Accepted; supersedes [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md)
+- Status: Superseded by [0151](0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md); supersedes [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md)
 - Date: 2026-11-21
 
 ## Context

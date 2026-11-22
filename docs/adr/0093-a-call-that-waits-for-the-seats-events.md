@@ -1,6 +1,6 @@
 # 0093. A call that waits for the seat's events, and programs made stuck or slow
 
-- Status: Accepted
+- Status: Accepted; superseded in part by [0153](0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md) (the log of events, and how its events are found)
 - Date: 2026-11-18
 
 ## Context

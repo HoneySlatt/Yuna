@@ -70,6 +70,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Cost window** (bench): a measured window whose costs the bench reads; for a compositor whose
   frames are counted by capture, the **frames window** after it runs the same scenario again with
   the frame counter, whose copies would weigh on the costs.
+- **Crate map**: the levels of Yuna's crates and which may depend on which, stated in
+  [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) and
+  checked from the *map file*.
 - **Cursor** (MCP): the number an agent gives `events` as `after`, an event's `seq` or a reply's
   `next`: the agent keeps it, Yuna keeps nothing between calls.
 - **Data control**: `ext-data-control-v1`, which lets a client, such as a clipboard manager, read
@@ -129,6 +132,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Fractional scale**: an output scale that is not a whole number, such as 1.5. A client that
   follows `wp_fractional_scale_v1` draws its buffer at its output's physical size and sets its
   viewport (`wp_viewporter`) to its logical size: one buffer pixel per physical pixel.
+- **Frame id** (`FrameId`): an opaque number a frame takes when its output's refresh is first
+  armed, kept if the refresh is aimed again; its record tells its causes, the inputs and commits
+  it covers, and when it was drawn and presented
+  ([ADR-0155](adr/0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md)).
 - **Full width**: a column that spans the working area, gaps aside; in dwindle, a window
   maximised over the working area. Umbriel calls it "maximize".
 - **Fullscreen state**: what Yuna tells the shell is fullscreen: a game, a film, plain fullscreen
@@ -195,6 +202,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   advances it, running each deadline it passes, in order
   ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). An agent never moves it past real
   time.
+- **Map file**: `crates/map.toml`, the machine-readable *crate map*: each crate's level, the
+  outside libraries' owners, the modules allowed `unsafe` code and every global, which
+  `scripts/crate-map.py` checks (ADR-0151).
+- **Mark**: what the core notes where state changes, a window and the fields that changed, an
+  output, the focus, a client gone; the round's marks become its events
+  ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
 - **Master override** (amdgpu): the kernel's `AMDGPU_SCHED` ioctl, allowed to the DRM master alone,
   whose process operation raises the priority of every context of an amdgpu file it is given by
   descriptor, with no capability; the way the session's Yuna can raise its composition from Stage 2b
@@ -218,6 +231,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   one its buffer holds.
 - **Offset**: a window's drawn position minus its place, after a layout operation moved it; it
   decays to 0 on a spring ([ADR-0052](adr/0052-motion-in-a-pure-crate.md)).
+- **Oracle test**: a test that checks one way of computing a result against another trusted one;
+  the events folded into a state are compared with what the compositor describes (ADR-0153).
 - **Override-redirect**: said of an X11 window its client places itself, past its manager:
   menus, tooltips, a drag's icon.
 - **Owed commands** (X11): the commands Yuna sent a seat's X11 window manager that its thread
@@ -271,6 +286,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the release, until the source drops or leaves, the drag ends or the pointer comes over an X11
   window, so that a source that looks late still finds it. It is not an `XdndProxy`, XDND's
   property by which a window names another to receive its messages.
+- **Pure crate**: a crate of levels 0 and 1 of the *crate map*, `yuna-types`, `yuna-layout`,
+  `yuna-motion` and `yuna-ipc` today: no Wayland, no Smithay, no system call, no `unsafe` code.
 - **Recipe**: how the rivals' bench runs one compositor, as data in `crates/yuna-bench`: its
   program, environment and configuration, how it is ready, stopped and driven, and how its frames
   are counted.
@@ -337,6 +354,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Sync request**: `_NET_WM_SYNC_REQUEST`, a value an X11 window is sent before a configure that
   resizes it, which it sets in its sync counter once it drew the new size; meanwhile Xwayland
   holds its commits, for 100 ms at most, so that its frame shows whole.
+- **Table of tasks**: every thread Yuna starts, each with its owner, inbox and bound, behaviour
+  when full, place in the stop order, failure, scheduling class and clock; one spawner starts
+  them all
+  ([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 - **Theme file**: a colours-only file a shell or theme tool writes and Yuna's configuration
   includes, reloaded live; its format is a public interface
   ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)).
@@ -353,6 +374,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Tour**: the owner's run of the rivals on a real display, by hand, from a spare virtual terminal,
   one after another ([ADR-0075](adr/0075-the-rivals-measured-headless-now-on-a-real-display-at-stage-2s-exit.md)).
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
+- **Transitional crate**: `yuna`, Stage 1's crate, which holds levels 2 to 4 of the *crate map*
+  at once until M2.19; its `unsafe` code, globals, outside libraries and files naming Smithay are
+  listed and only shrink (ADR-0151).
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.
 - **Unsupported** (WLCS): the outcome of a WLCS test that called a hook Yuna cannot honour, such
