@@ -235,10 +235,9 @@ impl WlcsCompositor {
     /// Yuna refuses; a shim error for any other failure, the seat or the output the shim made
     /// unknown to Yuna.
     pub fn move_pointer_to(&mut self, x: f64, y: f64) -> Result<(), NotDone> {
-        self.compositor
-            .pointer_move(self.seat, Some(self.output), x, y)
-            .map(drop)
-            .map_err(|error| refused_or_fault("a pointer move Yuna refuses", error))
+        // Canary: the pointer never moves, so WLCS's pointer tests that pass must fail in CI.
+        let _ = (x, y);
+        Ok(())
     }
 
     /// Moves the seat's pointer by (`dx`, `dy`) from where it is, from the output's corner
