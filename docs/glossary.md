@@ -376,7 +376,7 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
 - **Transitional crate**: `yuna`, Stage 1's crate, which holds levels 2 to 4 of the *crate map*
   at once until M2.19; its `unsafe` code, globals, outside libraries and files naming Smithay are
-  listed and only shrink (ADR-0151).
+  listed, the lists kept exact by the check and shrinking by review (ADR-0151).
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.
 - **Unsupported** (WLCS): the outcome of a WLCS test that called a hook Yuna cannot honour, such

@@ -118,7 +118,10 @@ One Cargo workspace; its crates live in `crates/`.
   name, and the files of `yuna` that name Smithay; `scripts/check.sh`'s `map` step compares it with
   `cargo metadata` and with rustc's `unsafe_code` lint. The workspace denies `unsafe` code; a
   module allowed it expects the lint, and the pure crates forbid it. Clippy refuses
-  `thread_local!`. `yuna` is the transitional crate until M2.19: its lists only shrink.
+  `thread_local!`, but in `yuna`'s program, whose root expects the lint for `fatal.rs`'s mark
+  ([debt](debt.md)); there the map's list of statics refuses a second one. `yuna` is the
+  transitional crate until M2.19: the check keeps its lists exact, and review keeps them
+  shrinking.
 
 ## The layout model
 
@@ -854,7 +857,7 @@ To add a test:
   reads (`scripts/test_workflows.py` checks their filters), Opium built from its Nix package at a
   pinned revision, uncached ([ADR-0122](adr/0122-real-applications-in-ci-and-rest-checked-on-the-program.md)).
 - `deny.toml`: the dependency policy. `clippy.toml`: the rule that every event source goes
-  through the rest auditor.
+  through the rest auditor, and the refusal of `thread_local!`. `crates/map.toml`: the crate map.
 - The measuring examples, each documented in its file, their figures in
   [`measurements.md`](measurements.md):
   - in `crates/yuna/examples/`: `frame_time.rs`, a frame's cost while `vkcube` draws;

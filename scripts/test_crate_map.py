@@ -38,8 +38,8 @@ serde = { from-level = 0 }
 calloop = { owner = "yuna" }
 
 [unsafe-code]
-"crates/yuna/src/fatal.rs" = { count = 2, reason = "`_exit`, declared and called" }
-"crates/yuna/tests/common/dies_with_test.rs" = { count = 1, reason = "a closure between fork and exec" }
+"crates/yuna/src/fatal.rs" = { count = 2 }
+"crates/yuna/tests/common/dies_with_test.rs" = { count = 1 }
 
 [globals."crates/yuna/src/fatal.rs"]
 STATE_THREAD = { kind = "fatal-or-signal", reason = "the panic hook's mark of the state thread" }
@@ -315,7 +315,7 @@ class UnsafeCodeCounts(CrateMapTest):
     def test_an_entry_in_the_src_of_a_crate_not_allowed_unsafe_code(self):
         self.dependencies["yuna-mcp"] = []
         self.map = self.map.replace(
-            "[unsafe-code]\n", '[unsafe-code]\n"crates/yuna-mcp/src/server.rs" = { count = 1, reason = "a read" }\n'
+            "[unsafe-code]\n", '[unsafe-code]\n"crates/yuna-mcp/src/server.rs" = { count = 1 }\n'
         )
         self.sources["crates/yuna-mcp/src/server.rs"] = '#![expect(unsafe_code, reason = "a read")]\n'
         self.unsafe.append([("crates/yuna-mcp/src/server.rs", 50, 60)])

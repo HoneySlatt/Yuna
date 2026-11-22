@@ -11,12 +11,13 @@
 #   made stays listed, so that the file states the map whole.
 # - An outside library is added under [libraries] with its owning crate, or its lowest level.
 # - A module allowed `unsafe` code expects the lint at its top, `#![expect(unsafe_code, reason =
-#   "…")]`, and its entry under [unsafe-code] gives its file, its count of `unsafe` as rustc names
-#   them, and why. A global is listed under [globals."<file>"] by name, with its kind and why.
+#   "…")]`, whose reason says why (clippy refuses an `expect` without one), and its entry under
+#   [unsafe-code] gives its file and its count of `unsafe` as rustc names them. A global is listed
+#   under [globals."<file>"] by name, with its kind and why.
 # - In `yuna`, the transitional crate, the modules with `unsafe` code, the globals and the files
 #   naming Smithay only shrink: an entry is added, or a count raised, only by an ADR that names
-#   it. An entry that matches less code is lowered or removed in the change that removes the code;
-#   the script asks for it.
+#   it. The script keeps the lists exact, and asks for an entry to be lowered or removed in the
+#   change that removes its code; review, not the script, refuses an entry added without its ADR.
 # - Files are named from the repository's root.
 
 # Outside the map: the rivals' bench and the parity script measure Yuna from outside. A crate
@@ -81,6 +82,7 @@ serde = { from-level = 0 }
 serde_json = { from-level = 0 }
 png = { from-level = 0 }
 tracing = { from-level = 0 }
+# The pixel formats' four-character codes, plain data: level 0's dma-buf descriptors will name them.
 drm-fourcc = { from-level = 0 }
 # Each library that binds C, the kernel or a wire protocol has one owner: `yuna` today, its
 # level-2 crate later.
@@ -97,23 +99,23 @@ tracing-subscriber = { owner = "yuna" }
 
 # Each module allowed `unsafe` code: its count of `unsafe` as rustc's lint `unsafe_code` names
 # them (blocks, `unsafe fn`, `unsafe extern` blocks, `unsafe impl`, unsafe attributes; one a macro
-# of the crate makes counts where the macro is called), and what for.
+# of the crate makes counts where the macro is called). Why is the reason of the module's `expect`.
 [unsafe-code]
-"crates/yuna/src/dmabuf.rs" = { count = 2, reason = "a client's dmabuf mapped and unmapped at once, to check that it maps" }
-"crates/yuna/src/fatal.rs" = { count = 2, reason = "`_exit`, declared and called, so that a panic of the state ends the process at once" }
-"crates/yuna/src/input.rs" = { count = 1, reason = "Smithay's `Xkb::keymap`, borrowed to ask xkbcommon whether the keymap names a key" }
-"crates/yuna/src/mcp/accessibility/bus.rs" = { count = 1, reason = "the bus's program given the descriptor it writes its address to" }
-"crates/yuna/src/process.rs" = { count = 5, reason = "`close_range`, and the closures between fork and exec on descriptors and the limit of open files" }
-"crates/yuna/src/render.rs" = { count = 3, reason = "EGL's display and context, the GLES renderer made on them, and one GL query" }
-"crates/yuna/src/screencopy.rs" = { count = 1, reason = "a capture's rows written into the client's `wl_shm` pool" }
-"crates/yuna/src/stop_signal.rs" = { count = 3, reason = "`sigaction`, declared and called, and the handler's borrow of its pipe" }
-"crates/yuna/src/xwayland/server.rs" = { count = 1, reason = "Xwayland given its sockets and descriptors" }
-"crates/yuna/tests/command_line.rs" = { count = 1, reason = "the closure between fork and exec that sets the child's limit of open files" }
-"crates/yuna/tests/common/dies_with_test.rs" = { count = 1, reason = "the closure between fork and exec that ties a child to the test's thread" }
-"crates/yuna-bench/src/sandbox.rs" = { count = 1, reason = "an inherited descriptor borrowed to mark it close-on-exec" }
-"crates/yuna-bench/src/wlcs/running.rs" = { count = 1, reason = "the closure between fork and exec that ties WLCS's process to the bench's thread" }
-"crates/yuna-wlcs/src/abi.rs" = { count = 5, reason = "libwayland-client's two calls, declared and wrapped" }
-"crates/yuna-wlcs/src/hooks.rs" = { count = 43, reason = "WLCS's hooks, on the pointers WLCS hands back, and the symbol the module exports" }
+"crates/yuna/src/dmabuf.rs" = { count = 2 }
+"crates/yuna/src/fatal.rs" = { count = 2 }
+"crates/yuna/src/input.rs" = { count = 1 }
+"crates/yuna/src/mcp/accessibility/bus.rs" = { count = 1 }
+"crates/yuna/src/process.rs" = { count = 5 }
+"crates/yuna/src/render.rs" = { count = 3 }
+"crates/yuna/src/screencopy.rs" = { count = 1 }
+"crates/yuna/src/stop_signal.rs" = { count = 3 }
+"crates/yuna/src/xwayland/server.rs" = { count = 1 }
+"crates/yuna/tests/command_line.rs" = { count = 1 }
+"crates/yuna/tests/common/dies_with_test.rs" = { count = 1 }
+"crates/yuna-bench/src/sandbox.rs" = { count = 1 }
+"crates/yuna-bench/src/wlcs/running.rs" = { count = 1 }
+"crates/yuna-wlcs/src/abi.rs" = { count = 5 }
+"crates/yuna-wlcs/src/hooks.rs" = { count = 43 }
 
 # Every `static` in the `src/` of a crate of the map, `thread_local!`'s included, by file and
 # name: its kind and why no state passed down replaces it. The kinds (ADR-0151):

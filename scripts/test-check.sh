@@ -80,6 +80,8 @@ expect_stopped lints "an unsafe block without its SAFETY comment" "undocumented_
     "printf '\n/// Unsafe.\n#[expect(unsafe_code, reason = \"a case of test-check.sh\")]\npub fn reads() -> u8 { unsafe { *(&1u8 as *const u8) } }\n' >> crates/yuna/src/lib.rs"
 expect_stopped lints "a module expecting unsafe code it does not hold (ADR-0151)" "lint expectation is unfulfilled" \
     "sed -i '1i #![expect(unsafe_code, reason = \"a case of test-check.sh\")]' crates/yuna/src/frames.rs"
+expect_stopped lints "an expect of a lint without its reason" "allow_attributes_without_reason|without a reason" \
+    "printf '\\n/// Nothing.\\n#[expect(dead_code)]\\nfn unused() {}\\n' >> crates/yuna/src/lib.rs"
 expect_stopped lints "a thread_local! under another name (ADR-0151)" "disallowed macro .std::thread_local." \
     "printf '\nuse std::thread_local as per_thread;\nper_thread! {\n    /// A mark.\n    pub static MARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n' >> crates/yuna/src/lib.rs"
 # The crate map (ADR-0151). A manifest edited here leaves Cargo.lock behind: `cargo metadata
@@ -108,6 +110,31 @@ expect_stopped map "a global's entry that matches nothing" "the global GONE .* m
     "sed -i 's|^\\[globals.\"crates/yuna/src/process.rs\"\\]$|&\nGONE = { kind = \"process\", reason = \"a case of test-check.sh\" }|' crates/map.toml"
 expect_stopped map "a new file of yuna naming Smithay" "named.rs:1 names Smithay without its entry" \
     "printf 'use smithay::utils::Rectangle;\n' > crates/yuna/src/named.rs"
+# The map's other failures, each on the real workspace (its unit tests prove them on fixtures).
+expect_stopped map "a crate of the workspace left out of the map" "the crate yuna-motion is in the workspace but not in crates/map.toml" \
+    "sed -i '/^yuna-motion = /d' crates/map.toml"
+expect_stopped map "the bench depending on a crate of Yuna's" "yuna-bench, outside the map, depends on yuna-types" \
+    "sed -i 's|^serde_json.workspace = true$|&\nyuna-types = { path = \"../yuna-types\" }|' crates/yuna-bench/Cargo.toml"
+expect_stopped map "a crate of the map depending on the bench beyond its tests" "yuna-wlcs depends on yuna-bench, a crate outside the map" \
+    "sed -i 's|^tracing.workspace = true$|&\nyuna-bench = { path = \"../yuna-bench\" }|' crates/yuna-wlcs/Cargo.toml"
+expect_stopped map "an edge the map refuses, by a build dependency" "yuna-layout \\(level 1\\) depends on yuna-ipc \\(level 1\\) by a build dependency" \
+    "printf '\n[build-dependencies]\nyuna-ipc = { path = \"../yuna-ipc\" }\n' >> crates/yuna-layout/Cargo.toml"
+expect_stopped map "an outside library the map does not list" "yuna-ipc depends on proptest, an outside library" \
+    "sed -i 's|^yuna-types = { path = \"../yuna-types\" }$|&\nproptest.workspace = true|' crates/yuna-ipc/Cargo.toml"
+expect_stopped map "a pure crate's root without its forbid" "the root of yuna-motion, a pure crate, lacks" \
+    "sed -i '/^#!\\[forbid(unsafe_code)\\]$/d' crates/yuna-motion/src/lib.rs"
+expect_stopped map "a module with fewer unsafe than its entry" "dmabuf.rs holds 2 .unsafe., fewer than its entry's 3" \
+    "sed -i 's|^\"crates/yuna/src/dmabuf.rs\" = { count = 2 }$|\"crates/yuna/src/dmabuf.rs\" = { count = 3 }|' crates/map.toml"
+expect_stopped map "an unsafe entry that matches nothing" "\\[unsafe-code\\] .crates/yuna/src/frames.rs. matches nothing" \
+    "sed -i 's|^\\[unsafe-code\\]$|&\n\"crates/yuna/src/frames.rs\" = { count = 1 }|' crates/map.toml"
+expect_stopped map "an unsafe entry in a pure crate" "in the .src/. of yuna-layout, which may not" \
+    "sed -i 's|^\\[unsafe-code\\]$|&\n\"crates/yuna-layout/src/area.rs\" = { count = 1 }|' crates/map.toml"
+expect_stopped map "two statics of one name in a file" "two statics named STOP_PIPE in crates/yuna/src/stop_signal.rs" \
+    "printf '\n/// Nothing.\npub(crate) fn again() {\n    static STOP_PIPE: u8 = 0;\n    let _ = STOP_PIPE;\n}\n' >> crates/yuna/src/stop_signal.rs"
+expect_stopped map "a static named by a macro's argument" "is named by a macro's argument" \
+    "printf '\nmacro_rules! counted {\n    (\$name:ident) => {\n        static \$name: u8 = 0;\n    };\n}\n' >> crates/yuna/src/lib.rs"
+expect_stopped map "a Smithay entry for a file that no longer names it" "command.rs is listed under \\[smithay\\] but no longer names Smithay" \
+    "sed -i 's|^files = \\[$|&\n    \"crates/yuna/src/command.rs\",|' crates/map.toml"
 expect_stopped tests "a test that fails" "panicked.*broken|broken.*FAILED|fails \\.\\.\\. FAILED" \
     "printf '\n#[cfg(test)]\nmod broken { #[test] fn fails() { panic!(\"broken\") } }\n' >> crates/yuna/src/lib.rs"
 expect_stopped tests "the help changed without its contract's file (ADR-0079)" "differs from the contract" \

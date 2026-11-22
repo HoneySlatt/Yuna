@@ -11,7 +11,8 @@ disallowed-methods = [
 # A `thread_local!` is a global of each thread, which no state passed down replaces (ADR-0151):
 # refused, under any name it is imported as. The one allowed, the panic hook's mark of the state
 # thread (crates/yuna/src/fatal.rs), is listed in crates/map.toml; crates/yuna/src/main.rs says
-# where the lint is expected, and why.
+# where the lint is expected, and why. That `expect` covers the whole program: a macro added to
+# this list is not refused in main.rs, fatal.rs and stop_signal.rs.
 disallowed-macros = [
     { path = "std::thread_local", reason = "a global of each thread: pass the state down instead, or name it in an ADR and in crates/map.toml (ADR-0151)" },
 ]

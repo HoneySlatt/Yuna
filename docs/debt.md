@@ -950,14 +950,20 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
 - A refusal's sentence is written twice: in `yuna_layout::LayoutError`'s `Display` and in
   `yuna_ipc::Refusal`'s, for the fifteen reasons both share, where ADR-0082 item 23 keeps Yuna's
-  text in one module. Tests hold both copies to the same words. Its place is put to the owner at
-  M2.4a's end.
+  text in one module. A test of `yuna`'s dispatch (`command.rs`) holds the two copies to the
+  same words. Its place is put to the owner at M2.4a's end.
 - `yuna` is the transitional crate
   ([ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)): levels
-  2 to 4 at once, it holds `unsafe` code in 9 modules of its sources, 8 globals and 28 files that
-  name Smithay, each listed in [`crates/map.toml`](../crates/map.toml), which the check holds to
-  the code; the lists only shrink. Each milestone that empties a module removes its entries. Paid
-  at Stage 2a, M2.19's done-when (Smithay removed).
+  2 to 4 at once, it holds `unsafe` code, globals and files that name Smithay, each listed in
+  [`crates/map.toml`](../crates/map.toml). The check keeps the lists exact; review keeps them
+  shrinking, an entry added only by an ADR that names it. Each milestone that empties a module
+  removes its entries. Paid at Stage 2a, M2.19's done-when (Smithay removed).
+- Clippy's refusal of `thread_local!` is expected at the root of `yuna`'s program
+  (`crates/yuna/src/main.rs`), for `fatal.rs`'s mark of the state thread, since clippy honours
+  that lint's `expect` at a crate's root alone: in the program's three files (`main.rs`,
+  `fatal.rs`, `stop_signal.rs`) no macro of `clippy.toml`'s `disallowed-macros` is refused. The
+  map refuses a second `thread_local!`'s static there. Kept: tried again at each toolchain raise,
+  and gone when the mark is, the `expect` then unfulfilled.
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated. Paid at Stage 2a, M2.16 (the store, wired behind a switch): the new store is

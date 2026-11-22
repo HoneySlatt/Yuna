@@ -183,3 +183,54 @@ pub(crate) fn refusal(error: LayoutError) -> Refusal {
         LayoutError::PinnedNotFloating => Refusal::PinnedNotFloating,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use yuna_types::{OutputId, SeatId, WindowId};
+
+    use super::*;
+
+    /// A refusal the layout gives reads, to the caller, as the layout words it: the sentences are
+    /// written in both crates (debt), and this holds the two copies together.
+    #[test]
+    fn a_refusal_from_the_layout_keeps_its_sentence() {
+        let errors = [
+            LayoutError::UnknownSeat(SeatId(7)),
+            LayoutError::UnknownOutput(OutputId(8)),
+            LayoutError::UnknownWindow(WindowId(9)),
+            LayoutError::UnknownWorkspace("code".to_owned()),
+            LayoutError::AlreadyExists,
+            LayoutError::InvalidValue,
+            LayoutError::NotEmpty,
+            LayoutError::OutputOfAnotherSeat,
+            LayoutError::SeatWithoutOutput,
+            LayoutError::WorkspaceWithoutOutput,
+            LayoutError::WindowTiled,
+            LayoutError::PinnedNotFullscreen,
+            LayoutError::ScreenHeld,
+            LayoutError::PinnedOutsideShownWorkspace,
+            LayoutError::PinnedNotFloating,
+        ];
+        for error in errors {
+            // Lists every variant, so that a reason added to the layout is added above too.
+            match error {
+                LayoutError::UnknownSeat(_)
+                | LayoutError::UnknownOutput(_)
+                | LayoutError::UnknownWindow(_)
+                | LayoutError::UnknownWorkspace(_)
+                | LayoutError::AlreadyExists
+                | LayoutError::InvalidValue
+                | LayoutError::NotEmpty
+                | LayoutError::OutputOfAnotherSeat
+                | LayoutError::SeatWithoutOutput
+                | LayoutError::WorkspaceWithoutOutput
+                | LayoutError::WindowTiled
+                | LayoutError::PinnedNotFullscreen
+                | LayoutError::ScreenHeld
+                | LayoutError::PinnedOutsideShownWorkspace
+                | LayoutError::PinnedNotFloating => {}
+            }
+            assert_eq!(refusal(error.clone()).to_string(), error.to_string());
+        }
+    }
+}

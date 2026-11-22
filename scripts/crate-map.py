@@ -19,7 +19,8 @@ It fails, each problem naming the crate, the file or the entry and what to do, w
   `forbid` at a pure crate's root apart; holds an `expect` of it without its entry; holds
   `unsafe` code without its own `expect`; or an entry's file holds none;
 - a file holds another count of `unsafe` than its entry gives: more needs an ADR first, fewer
-  lowers the entry, so that the list only shrinks and stays exact; or an entry names a file in
+  lowers the entry, so that the list stays exact (review, not the script, keeps it shrinking: an
+  entry added needs an ADR); or an entry names a file in
   the `src/` of a crate not allowed `unsafe` code there;
 - a pure crate's root (levels 0 and 1) lacks `#![forbid(unsafe_code)]` among its file's own
   attributes: one inside an inline module covers that module alone;
@@ -29,7 +30,8 @@ It fails, each problem naming the crate, the file or the entry and what to do, w
   alternatives of take distinct names too), or a global's entry matches nothing.
   A static that a macro's body names by an argument, `static $name`, cannot be listed, since its
   entry would cover every call of the macro: it is declared by name. Tests, examples and the
-  crates outside the map are left out;
+  crates outside the map are left out; unit tests inside `src/` are not: a static there is listed
+  too;
 - a file of a transitional crate's `src/` names Smithay (any identifier `smithay` in code: a path, a
   `use`, an `extern crate`, or a local of that name) without its entry, or an entry names a file that no longer does.
 
@@ -61,7 +63,13 @@ What it cannot see:
   feature, `parity-canary`, which it does not turn on. The canaries' code today is under `cfg!`,
   compiled in every build, so it is counted; `unsafe` under `#[cfg(feature = "parity-canary")]`
   would not be, though check.sh's `lints` step, which builds with the feature, refuses it
-  without its `expect`.
+  without its `expect`;
+- `unsafe` code in doctests, which no clippy run builds;
+- how many statics a `macro_rules!` body makes: a static it names, `static NAME`, is one entry,
+  however many times the macro is called;
+- a module that reaches Smithay's types without naming the crate, through the fields or the
+  results of a type that names it: the list of files naming Smithay is a list of names, and review
+  keeps new modules off Smithay's types.
 
     scripts/crate-map.py    prints each problem and exits 1 when there is one
 """
@@ -446,11 +454,10 @@ def read_library(name, value):
 
 def read_unsafe_entry(path, value):
     where = f'[unsafe-code] "{path}"'
-    table_at(value, where, required=("count", "reason"))
+    table_at(value, where, required=("count",))
     count = value["count"]
     if type(count) is not int or count < 1:
         raise Malformed(f"{where}: `count` is a number of `unsafe`, 1 or more")
-    text_at(value["reason"], f"{where}: `reason`")
     return count
 
 
@@ -715,7 +722,7 @@ def unsafe_attribute_problems(crate_map, crates, codes):
                 if path not in crate_map.unsafe_code:
                     problems.append(
                         f"{path}:{line} expects `unsafe_code`, but {MAP_FILE} has no entry for it: "
-                        "list it under [unsafe-code] with its count and reason (in `yuna`, once an "
+                        "list it under [unsafe-code] with its count (in `yuna`, once an "
                         "ADR names it, ADR-0151), or remove the `expect`"
                     )
             elif not (name == "forbid" and of_file and path in pure_roots):
@@ -740,7 +747,7 @@ def unsafe_count_problems(crate_map, crates, codes, counts):
         if path not in crate_map.unsafe_code:
             problems.append(
                 f"{path} holds {found} `unsafe` without an entry under [unsafe-code] in {MAP_FILE}: "
-                "remove the code, or list the module with its count and reason (in `yuna`, once an "
+                "remove the code, or list the module with its count (in `yuna`, once an "
                 "ADR names it, ADR-0151)"
             )
         if not expects_unsafe_code(codes.get(path, "")):

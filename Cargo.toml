@@ -86,3 +86,6 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 # AGENTS.md: every `unsafe` block says why it is sound, in a `// SAFETY:` comment.
 undocumented_unsafe_blocks = "warn"
+# Every `allow` and `expect` of a lint says why, in its `reason`: a module's
+# `expect(unsafe_code)` is where the map's entry finds why it holds `unsafe` code (ADR-0151).
+allow_attributes_without_reason = "warn"
