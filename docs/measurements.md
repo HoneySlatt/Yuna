@@ -4,6 +4,23 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.4b — The table of tasks (2026-11-22)
+
+- **The parity script's CI tier**, on GitHub's runner (`ubuntu-24.04`, 4 processors), CI's
+  `parity` job: every figure no worse at each push of the milestone, `60a681c` (run
+  45067304580) and `b239118` (run 45074090740). No parity scenario runs X11 or a capture
+  ([debt](debt.md)), so neither the X11 manager's change nor the encoders' cap moves a figure.
+- **The timed tier** was not run: a timed run waits for the owner's go.
+- **Stopping**: `yuna --headless`, a debug build, with a seat's Xwayland and its manager
+  (`cargo test -p yuna --test command_line sigterm_ends`), on the desktop: the process ended
+  0.031 s after SIGTERM, no bound of the stop order passed.
+- **The X11 stories on the manual clock**, a debug build, `cargo test -p yuna --test headless
+  -- manual_clock_passes third_drag`, not a timed measure but what they cost the suite: run
+  alone on the desktop, the three new ones took 6.1 to 6.3 s each, of which 6 s hold the clock
+  short of a limit, longer in real time than the 5 s limit; the third drag's, 1.8 s. On one
+  core shared with a busy loop, the four at once took 7.3 s in one run and 22.3 to 23.3 s in
+  three others, as the desktop's other load varied; all passed.
+
 ## M2.3 — WLCS, and the parity thresholds on one-unit builds (2026-11-22)
 
 **WLCS 1.8.1 against Yuna** ([ADR-0149](adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md)),

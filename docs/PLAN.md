@@ -14,16 +14,13 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   M2.1.
 - Stage 2's opening design is done (2026-11-19): ADR-0133 to ADR-0141, 2a's milestones below,
   the debt placed ([debt](debt.md)).
-- **M2.1, the baselines**, done on 2026-11-21: the parity script in CI (ADR-0142, ADR-0143),
-  the timed and GPU tiers, motion's and `yuna mcp`'s budgets met ([measurements](measurements.md)).
-- **M2.2, the interface**, done on 2026-11-21 (ADR-0145 to ADR-0148): `yuna-types`, `yuna-ipc`'s
-  commands, 256 clients a seat, 1 MiB a client; the parity script builds in one codegen unit.
-- **M2.3, WLCS**, done on 2026-11-22 (ADR-0149, ADR-0150): `yuna-wlcs`, its expected outcomes
-  (149 tests pass of 1,225), `check.sh`'s step and CI's `wlcs` job.
-- **M2.4's design** done on 2026-11-22: the owner split it in four and chose ADR-0151 to ADR-0155.
-- **M2.4a, the map's checks and the contracts**, done on 2026-11-22: `crates/map.toml` and
-  `check.sh`'s `map` step, `unsafe_code` denied, the contracts listed with their versions, a
-  `Refusal` variant per reason. **Next: M2.4b, the table of tasks**, in a new session.
+- **Done on 2026-11-21/22**: M2.1, the baselines (ADR-0142, ADR-0143); M2.2, the interface
+  (ADR-0145 to ADR-0148); M2.3, WLCS (ADR-0149, ADR-0150); M2.4's design, split in four
+  (ADR-0151 to ADR-0155); M2.4a, the map's checks and the contracts.
+- **M2.4b, the table of tasks**, done on 2026-11-22: `tasks.rs`, the one spawner and clippy's
+  refusal of the others, encoders capped at the cores less one, bounded reaps and joins at exit,
+  the X11 manager's limits on Yuna's manual clock. Its timed parity run waits for the owner's
+  go (ADR-0142). **Next: M2.4c, one event stream and the pidfd**, in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -143,7 +140,7 @@ M2.18 may run any time after M2.4d. A milestone that turns out too large is spli
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4a done; M2.4b next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4b done; M2.4c next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
