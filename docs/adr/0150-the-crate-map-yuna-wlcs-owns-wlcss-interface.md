@@ -79,7 +79,8 @@ never does.
 
 - M2.4's check of the map names `yuna-wlcs` among the crates that may hold `unsafe` code, and names
   its `Once`.
-- A change of WLCS's interface fails the declarations' test before it reaches a run.
+- A change of WLCS's structures, their sizes, fields' offsets or versions, fails the declarations'
+  test before it reaches a run; a change of a hook's parameter types alone it does not see.
 
 ## Validation and reconsideration
 

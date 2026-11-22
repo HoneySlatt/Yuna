@@ -91,7 +91,9 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: nix develop --no-update-lock-file --command cargo build --locked -p yuna-wlcs -p yuna-bench
+      # The module alone: built with it, yuna-bench would be built again by `cargo run`, its
+      # dependencies' features unified differently.
+      - run: nix develop --no-update-lock-file --command cargo build --locked -p yuna-wlcs
       - run: nix develop --no-update-lock-file --command cargo run --locked -p yuna-bench -- wlcs check --full
 
   # The package, built in a job of its own so that its release build runs beside the checks.

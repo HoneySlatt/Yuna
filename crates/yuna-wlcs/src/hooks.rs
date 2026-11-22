@@ -27,6 +27,8 @@ use crate::descriptor::Descriptor;
 use crate::server::{Link, Markers, Server, report_error};
 
 /// What WLCS looks the module up by: how it makes and frees a server.
+// SAFETY: no other symbol of WLCS's process is named `wlcs_server_integration`: WLCS loads one
+// module, with `RTLD_LOCAL`, and looks this name up in it alone.
 #[unsafe(export_name = "wlcs_server_integration")]
 pub static WLCS_SERVER_INTEGRATION: WlcsServerIntegration = WlcsServerIntegration {
     version: SERVER_INTEGRATION_VERSION,

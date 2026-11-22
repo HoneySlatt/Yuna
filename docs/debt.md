@@ -607,8 +607,8 @@ paid in the milestone that rewrites its module, which turns its tests to `pass`.
   Deck's touch only as an idea.
 - **Buffers before the first configure.** WLCS 1.8.1's surface builder attaches a buffer before
   the first configure (`src/surface_builder.cpp`), which xdg-shell forbids, and Yuna, through
-  Smithay, refuses it. That fails 259 tests that would otherwise test input regions, popups'
-  positioners and touch on xdg surfaces. Paid when a newer WLCS is put to the owner, before M2.12.
+  Smithay, refuses it. That fails 259 tests that would otherwise test input regions, every
+  popup test on xdg surfaces (their positioners, grabs, focus and dismissal) and touch on them. Paid when a newer WLCS is put to the owner, before M2.12.
 - **`BadBufferTest.test_truncated_shm_file`** cannot pass on nixpkgs' build. Its truncation is an
   `assert` the release build removes, so the buffer it sends is not truncated. It is the one test
   of Smithay's four groups that Yuna fails. Kept: it is WLCS's limit, and Yuna's own `wl_shm`
@@ -657,6 +657,10 @@ Yuna's code were not traced.
 - **Log noise.** Every compositor start logs Smithay's
   `Erroneous EGL call didn't set EGLError` at warn, 1,225 times in a run. Paid with Smithay's
   renderer, at M2.9 (Vulkan the default).
+- **A test leaving `pass` is checked by review alone.** ADR-0149 makes it a commit of its own
+  that cites the owner's go or an ADR; `wlcs record --merge` names each one against the file it
+  replaces, but no check compares `expected.txt` with the push before, as the parity script does
+  its baseline's moves. Paid when a test first leaves `pass`, or at Stage 2a's gate review.
 - **A second copy of a test helper.** `yuna-bench`'s `ends_with_its_thread`
   (`src/wlcs/running.rs`) copies `crates/yuna/tests/common/dies_with_test.rs`, because
   `yuna-bench` depends on nothing of Yuna's (ADR-0075). Kept while the two crates share no crate
@@ -670,6 +674,15 @@ Yuna's code were not traced.
   or rewriting history, is the owner's decision when it first happens. Paid at the baseline's
   first move: M2.2 made none, its 1 MiB moving no figure; the next foreseen is M2.9 (Vulkan the
   default).
+- The parity script's CI tier is not always deterministic on GitHub's runner. At M2.3, pull
+  request 10's `parity` job failed 4 times, each time on other figures: `idle`, `input`, then
+  3.75 more allocations a frame outside Yuna's own code in every drawing scenario. The same `yuna`
+  passed the same comparison 8 times: the pull request's first run, 6 runs on the runner (Intel
+  Xeon 8573C and 6975P, AMD EPYC 9V45 and 7763, the last the very model of a failure, its whole
+  tier), and the desktop. The cause is not known. Paid at Stage 2a, M2.4 (the map, tasks, frames
+  and events): the report gives, for a figure of allocations worse, the difference by allocation
+  site, as was compared by hand at M2.3, and the tree against itself is
+  measured on the runner, which the thresholds were never set on.
 - The parity script's `parity` job takes 18 to 29 minutes on GitHub's runner, over the method's
   bar of 20 for a CI job, in 4 of M2.2's 8 runs; its thresholds come from the desktop's spreads
   alone, and every run on the runner since M2.1 passed ([measurements](measurements.md)). The runs take most of it: a side's build takes
@@ -944,8 +957,9 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4 (the map, tasks,
   frames and events), where every public contract is listed with its version.
 - Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
-  its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, one
-  in `yuna-bench`, none in `yuna-layout` and `yuna-motion`, on 2026-11-19. Nothing checks the new
+  its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, 2
+  in `yuna-bench`, 23 in `yuna-wlcs` (ADR-0150), none in `yuna-layout` and `yuna-motion`, on
+  2026-11-22. Nothing checks the new
   crates' dependencies against ADR-0150's map yet; they match it. Paid at Stage 2a, M2.4 (the map,
   tasks, frames and events), with the crate map's checks.
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure

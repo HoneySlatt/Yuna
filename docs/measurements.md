@@ -55,8 +55,8 @@ run through the agents' exclusive lock, inside `agent-headless`; the proofs are 
 `.delegation/m2.1-timed-2` and `m2.1-timed-3`.
 
 - **The CI tier, the tree against itself**, one series of five a side, every scenario: no figure
-  worse (50 min on 4 cores). Its spreads, recorded and not yet used to set thresholds
-  ([debt](debt.md)): Yuna's instructions a frame 0.224 % at most (full), motion 0.126 %; the total's
+  worse (50 min on 4 cores). Its spreads, the first of the three series M2.3 kept the thresholds
+  by ([M2.3](#m23--wlcs-and-the-parity-thresholds-on-one-unit-builds-2026-11-22)): Yuna's instructions a frame 0.224 % at most (full), motion 0.126 %; the total's
   ranges 5,724 (idle) to 23,441 (input); allocations a frame 0, even in motion; heap growth 0.20
   bytes a frame; `Pss_Anon` 212 KiB; the operations 0.02 to 2.2 %.
 - **Canaries**: `spin-total` flagged the total in every drawing scenario (+0.19 % in full to +31 %

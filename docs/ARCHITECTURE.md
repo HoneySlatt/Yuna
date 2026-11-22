@@ -1118,8 +1118,9 @@ start with a thread, `yuna-wlcs-server`, that owns a `Compositor`:
 WLCS's hooks run on its test thread. Each sends one request through a channel of one message,
 wakes the compositor with its `Waker`, and waits for the answer. The thread lets Yuna settle,
 applies the request, lets Yuna settle again, then answers. Settling means no deadline due within
-two refresh periods: a frame asked just after another aims at the boundary after next. Yuna gives keyboard focus and activation at a refresh, and WLCS asserts right
-after one roundtrip, so an answer before the refresh would make its tests race.
+two refresh periods: a frame asked just after another aims at the boundary after next. Yuna gives
+keyboard focus and activation at a refresh, and WLCS asserts right after one roundtrip, so an
+answer before the refresh would make its tests race.
 
 **The seams it uses.** These are hidden from the documentation:
 
@@ -1129,7 +1130,9 @@ after one roundtrip, so an answer before the refresh would make its tests race.
 - `place_window`, a move of a floating window that sends no configure.
 
 **What it cannot do.** Yuna has no touch. A touch hook prints `yuna-wlcs: unsupported: touch`, and
-the test counts as *unsupported*, never passing. A fault of the module prints `yuna-wlcs: error:
+the test counts as *unsupported*, never passing. So does whatever Yuna refuses by design: a client
+past the seat's bound, a placement of a tiled or hidden window, a pointer move off the output, a
+press of a button held; WLCS 1.8.1 asks none of them. A fault of the module prints `yuna-wlcs: error:
 …` and fails. A panic, or a hook unanswered in 10 s, aborts the process with its message.
 
 **The runner judges.** `yuna-bench wlcs`

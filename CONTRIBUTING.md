@@ -83,7 +83,7 @@ nix develop -c cargo run -- --headless --output 1920x1080@60,1   # Yuna without 
 nix develop -c cargo run -- mcp            # an MCP server on standard input and output
 nix develop -c cargo test --workspace     # the tests alone
 nix develop -c cargo test --locked -p yuna --test headless <name>   # the stories whose name holds <name>
-nix develop -c cargo run -p yuna-bench -- wlcs check --listed   # WLCS's tests expected to pass
+nix develop -c scripts/check.sh only wlcs   # WLCS's tests expected to pass, the module built first
 nix develop -c cargo fmt --all            # formats, as the check's `format` step wants
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
@@ -503,8 +503,8 @@ nix develop -c cargo run -p yuna-bench -- wlcs check --full     # every test: CI
 read by eye:
 
 ```sh
-nix develop -c env -u WAYLAND_DISPLAY LP_NUM_THREADS=0 "$YUNA_WLCS_RUNNER" \
-    "${CARGO_TARGET_DIR:-target}/debug/libyuna_wlcs.so" --gtest_filter='XdgToplevelStableTest.*'
+nix develop -c sh -c 'env -u WAYLAND_DISPLAY LP_NUM_THREADS=0 "$YUNA_WLCS_RUNNER" \
+    "${CARGO_TARGET_DIR:-target}/debug/libyuna_wlcs.so" --gtest_filter="XdgToplevelStableTest.*"'
 ```
 
 **Recording the expected outcomes again.** Do it when a change turns a test from failing to
@@ -516,7 +516,7 @@ gh workflow run wlcs-record.yml --ref <branch> -f runs=20       # on GitHub's ru
 gh run view <run> --log | cut -f3- | sed 's/^\xef\xbb\xbf//; s/^[^ ]* //' \
     | sed -n '/^----- WLCS record begins -----$/,/^----- WLCS record ends -----$/p' \
     | sed '1d;$d' > runner.json                               # the log's lines, its time cut
-nix develop -c cargo run -p yuna-bench -- wlcs record --runs 20 --jobs 32 --out desktop.json
+nix develop -c cargo run -p yuna-bench -- wlcs record --runs 20 --jobs 32 --out desktop.json   # the desktop free, at the owner's go
 nix develop -c cargo run -p yuna-bench -- wlcs record --merge runner.json desktop.json \
     --write crates/yuna-wlcs/expected.txt
 ```
@@ -536,7 +536,7 @@ enough ([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)); be
 [the parity script](#the-parity-script), HEAD against the pinned baseline, with the whole history
 checked out, and the `wlcs` job runs every test of [WLCS](#wlcs).
 [`.github/workflows/wlcs-record.yml`](.github/workflows/wlcs-record.yml) records WLCS's outcomes
-on GitHub's runner, on demand. A change of Markdown files alone skips them:
+on GitHub's runner, on demand and on a pull request that changes the module. A change of Markdown files alone skips them:
 [`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`: their
 links, the length of those read at every session, the ADRs' index, the changelog's fragments and
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.
