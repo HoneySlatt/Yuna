@@ -73,8 +73,40 @@ expect_stopped lints "a warning" "unused variable" \
     "printf '\n/// Unused.\npub fn warns() { let unused = 1; }\n' >> crates/yuna-layout/src/lib.rs"
 expect_stopped lints "a warning in code only the parity canaries' feature compiles" "unused variable" \
     "printf '\n#[cfg(feature = \"parity-canary\")]\n/// Unused.\npub fn warns() { let unused = 1; }\n' >> crates/yuna-layout/src/lib.rs"
+# The function expects `unsafe_code`, so that the lint this case proves is the one that stops it.
 expect_stopped lints "an unsafe block without its SAFETY comment" "undocumented_unsafe_blocks|SAFETY" \
-    "printf '\n/// Unsafe.\npub fn reads() -> u8 { unsafe { *(&1u8 as *const u8) } }\n' >> crates/yuna/src/lib.rs"
+    "printf '\n/// Unsafe.\n#[expect(unsafe_code, reason = \"a case of test-check.sh\")]\npub fn reads() -> u8 { unsafe { *(&1u8 as *const u8) } }\n' >> crates/yuna/src/lib.rs"
+expect_stopped lints "a module expecting unsafe code it does not hold (ADR-0151)" "lint expectation is unfulfilled" \
+    "sed -i '1i #![expect(unsafe_code, reason = \"a case of test-check.sh\")]' crates/yuna/src/frames.rs"
+expect_stopped lints "a thread_local! under another name (ADR-0151)" "disallowed macro .std::thread_local." \
+    "printf '\nuse std::thread_local as per_thread;\nper_thread! {\n    /// A mark.\n    pub static MARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n' >> crates/yuna/src/lib.rs"
+# The crate map (ADR-0151). A manifest edited here leaves Cargo.lock behind: `cargo metadata
+# --no-deps` reads the manifests alone, so the map's reason is found and printed, and clippy then
+# refuses the stale lock, which the step reports too.
+expect_stopped map "a pure crate depending on another without its edge" "yuna-layout \\(level 1\\) depends on yuna-ipc \\(level 1\\)" \
+    "sed -i 's|^yuna-types = { path = \"../yuna-types\" }$|&\nyuna-ipc = { path = \"../yuna-ipc\" }|' crates/yuna-layout/Cargo.toml"
+expect_stopped map "a second crate depending on a library yuna owns" "yuna-wlcs depends on calloop, which yuna owns" \
+    "sed -i 's|^tracing.workspace = true$|&\ncalloop.workspace = true|' crates/yuna-wlcs/Cargo.toml"
+expect_stopped map "rustix in a pure crate" "yuna-motion \\(level 1\\) depends on rustix, allowed from level 2" \
+    "sed -i 's|^yuna-types = { path = \"../yuna-types\" }$|&\nrustix.workspace = true|' crates/yuna-motion/Cargo.toml"
+expect_stopped map "one more unsafe block in a module listed" "dmabuf.rs holds 3 .unsafe., its entry 2" \
+    "printf '\n/// Reads a byte.\npub(crate) fn reads() -> u8 {\n    // SAFETY: the pointer comes from a reference, alive for the read.\n    unsafe { *(&1u8 as *const u8) }\n}\n' >> crates/yuna/src/dmabuf.rs"
+expect_stopped map "an unsafe block in a module not listed, with its expect" "frames.rs holds 1 .unsafe. without an entry" \
+    "printf '\n/// Reads a byte.\n#[expect(unsafe_code, reason = \"a case of test-check.sh\")]\npub(crate) fn reads() -> u8 {\n    // SAFETY: the pointer comes from a reference, alive for the read.\n    unsafe { *(&1u8 as *const u8) }\n}\n' >> crates/yuna/src/frames.rs"
+expect_stopped map "an allow of unsafe code" ".allow. names .unsafe_code." \
+    "printf '\n/// Nothing.\n#[allow(unsafe_code)]\npub fn nothing() {}\n' >> crates/yuna/src/lib.rs"
+expect_stopped map "a static not listed" ".static NEXT_RUN. is a global" \
+    "printf '\n/// A count.\npub static NEXT_RUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);\n' >> crates/yuna/src/lib.rs"
+expect_stopped map "a static mut not listed" ".static mut HITS. is a global" \
+    "printf '\n/// A count.\npub static mut HITS: u32 = 0;\n' >> crates/yuna/src/lib.rs"
+# The program's root expects clippy's lint for fatal.rs's `thread_local!`, which covers the whole
+# program: a second one there passes clippy, and the map stops its static.
+expect_stopped map "a second thread_local! in yuna's program" "stop_signal.rs:[0-9]+: .static SECOND_MARK. is a global" \
+    "printf '\nthread_local! {\n    /// A second mark.\n    static SECOND_MARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n' >> crates/yuna/src/stop_signal.rs"
+expect_stopped map "a global's entry that matches nothing" "the global GONE .* matches nothing" \
+    "sed -i 's|^\\[globals.\"crates/yuna/src/process.rs\"\\]$|&\nGONE = { kind = \"process\", reason = \"a case of test-check.sh\" }|' crates/map.toml"
+expect_stopped map "a new file of yuna naming Smithay" "named.rs:1 names Smithay without its entry" \
+    "printf 'use smithay::utils::Rectangle;\n' > crates/yuna/src/named.rs"
 expect_stopped tests "a test that fails" "panicked.*broken|broken.*FAILED|fails \\.\\.\\. FAILED" \
     "printf '\n#[cfg(test)]\nmod broken { #[test] fn fails() { panic!(\"broken\") } }\n' >> crates/yuna/src/lib.rs"
 expect_stopped tests "the help changed without its contract's file (ADR-0079)" "differs from the contract" \

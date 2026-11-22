@@ -19,6 +19,11 @@
 //! Nothing starts Yuna again yet: ADR-0080's keeper, which restarts it within a second, comes
 //! with the desktop at Stage 2b.
 
+#![expect(
+    unsafe_code,
+    reason = "`_exit`, so that a panic of the state ends the process at once"
+)]
+
 use std::cell::Cell;
 use std::ffi::c_int;
 use std::io::{self, Write};

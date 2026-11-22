@@ -26,6 +26,8 @@
 //! ([`Compositor::child_reaped`](crate::Compositor::child_reaped)), and the pidfd finds it
 //! reaped, its end then unknown and come after.
 
+#![expect(unsafe_code, reason = "Xwayland given its sockets and descriptors")]
+
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};

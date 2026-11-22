@@ -12,6 +12,11 @@
 //! Yuna's state is fatal, as in Yuna's program, and the server's thread is the only thread of
 //! Yuna's the shim runs: no Xwayland, no MCP.
 
+#![expect(
+    unsafe_code,
+    reason = "WLCS's hooks, on the pointers WLCS hands back, and the symbol the module exports"
+)]
+
 use std::ffi::{c_char, c_int};
 use std::os::fd::IntoRawFd;
 use std::sync::{Arc, Once};

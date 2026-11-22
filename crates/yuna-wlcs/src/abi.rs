@@ -8,6 +8,11 @@
 //! shim gave it, and never at the same time from two threads (`hooks.rs` says what each hook
 //! relies on).
 
+#![expect(
+    unsafe_code,
+    reason = "libwayland-client's two calls, declared and wrapped"
+)]
+
 use std::ffi::{c_char, c_int};
 
 /// `wl_fixed_t`: libwayland's 24.8 fixed-point number, a signed 32-bit integer whose low 8 bits

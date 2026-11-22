@@ -1,0 +1,181 @@
+# Yuna's crate map, as data (ADR-0151): each crate's level and the edges allowed between them,
+# the outside libraries and which crates may use them, the modules allowed `unsafe` code, every
+# global, and the files of the transitional crate that name Smithay.
+#
+# scripts/crate-map.py reads it, and scripts/check.sh's `map` step runs the script, so CI does: it
+# compares this file with `cargo metadata` and rustc, and fails on any difference, naming the
+# entry and what to do. The script's header says what it checks and what it cannot see.
+#
+# Adding and removing entries:
+# - A crate is added under [crates] with its level, in the change that creates it; one not yet
+#   made stays listed, so that the file states the map whole.
+# - An outside library is added under [libraries] with its owning crate, or its lowest level.
+# - A module allowed `unsafe` code expects the lint at its top, `#![expect(unsafe_code, reason =
+#   "…")]`, and its entry under [unsafe-code] gives its file, its count of `unsafe` as rustc names
+#   them, and why. A global is listed under [globals."<file>"] by name, with its kind and why.
+# - In `yuna`, the transitional crate, the modules with `unsafe` code, the globals and the files
+#   naming Smithay only shrink: an entry is added, or a count raised, only by an ADR that names
+#   it. An entry that matches less code is lowered or removed in the change that removes the code;
+#   the script asks for it.
+# - Files are named from the repository's root.
+
+# Outside the map: the rivals' bench and the parity script measure Yuna from outside. A crate
+# outside the map depends on no crate of Yuna's, by any kind; the map's crates use it as a
+# development dependency alone. It may hold `unsafe` code, each module listed; its statics are not
+# checked.
+outside = ["yuna-bench"]
+
+# What a crate of level 4 may depend on beside level 3: the types the core's interface names.
+level-4-edges = ["yuna-types", "yuna-ipc"]
+
+# Each crate of ADR-0151's table, those not yet made included; the script checks those in the
+# workspace. "→" reads "may depend on", by a normal or a build dependency; development
+# dependencies do not count. Level 0 → nothing of Yuna's; level 1 → level 0, and the level-1
+# crates its `level-1-edges` names; level 2 → levels 0 and 1; level 3 → levels 0 to 2; level 4 →
+# level 3 and the crates of `level-4-edges`. `unsafe-code = true`: its `src/` may hold `unsafe`
+# code, each module listed under [unsafe-code]. A pure crate, of level 0 or 1, holds
+# `#![forbid(unsafe_code)]` at its root.
+[crates]
+yuna-types = { level = 0 }
+yuna-layout = { level = 1 }
+# Motion turns the layout's jumps into frames (ADR-0052).
+yuna-motion = { level = 1, level-1-edges = ["yuna-layout"] }
+yuna-clock = { level = 1 }
+yuna-colour = { level = 1 }
+yuna-scene = { level = 1, level-1-edges = ["yuna-colour"] }
+yuna-output = { level = 1, level-1-edges = ["yuna-clock", "yuna-scene"] }
+# The configuration's actions are commands of yuna-ipc's one type (ADR-0082, item 14).
+yuna-config = { level = 1, level-1-edges = ["yuna-ipc"] }
+yuna-ipc = { level = 1 }
+# One crate per outside library; they never depend on each other.
+yuna-wayland = { level = 2, unsafe-code = true }
+yuna-render = { level = 2, unsafe-code = true }
+yuna-kms = { level = 2, unsafe-code = true }
+yuna-headless = { level = 2, unsafe-code = true }
+yuna-input = { level = 2, unsafe-code = true }
+yuna-session = { level = 2, unsafe-code = true }
+yuna-xwm = { level = 2, unsafe-code = true }
+yuna-process = { level = 2, unsafe-code = true }
+yuna-core = { level = 3 }
+# Stage 1's crate, levels 2 to 4 at once until M2.19: its library is the core's interface until
+# yuna-core exists, so its edges and libraries are checked as level 3's. It owns the outside
+# libraries it uses today, and holds `unsafe` code, globals and files naming Smithay, each listed.
+yuna = { level = 4, transitional = { until = "M2.19", level = 3 }, unsafe-code = true }
+yuna-mcp = { level = 4 }
+# ADR-0151's rule: types and IPC only. Nothing checks it yet: it is checked when the crate is
+# made, when its entry gets a restriction of its own.
+yuna-keeper = { level = 4 }
+yuna-portal = { level = 4 }
+# WLCS's C interface, and two calls of libwayland-client (ADR-0149).
+yuna-wlcs = { level = 4, unsafe-code = true }
+# The fuzz targets are of level 4, each listed here when it is made.
+
+# The outside libraries the map's crates depend on, by normal dependencies: either the one crate
+# that owns it, or the lowest level that may use it. A library not listed fails the check; a new
+# one goes to its level-2 crate, never into `yuna`. Development dependencies (the tests' clients,
+# proptest) do not count.
+[libraries]
+# The system calls: no pure crate reads a clock or a descriptor.
+rustix = { from-level = 2 }
+serde = { from-level = 0 }
+serde_json = { from-level = 0 }
+png = { from-level = 0 }
+tracing = { from-level = 0 }
+drm-fourcc = { from-level = 0 }
+# Each library that binds C, the kernel or a wire protocol has one owner: `yuna` today, its
+# level-2 crate later.
+smithay = { owner = "yuna" }
+wayland-server = { owner = "yuna" }
+wayland-protocols = { owner = "yuna" }
+wayland-protocols-wlr = { owner = "yuna" }
+calloop = { owner = "yuna" }
+xkbcommon = { owner = "yuna" }
+x11rb = { owner = "yuna" }
+zbus = { owner = "yuna" }
+# The process's logger, which the program installs.
+tracing-subscriber = { owner = "yuna" }
+
+# Each module allowed `unsafe` code: its count of `unsafe` as rustc's lint `unsafe_code` names
+# them (blocks, `unsafe fn`, `unsafe extern` blocks, `unsafe impl`, unsafe attributes; one a macro
+# of the crate makes counts where the macro is called), and what for.
+[unsafe-code]
+"crates/yuna/src/dmabuf.rs" = { count = 2, reason = "a client's dmabuf mapped and unmapped at once, to check that it maps" }
+"crates/yuna/src/fatal.rs" = { count = 2, reason = "`_exit`, declared and called, so that a panic of the state ends the process at once" }
+"crates/yuna/src/input.rs" = { count = 1, reason = "Smithay's `Xkb::keymap`, borrowed to ask xkbcommon whether the keymap names a key" }
+"crates/yuna/src/mcp/accessibility/bus.rs" = { count = 1, reason = "the bus's program given the descriptor it writes its address to" }
+"crates/yuna/src/process.rs" = { count = 5, reason = "`close_range`, and the closures between fork and exec on descriptors and the limit of open files" }
+"crates/yuna/src/render.rs" = { count = 3, reason = "EGL's display and context, the GLES renderer made on them, and one GL query" }
+"crates/yuna/src/screencopy.rs" = { count = 1, reason = "a capture's rows written into the client's `wl_shm` pool" }
+"crates/yuna/src/stop_signal.rs" = { count = 3, reason = "`sigaction`, declared and called, and the handler's borrow of its pipe" }
+"crates/yuna/src/xwayland/server.rs" = { count = 1, reason = "Xwayland given its sockets and descriptors" }
+"crates/yuna/tests/command_line.rs" = { count = 1, reason = "the closure between fork and exec that sets the child's limit of open files" }
+"crates/yuna/tests/common/dies_with_test.rs" = { count = 1, reason = "the closure between fork and exec that ties a child to the test's thread" }
+"crates/yuna-bench/src/sandbox.rs" = { count = 1, reason = "an inherited descriptor borrowed to mark it close-on-exec" }
+"crates/yuna-bench/src/wlcs/running.rs" = { count = 1, reason = "the closure between fork and exec that ties WLCS's process to the bench's thread" }
+"crates/yuna-wlcs/src/abi.rs" = { count = 5, reason = "libwayland-client's two calls, declared and wrapped" }
+"crates/yuna-wlcs/src/hooks.rs" = { count = 43, reason = "WLCS's hooks, on the pointers WLCS hands back, and the symbol the module exports" }
+
+# Every `static` in the `src/` of a crate of the map, `thread_local!`'s included, by file and
+# name: its kind and why no state passed down replaces it. The kinds (ADR-0151):
+# - `fatal-or-signal`: the fatal path and the signal handlers, which run where no state is passed;
+# - `process`: state the operating system keeps for the whole process;
+# - `library`: what a library's interface forces until it leaves, `until` that milestone;
+# - `constant`: a static that never changes.
+[globals."crates/yuna/src/fatal.rs"]
+STATE_THREAD = { kind = "fatal-or-signal", reason = "the panic hook runs on any thread, given no state, and asks whether it runs on the state thread; the one `thread_local!` (clippy.toml)" }
+
+[globals."crates/yuna/src/stop_signal.rs"]
+STOP_PIPE = { kind = "fatal-or-signal", reason = "the pipe SIGTERM's and SIGINT's handler writes to, so that the loop wakes and stops" }
+CHILDREN_PIPE = { kind = "fatal-or-signal", reason = "the pipe SIGCHLD's handler writes to, so that the loop reaps the programs that ended" }
+
+[globals."crates/yuna/src/mcp/programs/homes.rs"]
+MADE_DEVICE = { kind = "fatal-or-signal", reason = "the device of the homes' folder this process made, for the fatal path, which has no `Homes` and must remove that folder alone" }
+MADE_INODE = { kind = "fatal-or-signal", reason = "the inode of the homes' folder this process made, for the fatal path, which has no `Homes` and must remove that folder alone" }
+
+[globals."crates/yuna/src/process.rs"]
+STARTING_OPEN_FILES_LIMIT = { kind = "process", reason = "the limit of open files the process started with, before Yuna raised the whole process's: each program Yuna starts gets it back" }
+
+[globals."crates/yuna/src/render.rs"]
+OPENED_DISPLAYS = { kind = "library", until = "M2.9", reason = "Smithay terminates a device's shared EGL display when its last `EGLDisplay` drops, racing a renderer another thread starts: each display stays open until the process ends" }
+
+[globals."crates/yuna/src/state.rs"]
+NO_CLIENT_STATE = { kind = "library", until = "M2.19", reason = "Smithay's `client_compositor_state` returns a reference even for a client Yuna never inserted, which none is" }
+
+[globals."crates/yuna-wlcs/src/hooks.rs"]
+WLCS_SERVER_INTEGRATION = { kind = "constant", reason = "the structure WLCS looks the module up by, exported as `wlcs_server_integration`" }
+SETUP = { kind = "fatal-or-signal", reason = "the panic hook that aborts, and Yuna's logger, set once in WLCS's process, at its first server: WLCS's hooks pass no state of the process's (ADR-0149)" }
+
+# The files of the transitional crate's `src/` that name Smithay (`smithay` as a word in code, so
+# a path, a `use` or an `extern crate`; comments and strings left out): no new module is built on
+# Smithay's types (ADR-0151).
+[smithay]
+files = [
+    "crates/yuna/src/activation.rs",
+    "crates/yuna/src/capture.rs",
+    "crates/yuna/src/clock.rs",
+    "crates/yuna/src/colour/mod.rs",
+    "crates/yuna/src/colour/protocol.rs",
+    "crates/yuna/src/compositor.rs",
+    "crates/yuna/src/dialog.rs",
+    "crates/yuna/src/dmabuf.rs",
+    "crates/yuna/src/frames.rs",
+    "crates/yuna/src/input.rs",
+    "crates/yuna/src/keymap.rs",
+    "crates/yuna/src/output.rs",
+    "crates/yuna/src/popups.rs",
+    "crates/yuna/src/render.rs",
+    "crates/yuna/src/render/x11_surface.rs",
+    "crates/yuna/src/scale.rs",
+    "crates/yuna/src/screencopy.rs",
+    "crates/yuna/src/seats.rs",
+    "crates/yuna/src/selection.rs",
+    "crates/yuna/src/shell.rs",
+    "crates/yuna/src/state.rs",
+    "crates/yuna/src/text_input.rs",
+    "crates/yuna/src/virtual_input.rs",
+    "crates/yuna/src/wlr_screencopy.rs",
+    "crates/yuna/src/xwayland/drags.rs",
+    "crates/yuna/src/xwayland/menus.rs",
+    "crates/yuna/src/xwayland/shell.rs",
+    "crates/yuna/src/xwayland/windows.rs",
+]

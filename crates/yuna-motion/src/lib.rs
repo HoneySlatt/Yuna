@@ -227,6 +227,8 @@
 //! [`Layer`]: yuna_layout::Layer
 //! [`WorkspaceView`]: yuna_layout::WorkspaceView
 
+#![forbid(unsafe_code)]
+
 mod arrangement;
 mod curve;
 mod oscillator;

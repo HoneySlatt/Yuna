@@ -1,6 +1,11 @@
 //! A process a test starts ends with the test's thread, shared by `applications.rs` and
 //! `consumers.rs`.
 
+#![expect(
+    unsafe_code,
+    reason = "the closure between fork and exec that ties a child to the test's thread"
+)]
+
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 

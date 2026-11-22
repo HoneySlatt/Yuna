@@ -36,6 +36,8 @@
 //! ([ADR-0019](../../../docs/adr/0019-the-layouts-behaviours.md)); workspaces are named, with
 //! dynamic ones as an option ([ADR-0018](../../../docs/adr/0018-workspaces.md)).
 
+#![forbid(unsafe_code)]
+
 pub mod geometry;
 
 mod area;

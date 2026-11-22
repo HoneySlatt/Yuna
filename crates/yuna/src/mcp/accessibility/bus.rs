@@ -23,6 +23,11 @@
 //! socket removed, so that a GTK 4 program, which connects without a time limit, never finds a
 //! socket with no daemon behind it.
 
+#![expect(
+    unsafe_code,
+    reason = "the bus's program given the descriptor it writes its address to"
+)]
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;

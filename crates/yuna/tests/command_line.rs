@@ -398,6 +398,10 @@ fn headless_with_the_rest_audit_names_a_client_then_rests() {
 }
 
 /// Starts `command`'s process with `limit` as its limit of open files.
+#[expect(
+    unsafe_code,
+    reason = "the closure between fork and exec that sets the child's limit of open files"
+)]
 fn limit_open_files(command: &mut Command, limit: Rlimit) {
     // SAFETY: the closure runs in the child between fork and exec, where only async-signal-safe
     // calls are sound: it makes one system call, `prlimit64` through rustix, and allocates

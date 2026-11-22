@@ -7,6 +7,11 @@
 //! loop builds this module's elements without naming GLES, and the layout knows none of it. X11
 //! windows' surfaces have an element of Yuna's own, in `render/x11_surface.rs`.
 
+#![expect(
+    unsafe_code,
+    reason = "EGL's display and context, the GLES renderer made on them, and one GL query"
+)]
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 

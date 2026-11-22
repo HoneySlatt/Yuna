@@ -31,6 +31,11 @@
 //! drawing. A buffer that fails later, at drawing, is left out of that frame by Smithay's
 //! renderer, which logs it.
 
+#![expect(
+    unsafe_code,
+    reason = "a client's dmabuf mapped and unmapped at once, to check that it maps"
+)]
+
 use std::os::fd::BorrowedFd;
 use std::os::unix::fs::MetadataExt;
 use std::ptr;

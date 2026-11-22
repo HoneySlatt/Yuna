@@ -10,6 +10,11 @@
 //! pid. `yuna mcp`'s reaping of every child, on SIGCHLD, may reap a process before its own
 //! pidfd's wait does: that wait then finds it reaped, its end [`End::Unknown`].
 
+#![expect(
+    unsafe_code,
+    reason = "`close_range`, and the closures between fork and exec on descriptors and the limit of open files"
+)]
+
 use std::ffi::OsString;
 use std::fs;
 use std::io;

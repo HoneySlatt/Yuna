@@ -25,6 +25,11 @@
 //! the kernel's socket diagnostics, the checks see the sockets bound in the owner's runtime
 //! folder, not those connected to one (`sockets.rs`).
 
+#![expect(
+    unsafe_code,
+    reason = "an inherited descriptor borrowed to mark it close-on-exec"
+)]
+
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io;

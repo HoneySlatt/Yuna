@@ -77,6 +77,11 @@ wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"
+# `unsafe` code only where the crate map allows it (ADR-0151): each module that holds some says so
+# with `#![expect(unsafe_code, reason = "…")]`, and crates/map.toml lists it with its count, which
+# scripts/crate-map.py checks. A crate's own level cannot be set beside `[lints] workspace = true`,
+# so the pure crates forbid it at their roots.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 # AGENTS.md: every `unsafe` block says why it is sound, in a `// SAFETY:` comment.

@@ -30,6 +30,11 @@
 //! refused, and a virtual device's is dropped
 //! ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 
+#![expect(
+    unsafe_code,
+    reason = "Smithay's `Xkb::keymap`, borrowed to ask xkbcommon whether the keymap names a key"
+)]
+
 use std::any::Any;
 use std::collections::HashSet;
 use std::sync::PoisonError;

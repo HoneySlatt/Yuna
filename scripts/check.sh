@@ -61,6 +61,17 @@ check_lints() {
         -- -D warnings
 }
 
+# The crate map (ADR-0151): scripts/crate-map.py compares crates/map.toml with the code. It guards
+# the crates' levels and the edges between them, the outside libraries' owners and lowest levels,
+# each module's `unsafe` code, as rustc counts it, against its entry, every global of the map's
+# crates, and the files of `yuna` that name Smithay; its header says what it cannot see. It runs
+# clippy once more, its own flag (`--force-warn unsafe_code`) reaching the workspace's crates
+# alone, so that the dependencies' builds are reused.
+check_map() {
+    step "The crate map: levels, libraries, unsafe code, globals (crates/map.toml)"
+    python3 -I -B scripts/crate-map.py
+}
+
 check_tests() {
     step "Build and tests"
     cargo test --workspace --locked
@@ -132,13 +143,14 @@ check_script_tests() {
 }
 
 DOCUMENT_STEPS=(links lengths indexes script-tests)
-CODE_STEPS=(rules format lints tests wlcs rustdoc dependencies)
+CODE_STEPS=(rules format lints map tests wlcs rustdoc dependencies)
 
 run_step() {
     case "$1" in
     rules) check_rules ;;
     format) check_format ;;
     lints) check_lints ;;
+    map) check_map ;;
     tests) check_tests ;;
     wlcs) check_wlcs ;;
     rustdoc) check_rustdoc ;;

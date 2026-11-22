@@ -317,26 +317,33 @@ only <step>` runs one:
 2. `format`, `cargo fmt --check`;
 3. `lints`, clippy over every target, warnings as errors, twice: the second time with the
    parity script's canaries (`--features yuna/parity-canary,…`), code no other build compiles;
-4. `tests`, the build and the tests;
-5. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
-6. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
+4. `map`, `scripts/crate-map.py`: the crate map, `crates/map.toml`, against the code
+   ([ADR-0151](docs/adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md));
+5. `tests`, the build and the tests;
+6. `wlcs`, WLCS's tests that `crates/yuna-wlcs/expected.txt` expects to pass, against the module
+   built here
+   ([ADR-0149](docs/adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md));
+7. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
+8. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
    and every yanked crate, on any dependency, direct or not; the sources of the dependencies. It
    reads the advisory database from the network;
-7. `links`, between the tracked Markdown files, offline, anchors included;
-8. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
-   session;
-9. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
-10. `script-tests`: the tests of those scripts, and of the path filters of SlimeEngine's and
+9. `links`, between the tracked Markdown files, offline, anchors included;
+10. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
+    session;
+11. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
+12. `script-tests`: the tests of those scripts, and of the path filters of SlimeEngine's and
     Opium's jobs.
 
 `scripts/test-check.sh` proves that each step stops what it guards against
 ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)): it clones the last
 commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
-warning, one in the canaries' code, an `unsafe` block without its comment, a failing test, a contract or a protocol changed
-without its file, a broken link, a licence refused, `AGENTS.md` too long, an ADR off the index, a
-fragment misnamed, SlimeEngine's or Opium's job leaving out the drawing path), and expects the step that
-guards against it to fail, for that reason. Run it after changing `check.sh` or a check, and
-before a release; it takes about as long as `check.sh` twice, building in `target/test-check`.
+warning, one in the canaries' code, an `unsafe` block without its comment, a wrong edge or owner
+in the crate map, `unsafe` or a `static` it does not list, a `thread_local!`, a failing test, a
+contract or a protocol changed without its file, a broken link, a licence refused, `AGENTS.md` too
+long, an ADR off the index, a fragment misnamed, SlimeEngine's or Opium's job leaving out the
+drawing path), and expects the step that guards against it to fail, for that reason. Run it after
+changing `check.sh` or a check, and before a release; it takes about as long as `check.sh` twice,
+building in `target/test-check`.
 
 Every cargo command of the check passes `--locked`: `Cargo.lock` changes only on purpose.
 

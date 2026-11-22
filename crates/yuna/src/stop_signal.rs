@@ -9,6 +9,11 @@
 //! accepted. Its structure is declared here as glibc and musl lay it out on x86-64 and AArch64,
 //! the targets Yuna builds for; another target refuses to build rather than pass a wrong layout.
 
+#![expect(
+    unsafe_code,
+    reason = "`sigaction`, declared and called, and the handler's borrow of its pipe"
+)]
+
 use std::ffi::c_int;
 use std::io;
 use std::os::fd::{BorrowedFd, IntoRawFd, OwnedFd, RawFd};

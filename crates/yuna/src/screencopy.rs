@@ -13,6 +13,11 @@
 //! damage. No cursor is captured, Yuna drawing none, and no window: a toplevel source needs
 //! `ext-foreign-toplevel-list-v1`, which Yuna does not offer.
 
+#![expect(
+    unsafe_code,
+    reason = "a capture's rows written into the client's `wl_shm` pool"
+)]
+
 use std::time::Duration;
 
 use smithay::output::Output;

@@ -29,6 +29,11 @@
 //! when the thread that started it ends: when this program is killed, its processes end with it,
 //! though a stray child of theirs would not.
 
+#![expect(
+    unsafe_code,
+    reason = "the closure between fork and exec that ties WLCS's process to the bench's thread"
+)]
+
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, PipeReader, Write as _};
