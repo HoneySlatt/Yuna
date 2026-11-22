@@ -1245,7 +1245,9 @@ impl Compositor {
     /// as they are. A floating window is asked 0 × 0, chooses its own size and follows its
     /// client's commits (`yuna-layout`'s `floating.rs`). It breaks what Yuna promises of every
     /// seat: that its new windows tile, unless their client's sizes or parent make them float.
-    /// Refused for a seat that does not exist.
+    /// And it breaks what [`Compositor::command`] holds: it takes no [`Caller`], so that it
+    /// changes any seat, where a caller reaches its own seat alone (ADR-0138, ADR-0146). Refused
+    /// for a seat that does not exist.
     #[doc(hidden)]
     pub fn set_seat_opens_floating(&mut self, seat: SeatId, floating: bool) -> Result<(), Refusal> {
         let data = self
@@ -1260,9 +1262,12 @@ impl Compositor {
     /// top-left corner of its output, at the size it is drawn at; enough of it stays on the
     /// output to grab it, as for any floating window. A move alone: the window is not raised or
     /// focused, its client is sent no configure, and its seat's outputs show it there at their
-    /// next refresh, without motion. It breaks no invariant of the layout's; it moves a window
-    /// where no command of Yuna's can yet. Refused for an unknown or tiled window, and one its
-    /// output does not show: on a workspace not shown, or under a fullscreen window.
+    /// next refresh, without motion. It moves a window where no command of Yuna's can yet. It
+    /// breaks what [`Compositor::command`] holds: it takes no [`Caller`], so that it moves any
+    /// seat's window, where a caller reaches its own seat's alone (ADR-0138, ADR-0146). The
+    /// layout's own invariants hold: the move is the layout's `set_floating_rect`. Refused for an
+    /// unknown or tiled window, and one its output does not show: on a workspace not shown, or
+    /// under a fullscreen window.
     #[doc(hidden)]
     pub fn place_window(&mut self, window: WindowId, x: f64, y: f64) -> Result<(), Refusal> {
         self.state.place_floating_window(window, x, y)

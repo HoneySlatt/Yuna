@@ -1,9 +1,9 @@
 //! What the shim tells WLCS Yuna supports: every global a client of an agent's seat is offered,
 //! each at the version Yuna offers. When a test binds a global the registry does not offer, at
 //! the version it needs, WLCS skips the test if this list leaves the global out, and fails it if
-//! the list names it: the list must be the registry's exactly. `tests/descriptor.rs` compares it
-//! with what a client of the shim's own compositor is announced. A global Yuna offers later
-//! turns its tests on once it is listed here.
+//! the list names it: the list must be the registry's exactly, `linux-dmabuf` apart
+//! ([`DMABUF`]). `tests/descriptor.rs` compares it with what a client of the shim's own
+//! compositor is announced. A global Yuna offers later turns its tests on once it is listed here.
 
 use std::ffi::CStr;
 
@@ -12,7 +12,10 @@ use crate::abi::{
 };
 
 /// The one global whose offer the renderer decides: `linux-dmabuf`, offered when it imports a
-/// format (`docs/protocols.md`). WLCS 1.8.1 has no test of it.
+/// format (`docs/protocols.md`). [`EXTENSIONS`] lists it always: WLCS reads the descriptor right
+/// after it makes a server, before it starts it, when no compositor exists yet to ask what the
+/// renderer imports. Listed and not offered, it would fail a test that binds it rather than skip
+/// it; WLCS 1.8.1 has no test of it.
 pub const DMABUF: &CStr = c"zwp_linux_dmabuf_v1";
 
 /// Each global an agent seat's client is offered, by its interface's name, with its version, in

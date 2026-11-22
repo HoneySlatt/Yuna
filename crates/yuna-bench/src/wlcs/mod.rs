@@ -24,12 +24,15 @@
 //!
 //! # A test's outcome
 //!
-//! A test passes only on gtest's `[       OK ] <its exact name>` line, without the module's
-//! `yuna-wlcs: unsupported: <what>` marker between its `[ RUN      ]` line and its end, and with
-//! its process not crashing after it. A marker makes the test unsupported, whatever gtest says.
-//! A test still running when its process crashes crashed; a test running when its process went
-//! silent for 60 s hung (WLCS's own waits give up after 10 s); when the process crashes between
-//! tests, the last test to end crashed. [`output`] gives the lines read.
+//! A test passes only on gtest's `[       OK ] <its exact name>` line, without a marker of the
+//! module's between its `[ RUN      ]` line and its end, and with its process not crashing after
+//! it. The module's two markers override what gtest says: `yuna-wlcs: unsupported: <what>`, a
+//! request Yuna refuses by design, makes the test unsupported; `yuna-wlcs: error: <what>`, the
+//! module itself gone wrong, makes it a shim error. A test still running when its process
+//! crashes crashed; a test running when its process went silent for 60 s hung (WLCS's own waits
+//! give up after 10 s); when the process crashes between tests, the last test to end crashed,
+//! and so when WLCS's process ends but a child of it holds its output open for 2 s more.
+//! [`output`] gives the lines read.
 //!
 //! # The rules of `check`
 //!
@@ -37,26 +40,29 @@
 //!
 //! - when a test the file expects to pass does not pass: it fails, skips, is unsupported,
 //!   crashes, hangs or does not run;
-//! - on any crash or hang, of any test, whatever the file expects of it, flaky included, and of
-//!   a process that failed before any of its tests began;
+//! - on any crash, hang or shim error, of any test, whatever the file expects of it, flaky
+//!   included, and of a process that failed with no test to blame: before any of its tests began,
+//!   WLCS's listing of its tests among them, or with the module's error marker outside any test;
 //! - when the file names a test WLCS no longer lists, WLCS lists a test the file does not name,
 //!   or the file's `wlcs` version is not `$YUNA_WLCS_VERSION` (judged before any test runs);
 //! - when a test not expected to pass passes, then passes again alone in a fresh process: it
 //!   passes now, and its line should say so. A single pass is only reported;
-//! - when the run stops before its end: the sentinel, the breaker (5 hangs or timeouts in a
-//!   row), or the deadline (`--deadline`, 15 min).
+//! - when the run stops before its end: the sentinel, the breaker, or the deadline (`--deadline`,
+//!   15 min). The breaker stops the run after 5 hangs or timeouts in a row, in the order the
+//!   tests end across the jobs; a timeout of a test the file expects to fail or to be flaky does
+//!   not count, and breaks the row as any other end does.
 //!
 //! It reports, without failing: each flaky test's outcome, never judged; other changes, such as
 //! a test expected to fail that skips; a test not expected to pass that did not run.
 //!
-//! A timeout is a test failed by WLCS's own wait, `Timeout waiting for condition`. It counts
-//! toward the breaker unless the file expects that test to fail or to be flaky: a test known to
-//! fail by timing out is no sign of a broken build. In a record, where nothing is expected yet,
-//! only hangs count. The summary at the end gives the counts of each outcome, then every failure
-//! with its rule.
+//! A timeout is a test failed by WLCS's own wait, `Timeout waiting for condition`. A test known
+//! to fail by timing out is no sign of a broken build, hence the breaker's exception. In a
+//! record, where nothing is expected yet, only hangs count. The summary at the end gives the
+//! counts of each outcome, then every failure with its rule.
 //!
-//! Exit status: 0 passed; 1 a rule failed; 2 the run could not judge: no runner, no module, the
-//! file unreadable or out of its format, WLCS's list of tests unreadable.
+//! Exit status: 0 passed; 1 a rule failed, a crash or a hang of WLCS while it lists its tests
+//! among them; 2 the run could not judge: no runner, no module, the file unreadable or out of its
+//! format, WLCS's list of tests unreadable or its runner exiting with an error.
 //!
 //! # The file of expected outcomes
 //!
@@ -82,22 +88,25 @@
 //! JSON, `format` 1 ([`record::RecordFile`]): `wlcs`, `module`, `commit`, `runs` (asked of each
 //! test), `started_utc`, `written_utc`, `stopped` (why it stopped early, or null), `failures` (the
 //! processes that failed with no test to blame), and `tests`, each test's name with the outcome of
-//! each of its runs: `"Suite.test": ["pass", "pass", "fail"]`. The merge gives a test with one
+//! each of its runs: `"Suite.test": ["pass", "pass", "fail"]`, an outcome one of `pass`, `fail`,
+//! `skip`, `unsupported`, `shim-error`, `crash` and `hang`. The merge gives a test with one
 //! outcome over every run of every record that outcome, and one whose outcome varied
-//! `flaky # varied: <counts>`. It writes nothing, naming every reason, when a test crashed or hung
-//! in any run, or never ran, when a record stopped or holds a failure, or when the records are of
-//! other WLCS versions or other tests.
+//! `flaky # varied: <counts>`. It writes nothing, naming every reason, when a test crashed, hung
+//! or met a shim error in any run, or never ran, when a record stopped or holds a failure, or
+//! when the records are of other WLCS versions or other tests. A record whose listing of the
+//! tests crashed or hung is not written.
 //!
 //! # The processes
 //!
 //! Each WLCS process runs in its own process group, killed whole on a hang or a stop, never by
 //! name, and dies with the runner if the runner is killed or stopped by Ctrl-C; without
 //! `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`; with `LP_NUM_THREADS=0` and Mesa's shader cache in the
-//! run's work folder, under the target folder unless `--work` names one. Its standard
-//! output and error are one pipe, so that the module's markers fall between a test's start and
-//! its end. Each test's outcome is printed as it ends, so a run killed from outside still shows
-//! what ran. Each process's output is kept in the work folder's `logs/`, which a run that passes
-//! removes. [`running`] gives the detail.
+//! run's work folder, under the target folder unless `--work` names one. Its standard output and
+//! error are one pipe, so that the module's markers fall between a test's start and its end; a
+//! child of its own that holds the pipe open 2 s after it ended is killed with its group. Each
+//! test's outcome is printed as it ends, so a run killed from outside still shows what ran. Each
+//! process's output is kept in the work folder's `logs/`. A run that passes removes the work
+//! folder it made; a folder `--work` names is never removed. [`running`] gives the detail.
 
 pub mod expected;
 pub mod judge;
@@ -116,7 +125,9 @@ use expected::{Expectation, ExpectedFile};
 use judge::{Finding, Inputs, Mode};
 use listing::Listing;
 use output::Seen;
-use running::{Batch, ProcessFailure, Settings, Stop, Supervisor, TestRun, Verdict, Watch};
+use running::{
+    Batch, ListFailure, ProcessFailure, Settings, Stop, Supervisor, TestRun, Verdict, Watch,
+};
 
 const HELP: &str = "\
 yuna-bench wlcs: WLCS, the Wayland conformance suite, run against Yuna's integration module
@@ -133,7 +144,8 @@ yuna-bench wlcs: WLCS, the Wayland conformance suite, run against Yuna's integra
       every test, each in its own process, n times: the outcomes seen, to merge
   yuna-bench wlcs record --merge <a.json> <b.json>... --write <expected.txt>
       the file of expected outcomes from records: a test with one outcome in every run gets it,
-      one that varied is flaky; a test that crashed or hung anywhere writes nothing
+      one that varied is flaky; a test that crashed, hung or met a shim error anywhere writes
+      nothing
 
 Options:
   --module <path>     the integration module (default: $CARGO_TARGET_DIR, or target, then
@@ -143,16 +155,19 @@ Options:
   --jobs <n>          processes at once (default: the processors, 4 at most)
   --deadline <min>    check: the run stops and fails after this many minutes (default: 15)
   --work <folder>     the processes' logs and Mesa's shader cache (default: a new folder in the
-                      target folder's wlcs/, removed after a run that passes)
+                      target folder's wlcs/, removed after a run that passes; a folder given here
+                      is never removed)
 
-check fails when a test expected to pass does not; on any crash or hang of any test; when the
-file and WLCS's list differ, or the file's wlcs line is not $YUNA_WLCS_VERSION; when a test not
-expected to pass passes twice, the second time alone; when the run stops: the sentinel, 5 hangs or
-timeouts in a row, the deadline. Flaky tests and other changes are reported, not judged.
-crates/yuna-bench/src/wlcs/mod.rs gives the rules and the files' formats.
+check fails when a test expected to pass does not; on any crash, hang or shim error (the module's
+line 'yuna-wlcs: error: ...') of any test, whatever the file expects of it; when the file and
+WLCS's list differ, or the file's wlcs line is not $YUNA_WLCS_VERSION; when a test not expected
+to pass passes twice, the second time alone; when the run stops: the sentinel, the breaker, the
+deadline. The breaker stops the run after 5 hangs or timeouts in a row; a timeout of a test the
+file expects to fail or to be flaky does not count, and breaks the row. Flaky tests and other changes are reported,
+not judged. crates/yuna-bench/src/wlcs/mod.rs gives the rules and the files' formats.
 
-Exit status: 0 passed; 1 a rule failed; 2 the run could not judge (no runner, no module, a file
-unreadable).
+Exit status: 0 passed; 1 a rule failed (a crash of WLCS's listing among them); 2 the run could
+not judge (no runner, no module, a file unreadable).
 Run it in the development shell: nix develop -c cargo run -p yuna-bench -- wlcs check --listed
 ";
 
@@ -598,7 +613,7 @@ struct CheckWatch<'a> {
 }
 
 impl Watch for CheckWatch<'_> {
-    fn ended(&self, run: &TestRun, _correction: bool) -> Verdict {
+    fn ended(&self, run: &TestRun) -> Verdict {
         let name = &run.ended.name;
         let seen = run.ended.seen;
         let expectation = self.expected.tests.get(name);
@@ -699,21 +714,30 @@ fn listed_batches(listing: &Listing, expected: &ExpectedFile) -> Vec<Batch> {
     largest_first(batches)
 }
 
-/// Prints the summary: the counts of each outcome, every failure with its rule, then what is
-/// only reported, and where the logs are when the run failed and has some.
+/// Prints the summary ([`summary`]).
 fn print_summary(
     runs: &BTreeMap<String, TestRun>,
     findings: &[Finding],
     elapsed: Duration,
     logs: Option<&Path>,
 ) {
+    print!("{}", summary(runs, findings, elapsed, logs));
+}
+
+/// The summary: the counts of each outcome, every failure with its rule, then what is only
+/// reported, and where the logs are when the run failed and has some.
+fn summary(
+    runs: &BTreeMap<String, TestRun>,
+    findings: &[Finding],
+    elapsed: Duration,
+    logs: Option<&Path>,
+) -> String {
     let mut counts: BTreeMap<Seen, usize> = BTreeMap::new();
     for run in runs.values() {
         *counts.entry(run.ended.seen).or_default() += 1;
     }
-    println!();
-    println!(
-        "yuna-bench wlcs: {} tests in {}: {}",
+    let mut text = format!(
+        "\nyuna-bench wlcs: {} tests in {}: {}\n",
         runs.len(),
         duration(elapsed),
         if counts.is_empty() {
@@ -723,33 +747,32 @@ fn print_summary(
         }
     );
     let line = |finding: &Finding| match &finding.test {
-        Some(test) => format!("  [{}] {test}: {}", finding.rule.name(), finding.text),
-        None => format!("  [{}] {}", finding.rule.name(), finding.text),
+        Some(test) => format!("  [{}] {test}: {}\n", finding.rule.name(), finding.text),
+        None => format!("  [{}] {}\n", finding.rule.name(), finding.text),
     };
     let failures: Vec<&Finding> = findings.iter().filter(|f| f.rule.judged()).collect();
     let reported: Vec<&Finding> = findings.iter().filter(|f| !f.rule.judged()).collect();
     if !failures.is_empty() {
-        println!("Failures, each with its rule:");
+        text.push_str("Failures, each with its rule:\n");
         for finding in &failures {
-            println!("{}", line(finding));
+            text.push_str(&line(finding));
         }
     }
     if !reported.is_empty() {
-        println!("Reported, not judged:");
+        text.push_str("Reported, not judged:\n");
         for finding in &reported {
-            println!("{}", line(finding));
+            text.push_str(&line(finding));
         }
     }
-    match (failures.len(), logs) {
-        (0, _) => println!("Passed."),
-        (failed, Some(logs)) => {
-            println!(
-                "Failed: {failed} failures. The logs are kept in {}.",
-                logs.display()
-            );
-        }
-        (failed, None) => println!("Failed: {failed} failures."),
-    }
+    text.push_str(&match (failures.len(), logs) {
+        (0, _) => "Passed.\n".to_owned(),
+        (failed, Some(logs)) => format!(
+            "Failed: {failed} failures. The logs are kept in {}.\n",
+            logs.display()
+        ),
+        (failed, None) => format!("Failed: {failed} failures.\n"),
+    });
+    text
 }
 
 /// `wlcs check`: reads the file, lists WLCS's tests, runs them as the mode says, judges them.
@@ -781,7 +804,25 @@ pub fn check(options: &CheckOptions) -> Result<Checked, String> {
         });
     }
     let supervisor = Supervisor::new(run.settings(Some(options.deadline)))?;
-    let listing = supervisor.list()?;
+    let listing = match supervisor.list() {
+        Ok(listing) => listing,
+        Err(ListFailure::Unusable(text)) => return Err(text),
+        Err(ListFailure::Broken(failure)) => {
+            let findings = vec![judge::process_failure(&failure)];
+            print_summary(
+                &BTreeMap::new(),
+                &findings,
+                started.elapsed(),
+                Some(&run.work),
+            );
+            return Ok(Checked {
+                exit: 1,
+                findings,
+                runs: BTreeMap::new(),
+                alone: BTreeMap::new(),
+            });
+        }
+    };
     let listed: Vec<String> = listing.names().map(str::to_owned).collect();
     let mut runs = BTreeMap::new();
     let mut failures = Vec::new();
@@ -888,6 +929,8 @@ mod tests {
         /// The hang guard's time: long enough that a slow start on a loaded machine is no hang,
         /// unless the test is of hangs.
         hang_ms: u32,
+        /// Processes at once: one, unless the test is of jobs.
+        jobs: usize,
     }
 
     impl Case {
@@ -903,6 +946,7 @@ mod tests {
             Case {
                 folder,
                 hang_ms: 5000,
+                jobs: 1,
             }
         }
 
@@ -914,7 +958,12 @@ mod tests {
             }
         }
 
-        /// `wlcs <command…>` with the fake runner, one job, and the case's hang guard.
+        /// The same, with `jobs` processes at once.
+        fn jobs(self, jobs: usize) -> Case {
+            Case { jobs, ..self }
+        }
+
+        /// `wlcs <command…>` with the fake runner, and the case's jobs and hang guard.
         fn arguments(&self, command: &[&str]) -> Vec<String> {
             let path = |name: &str| self.folder.join(name).display().to_string();
             let mut arguments: Vec<String> = command.iter().map(|a| (*a).to_owned()).collect();
@@ -926,7 +975,7 @@ mod tests {
                 "--work".to_owned(),
                 path("work"),
                 "--jobs".to_owned(),
-                "1".to_owned(),
+                self.jobs.to_string(),
                 "--hang-ms".to_owned(),
                 self.hang_ms.to_string(),
             ]);
@@ -1430,6 +1479,194 @@ mod tests {
             read_options(&arguments("check --help"), &environment).unwrap(),
             Command::Help
         );
+    }
+
+    /// Whether process `pid` runs: it exists, and is not a zombie waiting to be reaped.
+    fn runs(pid: i32) -> bool {
+        fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(") ")
+                .is_some_and(|(_, rest)| !rest.starts_with('Z'))
+        })
+    }
+
+    #[test]
+    fn jobs_run_their_batches_at_once() {
+        let case = Case::new(
+            "wlcs-jobs",
+            "A.a hang\nB.a hang\nC.a hang\n",
+            "pass A.a\npass B.a\npass C.a\n",
+        )
+        .quick_hang()
+        .jobs(3);
+        let started = Instant::now();
+        let checked = case.check("--full", &[]);
+        let elapsed = started.elapsed();
+        // One after another, the three hangs would take 3 s at least.
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+        assert_eq!(checked.exit, 1);
+        for name in ["A.a", "B.a", "C.a"] {
+            assert_eq!(seen(&checked, name), Seen::Hang, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_stop_in_one_job_kills_the_process_of_another() {
+        // The breaker trips in T's job, once P's process, in the other, prints without end.
+        let case = Case::new(
+            "wlcs-jobs-stop",
+            "T.a timeout-when-spamming\nT.b timeout\nT.c timeout\nT.d timeout\nT.e timeout\n\
+             P.a spam\nP.b ok\n",
+            "pass P.a\npass P.b\npass T.a\npass T.b\npass T.c\npass T.d\npass T.e\n",
+        )
+        .jobs(2);
+        let started = Instant::now();
+        let checked = case.check("--full", &["--deadline", "1"]);
+        let elapsed = started.elapsed();
+        // Far before the minute of the deadline, which P's process would otherwise meet.
+        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+        assert_eq!(checked.exit, 1);
+        assert_eq!(checked.findings[0].rule, Rule::Stopped);
+        assert!(
+            checked.findings[0]
+                .text
+                .starts_with("the breaker: 5 hangs or timeouts in a row: T.a, T.b, T.c, T.d, T.e"),
+            "{}",
+            checked.findings[0].text
+        );
+        // P's process ran beside T's, and the stop killed it: its tests did not run.
+        assert!(
+            case.filters().contains(&"P.*".to_owned()),
+            "{:?}",
+            case.filters()
+        );
+        assert_eq!(seen(&checked, "P.a"), Seen::NotRun);
+        assert_eq!(seen(&checked, "P.b"), Seen::NotRun);
+    }
+
+    #[test]
+    fn a_shim_error_fails_the_check_whatever_the_test_expects() {
+        let expected = "pass Suite.a\nfail Suite.b\npass Suite.c\npass Suite.d\n";
+        let case = Case::new(
+            "wlcs-shim-error",
+            "Suite.a error\nSuite.b error-fail\nSuite.c ok\nSuite.d error-after\n",
+            expected,
+        );
+        let checked = case.check("--full", &[]);
+        assert_eq!(checked.exit, 1);
+        assert_eq!(seen(&checked, "Suite.a"), Seen::ShimError);
+        assert_eq!(seen(&checked, "Suite.b"), Seen::ShimError);
+        assert_eq!(seen(&checked, "Suite.c"), Seen::Pass);
+        // Printed after its test's end, the marker blames no test: its process failed.
+        assert_eq!(seen(&checked, "Suite.d"), Seen::Pass);
+        assert_eq!(
+            rules(&checked),
+            [
+                (Rule::ShimError, None),
+                (Rule::ShimError, Some("Suite.a")),
+                (Rule::ShimError, Some("Suite.b")),
+            ]
+        );
+        let text = summary(
+            &checked.runs,
+            &checked.findings,
+            Duration::from_secs(1),
+            None,
+        );
+        assert!(
+            text.contains(
+                "  [shim-error] Suite.a: shim-error (error: placing a surface that is no mapped \
+                 window: wl_surface@3), expected pass"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("  [shim-error] Suite.b: "), "{text}");
+        // The same tests without the marker pass.
+        let case = Case::new(
+            "wlcs-shim-error-none",
+            "Suite.a ok\nSuite.b fail\nSuite.c ok\nSuite.d ok\n",
+            expected,
+        );
+        assert_eq!(case.check("--full", &[]).exit, 0);
+    }
+
+    #[test]
+    fn a_shim_error_in_a_record_is_refused_by_the_merge() {
+        let case = Case::new("wlcs-record-error", "Suite.a ok\nSuite.b error\n", "");
+        let out = case.folder.join("r.json");
+        let mut arguments = case.arguments(&["record", "--runs", "1", "--out"]);
+        arguments.insert(4, out.display().to_string());
+        assert_eq!(run(&arguments, &environment()), 1);
+        let record = record::read(&out).unwrap();
+        assert_eq!(record.tests["Suite.a"], [Seen::Pass]);
+        assert_eq!(record.tests["Suite.b"], [Seen::ShimError]);
+        let written = case.folder.join("expected-new.txt");
+        let merge = [
+            "record".to_owned(),
+            "--merge".to_owned(),
+            out.display().to_string(),
+            "--write".to_owned(),
+            written.display().to_string(),
+        ];
+        assert_eq!(run(&merge, &environment()), 1);
+        assert!(!written.exists());
+    }
+
+    #[test]
+    fn a_child_that_outlives_wlcs_is_killed_and_crashes_its_batch() {
+        let case = Case::new(
+            "wlcs-orphan",
+            "Suite.a ok\nSuite.b orphan\nSuite.c ok\n",
+            "pass Suite.a\npass Suite.b\npass Suite.c\n",
+        );
+        let started = Instant::now();
+        let checked = case.check("--full", &[]);
+        let elapsed = started.elapsed();
+        // Its grace, and not the hang guard, 5 s here, ended the process.
+        assert!(
+            elapsed >= running::ORPHAN_GRACE && elapsed < Duration::from_secs(4),
+            "{elapsed:?}"
+        );
+        assert_eq!(checked.exit, 1);
+        assert_eq!(seen(&checked, "Suite.a"), Seen::Pass);
+        assert_eq!(seen(&checked, "Suite.b"), Seen::Pass);
+        // The last test to end is named.
+        assert_eq!(seen(&checked, "Suite.c"), Seen::Crash);
+        assert_eq!(
+            checked.runs["Suite.c"].ended.note.as_deref(),
+            Some("its process ended badly after it: a child of WLCS outlived it: killed")
+        );
+        assert_eq!(rules(&checked), [(Rule::Crash, Some("Suite.c"))]);
+        // The child died with its group.
+        let orphan: i32 = fs::read_to_string(case.folder.join("orphan"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(!runs(orphan), "the child {orphan} still runs");
+    }
+
+    #[test]
+    fn a_listing_that_crashes_fails_the_check_and_the_record() {
+        let case = Case::new("wlcs-list-crash", "Suite.a list-crash\n", "pass Suite.a\n");
+        let checked = case.check("--listed", &[]);
+        assert_eq!(checked.exit, 1);
+        assert_eq!(rules(&checked), [(Rule::Crash, None)]);
+        assert!(
+            checked.findings[0].text.starts_with(
+                "the list of tests: WLCS ended while it listed its tests: signal 11, SIGSEGV"
+            ),
+            "{}",
+            checked.findings[0].text
+        );
+        assert_eq!(
+            run(&case.arguments(&["check", "--listed"]), &environment()),
+            1
+        );
+        let out = case.folder.join("r.json");
+        let mut arguments = case.arguments(&["record", "--runs", "1", "--out"]);
+        arguments.insert(4, out.display().to_string());
+        assert_eq!(run(&arguments, &environment()), 1);
+        assert!(!out.exists());
     }
 
     #[test]

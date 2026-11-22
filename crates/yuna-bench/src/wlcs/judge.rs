@@ -33,6 +33,9 @@ pub enum Rule {
     Crash,
     /// A test hung, or a process with no test to blame.
     Hang,
+    /// The integration module printed its error marker in a test, or outside any: the module
+    /// went wrong, whatever the test was expected to give.
+    ShimError,
     /// A test not expected to pass passed, and passed again alone.
     PassesNow,
     /// The run stopped before its end: the sentinel, the breaker or the deadline.
@@ -57,6 +60,7 @@ impl Rule {
             Rule::Pass => "pass",
             Rule::Crash => "crash",
             Rule::Hang => "hang",
+            Rule::ShimError => "shim-error",
             Rule::PassesNow => "passes-now",
             Rule::Stopped => "stopped",
             Rule::Changed => "changed",
@@ -136,14 +140,33 @@ fn outcome(run: &TestRun) -> String {
     }
 }
 
-/// The finding of a crash or a hang of `run`, whatever was expected of it; `context` says which
-/// run it was.
-fn crash_or_hang(run: &TestRun, expectation: Option<&Expectation>, context: &str) -> Finding {
-    let rule = if run.ended.seen == Seen::Hang {
-        Rule::Hang
-    } else {
-        Rule::Crash
-    };
+/// The rule a crash, a hang or a shim error comes under.
+fn broken_rule(seen: Seen) -> Rule {
+    match seen {
+        Seen::Hang => Rule::Hang,
+        Seen::ShimError => Rule::ShimError,
+        _ => Rule::Crash,
+    }
+}
+
+/// The finding of a process that failed with no test to blame.
+pub fn process_failure(failure: &ProcessFailure) -> Finding {
+    Finding {
+        rule: broken_rule(failure.seen),
+        test: None,
+        text: format!(
+            "{}: {} (log: {})",
+            failure.batch,
+            failure.text,
+            failure.log.display()
+        ),
+    }
+}
+
+/// The finding of a crash, a hang or a shim error of `run`, whatever was expected of it;
+/// `context` says which run it was.
+fn broken(run: &TestRun, expectation: Option<&Expectation>, context: &str) -> Finding {
+    let rule = broken_rule(run.ended.seen);
     let expected = expectation.map_or("not in the file".to_owned(), |e| {
         format!("expected {}", e.name())
     });
@@ -159,7 +182,8 @@ fn crash_or_hang(run: &TestRun, expectation: Option<&Expectation>, context: &str
 pub fn judge(inputs: &Inputs) -> Vec<Finding> {
     let mut findings = Vec::new();
     let listed: BTreeSet<&str> = inputs.listed.iter().map(String::as_str).collect();
-    let crashed = |run: &TestRun| matches!(run.ended.seen, Seen::Crash | Seen::Hang);
+    let is_broken =
+        |run: &TestRun| matches!(run.ended.seen, Seen::Crash | Seen::Hang | Seen::ShimError);
     if let Some(stop) = inputs.stop {
         let not_run: Vec<&String> = inputs
             .expected
@@ -188,22 +212,7 @@ pub fn judge(inputs: &Inputs) -> Vec<Finding> {
             text,
         });
     }
-    for failure in inputs.failures {
-        findings.push(Finding {
-            rule: if failure.seen == Seen::Hang {
-                Rule::Hang
-            } else {
-                Rule::Crash
-            },
-            test: None,
-            text: format!(
-                "{}: {} (log: {})",
-                failure.batch,
-                failure.text,
-                failure.log.display()
-            ),
-        });
-    }
+    findings.extend(inputs.failures.iter().map(process_failure));
     for name in inputs.expected.tests.keys() {
         if !listed.contains(name.as_str()) {
             findings.push(Finding {
@@ -232,8 +241,8 @@ pub fn judge(inputs: &Inputs) -> Vec<Finding> {
                     inputs.expected_path
                 ),
             });
-            if let Some(run) = inputs.runs.get(name).filter(|run| crashed(run)) {
-                findings.push(crash_or_hang(run, None, ""));
+            if let Some(run) = inputs.runs.get(name).filter(|run| is_broken(run)) {
+                findings.push(broken(run, None, ""));
             }
         }
     }
@@ -247,8 +256,8 @@ pub fn judge(inputs: &Inputs) -> Vec<Finding> {
             text,
         };
         let run = inputs.runs.get(name);
-        if let Some(run) = run.filter(|run| crashed(run)) {
-            findings.push(crash_or_hang(run, Some(expectation), ""));
+        if let Some(run) = run.filter(|run| is_broken(run)) {
+            findings.push(broken(run, Some(expectation), ""));
             continue;
         }
         let Some(run) = run.filter(|run| run.ended.seen != Seen::NotRun) else {
@@ -291,8 +300,8 @@ pub fn judge(inputs: &Inputs) -> Vec<Finding> {
                              list it as pass"
                         ),
                     )),
-                    Some(alone) if crashed(alone) => {
-                        findings.push(crash_or_hang(alone, Some(expectation), " alone"));
+                    Some(alone) if is_broken(alone) => {
+                        findings.push(broken(alone, Some(expectation), " alone"));
                     }
                     Some(alone) => findings.push(finding(
                         Rule::PassedOnce,
@@ -464,6 +473,48 @@ mod tests {
             findings[0].text,
             "A: signal 11, SIGSEGV, before any test began (log: /work/logs/0003-A.log)"
         );
+    }
+
+    #[test]
+    fn a_shim_error_fails_whatever_was_expected() {
+        for expectation in [
+            Expectation::Pass,
+            Expectation::Fail,
+            Expectation::Skip,
+            Expectation::Unsupported,
+            Expectation::Flaky("varied: pass 1, fail 1".to_owned()),
+        ] {
+            let expected = file(&[("A.a", expectation.clone())]);
+            let findings = judged_full(&expected, &[("A.a", Seen::ShimError)], &[]);
+            assert_eq!(
+                rules(&findings),
+                [(Rule::ShimError, Some("A.a"))],
+                "{expectation:?}"
+            );
+            assert!(fails(&findings));
+            assert_eq!(Rule::ShimError.name(), "shim-error");
+        }
+        // Run again alone, a new pass that meets a shim error fails too.
+        let expected = file(&[("A.a", Expectation::Fail)]);
+        let findings = judged_full(
+            &expected,
+            &[("A.a", Seen::Pass)],
+            &[("A.a", Seen::ShimError)],
+        );
+        assert_eq!(rules(&findings), [(Rule::ShimError, Some("A.a"))]);
+        // Outside any test, the process's failure.
+        let failure = ProcessFailure {
+            batch: "A".to_owned(),
+            seen: Seen::ShimError,
+            text: "the module's error marker outside any test: the server did not start".to_owned(),
+            log: PathBuf::from("/work/logs/0003-A.log"),
+        };
+        let finding = process_failure(&failure);
+        assert_eq!(finding.rule, Rule::ShimError);
+        assert!(finding.rule.judged());
+        // Without the marker, the same runs pass.
+        let expected = file(&[("A.a", Expectation::Pass)]);
+        assert!(judged_full(&expected, &[("A.a", Seen::Pass)], &[]).is_empty());
     }
 
     #[test]

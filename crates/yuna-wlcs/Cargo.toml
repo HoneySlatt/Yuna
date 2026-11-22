@@ -15,9 +15,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 yuna = { path = "../yuna" }
 yuna-types = { path = "../yuna-types" }
-# Yuna's log, to standard error, as Yuna's program writes it: the same crates and features.
+# The shim's own log lines, and the level it gives `yuna::start_logging`, which writes Yuna's.
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

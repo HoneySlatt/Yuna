@@ -5,31 +5,37 @@
 //!
 //! The lines it reads, each test's between its `[ RUN      ] <name>` and its end:
 //!
-//! - `[       OK ] <name> (<n> ms)`: it passed, unless the module printed
-//!   `yuna-wlcs: unsupported: <what>` between its start and its end: it called a hook Yuna cannot
-//!   honour, and is unsupported whatever gtest says.
+//! - `[       OK ] <name> (<n> ms)`: it passed, unless the module printed one of its markers
+//!   between its start and its end, whatever gtest says: `yuna-wlcs: unsupported: <what>`, a
+//!   hook Yuna refuses by design, makes it unsupported; `yuna-wlcs: error: <what>`, the module
+//!   itself gone wrong, makes it a shim error, which no outcome expected excuses.
 //! - `[  FAILED  ] <name>[, where GetParam() = <value>] (<n> ms)`: it failed. A failure whose
 //!   message holds `Timeout waiting for condition`, WLCS's own wait given up after 10 s, is a
 //!   timeout too.
 //! - `[          ] <reason>` lines, then `[     SKIP ] <name> (<n>ms)`: WLCS skipped it, such as
-//!   a test of an extension the compositor does not offer. gtest's own `[  SKIPPED ] <name>
-//!   (<n> ms)` is read the same.
+//!   a test of an extension the compositor does not offer. WLCS 1.8.1 never skips through
+//!   gtest's own `GTEST_SKIP`, whose end line is not read.
 //! - After the last test, WLCS's summary, `[==========] <n> tests from <m> test cases run. …`,
 //!   then the lists of the skipped and the failed. A test that failed before it was skipped ends
 //!   on `[     SKIP ]`, yet the listener counts it failed and lists it under `[  FAILED  ]`: it
 //!   fails here too.
 //!
-//! A test with a start and no end when its process ends crashed; [`Parser::finish`] names it, or
-//! the last test to end if the process crashed between tests, which is then no pass either.
+//! The lines carry no colours: the runner gives every process `--gtest_color=no`, and WLCS's
+//! listener colours only a terminal. A test with a start and no end when its process ends
+//! crashed; [`Parser::finish`] names it, or the last test to end if the process crashed between
+//! tests, which is then no pass either.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 /// The line the integration module prints, on its standard error, when a test calls a hook Yuna
-/// cannot honour; what follows names the hook.
+/// refuses by design; what follows names the hook.
 pub const UNSUPPORTED_MARKER: &str = "yuna-wlcs: unsupported: ";
+
+/// The line the integration module prints, on its standard error, when it went wrong itself;
+/// what follows says how.
+pub const ERROR_MARKER: &str = "yuna-wlcs: error: ";
 
 /// The message of WLCS's `Timeout`, thrown when one of its waits gives up, after 10 s.
 pub const WLCS_TIMEOUT: &str = "Timeout waiting for condition";
@@ -38,7 +44,6 @@ const RUN: &str = "[ RUN      ] ";
 const OK: &str = "[       OK ] ";
 const FAILED: &str = "[  FAILED  ] ";
 const WLCS_SKIP: &str = "[     SKIP ] ";
-const GTEST_SKIPPED: &str = "[  SKIPPED ] ";
 const SKIP_REASON: &str = "[          ] ";
 const SUMMARY: &str = "[==========] ";
 
@@ -52,8 +57,11 @@ pub enum Seen {
     Fail,
     /// WLCS skipped it.
     Skip,
-    /// It called a hook Yuna cannot honour.
+    /// It called a hook Yuna refuses by design.
     Unsupported,
+    /// The integration module printed its error marker while it ran: the module went wrong,
+    /// and the outcome cannot be trusted.
+    ShimError,
     /// Its process crashed while it ran, or just after it ended.
     Crash,
     /// Its process printed nothing for the hang guard's time while it ran.
@@ -70,6 +78,7 @@ impl Seen {
             Seen::Fail => "fail",
             Seen::Skip => "skip",
             Seen::Unsupported => "unsupported",
+            Seen::ShimError => "shim-error",
             Seen::Crash => "crash",
             Seen::Hang => "hang",
             Seen::NotRun => "not-run",
@@ -77,11 +86,12 @@ impl Seen {
     }
 
     /// Every outcome, in the order the summaries count them.
-    pub const ALL: [Seen; 7] = [
+    pub const ALL: [Seen; 8] = [
         Seen::Pass,
         Seen::Fail,
         Seen::Skip,
         Seen::Unsupported,
+        Seen::ShimError,
         Seen::Crash,
         Seen::Hang,
         Seen::NotRun,
@@ -95,8 +105,8 @@ pub struct Ended {
     pub name: String,
     /// What it gave.
     pub seen: Seen,
-    /// What the outcome alone does not say: the hook Yuna cannot honour, a skip's reason, how
-    /// its process ended.
+    /// What the outcome alone does not say: the module's error, the hook Yuna refuses, a skip's
+    /// reason, how its process ended.
     pub note: Option<String>,
     /// Whether it failed by one of WLCS's own waits.
     pub timed_out: bool,
@@ -113,6 +123,9 @@ pub enum ProcessEnd {
     Hung,
     /// The runner killed it because the run stopped: the breaker, the sentinel or the deadline.
     Stopped,
+    /// It ended, but a child of its own outlived it and held its output open: the runner killed
+    /// its process group. A crash of WLCS's.
+    ChildOutlived,
     /// It did not end after it was killed: it is left behind.
     Lost,
 }
@@ -128,6 +141,7 @@ impl ProcessEnd {
             },
             ProcessEnd::Hung => "no output for the hang guard's time: killed".to_owned(),
             ProcessEnd::Stopped => "killed: the run stopped".to_owned(),
+            ProcessEnd::ChildOutlived => "a child of WLCS outlived it: killed".to_owned(),
             ProcessEnd::Lost => "did not end after SIGKILL: left behind".to_owned(),
         }
     }
@@ -148,15 +162,6 @@ fn signal_name(signal: i32) -> Option<&'static str> {
     })
 }
 
-/// What a line said, when it said something of the tests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    /// A test began: its `[ RUN      ]` line.
-    Began(String),
-    /// A test ended.
-    Ended(Ended),
-}
-
 /// What the process's end changed, once its output is read whole.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Finish {
@@ -170,24 +175,44 @@ pub struct Finish {
     pub whole: bool,
     /// Whether any test began.
     pub began: bool,
-    /// Unsupported markers printed while no test ran.
+    /// Unsupported markers printed while no test ran, what follows each marker.
     pub stray_markers: Vec<String>,
+    /// Error markers printed while no test ran, what follows each marker: the module went wrong
+    /// with no test to blame.
+    pub stray_errors: Vec<String>,
 }
 
 /// The test running, while its output is read.
 #[derive(Debug)]
 struct Running {
     name: String,
+    /// What followed the module's first error marker in it.
+    error: Option<String>,
+    /// What followed the module's first unsupported marker in it.
     unsupported: Option<String>,
     timed_out: bool,
     skip_reasons: Vec<String>,
 }
 
 impl Running {
+    /// Its end as gtest's line gave it, `seen`, which the module's markers override: an error
+    /// first, then an unsupported hook.
+    fn end_line(self, seen: Seen) -> Ended {
+        let seen = if self.error.is_some() {
+            Seen::ShimError
+        } else if self.unsupported.is_some() {
+            Seen::Unsupported
+        } else {
+            seen
+        };
+        self.end(seen, None)
+    }
+
     fn end(self, seen: Seen, note: Option<String>) -> Ended {
-        let note = match (&self.unsupported, seen) {
-            (Some(what), _) => Some(format!("unsupported: {what}")),
-            (None, Seen::Skip) if !self.skip_reasons.is_empty() => {
+        let note = match (&self.error, &self.unsupported, seen) {
+            (Some(error), _, _) => Some(format!("error: {error}")),
+            (None, Some(what), _) => Some(format!("unsupported: {what}")),
+            (None, None, Seen::Skip) if !self.skip_reasons.is_empty() => {
                 Some(self.skip_reasons.join("; "))
             }
             _ => note,
@@ -215,35 +240,13 @@ pub struct Parser {
     /// The tests the summary lists as failed.
     failed_in_summary: BTreeSet<String>,
     stray_markers: Vec<String>,
+    stray_errors: Vec<String>,
 }
 
 /// A test's name at the start of what follows an end's tag: up to a space, or the comma of
 /// `, where GetParam() = …`.
 fn test_name(rest: &str) -> &str {
     rest.split([' ', ',']).next().unwrap_or_default()
-}
-
-/// `line` without the colours' escape sequences, `ESC [ … <letter>`, that a terminal's printer
-/// would add: the runner reads a pipe, which turns them off, but a line keeping one would be lost.
-fn without_colours(line: &str) -> Cow<'_, str> {
-    if !line.contains('\u{1b}') {
-        return Cow::Borrowed(line);
-    }
-    let mut plain = String::with_capacity(line.len());
-    let mut characters = line.chars().peekable();
-    while let Some(character) = characters.next() {
-        if character == '\u{1b}' && characters.peek() == Some(&'[') {
-            characters.next();
-            for inside in characters.by_ref() {
-                if ('\u{40}'..='\u{7e}').contains(&inside) {
-                    break;
-                }
-            }
-        } else {
-            plain.push(character);
-        }
-    }
-    Cow::Owned(plain)
 }
 
 /// Whether `rest`, after `[  FAILED  ] ` in the summary, is its count: `<n> test(s) failed:`.
@@ -255,8 +258,15 @@ fn is_failed_count(rest: &str) -> bool {
     })
 }
 
-/// At most this many unsupported markers outside a test are kept, to report.
+/// At most this many markers of each kind outside a test are kept, to report.
 const STRAY_MARKERS_KEPT: usize = 20;
+
+/// Keeps `what` in `stray`, unless it holds [`STRAY_MARKERS_KEPT`] already.
+fn keep_stray(stray: &mut Vec<String>, what: &str) {
+    if stray.len() < STRAY_MARKERS_KEPT {
+        stray.push(what.to_owned());
+    }
+}
 
 impl Parser {
     /// A parser for a new process's output.
@@ -264,37 +274,34 @@ impl Parser {
         Parser::default()
     }
 
-    /// Reads one line, its newline left out; gives what it said of the tests.
-    pub fn feed(&mut self, line: &str) -> Vec<Event> {
-        let line = without_colours(line);
-        let line = line.as_ref();
+    /// Reads one line, its newline left out; gives the test it ended, if it ended one. A line
+    /// ends one test at most: a `[ RUN      ]` line ends the test before it, whose end was lost.
+    pub fn feed(&mut self, line: &str) -> Option<Ended> {
         if let Some(rest) = line.strip_prefix(RUN) {
-            let mut events = Vec::new();
-            if let Some(cut) = self.running.take() {
-                // gtest ends every test before it begins the next: a test without its end has
-                // lost it, and its outcome cannot be read.
+            // gtest ends every test before it begins the next: a test without its end has lost
+            // it, and its outcome cannot be read.
+            let cut = self.running.take().map(|cut| {
                 let ended = cut.end(
                     Seen::Crash,
                     Some("its end line is missing: a new test began".to_owned()),
                 );
-                events.push(Event::Ended(self.record(ended)));
-            }
-            let name = test_name(rest).to_owned();
+                self.record(ended)
+            });
             self.began = true;
             self.running = Some(Running {
-                name: name.clone(),
+                name: test_name(rest).to_owned(),
+                error: None,
                 unsupported: None,
                 timed_out: false,
                 skip_reasons: Vec::new(),
             });
-            events.push(Event::Began(name));
-            return events;
+            return cut;
         }
         let Some(running) = &mut self.running else {
-            if let Some(what) = line.strip_prefix(UNSUPPORTED_MARKER) {
-                if self.stray_markers.len() < STRAY_MARKERS_KEPT {
-                    self.stray_markers.push(what.to_owned());
-                }
+            if let Some(what) = line.strip_prefix(ERROR_MARKER) {
+                keep_stray(&mut self.stray_errors, what);
+            } else if let Some(what) = line.strip_prefix(UNSUPPORTED_MARKER) {
+                keep_stray(&mut self.stray_markers, what);
             } else if line.starts_with(SUMMARY) && line.contains(" test cases run.") {
                 self.summary = true;
             } else if self.summary
@@ -303,21 +310,24 @@ impl Parser {
             {
                 self.failed_in_summary.insert(test_name(rest).to_owned());
             }
-            return Vec::new();
+            return None;
         };
+        if let Some(what) = line.strip_prefix(ERROR_MARKER) {
+            running.error.get_or_insert_with(|| what.to_owned());
+            return None;
+        }
         if let Some(what) = line.strip_prefix(UNSUPPORTED_MARKER) {
             running.unsupported.get_or_insert_with(|| what.to_owned());
-            return Vec::new();
+            return None;
         }
         if let Some(reason) = line.strip_prefix(SKIP_REASON) {
             running.skip_reasons.push(reason.to_owned());
-            return Vec::new();
+            return None;
         }
         let ending = [
             (OK, Seen::Pass),
             (FAILED, Seen::Fail),
             (WLCS_SKIP, Seen::Skip),
-            (GTEST_SKIPPED, Seen::Skip),
         ]
         .into_iter()
         .find_map(|(tag, seen)| Some((line.strip_prefix(tag)?, seen)));
@@ -327,21 +337,9 @@ impl Parser {
         if ends.is_none() && line.contains(WLCS_TIMEOUT) {
             running.timed_out = true;
         }
-        match (ends, self.running.take()) {
-            (Some(seen), Some(running)) => {
-                let seen = if running.unsupported.is_some() {
-                    Seen::Unsupported
-                } else {
-                    seen
-                };
-                let ended = running.end(seen, None);
-                vec![Event::Ended(self.record(ended))]
-            }
-            (_, running) => {
-                self.running = running;
-                Vec::new()
-            }
-        }
+        let seen = ends?;
+        let ended = self.running.take()?.end_line(seen);
+        Some(self.record(ended))
     }
 
     /// Notes that `ended` ended, and gives it back.
@@ -376,7 +374,9 @@ impl Parser {
             let blamed = match end {
                 ProcessEnd::Stopped => None,
                 ProcessEnd::Hung | ProcessEnd::Lost => Some(Seen::Hang),
-                ProcessEnd::Exited(_) | ProcessEnd::Signalled(_) => Some(Seen::Crash),
+                ProcessEnd::Exited(_) | ProcessEnd::Signalled(_) | ProcessEnd::ChildOutlived => {
+                    Some(Seen::Crash)
+                }
             };
             let how = match end {
                 ProcessEnd::Exited(_) if !self.summary => {
@@ -405,32 +405,31 @@ impl Parser {
             whole,
             began: self.began,
             stray_markers: self.stray_markers,
+            stray_errors: self.stray_errors,
         }
     }
-}
-
-/// Every test's outcome in a whole output `text`, once its process ended as `end`: what the tests
-/// gave, as the runner reads them, for the tests and for a log read again.
-pub fn parse(text: &str, end: ProcessEnd) -> (BTreeMap<String, Ended>, Finish) {
-    let mut parser = Parser::new();
-    let mut outcomes = BTreeMap::new();
-    for line in text.lines() {
-        for event in parser.feed(line) {
-            if let Event::Ended(ended) = event {
-                outcomes.insert(ended.name.clone(), ended);
-            }
-        }
-    }
-    let finish = parser.finish(end);
-    for ended in &finish.changed {
-        outcomes.insert(ended.name.clone(), ended.clone());
-    }
-    (outcomes, finish)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every test's outcome in a whole output `text`, once its process ended as `end`, as the
+    /// runner reads them line by line.
+    fn parse(text: &str, end: ProcessEnd) -> (BTreeMap<String, Ended>, Finish) {
+        let mut parser = Parser::new();
+        let mut outcomes = BTreeMap::new();
+        for line in text.lines() {
+            if let Some(ended) = parser.feed(line) {
+                outcomes.insert(ended.name.clone(), ended);
+            }
+        }
+        let finish = parser.finish(end);
+        for ended in &finish.changed {
+            outcomes.insert(ended.name.clone(), ended.clone());
+        }
+        (outcomes, finish)
+    }
 
     /// A run of WLCS 1.8.1 as its printer and listener write it: passes, failures, skips, a test
     /// skipped after it failed, an unsupported hook, parameterised names, its summary.
@@ -476,14 +475,10 @@ mod tests {
     #[test]
     fn a_test_skipped_after_it_failed_counts_failed() {
         let mut parser = Parser::new();
-        let mut ends = Vec::new();
-        for line in RUN_OUTPUT.lines() {
-            for event in parser.feed(line) {
-                if let Event::Ended(ended) = event {
-                    ends.push(ended);
-                }
-            }
-        }
+        let ends: Vec<Ended> = RUN_OUTPUT
+            .lines()
+            .filter_map(|line| parser.feed(line))
+            .collect();
         // Its own end line says skipped...
         let name = "SelfTest.acquiring_unsupported_extension_is_xfail";
         let own = ends.iter().find(|e| e.name == name).unwrap();
@@ -644,11 +639,43 @@ mod tests {
     }
 
     #[test]
-    fn colours_are_read_through() {
-        let text = "\u{1b}[0;32m[ RUN      ] \u{1b}[mA.a\n\u{1b}[0;32m[       OK ] \u{1b}[mA.a (0 ms)\n\
-                    \u{1b}[32m[==========] \u{1b}[00m1 tests from 1 test cases run. (0ms total elapsed)\n";
+    fn an_error_marker_makes_the_test_a_shim_error_whatever_gtest_says() {
+        // Between its start and its end, before an OK or a failure, after an unsupported marker.
+        let text = "[ RUN      ] A.a\nyuna-wlcs: error: placing a surface that is no mapped \
+                    window: wl_surface@3\n[       OK ] A.a (1 ms)\n\
+                    [ RUN      ] A.b\nyuna-wlcs: unsupported: touch\nyuna-wlcs: error: the \
+                    server has stopped: the request is dropped\n[  FAILED  ] A.b (2 ms)\n\
+                    [ RUN      ] A.c\n[       OK ] A.c (1 ms)\n\
+                    [==========] 3 tests from 1 test cases run. (4ms total elapsed)\n";
+        let (outcomes, finish) = parse(text, ProcessEnd::Exited(1));
+        assert!(finish.whole);
+        assert_eq!(outcomes["A.a"].seen, Seen::ShimError);
+        assert_eq!(
+            outcomes["A.a"].note.as_deref(),
+            Some("error: placing a surface that is no mapped window: wl_surface@3")
+        );
+        assert_eq!(outcomes["A.b"].seen, Seen::ShimError);
+        assert_eq!(outcomes["A.c"].seen, Seen::Pass);
+        assert!(finish.stray_errors.is_empty());
+        // Outside any test, it blames none and is kept to report.
+        let text = "yuna-wlcs: error: the server did not start: no output\n\
+                    [ RUN      ] A.a\n[       OK ] A.a (1 ms)\n\
+                    [==========] 1 tests from 1 test cases run. (1ms total elapsed)\n";
         let (outcomes, finish) = parse(text, ProcessEnd::Exited(0));
         assert_eq!(outcomes["A.a"].seen, Seen::Pass);
-        assert!(finish.whole);
+        assert_eq!(finish.stray_errors, ["the server did not start: no output"]);
+    }
+
+    #[test]
+    fn a_child_that_outlived_wlcs_is_a_crash_of_the_last_test() {
+        let text = "[ RUN      ] A.a\n[       OK ] A.a (1 ms)\n\
+                    [==========] 1 tests from 1 test cases run. (1ms total elapsed)\n";
+        let (outcomes, finish) = parse(text, ProcessEnd::ChildOutlived);
+        assert!(!finish.whole);
+        assert_eq!(outcomes["A.a"].seen, Seen::Crash);
+        assert_eq!(
+            outcomes["A.a"].note.as_deref(),
+            Some("its process ended badly after it: a child of WLCS outlived it: killed")
+        );
     }
 }

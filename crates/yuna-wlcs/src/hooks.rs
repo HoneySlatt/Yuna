@@ -16,7 +16,7 @@ use std::ffi::{c_char, c_int};
 use std::os::fd::IntoRawFd;
 use std::sync::{Arc, Once};
 
-use tracing::level_filters::LevelFilter;
+use tracing::Level;
 
 use crate::abi::{
     DISPLAY_SERVER_VERSION, POINTER_VERSION, SERVER_INTEGRATION_VERSION, TOUCH_VERSION, WlDisplay,
@@ -24,7 +24,7 @@ use crate::abi::{
     WlcsServerIntegration, WlcsTouch, display_fd, fixed_to_f64, surface_id,
 };
 use crate::descriptor::Descriptor;
-use crate::server::{Link, Markers, Server, report};
+use crate::server::{Link, Markers, Server, report_error};
 
 /// What WLCS looks the module up by: how it makes and frees a server.
 #[unsafe(export_name = "wlcs_server_integration")]
@@ -64,48 +64,20 @@ struct TouchDevice {
 }
 
 /// Sets what the whole process keeps once the module is loaded, at the first server: panics
-/// abort, and Yuna logs to standard error, at the level `RUST_LOG` names (`error`, `warn`,
-/// `info`, `debug` or `trace`), `warn` without it.
+/// abort, and Yuna logs to standard error at the level `YUNA_LOG` names, as Yuna's program does,
+/// `warn` without it ([`yuna::start_logging`]). The logger is the module's own copy of
+/// `tracing`'s, so that no logger of WLCS's is touched.
 fn setup_process() {
     static SETUP: Once = Once::new();
     SETUP.call_once(|| {
         let standard_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             standard_hook(info);
-            report("yuna-wlcs: a panic in Yuna or its shim is fatal: WLCS stops");
+            report_error("a panic in Yuna or its shim is fatal: WLCS stops");
             std::process::abort();
         }));
-        start_logging();
+        yuna::start_logging(Level::WARN);
     });
-}
-
-/// Logs to standard error at `RUST_LOG`'s level, `warn` without it: a value that names no level
-/// is reported and ignored. The module's own copy of `tracing`, so that no logger of WLCS's is
-/// touched.
-fn start_logging() {
-    let value = std::env::var_os("RUST_LOG");
-    let level = match value
-        .as_ref()
-        .map(|value| value.to_string_lossy().to_ascii_lowercase())
-        .as_deref()
-    {
-        None | Some("warn") => Some(LevelFilter::WARN),
-        Some("error") => Some(LevelFilter::ERROR),
-        Some("info") => Some(LevelFilter::INFO),
-        Some("debug") => Some(LevelFilter::DEBUG),
-        Some("trace") => Some(LevelFilter::TRACE),
-        Some(_) => None,
-    };
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(level.unwrap_or(LevelFilter::WARN))
-        .with_writer(std::io::stderr)
-        .try_init();
-    if level.is_none() {
-        tracing::warn!(
-            ?value,
-            "RUST_LOG names no level (error, warn, info, debug, trace); logging at warn"
-        );
-    }
 }
 
 /// The handle behind `server`.
@@ -161,7 +133,7 @@ unsafe extern "C" fn start(server: *mut WlcsDisplayServer) {
     // SAFETY: WLCS calls the hook with the server it was given (`handle`'s contract).
     let handle = unsafe { handle(server) };
     if let Err(error) = handle.server.start() {
-        report(&format!("yuna-wlcs: the server did not start: {error}"));
+        report_error(&format!("the server did not start: {error}"));
     }
 }
 
@@ -173,17 +145,14 @@ unsafe extern "C" fn stop(server: *mut WlcsDisplayServer) {
 }
 
 /// `create_client_socket`: a new client's end of a connection, which WLCS then owns; -1 when
-/// none could be made, said on standard error.
+/// none could be made, said on standard error (`Server::connect_client`).
 unsafe extern "C" fn create_client_socket(server: *mut WlcsDisplayServer) -> c_int {
     // SAFETY: as in `start`.
     let handle = unsafe { handle(server) };
-    match handle.server.connect_client() {
-        Ok(stream) => stream.into_raw_fd(),
-        Err(error) => {
-            report(&format!("yuna-wlcs: no client socket: {error}"));
-            -1
-        }
-    }
+    handle
+        .server
+        .connect_client()
+        .map_or(-1, IntoRawFd::into_raw_fd)
 }
 
 /// `position_window_absolute`: places the window of `client`'s `surface`, its top-left corner at
@@ -200,7 +169,7 @@ unsafe extern "C" fn position_window_absolute(
     // SAFETY: as in `start`.
     let handle = unsafe { handle(server) };
     if client.is_null() || surface.is_null() {
-        report("yuna-wlcs: a window to place, of no client or no surface: nothing is placed");
+        report_error("a window to place, of no client or no surface: nothing is placed");
         return;
     }
     // SAFETY: WLCS passes the live `wl_display` of one of its clients, and one of its live
@@ -270,7 +239,7 @@ unsafe fn pointer_device<'a>(pointer: *mut WlcsPointer) -> &'a PointerDevice {
 /// The link of a pointer device, or what WLCS is told when it has none.
 fn link_of(device: &PointerDevice) -> Option<&Link> {
     if device.link.is_none() {
-        report("yuna-wlcs: a pointer of a server that did not run: nothing moves");
+        report_error("a pointer of a server that did not run: nothing moves");
     }
     device.link.as_ref()
 }

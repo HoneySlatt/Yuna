@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::expected::{self, Expectation, ExpectedFile};
 use super::output::Seen;
-use super::running::{Batch, ProcessFailure, Supervisor, TestRun, Verdict, Watch};
+use super::running::{Batch, ListFailure, ProcessFailure, Supervisor, TestRun, Verdict, Watch};
 use super::{RunOptions, counts_text, duration, print_line};
 use crate::cli::{utc, write_atomically};
 
@@ -43,7 +43,7 @@ pub struct RecordFile {
     /// The processes that failed with no test to blame: never merged either.
     pub failures: Vec<String>,
     /// Each test WLCS lists, by name, with the outcome of each of its runs, in the order they
-    /// ended: `pass`, `fail`, `skip`, `unsupported`, `crash` or `hang`.
+    /// ended: `pass`, `fail`, `skip`, `unsupported`, `shim-error`, `crash` or `hang`.
     pub tests: BTreeMap<String, Vec<Seen>>,
 }
 
@@ -66,7 +66,7 @@ pub fn read(path: &Path) -> Result<RecordFile, String> {
 /// every run of every record gets it; one whose outcome varied is flaky, `# varied: <counts>`.
 /// Refuses, giving every reason: a record stopped, or with a process that failed; records of
 /// other WLCS versions, or of other tests; a test never run; a test that crashed or hung in any
-/// run.
+/// run, or met the module's error.
 pub fn merge(records: &[(String, RecordFile)]) -> Result<ExpectedFile, Vec<String>> {
     let mut refusals = Vec::new();
     let Some((first_path, first)) = records.first() else {
@@ -116,6 +116,13 @@ pub fn merge(records: &[(String, RecordFile)]) -> Result<ExpectedFile, Vec<Strin
         {
             refusals.push(format!(
                 "{name} crashed or hung: {}; fix it, then record again",
+                counts_text(&counts)
+            ));
+            continue;
+        }
+        if counts.contains_key(&Seen::ShimError) {
+            refusals.push(format!(
+                "{name} met the module's error: {}; fix the module, then record again",
                 counts_text(&counts)
             ));
             continue;
@@ -184,7 +191,7 @@ pub fn merge_files(inputs: &[PathBuf], write: &Path) -> Result<u8, String> {
 struct RecordWatch;
 
 impl Watch for RecordWatch {
-    fn ended(&self, run: &TestRun, _correction: bool) -> Verdict {
+    fn ended(&self, run: &TestRun) -> Verdict {
         print_line(run.ended.seen, &run.batch, run.ended.note.as_deref(), None);
         Verdict {
             toward_breaker: run.ended.seen == Seen::Hang,
@@ -198,13 +205,26 @@ impl Watch for RecordWatch {
 }
 
 /// `wlcs record --runs <n> --out <file>`: every test WLCS lists, each in its own process, `runs`
-/// times, `--jobs` at once; writes the outcomes to `out`. Gives 0 when no test crashed or hung and
-/// the record is whole, 1 otherwise; an error is a run that could not start.
+/// times, `--jobs` at once; writes the outcomes to `out`. Gives 0 when no test crashed, hung or
+/// met the module's error and the record is whole, 1 otherwise, and 1 with nothing written when
+/// WLCS crashed or hung while it listed its tests; an error is a run that could not start.
 pub fn record(options: &RunOptions, runs: u32, out: &Path) -> Result<u8, String> {
     let started = Instant::now();
     let started_utc = utc(SystemTime::now());
     let supervisor = Supervisor::new(options.settings(None))?;
-    let listing = supervisor.list()?;
+    let listing = match supervisor.list() {
+        Ok(listing) => listing,
+        Err(ListFailure::Unusable(text)) => return Err(text),
+        Err(ListFailure::Broken(failure)) => {
+            println!(
+                "yuna-bench wlcs record: {}: {}; nothing recorded; its log is {}",
+                failure.batch,
+                failure.text,
+                failure.log.display()
+            );
+            return Ok(1);
+        }
+    };
     let names: Vec<&str> = listing.names().collect();
     println!(
         "yuna-bench wlcs record: WLCS {}, {} tests, {runs} runs each, {} at once; module {}",
@@ -268,7 +288,10 @@ pub fn record(options: &RunOptions, runs: u32, out: &Path) -> Result<u8, String>
             *counts.entry(*seen).or_default() += 1;
             *own.entry(*seen).or_default() += 1;
         }
-        if own.contains_key(&Seen::Crash) || own.contains_key(&Seen::Hang) {
+        if [Seen::Crash, Seen::Hang, Seen::ShimError]
+            .iter()
+            .any(|seen| own.contains_key(seen))
+        {
             broken.push(format!("{name}: {}", counts_text(&own)));
         }
         varied += usize::from(own.len() > 1);
@@ -281,7 +304,7 @@ pub fn record(options: &RunOptions, runs: u32, out: &Path) -> Result<u8, String>
         counts_text(&counts)
     );
     for line in broken.iter().chain(&failures) {
-        println!("  crashed or hung: {line}");
+        println!("  crashed, hung or met the module's error: {line}");
     }
     if let Some(stopped) = &stopped {
         println!("  stopped: {stopped}");
@@ -384,6 +407,23 @@ mod tests {
                 "A.b crashed or hung: fail 3, crash 1; fix it, then record again",
             ]
         );
+    }
+
+    #[test]
+    fn a_shim_error_is_refused_and_named() {
+        use Seen::*;
+        let a = record(
+            "1.8.1",
+            &[("A.a", &[Pass, Pass]), ("A.b", &[Pass, ShimError])],
+        );
+        let refusals = merge(&[("a.json".to_owned(), a)]).unwrap_err();
+        assert_eq!(
+            refusals,
+            ["A.b met the module's error: pass 1, shim-error 1; fix the module, then record again"]
+        );
+        // The same runs without it merge.
+        let a = record("1.8.1", &[("A.a", &[Pass, Pass]), ("A.b", &[Pass, Pass])]);
+        assert!(merge(&[("a.json".to_owned(), a)]).is_ok());
     }
 
     #[test]

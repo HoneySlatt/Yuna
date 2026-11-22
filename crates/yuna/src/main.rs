@@ -30,7 +30,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
-use tracing::level_filters::LevelFilter;
+use tracing::Level;
 use yuna::mcp::{Server, Stop};
 use yuna::{ClockMode, Compositor, Config, Device, Error, OWNER_SEAT, OutputMode, XwaylandConfig};
 use yuna_motion::Settings;
@@ -313,7 +313,7 @@ fn usage_error(reason: &str) -> ExitCode {
 fn run_headless(headless: Headless, logging: &Logging) -> ExitCode {
     // Nothing of its own to end: a panic of this thread, which runs the compositor, stops it.
     fatal::install();
-    start_logging();
+    yuna::start_logging(Level::INFO);
     raise_open_files_limit();
     // Before the compositor starts, so that a SIGTERM during its start-up is kept in the pipe and
     // stops it as soon as its loop runs, rather than killing it half started.
@@ -433,7 +433,7 @@ fn start(config: Config) -> Result<Compositor, ExitCode> {
 /// runs the server.
 fn run_mcp(headless: Headless, logging: &Logging) -> ExitCode {
     let on_panic = fatal::install();
-    start_logging();
+    yuna::start_logging(Level::INFO);
     raise_open_files_limit();
     let signals = stop_signal::install().and_then(|stop| {
         let children = stop_signal::install_children()?;
@@ -518,32 +518,6 @@ fn raise_open_files_limit() {
     match yuna::raise_open_files_limit() {
         Ok(limit) => tracing::debug!(?limit, "the soft limit of open files"),
         Err(error) => tracing::warn!(%error, "the limit of open files could not be raised"),
-    }
-}
-
-/// Logs to standard error at the level `YUNA_LOG` names, `info` without it. A value that names
-/// no level is reported and ignored: a setting never stops Yuna (ADR-0008).
-fn start_logging() {
-    let (level, unknown) = match std::env::var_os("YUNA_LOG") {
-        None => (LevelFilter::INFO, None),
-        Some(value) => match value.to_str().map(str::to_ascii_lowercase).as_deref() {
-            Some("error") => (LevelFilter::ERROR, None),
-            Some("warn") => (LevelFilter::WARN, None),
-            Some("info") => (LevelFilter::INFO, None),
-            Some("debug") => (LevelFilter::DEBUG, None),
-            Some("trace") => (LevelFilter::TRACE, None),
-            _ => (LevelFilter::INFO, Some(value)),
-        },
-    };
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_writer(io::stderr)
-        .try_init();
-    if let Some(value) = unknown {
-        tracing::warn!(
-            ?value,
-            "YUNA_LOG names no level (error, warn, info, debug, trace); logging at info"
-        );
     }
 }
 

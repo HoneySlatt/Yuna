@@ -5,19 +5,24 @@
 //! started in its own process group, in the run's work folder, without `WAYLAND_DISPLAY` and
 //! `WAYLAND_SOCKET`, with `LP_NUM_THREADS=0` and the run's own `MESA_SHADER_CACHE_DIR`. Its
 //! standard output and error are one pipe, so that the integration module's markers fall between
-//! a test's start and its end. A thread reads the pipe and, once every writer closed it, waits
-//! for the process's end without reaping it; the batch's thread waits on what it sends, with a
-//! time limit and nothing else: no polling. Every line goes to the process's log, in
+//! a test's start and its end. One thread reads the pipe until every writer closed it; another
+//! waits for the process's end without reaping it; the batch's thread waits on what both send,
+//! with a time limit and nothing else: no polling. Every line goes to the process's log, in
 //! `<work>/logs/`.
 //!
 //! - The hang guard: no new line for the guard's time (60 s; WLCS's own waits give up after
 //!   10 s) kills the whole process group; the test running hangs.
+//! - A child left behind: when WLCS's process has ended but its pipe is still open,
+//!   [`ORPHAN_GRACE`] later the process group is killed: a crash of the process, blamed on the
+//!   test running or the last to end ([`ProcessEnd::ChildOutlived`]).
 //! - A batch resumes after a crash or a hang in a new process, its filter less every test that
 //!   ended, the culprit with them, as long as each process began a test.
 //! - The breaker: [`BREAKER`] hangs or timeouts in a row, in the order the tests end across the
 //!   jobs, stop the run; the [`Watch`] says which ends count.
 //! - The deadline stops the run once it passes.
 //! - A stop kills every running process's group at once.
+//! - The module's error marker printed outside any test is a failure of its process
+//!   ([`ProcessFailure`]).
 //!
 //! Each process group is killed by its id while its leader is not yet reaped, so the id cannot
 //! have been given to another process; nothing is killed by name. Each process gets SIGKILL too
@@ -39,7 +44,7 @@ use std::time::{Duration, Instant};
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
 use super::listing::{self, Listing};
-use super::output::{Ended, Event, Parser, ProcessEnd, Seen};
+use super::output::{Ended, Parser, ProcessEnd, Seen};
 
 /// The hang guard's time, unless the tests shorten it: six times WLCS's own 10 s waits.
 pub const HANG: Duration = Duration::from_secs(60);
@@ -49,6 +54,11 @@ pub const BREAKER: usize = 5;
 
 /// How long a killed process has to end before it is left behind.
 const KILL_GRACE: Duration = Duration::from_secs(10);
+
+/// How long a WLCS process's group may hold its output open once the process has ended, before
+/// the group is killed: long enough for the last lines to be read, far shorter than the hang
+/// guard, which a child left behind would otherwise meet.
+pub const ORPHAN_GRACE: Duration = Duration::from_secs(2);
 
 /// The bytes of a line kept: the rest of a longer one is read and dropped.
 const LINE_KEPT: usize = 64 * 1024;
@@ -109,12 +119,13 @@ pub struct TestRun {
     pub log: Option<PathBuf>,
 }
 
-/// A process that failed before any of its tests began, with no test to blame.
+/// A process that failed with no test to blame: it crashed or hung before any of its tests
+/// began, or the module printed its error marker outside any test.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFailure {
     /// Its batch's label.
     pub batch: String,
-    /// A crash or a hang.
+    /// A crash, a hang or a shim error.
     pub seen: Seen,
     /// What happened, in words.
     pub text: String,
@@ -161,10 +172,10 @@ pub struct Verdict {
 
 /// What a mode does as the tests end: it prints each, and judges whether the run goes on.
 pub trait Watch: Sync {
-    /// A test's run ended, or its outcome changed once its process ended (`correction`): prints
-    /// it and gives its verdict. Called one at a time, in the order the runs end.
-    fn ended(&self, run: &TestRun, correction: bool) -> Verdict;
-    /// A process failed before any test began.
+    /// A test's run ended, or its outcome changed once its process ended: prints it and gives
+    /// its verdict. Called one at a time, in the order the runs end.
+    fn ended(&self, run: &TestRun) -> Verdict;
+    /// A process failed with no test to blame.
     fn failed(&self, failure: &ProcessFailure);
 }
 
@@ -207,10 +218,24 @@ impl State {
     }
 }
 
-/// What the thread that reads a process's output sends.
+/// Why WLCS's tests could not be listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListFailure {
+    /// The run cannot judge (exit 2): the runner did not start or exited with an error, or its
+    /// list is out of its format or too long; in words.
+    Unusable(String),
+    /// The listing crashed or hung, which fails the rules (exit 1), as any process that failed
+    /// before any of its tests began.
+    Broken(ProcessFailure),
+}
+
+/// What the threads that watch a process send.
 enum Output {
+    /// A line of its output.
     Line(String),
-    /// The pipe ended, and then the process: it is not reaped yet.
+    /// Every writer closed the pipe.
+    Closed,
+    /// The process ended; it is not reaped yet.
     Exited,
 }
 
@@ -219,6 +244,7 @@ enum Output {
 enum Kill {
     Hang,
     Deadline,
+    ChildOutlived,
 }
 
 /// Locks `mutex`, whose data no panic can leave half changed.
@@ -307,10 +333,9 @@ fn read_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> 
     }
 }
 
-/// Reads the output of the process `leader` leads until every writer closed it, then waits for
-/// the leader's end without reaping it, so that its process group's id stays its own until the
-/// batch's thread has killed what remains of the group.
-fn read_output(pipe: PipeReader, leader: Pid, events: &SyncSender<Output>) {
+/// Reads a process's output until every writer closed it, sending each line, then
+/// [`Output::Closed`].
+fn read_output(pipe: PipeReader, events: &SyncSender<Output>) {
     let mut reader = BufReader::new(pipe);
     let mut line = Vec::new();
     loop {
@@ -331,7 +356,13 @@ fn read_output(pipe: PipeReader, leader: Pid, events: &SyncSender<Output>) {
             }
         }
     }
-    drop(reader);
+    let _ = events.send(Output::Closed);
+}
+
+/// Waits for the end of the process `leader` leads without reaping it, so that its process
+/// group's id stays its own until the batch's thread has killed what remains of the group, then
+/// sends [`Output::Exited`].
+fn wait_for_exit(leader: Pid, events: &SyncSender<Output>) {
     while let Err(rustix::io::Errno::INTR) = rustix::process::waitid(
         WaitId::Pid(leader),
         WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
@@ -415,33 +446,54 @@ impl Supervisor {
     }
 
     /// The tests WLCS lists, the disabled left out.
-    pub fn list(&self) -> Result<Listing, String> {
+    pub fn list(&self) -> Result<Listing, ListFailure> {
         let log = self.next_log("list");
         let mut text = String::new();
         let mut too_long = false;
-        let end = self.run_process(&log, &["--gtest_list_tests".to_owned()], &mut |line| {
-            if text.len() + line.len() >= LISTING_KEPT {
-                too_long = true;
-            } else {
-                text.push_str(line);
-                text.push('\n');
-            }
-        })?;
+        let end = self
+            .run_process(&log, &["--gtest_list_tests".to_owned()], &mut |line| {
+                if text.len() + line.len() >= LISTING_KEPT {
+                    too_long = true;
+                } else {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            })
+            .map_err(ListFailure::Unusable)?;
         if too_long {
-            return Err(format!(
+            return Err(ListFailure::Unusable(format!(
                 "WLCS's list of tests is longer than {LISTING_KEPT} bytes: {}",
                 log.display()
-            ));
+            )));
         }
-        if end != ProcessEnd::Exited(0) {
-            return Err(format!(
-                "WLCS could not list its tests ({}): its output is in {}",
-                end.describe(),
+        let broken = |seen: Seen| {
+            ListFailure::Broken(ProcessFailure {
+                batch: "the list of tests".to_owned(),
+                seen,
+                text: format!("WLCS ended while it listed its tests: {}", end.describe()),
+                log: log.clone(),
+            })
+        };
+        match end {
+            ProcessEnd::Exited(0) => {}
+            ProcessEnd::Signalled(_) | ProcessEnd::ChildOutlived => {
+                return Err(broken(Seen::Crash));
+            }
+            ProcessEnd::Hung | ProcessEnd::Lost => return Err(broken(Seen::Hang)),
+            ProcessEnd::Exited(_) | ProcessEnd::Stopped => {
+                return Err(ListFailure::Unusable(format!(
+                    "WLCS could not list its tests ({}): its output is in {}",
+                    end.describe(),
+                    log.display()
+                )));
+            }
+        }
+        listing::parse(&text).map_err(|e| {
+            ListFailure::Unusable(format!(
+                "WLCS's list of tests, kept in {}: {e}",
                 log.display()
-            ));
-        }
-        listing::parse(&text)
-            .map_err(|e| format!("WLCS's list of tests, kept in {}: {e}", log.display()))
+            ))
+        })
     }
 
     /// Runs `batches`, `jobs` at once, the first first; gives every test's run once all ended or
@@ -451,7 +503,13 @@ impl Supervisor {
         let queue = Mutex::new(VecDeque::from(batches));
         let ran = Mutex::new(Ran::default());
         let work = || {
-            while let Some(batch) = lock(&queue).pop_front() {
+            loop {
+                // Its own statement, so that the queue's lock is released before the batch
+                // runs: held through it, the other jobs would wait for it to end.
+                let next = lock(&queue).pop_front();
+                let Some(batch) = next else {
+                    break;
+                };
                 let (runs, failures) = self.run_batch(&batch, watch);
                 let mut ran = lock(&ran);
                 ran.runs.extend(runs);
@@ -486,10 +544,11 @@ impl Supervisor {
     }
 
     /// Gives `run` to the watch, counts it toward the breaker, and stops the run if either says
-    /// so. A correction leaves the breaker as it was, unless it is a hang.
+    /// so. A `correction`, a run's outcome changed once its process ended, leaves the breaker as
+    /// it was, unless it is a hang.
     fn report(&self, watch: &dyn Watch, run: &TestRun, correction: bool) {
         let mut state = lock(&self.state);
-        let verdict = watch.ended(run, correction);
+        let verdict = watch.ended(run);
         // A correction changes a test counted already: only a hang it reveals counts.
         if verdict.toward_breaker && (!correction || run.ended.seen == Seen::Hang) {
             state.count_toward_breaker(&run.ended.name);
@@ -501,7 +560,8 @@ impl Supervisor {
         }
     }
 
-    /// Gives `failure` to the watch; a hang counts toward the breaker, a crash breaks the streak.
+    /// Gives `failure` to the watch; a hang counts toward the breaker, a crash or a shim error
+    /// breaks the streak.
     fn report_failure(&self, watch: &dyn Watch, failure: &ProcessFailure) {
         let mut state = lock(&self.state);
         watch.failed(failure);
@@ -525,16 +585,14 @@ impl Supervisor {
             let log = self.next_log(&batch.label);
             let mut parser = Parser::new();
             let process = self.run_process(&log, &arguments, &mut |line| {
-                for event in parser.feed(line) {
-                    if let Event::Ended(test) = event {
-                        let run = TestRun {
-                            ended: test,
-                            batch: batch.label.clone(),
-                            log: Some(log.clone()),
-                        };
-                        self.report(watch, &run, false);
-                        ended.insert(run.ended.name.clone(), run);
-                    }
+                if let Some(test) = parser.feed(line) {
+                    let run = TestRun {
+                        ended: test,
+                        batch: batch.label.clone(),
+                        log: Some(log.clone()),
+                    };
+                    self.report(watch, &run, false);
+                    ended.insert(run.ended.name.clone(), run);
                 }
             });
             let end = match process {
@@ -600,9 +658,22 @@ impl Supervisor {
                     log.display()
                 );
             }
+            for what in &finish.stray_errors {
+                let failure = ProcessFailure {
+                    batch: batch.label.clone(),
+                    seen: Seen::ShimError,
+                    text: format!("the module's error marker outside any test: {what}"),
+                    log: log.clone(),
+                };
+                self.report_failure(watch, &failure);
+                failures.push(failure);
+            }
             let resumable = matches!(
                 end,
-                ProcessEnd::Exited(_) | ProcessEnd::Signalled(_) | ProcessEnd::Hung
+                ProcessEnd::Exited(_)
+                    | ProcessEnd::Signalled(_)
+                    | ProcessEnd::Hung
+                    | ProcessEnd::ChildOutlived
             ) && !finish.whole
                 && finish.began;
             if !resumable {
@@ -675,15 +746,23 @@ impl Supervisor {
         };
         let leader = Pid::from_child(&child);
         let (events, received) = mpsc::sync_channel(LINES_QUEUED);
+        let exit_events = events.clone();
         let reading = thread::Builder::new()
             .name("wlcs-output".to_owned())
-            .spawn(move || read_output(reader, leader, &events));
-        let reading = match reading {
-            Ok(reading) => reading,
+            .spawn(move || read_output(reader, &events));
+        let waiting = reading.and_then(|reading| {
+            thread::Builder::new()
+                .name("wlcs-exit".to_owned())
+                .spawn(move || wait_for_exit(leader, &exit_events))
+                .map(|waiting| (reading, waiting))
+        });
+        let (reading, waiting) = match waiting {
+            Ok(threads) => threads,
             Err(error) => {
+                // A reading thread already made ends with the pipe, once the group is dead.
                 let _ = rustix::process::kill_process_group(leader, Signal::KILL);
                 let _ = child.wait();
-                return Err(format!("a thread to read WLCS's output: {error}"));
+                return Err(format!("a thread to watch WLCS's process: {error}"));
             }
         };
         {
@@ -697,11 +776,20 @@ impl Supervisor {
         let mut killed = None;
         let mut killed_at: Option<Instant> = None;
         let mut last_line = Instant::now();
+        let mut closed = false;
+        let mut exited_at: Option<Instant> = None;
         // The limits are checked before each wait, not only when one times out: a process that
-        // never stops printing would otherwise never meet its deadline.
+        // never stops printing would otherwise never meet its deadline. Once the process has
+        // ended, the hang guard gives way to the grace of a child left behind.
         let left_behind = loop {
+            if closed && exited_at.is_some() {
+                break false;
+            }
             let now = Instant::now();
-            let hang = last_line + self.settings.hang;
+            let limit = match exited_at {
+                Some(at) => at + ORPHAN_GRACE,
+                None => last_line + self.settings.hang,
+            };
             match (killed_at, deadline) {
                 (Some(at), _) if now >= at + KILL_GRACE => break true,
                 (Some(_), _) => {}
@@ -711,8 +799,12 @@ impl Supervisor {
                     killed_at = Some(now);
                     continue;
                 }
-                (None, _) if now >= hang => {
-                    killed = Some(Kill::Hang);
+                (None, _) if now >= limit => {
+                    killed = Some(if exited_at.is_some() {
+                        Kill::ChildOutlived
+                    } else {
+                        Kill::Hang
+                    });
                     let _ = rustix::process::kill_process_group(leader, Signal::KILL);
                     killed_at = Some(now);
                     continue;
@@ -721,8 +813,8 @@ impl Supervisor {
             }
             let until = match (killed_at, deadline) {
                 (Some(at), _) => at + KILL_GRACE,
-                (None, Some((at, _))) => at.min(hang),
-                (None, None) => hang,
+                (None, Some((at, _))) => at.min(limit),
+                (None, None) => limit,
             };
             match received.recv_timeout(until.saturating_duration_since(now)) {
                 Ok(Output::Line(line)) => {
@@ -730,7 +822,9 @@ impl Supervisor {
                     log.line(&line);
                     on_line(&line);
                 }
-                Ok(Output::Exited) | Err(RecvTimeoutError::Disconnected) => break false,
+                Ok(Output::Closed) => closed = true,
+                Ok(Output::Exited) => exited_at = Some(Instant::now()),
+                Err(RecvTimeoutError::Disconnected) => break false,
                 // The checks above act on it.
                 Err(RecvTimeoutError::Timeout) => {}
             }
@@ -750,21 +844,32 @@ impl Supervisor {
                 KILL_GRACE.as_secs()
             ));
             log.close();
-            // Neither the reading thread nor the child is waited for: both stay blocked on the
-            // process that does not end.
-            drop(reading);
+            // Neither the watching threads nor the child are waited for: they stay blocked on
+            // the process, or the pipe, that does not end.
+            drop((reading, waiting));
             return Ok(ProcessEnd::Lost);
         }
+        // Both threads have ended before the leader is reaped: the one that waits for it would
+        // otherwise wait for whichever process took its id next.
         let _ = reading.join();
+        let _ = waiting.join();
         let status = child
             .wait()
             .map_err(|e| format!("waiting for WLCS's runner: {e}"))?;
+        if killed == Some(Kill::ChildOutlived) {
+            log.line(&format!(
+                "yuna-bench: the process ended, but a child of it held its output open for {} s: \
+                 its group was killed",
+                ORPHAN_GRACE.as_secs()
+            ));
+        }
         log.line(&format!("yuna-bench: the process ended: {status}"));
         log.close();
         let stopped = self.stop().is_some();
         Ok(match (killed, status.code(), status.signal()) {
             (Some(Kill::Hang), _, _) => ProcessEnd::Hung,
             (Some(Kill::Deadline), _, _) => ProcessEnd::Stopped,
+            (Some(Kill::ChildOutlived), _, _) => ProcessEnd::ChildOutlived,
             (None, None, Some(9)) if stopped => ProcessEnd::Stopped,
             (None, Some(code), _) => ProcessEnd::Exited(code),
             (None, None, signal) => ProcessEnd::Signalled(signal.unwrap_or(0)),

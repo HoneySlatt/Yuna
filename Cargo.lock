@@ -989,7 +989,6 @@ name = "yuna-wlcs"
 version = "0.1.0"
 dependencies = [
  "tracing",
- "tracing-subscriber",
  "yuna",
  "yuna-types",
 ]

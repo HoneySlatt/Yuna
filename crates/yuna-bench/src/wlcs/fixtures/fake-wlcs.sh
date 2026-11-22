@@ -8,11 +8,16 @@
 # those `--gtest_filter` selects, printing what WLCS's printer and listener print, each test as
 # its behaviour says:
 #
-#   ok, fail, skip; unsupported (the module's marker on standard error, then OK); timeout (one of
-#   WLCS's own waits given up); crash (SIGSEGV); crash-after (OK, then SIGSEGV); hang (silent until
-#   killed, with a child of its own in its process group); hang-alone (the same, the runner's own
-#   process silent, its pid written to `pid` beside the scenario); spam (prints without end);
-#   pass-first (passes the first time it runs, fails after).
+#   ok, fail, skip; unsupported (the module's marker on standard error, then OK); error (the
+#   module's error marker on standard error, then OK); error-fail (the same, then FAILED);
+#   error-after (OK, then the error marker, outside any test); timeout (one of WLCS's own waits
+#   given up); timeout-when-spamming (the same, once a spam test of another process has begun);
+#   crash (SIGSEGV); crash-after (OK, then SIGSEGV); hang (silent until killed, with a child of
+#   its own in its process group); hang-alone (the same, the runner's own process silent, its pid
+#   written to `pid` beside the scenario); orphan (OK, leaving behind a child that holds the
+#   output open, its pid written to `orphan`); spam (marks `spamming` beside the scenario, then
+#   prints without end); pass-first (passes the first time it runs, fails after); list-crash
+#   (the list of tests crashes, SIGSEGV).
 #
 # Each call appends its arguments to `invocations`, beside the scenario; pass-first counts its
 # test's runs there too. It leaves no core file when it crashes.
@@ -41,6 +46,9 @@ while read -r name behaviour; do
 done <"$scenario"
 
 if $list; then
+    for behaviour in "${behaviours[@]}"; do
+        if [ "$behaviour" = list-crash ]; then kill -SEGV $$; fi
+    done
     suite=
     for name in "${tests[@]}"; do
         if [ "${name%%.*}" != "$suite" ]; then
@@ -101,6 +109,31 @@ for index in "${!tests[@]}"; do
         echo "yuna-wlcs: unsupported: touch" >&2
         echo "[       OK ] $name (1 ms)"
         ;;
+    error)
+        echo "yuna-wlcs: error: placing a surface that is no mapped window: wl_surface@3" >&2
+        echo "[       OK ] $name (1 ms)"
+        ;;
+    error-fail)
+        echo "yuna-wlcs: error: the server has stopped: the request is dropped" >&2
+        echo "[  FAILED  ] $name (2 ms)"
+        failed+=("$name")
+        ;;
+    error-after)
+        echo "[       OK ] $name (1 ms)"
+        echo "yuna-wlcs: error: a client was made unasked, and dropped" >&2
+        ;;
+    timeout-when-spamming)
+        while [ ! -e "$folder/spamming" ]; do sleep 0.01; done
+        echo "unknown file: Failure"
+        echo 'C++ exception with description "Timeout waiting for condition" thrown in the test body.'
+        echo "[  FAILED  ] $name (10002 ms)"
+        failed+=("$name")
+        ;;
+    orphan)
+        sleep 600 &
+        echo $! >"$folder/orphan"
+        echo "[       OK ] $name (1 ms)"
+        ;;
     crash) kill -SEGV $$ ;;
     crash-after)
         echo "[       OK ] $name (1 ms)"
@@ -111,7 +144,10 @@ for index in "${!tests[@]}"; do
         echo $$ >"$folder/pid"
         exec sleep 600
         ;;
-    spam) while :; do echo "spam"; done ;;
+    spam)
+        : >"$folder/spamming"
+        while :; do echo "spam"; done
+        ;;
     pass-first)
         count="$folder/runs-${name//\//_}"
         runs=0

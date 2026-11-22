@@ -170,7 +170,10 @@ fn compile_and_run(folder: &Path, source: &str, include: &Path, stubs: &Path) ->
 #[test]
 fn the_declarations_are_wlcs_headers_layout() {
     let include = wlcs_include();
-    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("yuna-wlcs-abi");
+    // The run's own folder, by its process's id: two runs at once never share their files.
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("yuna-wlcs-abi-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
     let stubs = folder.join("stubs");
     std::fs::create_dir_all(&stubs).expect("the test's folder is made");
     std::fs::write(
@@ -210,4 +213,6 @@ fn the_declarations_are_wlcs_headers_layout() {
         include.display(),
         differing.join("\n")
     );
+    // Kept when the test fails, to read.
+    let _ = std::fs::remove_dir_all(&folder);
 }

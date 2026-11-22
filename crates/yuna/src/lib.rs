@@ -54,7 +54,10 @@ mod vrr;
 mod wlr_screencopy;
 mod xwayland;
 
+use std::ffi::OsString;
 use std::fmt;
+
+use tracing::Level;
 
 pub use activation::{MAX_KEPT_TOKENS_OF_CLIENTS_GONE, TOKEN_LIFETIME};
 #[doc(hidden)]
@@ -134,3 +137,70 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Logs to standard error at the level `YUNA_LOG` names, `default` without it: the one reader of
+/// that variable, which the `yuna` program calls with `info`, and WLCS's integration module
+/// (`crates/yuna-wlcs`) with `warn`. A value that names no level is reported and `default` taken:
+/// a setting never stops Yuna (ADR-0008). Once a logger is set, a call changes nothing.
+#[doc(hidden)]
+pub fn start_logging(default: Level) {
+    let (level, unknown) = log_level(std::env::var_os("YUNA_LOG"), default);
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_writer(std::io::stderr)
+        .try_init();
+    if let Some(value) = unknown {
+        tracing::warn!(
+            ?value,
+            "YUNA_LOG names no level (error, warn, info, debug, trace); logging at {}",
+            default.as_str().to_ascii_lowercase()
+        );
+    }
+}
+
+/// The level `value`, `YUNA_LOG`'s, names, in any case: `default` when it is unset, and
+/// `default` with the value given back when it names none.
+fn log_level(value: Option<OsString>, default: Level) -> (Level, Option<OsString>) {
+    let Some(value) = value else {
+        return (default, None);
+    };
+    match value.to_str().map(str::to_ascii_lowercase).as_deref() {
+        Some("error") => (Level::ERROR, None),
+        Some("warn") => (Level::WARN, None),
+        Some("info") => (Level::INFO, None),
+        Some("debug") => (Level::DEBUG, None),
+        Some("trace") => (Level::TRACE, None),
+        _ => (default, Some(value)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::*;
+
+    #[test]
+    fn yuna_log_names_a_level_in_any_case_or_the_default_is_taken() {
+        assert_eq!(log_level(None, Level::INFO), (Level::INFO, None));
+        assert_eq!(log_level(None, Level::WARN), (Level::WARN, None));
+        assert_eq!(
+            log_level(Some("Debug".into()), Level::INFO),
+            (Level::DEBUG, None)
+        );
+        assert_eq!(
+            log_level(Some("error".into()), Level::WARN),
+            (Level::ERROR, None)
+        );
+        let unknown = OsString::from("verbose");
+        assert_eq!(
+            log_level(Some(unknown.clone()), Level::WARN),
+            (Level::WARN, Some(unknown))
+        );
+        let not_utf8 = OsString::from_vec(vec![0xff, b'i']);
+        assert_eq!(
+            log_level(Some(not_utf8.clone()), Level::INFO),
+            (Level::INFO, Some(not_utf8))
+        );
+    }
+}
