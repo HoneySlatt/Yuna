@@ -26,9 +26,28 @@ permissions:
   contents: read
 
 jobs:
-  parity:
+  self:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Let an unprivileged user make namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: grep -m1 'model name' /proc/cpuinfo; nproc
+      - run: >-
+          nix develop .#parity --no-update-lock-file --command
+          cargo run --release --locked -p yuna-bench -- parity run --base HEAD --head HEAD
+          --tier ci --work /home/runner/parity || true
+      - run: cat target/parity/parity-*.md | grep -v '| no worse |' | head -60
+  head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,6 +62,6 @@ jobs:
       - run: >-
           nix develop .#parity --no-update-lock-file --command
           cargo run --release --locked -p yuna-bench -- parity run --base baseline --head HEAD
-          --tier ci --scenario partial --keep --before HEAD^1 --work /home/runner/parity || true
-      - run: python3 -I debug/dhat_diff.py /home/runner/parity partial
-      - run: cat target/parity/parity-*.md | grep -E 'allocations|Parity'
+          --tier ci --keep --before HEAD^1 --work /home/runner/parity || true
+      - run: cat target/parity/parity-*.md | grep -v '| no worse |' | head -60
+      - run: for s in partial full motion scaled many input idle; do echo "== $s"; python3 -I debug/dhat_diff.py /home/runner/parity $s | head -12 | cut -c1-500; done
