@@ -151,14 +151,26 @@ pub fn merge(records: &[(String, RecordFile)]) -> Result<ExpectedFile, Vec<Strin
 
 /// `wlcs record --merge`: merges the records at `inputs` and writes the file of expected
 /// outcomes to `write`, atomically. Gives 0 written, 1 refused; an error is an input unreadable
-/// or the file unwritable.
+/// or the file unwritable. It says which commit each record ran, warning when they differ or one
+/// was dirty, and every test that leaves `pass` against the file it replaces: such a loss is a
+/// commit of its own that cites the owner's go or an ADR (ADR-0149), which only its reviewer
+/// checks.
 pub fn merge_files(inputs: &[PathBuf], write: &Path) -> Result<u8, String> {
     let mut records = Vec::new();
     for path in inputs {
         records.push((path.display().to_string(), read(path)?));
     }
+    say_commits(&records);
+    let replaced = fs::read_to_string(write)
+        .ok()
+        .and_then(|text| expected::parse(&text).ok());
     match merge(&records) {
         Ok(file) => {
+            if let Some(replaced) = &replaced {
+                for (name, now) in left_pass(replaced, &file) {
+                    println!("yuna-bench wlcs: leaves pass: {name}, now {now}");
+                }
+            }
             let text = expected::write(&file);
             write_atomically(write, |writer| writer.write_all(text.as_bytes()))?;
             let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -183,6 +195,48 @@ pub fn merge_files(inputs: &[PathBuf], write: &Path) -> Result<u8, String> {
             }
             Ok(1)
         }
+    }
+}
+
+/// The tests `old` expects to pass that `new` does not, each with what `new` says of it: its
+/// outcome, or `gone`.
+fn left_pass<'a>(old: &'a ExpectedFile, new: &ExpectedFile) -> Vec<(&'a str, &'static str)> {
+    old.tests
+        .iter()
+        .filter(|(_, expectation)| **expectation == Expectation::Pass)
+        .filter_map(|(name, _)| match new.tests.get(name) {
+            Some(Expectation::Pass) => None,
+            Some(now) => Some((name.as_str(), now.name())),
+            None => Some((name.as_str(), "gone")),
+        })
+        .collect()
+}
+
+/// Prints the commit each record ran, and warns when they differ or one was dirty: records of
+/// different code merge into `flaky` where they disagree. A pull request's record names the merge
+/// commit GitHub checked out, not the branch's.
+fn say_commits(records: &[(String, RecordFile)]) {
+    for (path, record) in records {
+        let commit = record.commit.as_deref().unwrap_or("unknown");
+        println!("yuna-bench wlcs: {path}: commit {commit}");
+    }
+    let commits: std::collections::BTreeSet<&str> = records
+        .iter()
+        .map(|(_, record)| {
+            let commit = record.commit.as_deref().unwrap_or("unknown");
+            commit.strip_suffix("-dirty").unwrap_or(commit)
+        })
+        .collect();
+    if commits.len() > 1 {
+        println!("yuna-bench wlcs: warning: the records ran different commits");
+    }
+    if records.iter().any(|(_, record)| {
+        record
+            .commit
+            .as_deref()
+            .is_some_and(|c| c.ends_with("-dirty"))
+    }) {
+        println!("yuna-bench wlcs: warning: a record ran a tree with uncommitted changes");
     }
 }
 
@@ -342,6 +396,35 @@ mod tests {
                 .map(|(name, seen)| ((*name).to_owned(), seen.to_vec()))
                 .collect(),
         }
+    }
+
+    fn file(tests: &[(&str, Expectation)]) -> ExpectedFile {
+        ExpectedFile {
+            wlcs: "1.8.1".to_owned(),
+            tests: tests
+                .iter()
+                .map(|(name, expectation)| ((*name).to_owned(), expectation.clone()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_test_that_leaves_pass_is_named_with_what_it_became() {
+        let old = file(&[
+            ("A.kept", Expectation::Pass),
+            ("A.lost", Expectation::Pass),
+            ("A.gone", Expectation::Pass),
+            ("A.failing", Expectation::Fail),
+        ]);
+        let new = file(&[
+            ("A.kept", Expectation::Pass),
+            ("A.lost", Expectation::Fail),
+            ("A.failing", Expectation::Pass),
+        ]);
+        assert_eq!(
+            left_pass(&old, &new),
+            vec![("A.gone", "gone"), ("A.lost", "fail")]
+        );
     }
 
     #[test]
