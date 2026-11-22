@@ -6,12 +6,14 @@
 //! mode, for tests and for `yuna mcp --manual-clock`, time starts at the real monotonic time and
 //! moves only when [`Compositor::advance`](crate::Compositor::advance) moves it, a test's call or
 //! MCP's `clock` tool, which never moves it past real time; every deadline it passes runs, at its
-//! own time, in order. Either way, nothing is armed at rest.
+//! own time, in order, but an X11 manager's limit: the manager, on a thread of its own, is sent
+//! the time the advance reaches, at its end (`xwayland/manager/`). Either way, nothing is armed
+//! at rest.
 
 use std::time::Duration;
 
 use smithay::utils::{Clock as SystemClock, Monotonic};
-use yuna_types::OutputId;
+use yuna_types::{OutputId, SeatId};
 
 /// How the clock's time moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +40,16 @@ pub(crate) enum Deadline {
     /// The earliest time an X11 program's drag released goes without its source's drop or leave
     /// (`xwayland/drags.rs`).
     Drags,
+    /// On the manual clock, the earliest time limit of a seat's X11 manager, a transfer's or a
+    /// drag's, as the manager last told Yuna (`xwayland/manager/`). An advance stops at it, a
+    /// wake named, and sends the manager the time it reaches, at its end.
+    X11Manager(SeatId),
+}
+
+/// `CLOCK_MONOTONIC`'s time, as [`Clock::real_now`] reads it, for a thread that holds no clock:
+/// an X11 manager's (`xwayland/manager/time.rs`).
+pub(crate) fn monotonic_now() -> Duration {
+    SystemClock::<Monotonic>::new().now().into()
 }
 
 /// The time and the armed deadlines. See the module's documentation.
@@ -47,8 +59,9 @@ pub struct Clock {
     system: SystemClock<Monotonic>,
     /// Manual mode's time; unused in real mode.
     manual_now: Duration,
-    /// Armed deadlines, in the order they were first armed: two per output and one of each
-    /// other kind at most, so a scan costs less than any ordered structure.
+    /// Armed deadlines, in the order they were first armed: two per output, one per seat's X11
+    /// manager and one of each other kind at most, so a scan costs less than any ordered
+    /// structure.
     deadlines: Vec<(Duration, Deadline)>,
 }
 

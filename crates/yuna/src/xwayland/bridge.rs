@@ -37,12 +37,13 @@
 //! to the seat's Wayland selection, which Wayland's own rule then gives to the client with the
 //! focus.
 //!
-//! **Bounds.** A transfer that makes no progress for [`X11_TRANSFER_TIMEOUT`] ends, as does one
-//! past [`MAX_X11_TRANSFER_BYTES`]; [`MAX_X11_TRANSFERS`] run at once each way, and a request
-//! past them is refused. A transfer holds a piece of a property, or a chunk, at a time: its
-//! reader's pace sets the next. A reader or a pipe that closes, a requestor or an owner gone, a
-//! reply of the wrong type or too short, each ends its transfer alone: the Wayland reader sees
-//! its pipe end, the X11 requestor a refusal, or, mid-INCR, no next chunk.
+//! **Bounds.** A transfer that makes no progress for [`X11_TRANSFER_TIMEOUT`], on the manager's
+//! time (`manager/time.rs`), ends, as does one past [`MAX_X11_TRANSFER_BYTES`];
+//! [`MAX_X11_TRANSFERS`] run at once each way, and a request past them is refused. A transfer
+//! holds a piece of a property, or a chunk, at a time: its reader's pace sets the next. A reader
+//! or a pipe that closes, a requestor or an owner gone, a reply of the wrong type or too short,
+//! each ends its transfer alone: the Wayland reader sees its pipe end, the X11 requestor a
+//! refusal, or, mid-INCR, no next chunk.
 //!
 //! **Drags.** A drag's data between X11 and Wayland moves through the same transfers, within the
 //! same bounds and count (`xdnd.rs`): an X11 program's `XdndSelection` read for a Wayland target,
@@ -53,7 +54,7 @@
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use calloop::channel::SyncSender;
 use rustix::buffer::spare_capacity;
@@ -70,13 +71,27 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent};
+use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent, ManagerTime};
 
 /// How long a transfer of a selection between X11 and Wayland may go without progress, no byte
 /// read or written and no step of its X11 peer, before it ends: as long as a ping waits
 /// ([`X11_PING_TIMEOUT`](crate::X11_PING_TIMEOUT)), as KWin waits 5 to 10 s. A transfer that
 /// moves is never ended by it, however long it takes.
 pub const X11_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// When a transfer that last moved at `progress`, or an owner's `TARGETS` asked then, runs out
+/// of time: [`X11_TRANSFER_TIMEOUT`] later, or at the end of time when that would pass it.
+fn transfer_limit(progress: Duration) -> Duration {
+    progress.saturating_add(X11_TRANSFER_TIMEOUT)
+}
+
+/// Whether what last moved at `progress` is out of time `now`: once its [`transfer_limit`] is
+/// due. The limit the manager waits for is the same, so that a limit due always ends what it
+/// limits: judged apart, near the end of time, a saturated limit could be due while nothing was
+/// out of time, and the manager would wake at once, for ever.
+fn overdue(progress: Duration, now: Duration) -> bool {
+    transfer_limit(progress) <= now
+}
 
 /// How many transfers run at once on a seat, each way: a paste asks for a type or two, a
 /// clipboard manager for a few more. One past them is refused.
@@ -241,7 +256,7 @@ struct X11Owner {
     /// What it offers, once its `TARGETS` are read: each MIME type with its target.
     offer: Option<Vec<(String, Atom)>>,
     /// The window its `TARGETS` are converted onto, and when they were asked, until they come.
-    asking: Option<(Window, Instant)>,
+    asking: Option<(Window, Duration)>,
 }
 
 /// What a transfer to Wayland reads.
@@ -273,7 +288,7 @@ struct ToWayland {
     /// The bytes read so far, for [`MAX_X11_TRANSFER_BYTES`].
     total: u64,
     /// The last time it moved.
-    progress: Instant,
+    progress: Duration,
 }
 
 /// Where a transfer to Wayland stands on X11's side.
@@ -343,7 +358,7 @@ struct ToX11 {
     buffer: Vec<u8>,
     total: u64,
     stage: Answer,
-    progress: Instant,
+    progress: Duration,
 }
 
 /// Where a transfer to X11 stands.
@@ -372,6 +387,8 @@ enum Step<T> {
 pub(super) struct Bridge<'a> {
     connection: &'a ManagerConnection,
     events: &'a SyncSender<ManagerEvent>,
+    /// The manager's time, which the transfers' progress is stamped with.
+    time: &'a ManagerTime,
     atoms: Atoms,
     root: Window,
     /// The manager's own window: it owns the selections held for Wayland, and the transfers'
@@ -396,13 +413,13 @@ pub(super) struct Bridge<'a> {
     names: HashMap<Atom, Option<String>>,
     /// When the transfers of the latest drags last moved, once they ended, each way, by drag:
     /// a drag's time limit runs from its last move, ended transfers included.
-    drags_to_wayland_moved: Vec<(u64, Instant)>,
-    drags_to_x11_moved: Vec<(u64, Instant)>,
+    drags_to_wayland_moved: Vec<(u64, Duration)>,
+    drags_to_x11_moved: Vec<(u64, Duration)>,
 }
 
 /// Records that drag `drag`'s transfers last moved `at`, in `moves`, one entry a drag: the
 /// manager forgets the drags it no longer follows at each turn ([`Bridge::keep_drag_moves`]).
-fn note_move(moves: &mut Vec<(u64, Instant)>, drag: u64, at: Instant) {
+fn note_move(moves: &mut Vec<(u64, Duration)>, drag: u64, at: Duration) {
     match moves.iter_mut().find(|(of, _)| *of == drag) {
         Some((_, last)) => *last = (*last).max(at),
         None => moves.push((drag, at)),
@@ -413,6 +430,7 @@ impl<'a> Bridge<'a> {
     pub(super) fn new(
         connection: &'a ManagerConnection,
         events: &'a SyncSender<ManagerEvent>,
+        time: &'a ManagerTime,
         atoms: Atoms,
         root: Window,
         own: Window,
@@ -421,6 +439,7 @@ impl<'a> Bridge<'a> {
         Bridge {
             connection,
             events,
+            time,
             atoms,
             root,
             own,
@@ -607,7 +626,7 @@ impl<'a> Bridge<'a> {
         self.held(selection).x11 = Some(X11Owner {
             number,
             offer: None,
-            asking: Some((window, Instant::now())),
+            asking: Some((window, self.time.now())),
         });
         Ok(true)
     }
@@ -684,7 +703,7 @@ impl<'a> Bridge<'a> {
             };
             transfer.time = time;
             transfer.asks += 1;
-            transfer.progress = Instant::now();
+            transfer.progress = self.time.now();
             let (selection, target) = (transfer.selection, transfer.target);
             self.connection.convert_selection(
                 window,
@@ -699,7 +718,7 @@ impl<'a> Bridge<'a> {
             offset: 0,
             incr: false,
         };
-        transfer.progress = Instant::now();
+        transfer.progress = self.time.now();
         self.pump_to_wayland(window)
     }
 
@@ -906,7 +925,7 @@ impl<'a> Bridge<'a> {
                 pending: Vec::new(),
                 written: 0,
                 total: 0,
-                progress: Instant::now(),
+                progress: self.time.now(),
             },
         );
         Ok(true)
@@ -925,7 +944,7 @@ impl<'a> Bridge<'a> {
                 Ok(true)
             }
             Step::Ended => {
-                self.ended_to_wayland(from, Instant::now());
+                self.ended_to_wayland(from, self.time.now());
                 self.closed_to_wayland(window, None)
             }
             // Dropped, the transfer closes its pipe.
@@ -938,7 +957,7 @@ impl<'a> Bridge<'a> {
 
     /// A transfer to Wayland that last moved `at` ended: for a drag's, its time limit runs from
     /// then.
-    fn ended_to_wayland(&mut self, from: ReadFrom, at: Instant) {
+    fn ended_to_wayland(&mut self, from: ReadFrom, at: Duration) {
         if let ReadFrom::Drag(drag) = from {
             note_move(&mut self.drags_to_wayland_moved, drag, at);
         }
@@ -956,7 +975,7 @@ impl<'a> Bridge<'a> {
                 match rustix::io::write(&transfer.pipe, &transfer.pending[transfer.written..]) {
                     Ok(written) => {
                         transfer.written += written;
-                        transfer.progress = Instant::now();
+                        transfer.progress = self.time.now();
                     }
                     Err(Errno::AGAIN) => return Ok(Step::Going(transfer)),
                     Err(Errno::INTR) => {}
@@ -991,7 +1010,7 @@ impl<'a> Bridge<'a> {
             if piece.type_ == x11rb::NONE {
                 return Ok(Step::Failed(transfer, "its owner set no property"));
             }
-            transfer.progress = Instant::now();
+            transfer.progress = self.time.now();
             if offset == 0 && !incr && piece.type_ == self.atoms.INCR {
                 // ICCCM 2.7.2: deleting the property asks for the first chunk.
                 self.connection.delete_property(window, property)?;
@@ -1162,7 +1181,7 @@ impl<'a> Bridge<'a> {
                 buffer: Vec::new(),
                 total: 0,
                 stage: Answer::AwaitingSource,
-                progress: Instant::now(),
+                progress: self.time.now(),
             },
         );
         Ok(self.post(match served {
@@ -1220,7 +1239,7 @@ impl<'a> Bridge<'a> {
         };
         sending.source = Some(source);
         sending.stage = Answer::Collecting;
-        sending.progress = Instant::now();
+        sending.progress = self.time.now();
         self.pump_to_x11(transfer)
     }
 
@@ -1238,7 +1257,7 @@ impl<'a> Bridge<'a> {
                 Ok(true)
             }
             Step::Ended => {
-                self.moved_to_x11(served, Instant::now());
+                self.moved_to_x11(served, self.time.now());
                 Ok(true)
             }
             Step::Failed(sending, reason) => self.ended_to_x11(&sending, reason),
@@ -1247,7 +1266,7 @@ impl<'a> Bridge<'a> {
 
     /// A transfer to X11 that last moved `at` ended: for a drag's, its time limit runs from
     /// then.
-    fn moved_to_x11(&mut self, served: Served, at: Instant) {
+    fn moved_to_x11(&mut self, served: Served, at: Duration) {
         if let Served::Drag(drag) = served {
             note_move(&mut self.drags_to_x11_moved, drag, at);
         }
@@ -1273,7 +1292,7 @@ impl<'a> Bridge<'a> {
                     }
                     Ok(read) => {
                         sending.total += read as u64;
-                        sending.progress = Instant::now();
+                        sending.progress = self.time.now();
                         moved = true;
                         if sending.total > MAX_X11_TRANSFER_BYTES {
                             return Ok(Step::Failed(
@@ -1333,7 +1352,7 @@ impl<'a> Bridge<'a> {
                     )?;
                     sending.buffer.drain(..length);
                     sending.stage = Answer::Incr { deleted: false };
-                    sending.progress = Instant::now();
+                    sending.progress = self.time.now();
                 }
                 Answer::Incr { deleted: true } if sending.ended => {
                     // The last chunk, an empty one.
@@ -1387,7 +1406,7 @@ impl<'a> Bridge<'a> {
                 return Ok(true);
             }
             transfer.stage = Fetch::AwaitingChunk { arrived: true };
-            transfer.progress = Instant::now();
+            transfer.progress = self.time.now();
             return self.pump_to_wayland(changed.window);
         }
         if changed.state != Property::DELETE {
@@ -1404,7 +1423,7 @@ impl<'a> Bridge<'a> {
         };
         if let Some(sending) = self.to_x11.get_mut(&transfer) {
             sending.stage = Answer::Incr { deleted: true };
-            sending.progress = Instant::now();
+            sending.progress = self.time.now();
         }
         self.pump_to_x11(transfer)
     }
@@ -1412,12 +1431,11 @@ impl<'a> Bridge<'a> {
     /// Moves every transfer as far as it goes without waiting, and ends those that made no
     /// progress for [`X11_TRANSFER_TIMEOUT`], an owner's `TARGETS` that never came among them.
     pub(super) fn run(&mut self) -> Result<GoOn, Failure> {
-        let now = Instant::now();
-        let overdue = |progress: Instant| now.duration_since(progress) >= X11_TRANSFER_TIMEOUT;
+        let now = self.time.now();
         for selection in Selection::BOTH {
             let asking = self.held(selection).x11.as_ref().and_then(|x11| x11.asking);
             if let Some((window, asked)) = asking
-                && overdue(asked)
+                && overdue(asked, now)
                 && !self.targets_answered(selection, window, false)?
             {
                 return Ok(false);
@@ -1428,7 +1446,7 @@ impl<'a> Bridge<'a> {
             let late = self
                 .to_wayland
                 .get(&window)
-                .is_some_and(|transfer| overdue(transfer.progress));
+                .is_some_and(|transfer| overdue(transfer.progress, now));
             let go_on = if late {
                 self.end_to_wayland(window, "it made no progress in time")?
             } else {
@@ -1443,7 +1461,7 @@ impl<'a> Bridge<'a> {
             let late = self
                 .to_x11
                 .get(&transfer)
-                .is_some_and(|sending| overdue(sending.progress));
+                .is_some_and(|sending| overdue(sending.progress, now));
             let go_on = if late {
                 self.end_to_x11(transfer, "it made no progress in time")?
             } else {
@@ -1474,7 +1492,7 @@ impl<'a> Bridge<'a> {
 
     /// When a transfer of X11 drag `drag` to Wayland last moved, running or ended; none if none
     /// ran.
-    pub(super) fn drag_to_wayland_progress(&self, drag: u64) -> Option<Instant> {
+    pub(super) fn drag_to_wayland_progress(&self, drag: u64) -> Option<Duration> {
         let running = self
             .to_wayland
             .values()
@@ -1490,7 +1508,7 @@ impl<'a> Bridge<'a> {
 
     /// When a transfer of Wayland drag `drag` to X11 last moved, running or ended; none if none
     /// ran.
-    pub(super) fn drag_to_x11_progress(&self, drag: u64) -> Option<Instant> {
+    pub(super) fn drag_to_x11_progress(&self, drag: u64) -> Option<Duration> {
         let running = self
             .to_x11
             .values()
@@ -1534,8 +1552,9 @@ impl<'a> Bridge<'a> {
         Ok(true)
     }
 
-    /// When the first transfer, or the first owner's `TARGETS`, runs out of time, if one runs.
-    pub(super) fn next_deadline(&self) -> Option<Instant> {
+    /// When the first transfer, or the first owner's `TARGETS`, runs out of time, on the
+    /// manager's time, if one runs.
+    pub(super) fn next_deadline(&self) -> Option<Duration> {
         let asked = [&self.clipboard, &self.primary]
             .into_iter()
             .filter_map(|held| held.x11.as_ref()?.asking.map(|(_, asked)| asked));
@@ -1544,10 +1563,7 @@ impl<'a> Bridge<'a> {
             .values()
             .map(|transfer| transfer.progress)
             .chain(self.to_x11.values().map(|sending| sending.progress));
-        asked
-            .chain(moved)
-            .min()
-            .map(|earliest| earliest + X11_TRANSFER_TIMEOUT)
+        asked.chain(moved).min().map(transfer_limit)
     }
 }
 
@@ -1604,7 +1620,7 @@ mod tests {
     /// each drag at its latest move, until the manager forgets the drag.
     #[test]
     fn the_last_move_of_a_drags_ended_transfers_is_kept() {
-        let start = Instant::now();
+        let start = Duration::from_secs(1);
         let at = |ms: u64| start + Duration::from_millis(ms);
         let mut moves = Vec::new();
         note_move(&mut moves, 1, at(10));
@@ -1725,6 +1741,22 @@ mod tests {
         let targets = targets_of_offer(&strings(&[UTF8_TEXT, "UTF8_STRING", "STRING", "TEXT"]));
         let names: Vec<&str> = targets.iter().map(|(target, _)| target.as_str()).collect();
         assert_eq!(names, [UTF8_TEXT, "UTF8_STRING", "STRING", "TEXT"]);
+    }
+
+    #[test]
+    fn a_transfer_is_out_of_time_once_its_limit_is_due_the_end_of_time_too() {
+        let second = Duration::from_secs(1);
+        let moved = 10 * second;
+        let nanosecond = Duration::from_nanos(1);
+        assert_eq!(transfer_limit(moved), moved + X11_TRANSFER_TIMEOUT);
+        assert!(!overdue(moved, moved + X11_TRANSFER_TIMEOUT - nanosecond));
+        assert!(overdue(moved, moved + X11_TRANSFER_TIMEOUT));
+        // Near the end of time the limit saturates: out of time once it is due, so that the
+        // manager ends what it waits on rather than waking at once, for ever.
+        let late = Duration::MAX - second;
+        assert_eq!(transfer_limit(late), Duration::MAX);
+        assert!(!overdue(late, Duration::MAX - nanosecond));
+        assert!(overdue(late, Duration::MAX));
     }
 
     #[test]

@@ -73,6 +73,8 @@ use rustix::io::Errno;
 use rustix::process::{Pid, WaitStatus};
 use yuna_types::SeatId;
 
+use crate::ClockMode;
+use crate::clock::Deadline;
 use crate::process::{End, find_program, kill, kill_and_reap, reap};
 use crate::render::Device;
 use crate::rest::{Source, Wake, insert_source};
@@ -543,7 +545,7 @@ impl Xwayland {
         let notes = std::mem::take(&mut state.xwayland_notes);
         let mut backlog = handle_within_slice(notes, slice_end, |note| match note {
             Note::Connection(seat) => self.start(seat, state, handle),
-            Note::Displayed { server, number } => self.displayed(server, number, handle),
+            Note::Displayed { server, number } => self.displayed(server, number, state, handle),
             Note::Manager { server, event } => self.manager_event(server, event, state, handle),
             Note::ManagerGone { server } => self.manager_gone(server, handle),
             Note::Overdue { server } => self.overdue(server, handle),
@@ -760,8 +762,14 @@ impl Xwayland {
     }
 
     /// Xwayland `id` wrote its display number, or closed `-displayfd` without one: its manager
-    /// starts, or it ends.
-    fn displayed(&mut self, id: u64, number: Option<u32>, handle: &LoopHandle<'static, State>) {
+    /// starts, on Yuna's clock, or it ends.
+    fn displayed(
+        &mut self,
+        id: u64,
+        number: Option<u32>,
+        state: &State,
+        handle: &LoopHandle<'static, State>,
+    ) {
         let Some(xserver) = self.servers.get_mut(&id) else {
             return;
         };
@@ -792,7 +800,7 @@ impl Xwayland {
             }
             let (taken, taken_source) = listen_for_taken(id, seat, handle)?;
             xserver.sources.push(taken_source);
-            manager::start(seat, wm, xserver.scale, events, taken)
+            manager::start(seat, wm, xserver.scale, &state.clock, events, taken)
                 .map_err(|error| format!("its manager's thread cannot start: {error}"))
         });
         match started {
@@ -832,6 +840,13 @@ impl Xwayland {
                 );
                 state.x11_selections_ready(id);
             }
+            ManagerEvent::NextLimit(at) => {
+                let deadline = Deadline::X11Manager(xserver.seat);
+                state.clock.disarm(deadline);
+                if let Some(at) = at.filter(|_| xserver.manager.is_some()) {
+                    state.clock.arm(deadline, at);
+                }
+            }
             ManagerEvent::Stopped(stop) => {
                 xserver.manager_stopped = true;
                 match stop {
@@ -858,10 +873,21 @@ impl Xwayland {
     /// was owed, and its Xwayland ends as when its manager fails once the notes are handled
     /// again, the next round, which comes at once ([`Note::OverBound`]): ending it takes the
     /// loop's handle, which a round's end has not.
+    ///
+    /// On the manual clock, each manager that runs is sent Yuna's time first, when it is later
+    /// than the last sent, and woken for it too: the round's commands go after it, so that the
+    /// manager carries them out at that time; and an advance ends with this call, so that the
+    /// manager is sent the time it reaches, past every limit of the manager's it passed
+    /// (`manager/`). The time limit of a manager let go or stopped is disarmed.
     pub(crate) fn send_commands(&mut self, state: &mut State) {
         state.x11_selection_commands();
         state.x11_drag_commands();
-        let mut woken = Vec::new();
+        let manual = state.clock.mode() == ClockMode::Manual;
+        let mut woken = if manual {
+            self.send_time(state.clock.now())
+        } else {
+            Vec::new()
+        };
         for (id, command) in state.x11.take_outbox() {
             let Some(xserver) = self.servers.get_mut(&id) else {
                 continue;
@@ -884,6 +910,9 @@ impl Xwayland {
                 }
             }
         }
+        if manual {
+            self.disarm_limits_of_stopped(state);
+        }
         for id in woken {
             if let Some(manager) = self
                 .servers
@@ -891,6 +920,31 @@ impl Xwayland {
                 .and_then(|xserver| xserver.manager.as_ref())
             {
                 manager.wake();
+            }
+        }
+    }
+
+    /// On the manual clock, sends Yuna's time `now` to each manager that runs whose last time
+    /// sent is older; returns those sent it, to be woken.
+    fn send_time(&mut self, now: Duration) -> Vec<u64> {
+        let mut sent = Vec::new();
+        for (&id, xserver) in &mut self.servers {
+            let running = !xserver.manager_stopped;
+            if let Some(manager) = xserver.manager.as_mut().filter(|_| running)
+                && manager.send_time(now)
+            {
+                sent.push(id);
+            }
+        }
+        sent
+    }
+
+    /// Disarms the time limit of each seat whose manager no longer runs: let go, its Xwayland
+    /// ended or stalled, or its thread stopped.
+    fn disarm_limits_of_stopped(&self, state: &mut State) {
+        for xserver in self.servers.values() {
+            if xserver.manager.is_none() || xserver.manager_stopped {
+                state.clock.disarm(Deadline::X11Manager(xserver.seat));
             }
         }
     }
@@ -943,6 +997,7 @@ impl Xwayland {
             return;
         };
         xserver.release(handle);
+        state.clock.disarm(Deadline::X11Manager(xserver.seat));
         state.x11_server_gone(id);
         // `-terminate` exits with 0. An end unknown comes from a pidfd that found its process
         // reaped by another, which gave its status first (`child_reaped`): it is known only to be

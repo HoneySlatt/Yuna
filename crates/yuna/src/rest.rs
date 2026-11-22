@@ -73,6 +73,10 @@ pub enum Source {
     /// The clock's timer, due when an X11 program's drag released goes without its source's
     /// drop or leave.
     ClockDrags,
+    /// The manual clock, stepped past the earliest time limit of a seat's X11 manager, a
+    /// transfer's or a drag's; never on the real clock, where the manager waits for its limits
+    /// on its own thread.
+    ClockX11Manager,
     /// SIGTERM or SIGINT, through its pipe.
     StopSignal,
     /// Another thread woke it through a [`Waker`](crate::Waker), a test seam: the WLCS shim's
@@ -138,7 +142,7 @@ pub enum Source {
 
 impl Source {
     /// How many there are.
-    pub const COUNT: usize = 37;
+    pub const COUNT: usize = 38;
 
     /// Every source, in the order results give them.
     pub const ALL: [Source; Source::COUNT] = [
@@ -150,6 +154,7 @@ impl Source {
         Source::ClockHiddenFrames,
         Source::ClockX11Answers,
         Source::ClockDrags,
+        Source::ClockX11Manager,
         Source::StopSignal,
         Source::Waker,
         Source::ChildEnded,
@@ -192,6 +197,7 @@ impl Source {
             Source::ClockHiddenFrames => "clock_hidden_frames",
             Source::ClockX11Answers => "clock_x11_answers",
             Source::ClockDrags => "clock_drags",
+            Source::ClockX11Manager => "clock_x11_manager",
             Source::StopSignal => "stop_signal",
             Source::Waker => "waker",
             Source::ChildEnded => "child_ended",
@@ -239,6 +245,7 @@ impl Source {
                 | Source::SocketPause
                 | Source::ClockRefresh
                 | Source::ClockPresentation
+                | Source::ClockX11Manager
                 | Source::ProgramOutput
                 | Source::ProgramPace
                 | Source::SeatClosing

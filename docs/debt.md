@@ -734,10 +734,13 @@ Yuna's code were not traced.
   target only a window with a `WM_NAME` and `XdndAware` 5 or more (its `window_cache.cc` and
   `x11_drag_drop_client.cc`, read on 2026-11-18): the proxy window has both. Kept: checked when one
   of them is first needed.
-- An X11 drag's time limits run on the real clock, also in the headless stories on the manual
-  clock: `a_third_drag_refuses_the_oldest_of_the_two_ending` must reach its third drag within
-  5 s of the first's transfer, which a machine slowed that much would miss. Paid at Stage 2a,
-  M2.4b (the table of tasks): on the manual clock the manager reads Yuna's time (ADR-0152).
+- On the manual clock, the X11 manager's transfers and drags run on the time Yuna sends it at
+  each round's end, not on Yuna's clock itself: a stamp the manager takes from an X11 event or a
+  pipe may lag Yuna's time by the advances whose time it has not taken yet, one most often,
+  never ahead; Yuna's commands run at the time they were sent with. A time limit an advance
+  passes takes effect once the manager's thread has run, after the advance returns, at the time
+  the advance reached rather than at its own (ADR-0152). Paid at Stage 2a, M2.17 (the X11
+  manager, a task), where the manager runs inline.
 - Three races of an X11 drag are left, Yuna's loop never waiting for the manager's thread; the
   owner kept them, the second on 2026-11-18 and all three on 2026-11-19, against holding the
   release until the manager confirms
@@ -799,9 +802,6 @@ Yuna's code were not traced.
 - An X11 requestor window the manager does not follow, given a Wayland selection through INCR,
   keeps the manager's `PropertyChange` mask for its life: its property changes wake the manager,
   which leaves them. Kept: the wakes are harmless.
-- The transfers' time limit runs on the manager's thread, on real time, not on Yuna's clock: a
-  test on the manual clock cannot step it. Paid at Stage 2a, M2.4b (the table of tasks):
-  on the manual clock the manager reads Yuna's time (ADR-0152).
 - No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
   key, until Stage 2c, with the keyboard shortcuts' inhibitor
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md), [ROADMAP](ROADMAP.md)).

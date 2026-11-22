@@ -49,7 +49,7 @@
 //! ending one going first. One position at most waits, replaced, never queued. Nothing waits
 //! when no drag lives.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use calloop::channel::SyncSender;
 use x11rb::connection::Connection;
@@ -64,7 +64,7 @@ use super::bridge::{
     Bridge, Served, X11_TRANSFER_TIMEOUT, offer_of_targets, refused_is_none, targets_of_offer,
 };
 use super::drag_session::DragAction;
-use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent};
+use super::manager::{Atoms, Failure, GoOn, ManagerConnection, ManagerEvent, ManagerTime};
 
 /// The XDND version Yuna speaks: the last.
 const XDND_VERSION: u8 = 5;
@@ -73,10 +73,11 @@ const XDND_VERSION: u8 = 5;
 /// XDND asks no less.
 const OLDEST_VERSION: u8 = 3;
 
-/// How long the manager waits on a drag's X11 peer or on Yuna: a target's status at the
-/// release; a target's `XdndFinished`, or a Wayland target's finish, after the drop, with no
-/// transfer of the drag moving; a source's answer to a move's `DELETE`. As long as a transfer
-/// waits ([`X11_TRANSFER_TIMEOUT`]): KWin gives a target 2 s, Mutter waits on.
+/// How long the manager waits on a drag's X11 peer or on Yuna, on its time
+/// (`manager/time.rs`): a target's status at the release; a target's `XdndFinished`, or a
+/// Wayland target's finish, after the drop, with no transfer of the drag moving; a source's
+/// answer to a move's `DELETE`. As long as a transfer waits ([`X11_TRANSFER_TIMEOUT`]): KWin
+/// gives a target 2 s, Mutter waits on.
 const X11_DRAG_TIMEOUT: Duration = X11_TRANSFER_TIMEOUT;
 
 /// The most types read of a source's `XdndTypeList`: the bound on every list of atoms the
@@ -306,9 +307,9 @@ struct FromX11 {
     /// Whether Yuna wants the proxy shown for it.
     proxy_wanted: bool,
     /// When its `XdndDrop` came: Yuna's finish is waited for from then.
-    dropped: Option<Instant>,
+    dropped: Option<Duration>,
     /// A move's `DELETE`, converted before its `XdndFinished`: the window, and when it was asked.
-    deleting: Option<(Window, Instant)>,
+    deleting: Option<(Window, Duration)>,
 }
 
 impl FromX11 {
@@ -381,15 +382,17 @@ enum Stage {
     /// In the hand.
     Dragging,
     /// Released: the last position's status is waited for, since then.
-    Releasing { since: Instant },
+    Releasing { since: Duration },
     /// `XdndDrop` sent then: the target's `XdndFinished` is waited for.
-    Dropped { at: Instant },
+    Dropped { at: Duration },
 }
 
 /// Drag and drop on X11's side of a seat's manager.
 pub(super) struct Xdnd<'a> {
     connection: &'a ManagerConnection,
     events: &'a SyncSender<ManagerEvent>,
+    /// The manager's time, which the drags' stages are stamped with.
+    time: &'a ManagerTime,
     atoms: Atoms,
     actions: Actions,
     /// The manager's own window: the source of Wayland clients' drags, and their
@@ -419,6 +422,7 @@ impl<'a> Xdnd<'a> {
     pub(super) fn new(
         connection: &'a ManagerConnection,
         events: &'a SyncSender<ManagerEvent>,
+        time: &'a ManagerTime,
         atoms: Atoms,
         own: Window,
         proxy: Window,
@@ -426,6 +430,7 @@ impl<'a> Xdnd<'a> {
         Xdnd {
             connection,
             events,
+            time,
             atoms,
             actions: Actions::of(&atoms),
             own,
@@ -656,13 +661,14 @@ impl<'a> Xdnd<'a> {
     /// `XdndDrop` from the source: its time names the conversions, Yuna's finish is waited for,
     /// and the proxy hides.
     fn dropped(&mut self, data: Data) -> Result<GoOn, Failure> {
+        let now = self.time.now();
         let Some(drag) = self.x11_from(data[0]) else {
             return Ok(true);
         };
         if data[2] != x11rb::CURRENT_TIME {
             drag.time = data[2];
         }
-        drag.dropped = Some(Instant::now());
+        drag.dropped = Some(now);
         let drag = drag.drag;
         self.update_proxy()?;
         Ok(self.post(ManagerEvent::X11DragDropped(drag)))
@@ -808,8 +814,9 @@ impl<'a> Xdnd<'a> {
             let window = bridge.transfer_window()?;
             self.connection
                 .convert_selection(window, selection, delete, property, time)?;
+            let now = self.time.now();
             if let Some(of) = self.x11_drag(drag) {
-                of.deleting = Some((window, Instant::now()));
+                of.deleting = Some((window, now));
             }
             return Ok(());
         }
@@ -1255,7 +1262,9 @@ impl<'a> Xdnd<'a> {
         let accepted = of.status.is_some_and(|(accepted, _)| accepted);
         match (of.target, of.taken) {
             (Some(target), Taken::At(time)) if accepted && target.entered => {
-                of.stage = Stage::Dropped { at: Instant::now() };
+                of.stage = Stage::Dropped {
+                    at: self.time.now(),
+                };
                 let data = drop_data(self.own, time);
                 self.send(target.dest, target.window, self.atoms.XdndDrop, data)?;
                 Ok(true)
@@ -1277,7 +1286,7 @@ impl<'a> Xdnd<'a> {
             return Ok(true);
         }
         of.stage = Stage::Releasing {
-            since: Instant::now(),
+            since: self.time.now(),
         };
         self.advance(index)
     }
@@ -1427,7 +1436,7 @@ impl<'a> Xdnd<'a> {
     /// Moves the drags waiting on time: a release whose status did not come leaves; a drop or a
     /// finish not answered in time ends, refused.
     pub(super) fn run(&mut self, bridge: &Bridge<'_>) -> Result<GoOn, Failure> {
-        let now = Instant::now();
+        let now = self.time.now();
         let late: Vec<u64> = self
             .from_wayland
             .iter()
@@ -1468,32 +1477,33 @@ impl<'a> Xdnd<'a> {
         Ok(true)
     }
 
-    fn wayland_deadline(&self, of: &FromWayland, bridge: &Bridge<'_>) -> Option<Instant> {
+    fn wayland_deadline(&self, of: &FromWayland, bridge: &Bridge<'_>) -> Option<Duration> {
         match of.stage {
             Stage::Dragging => None,
-            Stage::Releasing { since } => Some(since + X11_DRAG_TIMEOUT),
+            Stage::Releasing { since } => Some(since.saturating_add(X11_DRAG_TIMEOUT)),
             Stage::Dropped { at } => {
                 let moved = bridge
                     .drag_to_x11_progress(of.drag)
                     .map_or(at, |progress| progress.max(at));
-                Some(moved + X11_DRAG_TIMEOUT)
+                Some(moved.saturating_add(X11_DRAG_TIMEOUT))
             }
         }
     }
 
-    fn x11_deadline(&self, of: &FromX11, bridge: &Bridge<'_>) -> Option<Instant> {
+    fn x11_deadline(&self, of: &FromX11, bridge: &Bridge<'_>) -> Option<Duration> {
         if let Some((_, asked)) = of.deleting {
-            return Some(asked + X11_DRAG_TIMEOUT);
+            return Some(asked.saturating_add(X11_DRAG_TIMEOUT));
         }
         let dropped = of.dropped?;
         let moved = bridge
             .drag_to_wayland_progress(of.drag)
             .map_or(dropped, |progress| progress.max(dropped));
-        Some(moved + X11_DRAG_TIMEOUT)
+        Some(moved.saturating_add(X11_DRAG_TIMEOUT))
     }
 
-    /// When the first drag waiting on time runs out of it; none when none waits.
-    pub(super) fn next_deadline(&self, bridge: &Bridge<'_>) -> Option<Instant> {
+    /// When the first drag waiting on time runs out of it, on the manager's time; none when none
+    /// waits.
+    pub(super) fn next_deadline(&self, bridge: &Bridge<'_>) -> Option<Duration> {
         let wayland = self
             .from_wayland
             .iter()
@@ -1729,7 +1739,7 @@ mod tests {
     /// refused with `XdndFinished`; one that never dropped is sent nothing.
     #[test]
     fn a_dropped_drag_forgotten_is_refused() {
-        let drag = |dropped: Option<Instant>| FromX11 {
+        let drag = |dropped: Option<Duration>| FromX11 {
             drag: 1,
             client: 0x0040_0000,
             time: 0,
@@ -1744,7 +1754,7 @@ mod tests {
             deleting: None,
         };
         assert_eq!(
-            drag(Some(Instant::now())).finished_when_forgotten(),
+            drag(Some(Duration::from_secs(1))).finished_when_forgotten(),
             Some((false, DragAction::None))
         );
         assert_eq!(drag(None).finished_when_forgotten(), None);

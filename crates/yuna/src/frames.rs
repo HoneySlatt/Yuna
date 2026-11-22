@@ -335,6 +335,7 @@ impl State {
             Deadline::HiddenFrames => Wake::of(Source::ClockHiddenFrames),
             Deadline::X11Answers => Wake::of(Source::ClockX11Answers),
             Deadline::Drags => Wake::of(Source::ClockDrags),
+            Deadline::X11Manager(seat) => Wake::of_seat(Source::ClockX11Manager, seat),
         }
     }
 
@@ -346,6 +347,9 @@ impl State {
             Deadline::HiddenFrames => self.send_hidden_frames(),
             Deadline::X11Answers => self.x11_answers_due(),
             Deadline::Drags => self.drags_due(),
+            // Yuna's state holds no manager: the advance's end sends it the time it reaches,
+            // this limit or past it (`Xwayland::send_commands`).
+            Deadline::X11Manager(_) => {}
         }
     }
 

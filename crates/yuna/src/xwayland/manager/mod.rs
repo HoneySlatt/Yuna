@@ -55,6 +55,23 @@
 //! for drags between them, both ways (`xdnd.rs`): it posts what X11 sources and targets say, and
 //! answers them at once from what Yuna last told it.
 //!
+//! **Its time.** The transfers' and the drags' time limits run on the manager's time, chosen at
+//! its start from Yuna's clock (`time.rs`,
+//! [ADR-0152](../../../../../docs/adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
+//! On the real clock it is the monotonic clock, Yuna's too, and the thread sleeps until its
+//! earliest limit. On the manual clock it is a time Yuna sent. At each round's end, an advance's
+//! included, Yuna sends its time when it moved, before the round's commands, in its place among
+//! them (`owed.rs`); the manager moves its own to each time as it reaches it, so that it carries
+//! out each command at the time Yuna sent it with, however late it takes it. It tells Yuna its
+//! earliest limit, which Yuna's clock holds as a deadline, so that a test's advance passes it;
+//! the manager is sent the time the advance reaches, at its end. Two things remain there, until
+//! the manager runs inline at M2.17. What the manager does on its own, for X11's events and its
+//! transfers' pipes, it stamps with the last time it took: such a stamp may lag Yuna's time, by
+//! the advances whose time it has not taken yet, and never runs ahead of it. And a limit's effect
+//! comes after the advance that passed it returns, once the manager's thread has run, so that a
+//! story pumps Yuna's loop until it sees it (`serve.rs`). The watchdog of what the manager has
+//! not taken stays on real time: it judges a stalled thread.
+//!
 //! **No reparenting.** The manager never puts a window inside a frame of its own: Yuna draws no
 //! title bars ([ADR-0024](../../../../../docs/adr/0024-no-title-bars.md)), so a frame would only
 //! cost a window and a round trip each. Its known consequence: Java's AWT, which waits for a
@@ -77,10 +94,12 @@
 //!   each window it follows, [`Tracked`];
 //! - `messages.rs`: what the thread posts, [`ManagerEvent`], and the commands it takes,
 //!   [`Command`];
-//! - `owed.rs`: the commands Yuna sent that the thread has not taken yet, bounded;
+//! - `owed.rs`: the commands Yuna sent that the thread has not taken yet, bounded, and Yuna's
+//!   times among them on the manual clock;
 //! - `stream.rs`: the connection's stream, which follows X11's framing as it reads;
-//! - `serve.rs`: its loop, where it sleeps, and the root's lists of windows it writes once a
-//!   batch;
+//! - `time.rs`: its time, which its limits run on;
+//! - `serve.rs`: its loop, where it sleeps, what it tells Yuna of its limits, and the root's
+//!   lists of windows it writes once a batch;
 //! - `x11_events.rs`: X11's events;
 //! - `commands.rs`: Yuna's commands;
 //! - `reading.rs`: the properties it reads of a window, and its client's process.
@@ -91,13 +110,14 @@ mod owed;
 mod reading;
 mod serve;
 mod stream;
+mod time;
 mod x11_events;
 
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use calloop::channel::SyncSender;
 use calloop::ping::Ping;
@@ -119,6 +139,8 @@ use yuna_types::SeatId;
 use super::bridge::Bridge;
 use super::properties::{Properties, X11Rect};
 use super::xdnd::{self, Xdnd};
+use crate::ClockMode;
+use crate::clock::Clock;
 use crate::tasks::{self, Task, TaskThread};
 #[cfg(debug_assertions)]
 pub use commands::PANIC_ON_X11_CLOSE;
@@ -128,6 +150,7 @@ use owed::Owed;
 #[cfg(debug_assertions)]
 pub use owed::X11_OWED_BOUND;
 pub(crate) use stream::{ManagerConnection, ManagerStream};
+pub(crate) use time::ManagerTime;
 
 /// How many of the manager's events wait for Yuna's loop before the thread waits in turn: X11's
 /// own buffers then hold what comes, rather than Yuna's memory.
@@ -154,6 +177,9 @@ const ICONIC_STATE: u32 = 3;
 pub(crate) struct Commands {
     owed: Arc<Mutex<Owed>>,
     wake: UnixStream,
+    /// On the manual clock, the latest of Yuna's times sent to the manager, from Yuna's time at
+    /// its start; none on the real clock, where the manager reads the monotonic clock itself.
+    time_sent: Option<Duration>,
 }
 
 impl Commands {
@@ -163,6 +189,22 @@ impl Commands {
     /// learns of its end through the events' channel.
     pub(crate) fn send(&self, command: Command) -> Result<(), OverBound> {
         lock(&self.owed).push(command, Instant::now())
+    }
+
+    /// On the manual clock, sends the manager Yuna's time `now`, when it is later than the last
+    /// sent, after the commands sent so far: the manager carries out those sent from then on at
+    /// it. It replaces a time the manager has not taken that no command follows. Returns whether
+    /// it was sent, so that [`Commands::wake`] wakes the thread for it. Never waits. Nothing on
+    /// the real clock.
+    pub(crate) fn send_time(&mut self, now: Duration) -> bool {
+        match self.time_sent {
+            Some(sent) if now > sent => {
+                lock(&self.owed).push_time(now);
+                self.time_sent = Some(now);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Wakes the manager's thread for the commands sent. Never waits: a full socket wakes the
@@ -277,41 +319,42 @@ x11rb::atom_manager! {
 }
 
 /// Starts the manager of seat `seat`'s Xwayland on a thread of its own, on `wm`, Xwayland's
-/// `-wm` socket, for a scale of `scale`. Its events go to `events`; `taken` pings Yuna's loop
-/// when it takes commands a watchdog waited on ([`Commands::watch`]). Returns Yuna's side of it,
-/// and its thread, which Yuna joins when it stops.
+/// `-wm` socket, for a scale of `scale`, its time Yuna's `clock`'s ([`ManagerTime`]). Its events
+/// go to `events`; `taken` pings Yuna's loop when it takes commands a watchdog waited on
+/// ([`Commands::watch`]). Returns Yuna's side of it, and its thread, which Yuna joins when it
+/// stops.
 pub(crate) fn start(
     seat: SeatId,
     wm: UnixStream,
     scale: f64,
+    clock: &Clock,
     events: SyncSender<ManagerEvent>,
     taken: Ping,
 ) -> io::Result<(Commands, TaskThread)> {
     let owed = Arc::new(Mutex::new(Owed::bounded_at(owed::owed_bound())));
-    #[cfg(debug_assertions)]
-    let panic_on_close = commands::panic_on_close_asked();
+    let (mode, now) = (clock.mode(), clock.now());
+    let time = ManagerTime::new(mode, now);
+    let time_sent = (mode == ClockMode::Manual).then_some(now);
     let (wake, woken) = UnixStream::pair()?;
     wake.set_nonblocking(true)?;
     woken.set_nonblocking(true)?;
     let shared = Arc::clone(&owed);
     let thread = tasks::spawn(Task::X11Manager(seat), move || {
-        let stop = match run(
-            wm,
-            scale,
-            &events,
-            &shared,
-            taken,
-            &woken,
-            #[cfg(debug_assertions)]
-            panic_on_close,
-        ) {
+        let stop = match run(wm, scale, &time, &events, &shared, taken, &woken) {
             Ok(()) => Stop::Released,
             Err(failure) if is_closed(&*failure) => Stop::Closed,
             Err(failure) => Stop::Failed(failure.to_string()),
         };
         let _ = events.send(ManagerEvent::Stopped(stop));
     })?;
-    Ok((Commands { owed, wake }, thread))
+    Ok((
+        Commands {
+            owed,
+            wake,
+            time_sent,
+        },
+        thread,
+    ))
 }
 
 /// Whether `failure` is Xwayland closing the connection.
@@ -332,34 +375,37 @@ fn is_closed(failure: &(dyn std::error::Error + 'static)) -> bool {
 fn run(
     wm: UnixStream,
     scale: f64,
+    time: &ManagerTime,
     events: &SyncSender<ManagerEvent>,
     owed: &Mutex<Owed>,
     taken: Ping,
     woken: &UnixStream,
-    #[cfg(debug_assertions)] panic_on_close: bool,
 ) -> Result<(), Failure> {
     let (stream, _) = DefaultStream::from_unix_stream(wm)?;
     // Xwayland has a single screen.
     let connection = RustConnection::connect_to_stream(ManagerStream::new(stream), 0)?;
-    let (atoms, own, proxy) = take_charge(&connection, scale)?;
+    let charge = take_charge(&connection, scale)?;
     if events.send(ManagerEvent::Ready).is_err() {
         return Ok(());
     }
-    let mut manager = Manager::new(&connection, atoms, own, proxy, events, owed, taken)?;
+    let mut manager = Manager::new(&connection, charge, time, events, owed, taken)?;
     #[cfg(debug_assertions)]
     {
-        manager.panic_on_close = panic_on_close;
+        manager.panic_on_close = commands::panic_on_close_asked();
     }
     manager.serve(woken)
 }
 
+/// What taking charge made: the atoms, the manager's own window and the drags' proxy.
+struct Charge {
+    atoms: Atoms,
+    own: Window,
+    proxy: Window,
+}
+
 /// Takes charge of Xwayland's root, in the order the module's documentation gives, and checks
-/// that `WM_S0` is the manager's. Returns the atoms, the manager's own window and the drags'
-/// proxy.
-fn take_charge(
-    connection: &ManagerConnection,
-    scale: f64,
-) -> Result<(Atoms, Window, Window), Failure> {
+/// that `WM_S0` is the manager's.
+fn take_charge(connection: &ManagerConnection, scale: f64) -> Result<Charge, Failure> {
     let atoms = Atoms::new(connection)?.reply()?;
     let root = connection
         .setup()
@@ -478,7 +524,11 @@ fn take_charge(
     if owner != window {
         return Err(format!("WM_S0 belongs to window {owner}, not the manager's").into());
     }
-    Ok((atoms, window, proxy))
+    Ok(Charge {
+        atoms,
+        own: window,
+        proxy,
+    })
 }
 
 /// What the manager supports, for `_NET_SUPPORTED`: the hints it reads or sets and the messages
@@ -586,6 +636,11 @@ struct Manager<'a> {
     order: Vec<Window>,
     /// Whether `clients` or `stacking` changed since the root's lists were last set.
     lists_changed: bool,
+    /// Its time, which the selections' and the drags' time limits run on.
+    time: &'a ManagerTime,
+    /// On the manual clock, the earliest time limit it last told Yuna of
+    /// ([`ManagerEvent::NextLimit`]).
+    limit_told: Option<Duration>,
     events: &'a SyncSender<ManagerEvent>,
     /// What Yuna owes it.
     owed: &'a Mutex<Owed>,
@@ -608,13 +663,13 @@ pub(super) type GoOn = bool;
 impl<'a> Manager<'a> {
     fn new(
         connection: &'a ManagerConnection,
-        atoms: Atoms,
-        own: Window,
-        proxy: Window,
+        charge: Charge,
+        time: &'a ManagerTime,
         events: &'a SyncSender<ManagerEvent>,
         owed: &'a Mutex<Owed>,
         taken: Ping,
     ) -> Result<Manager<'a>, Failure> {
+        let Charge { atoms, own, proxy } = charge;
         let setup = connection.setup();
         let root = setup
             .roots
@@ -650,11 +705,13 @@ impl<'a> Manager<'a> {
             // Both made before any client's window, the proxy after the manager's own.
             order: vec![own, proxy],
             lists_changed: false,
+            time,
+            limit_told: None,
             events,
             owed,
             taken,
-            bridge: Bridge::new(connection, events, atoms, root, own),
-            xdnd: Xdnd::new(connection, events, atoms, own, proxy),
+            bridge: Bridge::new(connection, events, time, atoms, root, own),
+            xdnd: Xdnd::new(connection, events, time, atoms, own, proxy),
             #[cfg(debug_assertions)]
             panic_on_close: false,
         })

@@ -1,8 +1,19 @@
 //! The manager serving: the loop that carries out Yuna's commands, moves the selections'
 //! transfers and the drags, and handles X11's events, Yuna's commands taken between them too; and
 //! its writing of the root's lists of windows. Between them it sleeps in `poll` on its
-//! connection, its wake-up socket and the pipes its transfers wait on, until the first transfer's
-//! or drag's time limit: with neither, until something comes.
+//! connection, its wake-up socket and the pipes its transfers wait on.
+//!
+//! Its transfers and drags have time limits, on the manager's time (`time.rs`). On the real
+//! clock, the sleep ends at the earliest: with none, only when something comes. On the manual
+//! clock, the manager's time moves only when it takes a time Yuna sent, Yuna waking the thread
+//! for it: the sleep never ends on a timer, and after each round in which its earliest limit
+//! changed, the manager tells Yuna ([`ManagerEvent::NextLimit`]), whose clock then holds it as a
+//! deadline, so that an advance stops at it among Yuna's own; the manager is sent the time the
+//! advance reaches, at its end. What remains on the manual clock, as
+//! [ADR-0152](../../../../../docs/adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)
+//! says, is in the parent module's documentation: a stamp the manager takes on its own may lag
+//! Yuna's time, never run ahead of it; and a limit's effect, a paste refused or a drop cancelled,
+//! comes after the advance that passed it returns, once the manager's thread has run.
 //!
 //! It is apart from what each wake-up does, X11's events in `x11_events.rs` and Yuna's commands
 //! in `commands.rs`, so that the order of one round, and why the thread sleeps where it does,
@@ -10,7 +21,7 @@
 
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
-use std::time::Instant;
+use std::time::Duration;
 
 use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::io::Errno;
@@ -21,13 +32,14 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{AtomEnum, PropMode};
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::{Failure, Manager, ManagerConnection};
+use super::{Failure, GoOn, Manager, ManagerConnection, ManagerEvent};
 
 impl Manager<'_> {
     /// Reads X11's events and Yuna's commands, and moves the transfers of selections and the
     /// drags, until Xwayland closes the connection or Yuna lets the commands go. Sleeps in `poll`
-    /// between them, woken by X11, by Yuna, by a transfer's pipe, or by a transfer's or a drag's
-    /// time limit: nothing is polled on a timer, and with neither the sleep has no end but those.
+    /// between them, woken by X11, by Yuna, by a transfer's pipe, or, on the real clock, by a
+    /// transfer's or a drag's time limit: nothing is polled on a timer, and without a limit the
+    /// sleep has no end but those.
     pub(super) fn serve(&mut self, woken: &UnixStream) -> Result<(), Failure> {
         loop {
             if !self.take_commands()? || !self.bridge.run()? || !self.xdnd.run(&self.bridge)? {
@@ -67,9 +79,12 @@ impl Manager<'_> {
             .into_iter()
             .flatten()
             .min();
-            let timeout = deadline.and_then(|deadline| {
-                Timespec::try_from(deadline.saturating_duration_since(Instant::now())).ok()
-            });
+            if !self.tell_limit(deadline) {
+                return Ok(());
+            }
+            let timeout = deadline
+                .and_then(|deadline| self.sleep_before(deadline))
+                .and_then(|sleep| Timespec::try_from(sleep).ok());
             let mut sleep = vec![
                 PollFd::new(self.connection.stream(), PollFlags::IN),
                 PollFd::new(woken, PollFlags::IN),
@@ -89,6 +104,34 @@ impl Manager<'_> {
                 return Ok(());
             }
         }
+    }
+
+    /// On the manual clock, tells Yuna the manager's earliest time limit, `deadline`, or none,
+    /// when it changed since last told and is not due yet: a limit due is the manager's own to
+    /// act on at once. False once Yuna's loop is gone. On the real clock, which the manager's
+    /// sleep follows itself, it tells nothing.
+    fn tell_limit(&mut self, deadline: Option<Duration>) -> GoOn {
+        if !self.time.is_manual() || deadline == self.limit_told {
+            return true;
+        }
+        if deadline.is_some_and(|deadline| deadline <= self.time.now()) {
+            return true;
+        }
+        self.limit_told = deadline;
+        self.post(ManagerEvent::NextLimit(deadline))
+    }
+
+    /// How long the sleep may last before the earliest time limit, `deadline`. On the real
+    /// clock, until it. On the manual clock, not at all once it is due, Yuna's time, taken
+    /// between X11's events, having passed it since the transfers and the drags last moved: the
+    /// loop goes on at once. Otherwise as long as nothing comes, since the manager's time moves
+    /// only when Yuna sends it, which wakes the thread.
+    fn sleep_before(&self, deadline: Duration) -> Option<Duration> {
+        let now = self.time.now();
+        if self.time.is_manual() && deadline > now {
+            return None;
+        }
+        Some(deadline.saturating_sub(now))
     }
 
     /// Marks the root's `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` changed: they are set

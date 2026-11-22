@@ -171,10 +171,15 @@ fn sorted(mut states: Vec<State>) -> Vec<State> {
     states
 }
 
-/// Moves the clock to `to`, then lets the client read what came.
-fn advance_to(compositor: &mut Compositor, client: &mut Client, to: Duration) {
+/// Moves the manual clock to `to`, running every deadline it passes on the way.
+fn advance_clock_to(compositor: &mut Compositor, to: Duration) {
     let by = to.saturating_sub(compositor.now());
     compositor.advance(by).expect("the manual clock moves");
+}
+
+/// Moves the clock to `to`, then lets the client read what came.
+fn advance_to(compositor: &mut Compositor, client: &mut Client, to: Duration) {
+    advance_clock_to(compositor, to);
     client.roundtrip(compositor);
 }
 

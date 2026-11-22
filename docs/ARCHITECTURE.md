@@ -239,7 +239,8 @@ tests call `dispatch` themselves, and `Compositor::advance` on the manual clock.
 3. The clients' requests are read: Smithay dispatches them to Yuna's handlers.
 4. The clock's deadlines due by now run.
 5. The round ends (`Compositor::flush`): the clients the display ended are freed, Yuna's writes
-   of agents' clipboards go on, the X11 window managers get their commands, what closed windows
+   of agents' clipboards go on, the X11 window managers get their commands, and on the manual
+   clock Yuna's time, what closed windows
    and destroyed surfaces left is freed, and the events written are sent.
 
 ### Time and deadlines
@@ -251,7 +252,12 @@ loop. Its `Deadline` names each kind, each armed once at most:
 - two per output: its next refresh, and the boundary its held presentation feedback waits for;
 - the hidden windows' frame callbacks;
 - the X11 windows' sync requests and pings (`xwayland/answers.rs`);
-- the drags between X11 and Wayland (`xwayland/drags.rs`).
+- the drags between X11 and Wayland (`xwayland/drags.rs`);
+- on the manual clock, each X11 window manager's earliest transfer or drag time limit, which the
+  manager tells Yuna. The manager runs on Yuna's time, which Yuna sends it at each round's end:
+  an advance that passes the limit sends the time it reached, and the limit takes effect once
+  the manager's thread has run (`xwayland/manager/time.rs`,
+  [ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 
 In real mode, time is `CLOCK_MONOTONIC`; with no deadline armed, no timer is. In manual mode,
 for tests and for `yuna mcp --manual-clock`, time starts at the real monotonic time and moves only

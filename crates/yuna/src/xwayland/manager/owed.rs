@@ -11,9 +11,17 @@
 //! [`MANAGER_STALL`](crate::xwayland::MANAGER_STALL) ([`Owed::watch`]). While that watchdog
 //! waits, the manager tells Yuna when it takes what it owes ([`Taken::watched`]), so that the
 //! watchdog is disarmed at once and nothing is left armed at rest.
+//!
+//! On the manual clock, Yuna's time rides along, in its place among the commands
+//! ([`Owed::push_time`]): the manager moves its own time to each as it reaches it, so that it
+//! carries out each command at the time Yuna sent it with, however late it takes it. A time sent
+//! right after another replaces it: one lies between two commands at most, so that the times owed
+//! outnumber the commands by one at most. Each takes a place, counted against the bound as a
+//! command's is, but never refused: only commands make a manager stalled. The watchdog judges the
+//! commands alone.
 
 use std::mem::size_of;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use x11rb::protocol::xproto::Window;
 
@@ -51,8 +59,8 @@ pub(super) fn owed_bound() -> usize {
     MAX_OWED_BYTES
 }
 
-/// What one command owed takes in the list, beside what it points to.
-const SLOT: usize = size_of::<Option<Command>>();
+/// What one command or time owed takes in the list, beside what a command points to.
+const SLOT: usize = size_of::<Option<Sent>>();
 
 /// The kinds of command whose latest says all it sets: the X input focus, the stacking of every
 /// window, and each selection's Wayland source. The latest replaces the one owed, and goes in
@@ -88,25 +96,36 @@ pub(crate) struct OverBound {
     pub(crate) bound: usize,
 }
 
+/// One thing Yuna sent a manager, in its place among the others.
+#[derive(Debug)]
+pub(super) enum Sent {
+    /// A command, carried out at the time before it.
+    Command(Command),
+    /// On the manual clock, Yuna's time: the commands after it were sent at it.
+    Time(Duration),
+}
+
 /// What the manager took of what it was owed ([`Owed::take`]).
 #[derive(Debug, Default)]
 pub(super) struct Taken {
-    /// Every command it was owed, in the order sent.
-    pub(super) commands: Vec<Command>,
-    /// Whether Yuna's watchdog waited on them ([`Owed::watch`]): the manager then tells Yuna it
-    /// took them.
+    /// Every command it was owed and, on the manual clock, Yuna's times among them, in the order
+    /// sent.
+    pub(super) sent: Vec<Sent>,
+    /// Whether Yuna's watchdog waited on the commands ([`Owed::watch`]): the manager then tells
+    /// Yuna it took them.
     pub(super) watched: bool,
 }
 
 /// What Yuna owes a manager.
 #[derive(Debug)]
 pub(super) struct Owed {
-    /// The commands in the order sent; a place emptied held one a later one of its kind
-    /// replaced, and stays counted until the manager takes the list.
-    commands: Vec<Option<Command>>,
-    /// The place in `commands` of the one command owed of each [`Latest`] kind.
+    /// The commands and, on the manual clock, Yuna's times, in the order sent; a place emptied
+    /// held a command a later one of its kind replaced, and stays counted until the manager takes
+    /// the list.
+    sent: Vec<Option<Sent>>,
+    /// The place in `sent` of the one command owed of each [`Latest`] kind.
     latest: [Option<usize>; Latest::COUNT],
-    /// What `commands` holds, about: each place, and the text and lists each command points to.
+    /// What `sent` holds, about: each place, and the text and lists each command points to.
     bytes: usize,
     /// The most `bytes` may reach: [`MAX_OWED_BYTES`], lower in a test ([`X11_OWED_BOUND`]).
     bound: usize,
@@ -123,7 +142,7 @@ impl Owed {
     /// Nothing owed, bounded at `bound` bytes.
     pub(super) fn bounded_at(bound: usize) -> Owed {
         Owed {
-            commands: Vec::new(),
+            sent: Vec::new(),
             latest: [None; Latest::COUNT],
             bytes: 0,
             bound,
@@ -138,40 +157,55 @@ impl Owed {
     pub(super) fn push(&mut self, command: Command, now: Instant) -> Result<(), OverBound> {
         let latest = Latest::of(&command);
         let replaced = latest.and_then(|kind| self.latest[kind as usize]);
-        let freed = replaced
-            .and_then(|at| self.commands[at].as_ref())
-            .map_or(0, heap_bytes);
+        let freed = match replaced.and_then(|at| self.sent[at].as_ref()) {
+            Some(Sent::Command(command)) => heap_bytes(command),
+            _ => 0,
+        };
         let bytes = self.bytes - freed + SLOT + heap_bytes(&command);
         if bytes > self.bound {
             return Err(OverBound { bound: self.bound });
         }
         if let Some(at) = replaced {
-            self.commands[at] = None;
+            self.sent[at] = None;
         }
         if let Some(kind) = latest {
-            self.latest[kind as usize] = Some(self.commands.len());
+            self.latest[kind as usize] = Some(self.sent.len());
         }
-        self.commands.push(Some(command));
+        self.sent.push(Some(Sent::Command(command)));
         self.bytes = bytes;
         self.untaken_since.get_or_insert(now);
         Ok(())
     }
 
-    /// Every command owed, in the order sent, the manager owing none from then on; and whether
-    /// Yuna's watchdog waited on them, which it waits on no longer.
+    /// Adds Yuna's time `now`, on the manual clock, after the commands owed: those sent from
+    /// then on were sent at it. A time owed right before it is replaced, unless that one is
+    /// later. Otherwise it takes a place of its own, counted, never refused, nor watched: a
+    /// time follows a command, or opens the list, so that it passes the bound by one place at
+    /// most, past which the next command is refused.
+    pub(super) fn push_time(&mut self, now: Duration) {
+        if let Some(Some(Sent::Time(owed))) = self.sent.last_mut() {
+            *owed = (*owed).max(now);
+            return;
+        }
+        self.sent.push(Some(Sent::Time(now)));
+        self.bytes += SLOT;
+    }
+
+    /// Every command and time owed, in the order sent, the manager owing none from then on;
+    /// and whether Yuna's watchdog waited on the commands, which it waits on no longer.
     pub(super) fn take(&mut self) -> Taken {
-        if self.commands.is_empty() {
+        if self.sent.is_empty() {
             return Taken::default();
         }
         self.latest = [None; Latest::COUNT];
         self.bytes = 0;
         self.untaken_since = None;
-        let commands = std::mem::take(&mut self.commands)
+        let sent = std::mem::take(&mut self.sent)
             .into_iter()
             .flatten()
             .collect();
         Taken {
-            commands,
+            sent,
             watched: std::mem::take(&mut self.watched),
         }
     }
@@ -231,15 +265,15 @@ mod tests {
     }
 
     /// A short name for what is taken, in order.
-    fn named(commands: &[Command]) -> Vec<String> {
-        commands
-            .iter()
-            .map(|command| match command {
-                Command::Map(window) => format!("map {window}"),
-                Command::Focus(window) => format!("focus {window:?}"),
-                Command::Restack(order) => format!("restack {order:?}"),
-                Command::OwnSelection { serial, .. } => format!("own {serial}"),
-                other => format!("{other:?}"),
+    fn named(sent: &[Sent]) -> Vec<String> {
+        sent.iter()
+            .map(|sent| match sent {
+                Sent::Command(Command::Map(window)) => format!("map {window}"),
+                Sent::Command(Command::Focus(window)) => format!("focus {window:?}"),
+                Sent::Command(Command::Restack(order)) => format!("restack {order:?}"),
+                Sent::Command(Command::OwnSelection { serial, .. }) => format!("own {serial}"),
+                Sent::Command(other) => format!("{other:?}"),
+                Sent::Time(time) => format!("time {time:?}"),
             })
             .collect()
     }
@@ -268,14 +302,14 @@ mod tests {
         )
         .expect("owed");
         assert_eq!(owed.untaken_since, Some(now), "since the first, replaced");
-        let taken = owed.take().commands;
+        let taken = owed.take().sent;
         assert_eq!(
             named(&taken)[..4],
             ["map 2", "focus Some(2)", "restack [1, 2]", "own 2"]
         );
         assert_eq!(taken.len(), 5);
         assert_eq!(owed.untaken_since, None);
-        assert!(owed.take().commands.is_empty());
+        assert!(owed.take().sent.is_empty());
     }
 
     #[test]
@@ -289,7 +323,7 @@ mod tests {
         owed.push(Command::Map(2), now).expect("owed");
         assert_eq!(owed.watch(), Some(now));
         let taken = owed.take();
-        assert_eq!(named(&taken.commands), ["map 2"]);
+        assert_eq!(named(&taken.sent), ["map 2"]);
         assert!(taken.watched, "the watchdog that waited is told");
         // Told once: what is owed next has no watchdog until one is armed for it.
         owed.push(Command::Map(3), now).expect("owed");
@@ -315,7 +349,7 @@ mod tests {
             "{} bytes",
             owed.bytes
         );
-        assert_eq!(named(&owed.take().commands), ["own 9999"]);
+        assert_eq!(named(&owed.take().sent), ["own 9999"]);
     }
 
     #[test]
@@ -334,7 +368,7 @@ mod tests {
             bound: MAX_OWED_BYTES,
         });
         assert_eq!(owed.push(Command::Focus(None), now), over);
-        assert_eq!(owed.take().commands.len(), sent as usize);
+        assert_eq!(owed.take().sent.len(), sent as usize);
         // Taken, the manager is owed anew.
         assert_eq!(owed.push(Command::Map(0), now), Ok(()));
     }
@@ -367,12 +401,60 @@ mod tests {
     }
 
     #[test]
+    fn yunas_times_are_owed_in_their_place_among_the_commands() {
+        let mut owed = Owed::bounded_at(MAX_OWED_BYTES);
+        let second = Duration::from_secs(1);
+        let now = Instant::now();
+        owed.push_time(3 * second);
+        owed.push_time(5 * second);
+        owed.push_time(4 * second);
+        assert_eq!(owed.watch(), None, "no watchdog waits on a time");
+        assert_eq!(named(&owed.take().sent), ["time 5s"], "the latest of a row");
+        assert!(owed.take().sent.is_empty(), "taken once");
+        // Each command goes after the time it was sent at; a command of a kind replaced goes in
+        // its own place, after its own time.
+        owed.push(Command::Map(1), now).expect("owed");
+        owed.push(Command::Focus(Some(1)), now).expect("owed");
+        owed.push_time(6 * second);
+        owed.push(Command::Map(2), now).expect("owed");
+        owed.push(Command::Focus(Some(2)), now).expect("owed");
+        owed.push_time(7 * second);
+        owed.push_time(8 * second);
+        assert_eq!(
+            named(&owed.take().sent),
+            ["map 1", "time 6s", "map 2", "focus Some(2)", "time 8s"]
+        );
+    }
+
+    #[test]
+    fn a_time_takes_a_place_never_refused_past_the_bound_by_one_at_most() {
+        let mut owed = Owed::bounded_at(4 * SLOT);
+        let second = Duration::from_secs(1);
+        let now = Instant::now();
+        for window in 0..4 {
+            owed.push(Command::Map(window), now).expect("owed");
+        }
+        owed.push_time(second);
+        assert_eq!(owed.bytes, 5 * SLOT, "counted, and never refused");
+        assert_eq!(owed.untaken_since, Some(now), "the commands' alone");
+        let over = Err(OverBound { bound: 4 * SLOT });
+        assert_eq!(owed.push(Command::Map(4), now), over);
+        owed.push_time(2 * second);
+        assert_eq!(owed.bytes, 5 * SLOT, "a time after a time replaces it");
+        assert_eq!(
+            named(&owed.take().sent),
+            ["map 0", "map 1", "map 2", "map 3", "time 2s"]
+        );
+        assert_eq!(owed.bytes, 0);
+    }
+
+    #[test]
     fn a_manager_let_go_is_owed_nothing() {
         let mut owed = Owed::bounded_at(MAX_OWED_BYTES);
         owed.push(own(1, 64), Instant::now()).expect("owed");
         owed.release();
         assert!(owed.released());
         assert_eq!(owed.untaken_since, None);
-        assert!(owed.take().commands.is_empty());
+        assert!(owed.take().sent.is_empty());
     }
 }

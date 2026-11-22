@@ -4,11 +4,12 @@
 //! a source that goes, made-up and malformed answers, stale requests, the bound on transfers, and
 //! the keyboard focus that lets X11 read Wayland's selection.
 //!
-//! Each story runs the development shell's Xwayland for an agent's seat, on the real clock: the
-//! X11 test client (`x11_client.rs`) on a thread of its own, as an X11 program that copies or
-//! pastes, and a Wayland selection client (`selection_client.rs`) of the same seat on the
-//! story's thread, between the compositor's rounds. A Wayland source answers on threads of its
-//! own, as a program writes into its pipe.
+//! Each story runs the development shell's Xwayland for an agent's seat, on the real clock but
+//! for two, which step the manual clock past the transfers' time limit: the X11 test client
+//! (`x11_client.rs`) on a thread of its own, as an X11 program that copies or pastes, and a
+//! Wayland selection client (`selection_client.rs`) of the same seat on the story's thread,
+//! between the compositor's rounds. A Wayland source answers on threads of its own, as a program
+//! writes into its pipe.
 
 use std::os::fd::OwnedFd;
 use std::thread::{self, JoinHandle};
@@ -21,10 +22,11 @@ use x11rb::protocol::xproto::{
     SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Timestamp, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::{ClockMode, MAX_X11_TRANSFERS, WindowShell, X11_TRANSFER_TIMEOUT};
+use yuna::{ClockMode, Compositor, MAX_X11_TRANSFERS, WindowShell, X11_TRANSFER_TIMEOUT};
 use yuna_ipc::{Caller, Command};
 use yuna_types::WindowId;
 
+use crate::advance_clock_to;
 use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};
 use crate::x11_client::{PATIENCE, WindowSpec, X11Client, step, step_pumping};
 use crate::x11_windows::{X11Seat, at_1_5, off, open_drawn, pump, wait};
@@ -37,6 +39,27 @@ pub(crate) const CHUNK: usize = 64 * 1024;
 
 /// One mebibyte: above the maximum request of X11's core protocol, 256 KiB, so INCR both ways.
 pub(crate) const MEBIBYTE: usize = 1024 * 1024;
+
+/// How long a story watches for something that must not happen: Yuna answers an X11 or a
+/// Wayland message within a few rounds of its loop, milliseconds apart; a second is hundreds of
+/// rounds, and keeps the stories quick.
+pub(crate) const QUIET: Duration = Duration::from_secs(1);
+
+/// How far short of a time limit, and past it, a story steps the manual clock.
+pub(crate) const LIMIT_STEP: Duration = Duration::from_millis(1);
+
+/// How long, in real time, a story holds the manual clock short of a transfer's or a drag's time
+/// limit, both [`X11_TRANSFER_TIMEOUT`]: past the limit, so that one that ran on real time would
+/// end what the story watches.
+pub(crate) const LONGER_THAN_THE_LIMIT: Duration = X11_TRANSFER_TIMEOUT.saturating_add(QUIET);
+
+/// One round of the compositor's loop, a short wait for its sources, the manual clock held
+/// where it is: only the deadlines due by now run, and the X11 manager's time stays where it is.
+pub(crate) fn pump_held(compositor: &mut Compositor) {
+    compositor
+        .dispatch(Some(Duration::from_millis(2)))
+        .expect("Yuna dispatches");
+}
 
 x11rb::atom_manager! {
     /// The atoms the stories name.
@@ -739,6 +762,82 @@ fn a_wayland_source_that_never_writes_is_refused_within_the_time_limit() {
     );
 }
 
+/// Where a story on the manual clock stands around a transfer's time limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AroundTheLimit {
+    /// Held where it was when the transfer started.
+    Held,
+    /// 1 ms short of the limit since this real time.
+    Short { since: Instant },
+    /// 1 ms past it.
+    Past,
+}
+
+/// [`a_wayland_source_that_never_writes_is_refused_within_the_time_limit`], on the manual clock,
+/// held from the paste on: the X11 paste goes unanswered while the clock stays 1 ms short of the
+/// time limit, longer in real time than the limit itself, and is refused once the clock passes
+/// it. The manager stamped the transfer at the held time, which it took before the paste, Yuna
+/// having sent it with the last round that moved the clock: no stamp lags here. Real time does
+/// not count: a machine slowed many times passes it.
+#[test]
+fn a_wayland_source_that_never_writes_is_refused_once_the_manual_clock_passes_the_limit() {
+    let mut seat = X11Seat::new(
+        "sel-never-writes-manual",
+        &[at_1_5()],
+        ClockMode::Manual,
+        off(),
+    );
+    let client = seat.client();
+    let (client, window) = open_x11_window(&mut seat, client, "paster");
+    let x11_id = seat
+        .compositor
+        .keyboard_window(seat.seat)
+        .expect("the X11 window");
+    let mut wl = SelectionClient::connect_to(&mut seat.compositor, seat.seat);
+    open_wayland_window(&mut seat, &mut wl);
+    let source = wl.set_clipboard(&[TEXT], wl.enter_serial());
+    wl.roundtrip(&mut seat.compositor);
+    focus(&mut seat, x11_id);
+
+    let started = seat.compositor.now();
+    let limit = started + X11_TRANSFER_TIMEOUT;
+    let mut held: Vec<OwnedFd> = Vec::new();
+    let mut clock = AroundTheLimit::Held;
+    let (_client, pasted) = step_pumping(
+        &mut seat.compositor,
+        client,
+        |compositor| {
+            pump_held(compositor);
+            wl.read_events();
+            held.extend(wl.take_sent(source));
+            clock = match clock {
+                AroundTheLimit::Held if !held.is_empty() => {
+                    advance_clock_to(compositor, limit - LIMIT_STEP);
+                    AroundTheLimit::Short {
+                        since: Instant::now(),
+                    }
+                }
+                AroundTheLimit::Short { since } if since.elapsed() >= LONGER_THAN_THE_LIMIT => {
+                    advance_clock_to(compositor, limit + LIMIT_STEP);
+                    AroundTheLimit::Past
+                }
+                unchanged => unchanged,
+            };
+        },
+        move |client| {
+            let atoms = atoms_of(client);
+            paste(client, window, atoms.CLIPBOARD, atoms.UTF8_STRING)
+        },
+    );
+    assert_eq!(held.len(), 1, "the source was sent the pipe, and holds it");
+    assert_eq!(
+        clock,
+        AroundTheLimit::Past,
+        "answered only once the clock passed the limit"
+    );
+    assert_eq!(pasted, None, "refused");
+}
+
 /// A Wayland client copies while the seat has no Xwayland; the first X11 program starts one,
 /// opens a window, and pastes the copy.
 #[test]
@@ -1009,6 +1108,156 @@ fn reads_past_the_transfers_at_once_are_refused_and_the_others_end_in_time() {
             "not before the time limit: {end:?}"
         );
     }
+
+    // The eight requests it never answered are left, as a program that gave up on them.
+    let (client, _) = step(&mut seat.compositor, client, |client| client.take_events());
+    let text = b"served again".to_vec();
+    let mut paste = WaylandPaste::default();
+    let (_client, ()) = step_pumping(
+        &mut seat.compositor,
+        client,
+        |compositor| {
+            pump(compositor);
+            paste.advance(&mut wl, TEXT, clipboard);
+        },
+        move |client| serve(client, owner, &text, false),
+    );
+    wait(&mut seat.compositor, "the next paste ends", |compositor| {
+        pump(compositor);
+        paste.advance(&mut wl, TEXT, clipboard);
+        paste.ended.map(|_| ())
+    });
+    assert_eq!(paste.data, b"served again");
+}
+
+/// Wayland reads of a selection, each through its pipe, read on the manual clock held.
+struct Reads {
+    pipes: Vec<Pipe>,
+    /// Whether each pipe ended: every writer closed it.
+    ended: Vec<bool>,
+    /// What came through them all.
+    data: Vec<u8>,
+}
+
+impl Reads {
+    fn new(pipes: impl IntoIterator<Item = Pipe>) -> Reads {
+        let pipes: Vec<Pipe> = pipes.into_iter().collect();
+        Reads {
+            ended: vec![false; pipes.len()],
+            pipes,
+            data: Vec::new(),
+        }
+    }
+
+    /// One round of the compositor's loop, its manual clock held, then what each pipe holds.
+    fn held_round(&mut self, compositor: &mut Compositor) {
+        pump_held(compositor);
+        for (pipe, ended) in self.pipes.iter_mut().zip(&mut self.ended) {
+            *ended = *ended || pipe.read_available(&mut self.data);
+        }
+    }
+
+    /// Runs held rounds as long as `go_on` says, and fails the story if one of the first
+    /// `count` pipes ends meanwhile.
+    #[track_caller]
+    fn none_of_the_first_ends_while(
+        &mut self,
+        count: usize,
+        compositor: &mut Compositor,
+        mut go_on: impl FnMut(&Compositor) -> bool,
+    ) {
+        while go_on(compositor) {
+            self.held_round(compositor);
+            assert!(
+                !self.ended[..count].contains(&true),
+                "a read ended before the clock passed its limit: {:?}",
+                self.ended
+            );
+        }
+    }
+}
+
+/// [`reads_past_the_transfers_at_once_are_refused_and_the_others_end_in_time`], on the manual
+/// clock, held once the X11 selection is offered: the ninth read ends at once, refused; the
+/// eight stay open while the clock stays 1 ms short of the time limit, longer in real time than
+/// the limit itself, and end once it passes it; Yuna then serves the next paste. The clock moves
+/// as soon as the ninth is refused, before the manager may have taken the eight: it carries them
+/// out at the time Yuna sent them with all the same, so that their limit, which it tells Yuna's
+/// clock, stays where it was.
+#[test]
+fn reads_past_the_transfers_at_once_are_refused_and_the_others_end_once_the_manual_clock_passes() {
+    let mut seat = X11Seat::new(
+        "sel-transfer-cap-manual",
+        &[at_1_5()],
+        ClockMode::Manual,
+        off(),
+    );
+    let mut wl = SelectionClient::connect_to(&mut seat.compositor, seat.seat);
+    open_wayland_window(&mut seat, &mut wl);
+    let client = seat.client();
+    let (client, owner) = step(&mut seat.compositor, client, |client| {
+        let atoms = atoms_of(client);
+        let owner = take_selection(client, atoms.CLIPBOARD)?;
+        let targets = next_request(client, owner)?;
+        client
+            .connection
+            .change_property32(
+                PropMode::REPLACE,
+                targets.requestor,
+                targets.property,
+                AtomEnum::ATOM,
+                &[atoms.TARGETS, atoms.UTF8_STRING],
+            )
+            .map_err(|e| e.to_string())?;
+        notify(client, &targets, targets.property)?;
+        Ok(owner)
+    });
+    let offer = wait(
+        &mut seat.compositor,
+        "the X11 selection is offered",
+        |compositor| {
+            pump(compositor);
+            wl.read_events();
+            last_offer(&wl, clipboard)
+        },
+    );
+
+    let limit = seat.compositor.now() + X11_TRANSFER_TIMEOUT;
+    assert_eq!(MAX_X11_TRANSFERS, 8);
+    let mut reads = Reads::new((0..=MAX_X11_TRANSFERS).map(|_| wl.receive(offer, TEXT)));
+    wl.client.send();
+    let ninth = MAX_X11_TRANSFERS;
+    let patience = Instant::now() + PATIENCE;
+    while !reads.ended[ninth] {
+        assert!(Instant::now() < patience, "the ninth read never ended");
+        reads.held_round(&mut seat.compositor);
+    }
+    advance_clock_to(&mut seat.compositor, limit - LIMIT_STEP);
+    reads.none_of_the_first_ends_while(ninth, &mut seat.compositor, |compositor| {
+        let armed = compositor.next_deadline();
+        assert!(
+            Instant::now() < patience,
+            "Yuna's clock holds {armed:?}, not the manager's limit {limit:?}"
+        );
+        armed != Some(limit)
+    });
+    let quiet = Instant::now() + LONGER_THAN_THE_LIMIT;
+    reads.none_of_the_first_ends_while(ninth, &mut seat.compositor, |_| Instant::now() < quiet);
+    assert_eq!(
+        seat.compositor.next_deadline(),
+        Some(limit),
+        "the limit held"
+    );
+    advance_clock_to(&mut seat.compositor, limit + LIMIT_STEP);
+    while reads.ended.contains(&false) {
+        assert!(
+            Instant::now() < patience,
+            "a read never ended: {:?}",
+            reads.ended
+        );
+        reads.held_round(&mut seat.compositor);
+    }
+    assert!(reads.data.is_empty(), "no read got data");
 
     // The eight requests it never answered are left, as a program that gave up on them.
     let (client, _) = step(&mut seat.compositor, client, |client| client.take_events());

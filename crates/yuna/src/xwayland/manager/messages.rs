@@ -12,6 +12,7 @@
 //! commands.
 
 use std::os::fd::OwnedFd;
+use std::time::Duration;
 
 use x11rb::protocol::xproto::Window;
 
@@ -144,6 +145,11 @@ pub(crate) enum ManagerEvent {
         drag: u64,
         performed: Option<DragAction>,
     },
+    /// On the manual clock, the manager's earliest time limit changed, a transfer's or a
+    /// drag's: its time on Yuna's clock, or none. Yuna arms its clock for it, so that an advance
+    /// stops at it, and sends the manager the time it reaches, at its end (`serve.rs`). Never
+    /// posted on the real clock.
+    NextLimit(Option<Duration>),
     /// The thread ends, for this reason.
     Stopped(Stop),
 }

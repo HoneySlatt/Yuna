@@ -16,6 +16,7 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 
 use super::messages::{Command, ManagerEvent};
+use super::owed::Sent;
 use super::{Failure, GoOn, Manager, ManagerConnection, NORMAL_STATE, lock};
 use crate::xwayland::properties::X11Rect;
 
@@ -36,7 +37,11 @@ pub(super) fn panic_on_close_asked() -> bool {
 
 impl Manager<'_> {
     /// Carries out every command Yuna's loop sent so far, in the order sent; false once Yuna let
-    /// them go. When Yuna's watchdog waited on them, Yuna is told they are taken.
+    /// them go. On the manual clock, the manager's time moves to each of Yuna's times among them
+    /// as it reaches it, so that each command is carried out at the time Yuna sent it with,
+    /// however late it is taken, and ends at the latest; at each, the transfers' and the drags'
+    /// limits it passed are judged before the commands after it. When Yuna's watchdog waited on
+    /// them, Yuna is told they are taken.
     pub(super) fn take_commands(&mut self) -> Result<GoOn, Failure> {
         let taken = {
             let mut owed = lock(self.owed);
@@ -48,9 +53,22 @@ impl Manager<'_> {
         if taken.watched {
             self.taken.ping();
         }
-        for command in taken.commands {
-            if !self.command(command)? {
-                return Ok(false);
+        for sent in taken.sent {
+            match sent {
+                Sent::Time(yunas_now) => {
+                    self.time.move_to(yunas_now);
+                    // The limits this time passed are judged before a later command, which
+                    // would stamp what it moves at a later time, as if the limit had not
+                    // passed: taken late or at once, the commands meet the same ends.
+                    if !self.bridge.run()? || !self.xdnd.run(&self.bridge)? {
+                        return Ok(false);
+                    }
+                }
+                Sent::Command(command) => {
+                    if !self.command(command)? {
+                        return Ok(false);
+                    }
+                }
             }
         }
         Ok(true)

@@ -728,8 +728,8 @@ impl State {
             | ManagerEvent::WaylandDragStatus { .. }
             | ManagerEvent::ReadWaylandDrag { .. }
             | ManagerEvent::WaylandDragEnded { .. } => self.x11_drag_event(server, event),
-            // The phases of Xwayland's start and end, `mod.rs`'s.
-            ManagerEvent::Ready | ManagerEvent::Stopped(_) => {}
+            // The phases of Xwayland's start and end, and the manager's time limit, `mod.rs`'s.
+            ManagerEvent::Ready | ManagerEvent::Stopped(_) | ManagerEvent::NextLimit(_) => {}
         }
     }
 
