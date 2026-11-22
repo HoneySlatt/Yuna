@@ -4,6 +4,49 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.3 — WLCS, and the parity thresholds on one-unit builds (2026-11-22)
+
+**WLCS 1.8.1 against Yuna** ([ADR-0149](adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md)),
+the module a debug build:
+
+- **The outcomes**: 1,225 tests. 149 pass, 293 fail, 716 are skipped (protocols an agent's seat
+  does not offer) and 67 are unsupported (touch). None varied over 20 runs at 32 processes at
+  once on the desktop. Of Smithay's four groups, 23 pass, the 4 self-tests of WLCS's skipping
+  skip as designed, and 1 fails on WLCS's build (`BadBufferTest.test_truncated_shm_file`,
+  [debt](debt.md#wlcs)).
+- **On GitHub's runner** (`ubuntu-24.04`, 4 processors), pull request 10:
+  - the `wlcs` job took 2 min 12 s, its run of every test 24.1 s;
+  - `check.sh`'s `wlcs` step ran the 149 expected to pass in 8.3 s;
+  - a record of 20 runs took 11 min 46 s.
+- **On the desktop**, 20 runs of every test, 32 at once, took 3 min 58 s.
+- **What load found.**
+  - The process crashed at exit, 12 times in 24,500, before the module was linked `NODELETE`.
+  - Tests raced Yuna's next frame, 1 in about 640 for `pointer_respects_window_geom_offset`
+    under 16 processes and 8 of the virtual pointer's tests on the runner, while the module
+    settled on deadlines within one refresh only. With two refreshes, none in 5,760 runs of the
+    two racing tests, nor in 480 of the virtual pointer's suite.
+- **The canary.** With the module never moving the pointer, CI failed: `check`, 62 of the 149
+  failing, and `wlcs`, stopped by its breaker (run 45002832309).
+
+**The parity script's CI tier on one-unit builds** (ADR-0148). Two more series of the tree
+against itself, five a side, `e1e8ab3`, on the desktop: both exit 0, no figure worse or void.
+
+| Series | Wall time | Others' cores: median, max | Disturbed |
+|---|---|---|---|
+| 1 | 57.0 min | 1.55, 14.6 | yes, 27 of 57 minutes above 2 cores, builds beside it |
+| 2 | 52.5 min | 0.22, 13.3 | lightly, 8 of 53 |
+
+- **What the script judges.** The difference of the two sides' medians stayed under 19 % of every
+  threshold.
+- **The widest range of ten, over the threshold:**
+  - Yuna's instructions a frame in `full`: 106 %, from one base run 0.6 % under the other nine;
+  - `switch-tiling@100-scrolling`: 68 %;
+  - `move-left-right@100-scrolling` and `move-left-right@1000-dwindle`: 64 %.
+- **Allocations, wakes and context switches** had a range of 0, but for a fraction of a block in
+  `motion` and `many`. `Pss_Anon` ranged over 88 to 216 KiB, against 512.
+- **The thresholds stay**, by the owner's choice
+  ([thresholds](../crates/yuna-bench/parity-thresholds.toml)).
+
 ## M2.1 — The timed and GPU tiers, and M2.2's head (2026-11-21)
 
 At the owner's go, the desktop quiet (others 0.04 to 1.8 cores at most in any second; 2 of 286
