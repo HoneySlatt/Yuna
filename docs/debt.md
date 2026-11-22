@@ -67,9 +67,11 @@ read again.
   two `vkcube` on lavapipe, 0 or 1 frame in 2,400 was missed in C5's runs; the lead itself was
   not read there ([measurements](measurements.md)). On llvmpipe it sits at its cap, one period.
   [ADR-0076](adr/0076-input-to-present-read-by-mode.md)'s budget, no frame missed, is missed:
-  0.4 to 0.9 % on llvmpipe at 1080p, 0 or 1 frame in 2,400 on the GPU at 4K. Paid at Stage 2a, M2.4
-  (the map, tasks, frames and events), with the frame scheduler; its budget is checked on KMS at
-  Stage 2b.
+  0.4 to 0.9 % on llvmpipe at 1080p, 0 or 1 frame in 2,400 on the GPU at 4K. Paid at Stage 2a, M2.8
+  (the Vulkan renderer), whose lead comes from the GPU's timestamps; meanwhile M2.4d's frame record
+  names each late frame
+  ([ADR-0155](adr/0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md)); its
+  budget is checked on KMS at Stage 2b.
 - `Compositor::advance`, which the tests use, may run virtual time ahead of real time, while
   [ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md) says never while real clients
   are connected. Kept: MCP's `clock` refuses it, and in the tests every client is the test's own.
@@ -207,8 +209,8 @@ read again.
   ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
   1).
 - Each time the hidden windows' deadline fires, `send_hidden_frames` walks every toplevel, not
-  only the hidden ones. Paid at Stage 2a, M2.4 (the map, tasks, frames and events), with the frame
-  scheduler.
+  only the hidden ones. Paid at Stage 2a, M2.4d (a frame's identity): hidden windows wait in a set
+  ordered by when each is due.
 - Smithay keeps a record of every seat it made and offers no way to drop one: each seat closed
   leaves its record, without keyboard or pointer, until Yuna stops. An agent that makes and
   closes seats without end grows it.
@@ -352,26 +354,26 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   `yuna-ipc`, at Stage 2c, as the owner chose
   ([ADR-0096](adr/0096-a-rest-auditor-naming-what-wakes-yuna-or-makes-it-draw.md)).
 - X11 programs are named as their seat's Xwayland, the one Wayland client of them all, and by
-  the X11 manager's wakes, by seat: which X11 client woke Yuna is not told. Paid at Stage 2a, M2.4
-  (the map, tasks, frames and events), with the frame's identity
+  the X11 manager's wakes, by seat: which X11 client woke Yuna is not told. Paid at Stage 2a, M2.4d
+  (a frame's identity)
   ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
   11).
 - A window's first buffer, which maps it, draws as a layout change, not as its client's commit:
   a client that opens windows again and again is named by its wakes and commits, its frames by
-  the layout. Paid at Stage 2a, M2.4, with the frame's identity.
+  the layout. Paid at Stage 2a, M2.4d (a frame's identity).
 - A commit is among a frame's causes when it armed its output's refresh or joined it: one that
   brought nothing new is named too when another cause drew the frame. Damage is not followed by
-  client. Paid at Stage 2a, M2.4, with the frame's identity.
+  client. Paid at Stage 2a, M2.4d (a frame's identity).
 - Each client costs Yuna a second descriptor, so a seat's socket runs out of descriptors at about
   half the clients it did. A client whose second descriptor cannot be made is served unnamed,
-  counted among the unnamed wakes. Kept: the limit is raised at start; the pidfd that Stage 2's core
-  records for each client
-  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
-  15) adds one descriptor and removes none.
+  counted among the unnamed wakes. Kept: the limit is raised at start; the pidfd taken at accept
+  is closed once the client's program is resolved
+  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md)), so it adds none.
 - A client's program is found as a departure's is ([below](#the-mcp-server)), at each answer:
   one that left its program's tree and group has none. `rest`'s programs are those remembered:
   one forgotten in a window, past 128 or with its seat, is not listed, its wakes counted in the
-  sources. Paid at Stage 2a, M2.4 (the map, tasks, frames and events), by a pidfd taken at accept.
+  sources. Paid at Stage 2a, M2.4c (one event stream and the pidfd), by a pidfd taken at accept
+  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md)).
 - The log of each second runs on real time, a manual clock's too. A Yuna that stops within a
   second does not log it. Kept: it is a log for people; `rest` reads the counters.
 
@@ -408,10 +410,11 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   `getrandom`.
 - An agent reads presentation times only through a capture: its frame's `boundary` and
   `presented_ns`. No tool gives a program's presentation feedback, which the program reads
-  itself through `wp_presentation`. Paid at Stage 2a, M2.4 (the map, tasks, frames and events), when
-  the frame's identity is exposed.
+  itself through `wp_presentation`. Paid at Stage 2a, M2.4d (a frame's identity), by
+  the `frames` tool.
 - `windows` lists every window of its seat: past a few hundred, its reply passes Claude Code's
-  25,000 tokens of tool output. Paid at Stage 2a, M2.4, by the event stream, paged.
+  25,000 tokens of tool output. Paid at Stage 2a, M2.4c (one event stream and the pidfd): `windows`
+  paged.
 - A process that empties its environment and leaves its process group and its parents, a
   double fork with `setsid` and `env -i`, escapes its seat's closing
   ([ADR-0117](adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md));
@@ -434,22 +437,23 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   window, through `Layout::window` ([above](#the-layout-model)): 0.13 ms at 100 windows, 4.4 ms
   at 1,000 and 11 ms at 2,000 in a release build ([measurements](measurements.md)). A title
   changed each round, among 1,000 windows, takes a frame's time of 240 Hz. `windows` pays the
-  same. Paid at Stage 2a, M2.4 (the map, tasks, frames and events): the one event stream
-  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md),
-  item 14) replaces the comparison.
+  same. Paid at Stage 2a, M2.4c (one event stream and the pidfd): marks where state changes
+  replace the comparison
+  ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
 - An event's title, application id or workspace's name is cut to 512 bytes, at a character's
   boundary: a change past the cut is not told. Kept: an event holds 1 KiB of text at most, a
   seat's log about 1 MiB (`MAX_EVENT_TEXT`).
 - `missed` is exact while a seat's dropped events form at most 1,024 runs of consecutive
   numbers; past that, other seats' events interleaving, the oldest runs merge, and a cursor
-  inside a merged run is told at most that run's count. Paid at Stage 2a, M2.4, with the event
-  stream's resync event.
+  inside a merged run is told at most that run's count. Paid at Stage 2a, M2.4c (one event stream and
+  the pidfd): events numbered per seat (ADR-0153).
 - A client's program is found from the processes above it when Yuna accepted it, or its process
   group: one that left both, a double fork with `setsid`, is told with no program, its protocol
   error kept on none. A client whose process exited before the accept has no lineage, and no
   program; were its pid taken meanwhile, the lineage read would be the other process's. Paid at
-  Stage 2a, M2.4 (the map, tasks, frames and events): the core records a pidfd of the peer when a
-  client connects, which makes it exact
+  Stage 2a, M2.4c (one event stream and the pidfd): a pidfd of the peer taken at accept fixes the
+  client's own process; its parents and an X11 client's pid stay inexact
+  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md))
   ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
   15).
 - Yuna keeps no protocol trace of a client: wayland-rs has none, and a fork for it was not
@@ -689,8 +693,8 @@ Yuna's code were not traced.
 - About one start in thirty of `yuna mcp` on llvmpipe at 4K takes 95 to 101 ms to `seat create`'s
   reply, against a median of 88, on a quiet machine with a full `TMPDIR`; why is not known. ADR-0100's
   budget is judged on an empty `TMPDIR` (the owner's choice, 2026-11-21), where the longest of 20
-  was 82.6 to 96.0 ms. Paid at Stage 2a, M2.4 (the map, tasks, frames and events), where each wake
-  is named.
+  was 82.6 to 96.0 ms. Looked into at Stage 2a, M2.4d (a frame's identity), where each wake is
+  named, by a timed run at the owner's go.
 - The parity script has no scenario for popups, X11 windows, captures or subsurfaces, and the held
   captures take no X11 window: their *filtered* class tests the renderer's bilinear filter, not
   X11's area filter. Paid before the milestones that rewrite them: subsurfaces at M2.5 (the
@@ -698,13 +702,15 @@ Yuna's code were not traced.
   popups at M2.13.
 - The parity script's "allocations a frame through Yuna's binary" counts the blocks whose stack,
   within DHAT's 12 frames, passes through Yuna's binary, Mesa's allocations called from Yuna
-  included; ADR-0140's target needs the innermost frame outside the allocator. Its context
-  switches count only Yuna's main thread and its threads named `yuna-…`. Paid at Stage 2a, M2.4
-  (the map, tasks, frames and events), with the table of tasks.
+  included; ADR-0140's target needs the innermost frame outside the allocator. Paid at
+  Stage 2a, M2.9 (Vulkan the default), whose target it is. Its context switches count only Yuna's
+  main thread and its threads named `yuna-…`. Paid at Stage 2a, M2.4b (the table of tasks), where
+  every thread is named so.
 - Two X11 stories absorb a race between the manager's thread and the story by retrying:
   `a_surface_committed_after_its_windows_serial_is_paired_with_it` (three tries, a 500 ms sleep)
-  and the managers' burst in `x11_bounds.rs` (up to eight). Paid at Stage 2a, M2.4, where every
-  task runs inline on the manual clock.
+  and the managers' burst in `x11_bounds.rs` (up to eight). Paid at Stage 2a, M2.17 (the X11 manager, a
+  task), where the manager runs inline; no clock removes a race between threads
+  ([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 - `yuna mcp`'s start is measured on the desktop alone: the laptop and the lowest machine are not,
   and no budget holds with programs open
   ([ADR-0100](adr/0100-the-budgets-of-yuna-mcp-at-their-conditions.md)). Paid at Stage 2b, with
@@ -733,7 +739,7 @@ Yuna's code were not traced.
 - An X11 drag's time limits run on the real clock, also in the headless stories on the manual
   clock: `a_third_drag_refuses_the_oldest_of_the_two_ending` must reach its third drag within
   5 s of the first's transfer, which a machine slowed that much would miss. Paid at Stage 2a,
-  M2.4 (the map, tasks, frames and events), where every task runs inline on the manual clock.
+  M2.4b (the table of tasks): on the manual clock the manager reads Yuna's time (ADR-0152).
 - Three races of an X11 drag are left, Yuna's loop never waiting for the manager's thread; the
   owner kept them, the second on 2026-11-18 and all three on 2026-11-19, against holding the
   release until the manager confirms
@@ -796,8 +802,8 @@ Yuna's code were not traced.
   keeps the manager's `PropertyChange` mask for its life: its property changes wake the manager,
   which leaves them. Kept: the wakes are harmless.
 - The transfers' time limit runs on the manager's thread, on real time, not on Yuna's clock: a
-  test on the manual clock cannot step it. Paid at Stage 2a, M2.4 (the map, tasks, frames and
-  events): tasks run inline on the manual clock.
+  test on the manual clock cannot step it. Paid at Stage 2a, M2.4b (the table of tasks):
+  on the manual clock the manager reads Yuna's time (ADR-0152).
 - No X11 keyboard grab (`xwayland-keyboard-grab`): a virtual machine's viewer cannot take every
   key, until Stage 2c, with the keyboard shortcuts' inhibitor
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md), [ROADMAP](ROADMAP.md)).
@@ -945,14 +951,15 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - `yuna-ipc`'s `Refusal::Refused` carries as text the layout's reasons that have no variant of
   their own (no output, a pinned window made fullscreen, another window's fullscreen holding the
   screen, and the others the layout gives as text), where ADR-0146 asks a variant per reason: a caller tells them apart only by their
-  sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4 (the map, tasks,
-  frames and events), where every public contract is listed with its version.
+  sentence. Paid before Hollow uses `yuna-ipc`, at the latest at Stage 2a, M2.4a (the map's checks
+  and the contracts), where every public contract is listed with its version.
 - Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
   its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, 2
-  in `yuna-bench`, 23 in `yuna-wlcs` (ADR-0150), none in `yuna-layout` and `yuna-motion`, on
+  in `yuna-bench`, 23 in `yuna-wlcs` (ADR-0151), none in `yuna-layout` and `yuna-motion`, on
   2026-11-22. Nothing checks the new
-  crates' dependencies against ADR-0150's map yet; they match it. Paid at Stage 2a, M2.4 (the map,
-  tasks, frames and events), with the crate map's checks.
+  crates' dependencies against ADR-0151's map yet; they match it. Paid at Stage 2a, M2.4a (the map's
+  checks and the contracts,
+  [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)).
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated. Paid at Stage 2a, M2.16 (the store, wired behind a switch): the new store is

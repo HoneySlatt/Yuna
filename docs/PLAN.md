@@ -14,40 +14,14 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   M2.1.
 - Stage 2's opening design is done (2026-11-19): ADR-0133 to ADR-0141, 2a's milestones below,
   the debt placed ([debt](debt.md)).
-- **M2.1, the baselines**: the CI tier done and on `main` (2026-11-20). The parity script
-  (ADR-0142) compares each push with its pinned baseline in CI, 21.7 minutes on GitHub's runner,
-  its canaries flagged on the desktop; allocations by DHAT (ADR-0143); motion's budget met, its clients on the GPU
-  (ADR-0144); `yuna mcp`'s start budgets met; the traces, the held captures and the debt's tests;
-  the 4K scene on lavapipe as fast as on llvmpipe ([measurements](measurements.md)).
-  The timed and GPU tiers, at the owner's go on 2026-11-21: built, reviewed, their controls
-  passing, the soak flat ([measurements](measurements.md)). **M2.1 is done.** Missing scenarios:
-  popups, X11, captures, subsurfaces ([debt](debt.md)).
-- **M2.2, the interface**, done on 2026-11-21. The owner chose that day to pause the
-  measurements and start it, the timed tier finishing at their go, against ADR-0139's "baselines
-  first" for that tier alone: M2.2 cannot close until the timed tier has compared its head with
-  the baseline. The timed tier's start scenario takes a full `TMPDIR`, so that it guards
-  `58f2e75`'s fix. Decided: the crate map amended (ADR-0145), the interface's shape (ADR-0146),
-  256 clients a seat (ADR-0147). Done, on `main`, CI's parity green at each push: direct
-  dependencies; ADR-0140's toggles and guard; the helpers the debt placed here; `yuna-types`;
-  `yuna-ipc`'s commands in place of `change_layout`, refused ones drawing nothing, another seat's
-  window or output refused; `read_pixels` on a `PixelRect`, and `check.sh` refusing Smithay in a
-  test; `yuna`'s re-exports gone; Yuna's events under 4 KiB; 256 clients a seat; then 1 MiB a
-  client, which moved no parity figure, so no move of the baseline. The closing review is done
-  and its findings fixed; CI's parity found them worse in `input`, by the split of codegen units
-  alone, and the parity script builds in one since (ADR-0148). The timed and GPU tiers compared
-  M2.2's head, `c7ce632`, with the baseline on 2026-11-21: no figure worse
-  ([measurements](measurements.md)). **M2.2 is done.**
-- **M2.3, WLCS**, done on 2026-11-22. Decided by the owner: WLCS 1.8.1 from nixpkgs, the shim
-  declaring WLCS's interface itself, the WLCS seat's windows opening floating, every test's
-  outcome expected and a new pass failing once confirmed alone, WLCS's own CI job (ADR-0149);
-  `yuna-wlcs`'s `unsafe` a named exception of the crate map (ADR-0150); the parity thresholds kept
-  on one-unit builds, two more series measured; LLVM's allocations left out of the parity
-  script's allocations a frame, which made its CI tier fail on the runner
-  ([measurements](measurements.md)). On `main`:
-  `yuna-wlcs` and its seams, `yuna-bench wlcs`, `crates/yuna-wlcs/expected.txt` (149 tests
-  pass of 1,225), `check.sh`'s `wlcs` step and CI's `wlcs` job; a canary showed CI red when
-  tests expected to pass fail. **M2.3 is done.**
-- **Next: M2.4, the map, tasks, frames and events**, in a new session.
+- **M2.1, the baselines**, done on 2026-11-21: the parity script in CI (ADR-0142, ADR-0143),
+  the timed and GPU tiers, motion's and `yuna mcp`'s budgets met ([measurements](measurements.md)).
+- **M2.2, the interface**, done on 2026-11-21 (ADR-0145 to ADR-0148): `yuna-types`, `yuna-ipc`'s
+  commands, 256 clients a seat, 1 MiB a client; the parity script builds in one codegen unit.
+- **M2.3, WLCS**, done on 2026-11-22 (ADR-0149, ADR-0150): `yuna-wlcs`, its expected outcomes
+  (149 tests pass of 1,225), `check.sh`'s step and CI's `wlcs` job.
+- **M2.4's design** done on 2026-11-22: the owner split it in four, in this order, and chose
+  ADR-0151 to ADR-0155. **Next: M2.4a, the map's checks and the contracts**, in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -78,14 +52,32 @@ milestone that replaces its module. A new dependency is put to the owner at its 
   *Done when* no test or example names a Smithay type and M2.1's figures hold.
 - **M2.3 WLCS.** `yuna-wlcs`, WLCS in CI, its passing tests recorded as a list. *Done when* CI
   fails if a passing test fails.
-- **M2.4 The map, tasks, frames and events.** `scripts/check.sh` checks the crate map's edges,
-  `forbid(unsafe_code)` and no global mutable state; every thread in the table of tasks, with its
-  scheduling class, runnable inline on the manual clock; a frame's identity from input to
-  presentation, each wake named, the GPU priority granted logged; a pidfd at accept; one event
-  stream, bounded per subscriber, with a resync; every public contract listed with its version.
-  The table names `yuna-wlcs-server`, the one thread on the real clock alone (ADR-0149); the
-  check allows `yuna-wlcs`'s `unsafe` code and its one `Once` (ADR-0150).
-  *Done when* a wrong edge and an unregistered thread fail the check.
+- **M2.4a The map's checks and the contracts.** ADR-0151: `unsafe_code` denied, expected per
+  module; `crates/map.toml` and `scripts/crate-map.py` check the edges, the outside libraries'
+  owners, the `unsafe` counts and every global by name; `thread_local!` refused by clippy; `yuna`
+  transitional, its lists and its files naming Smithay only shrinking; `forbid(unsafe_code)` in
+  every pure crate; the two debug `OnceLock`s gone. Every public contract listed with its version
+  (ADR-0079); `Refusal` a variant per reason, the layout's included. *Done when* a wrong edge, a
+  second owner of an outside library, `unsafe` added to a listed module or in an unlisted one, an
+  unlisted `static` or `static mut`, an aliased `thread_local!` and rustix in a level-1 crate each
+  fail the check, and no `Refusal` holds text.
+- **M2.4b The table of tasks.** ADR-0152: one spawner, every thread `yuna-…` in 15 bytes, the
+  table with each task's owner, inbox, bound, stop order, failure, class (normal) and clock;
+  encoders capped at the cores less one; joins and reaps bounded; the X11 manager on Yuna's manual
+  time, its inline running and the two retry stories at M2.17. *Done when* an unregistered thread
+  fails the check and the X11 drag and transfer stories step the manual clock past their limits.
+- **M2.4c One event stream and the pidfd.** ADR-0153: marks at the change points, `yuna_ipc::Event`
+  built once a round, MCP's log on it numbered per seat, `windows` paged, the comparison a test
+  oracle. ADR-0154: `SO_PEERPIDFD` at accept, the program resolved there. *Done when* a window
+  opened and closed in one round is told, a title changed a thousand times in a round is one
+  event, `missed` is exact, `windows` pages, and a client's program comes from its pidfd, or from
+  today's walk marked inexact when the kernel refuses it.
+- **M2.4d A frame's identity.** ADR-0155: an opaque `FrameId`, rings of inputs, commits and
+  frames, the `frames` tool, exact causes, hidden windows by due time, wakes naming their task or
+  X11 client, the GPU priority granted logged. *Done when* a story reads a frame's inputs,
+  commits, causes and presentation through `frames`, a re-aimed refresh keeps its id, a `Waker`'s
+  and an X11 wake name their task or client, the priority granted is logged, and the parity
+  figures hold or the baseline moves by a named commit.
 - **M2.5 The boundary.** Its contract first, an ADR, put to the owner: roles, each module's
   double-buffered state applied at commit, checks before a commit, notices after, a read-only
   view and typed requests; the queue's crate placed in the map. Implemented over Smithay's cached
@@ -130,8 +122,10 @@ milestone that replaces its module. A new dependency is put to the owner at its 
   damage flood scenario passes.
 - **M2.16 The store, wired behind a switch.** Both stores built and tested in CI. *Done when*
   recorded request streams give the same results in both and memory a window meets its budget.
-- **M2.17 The X11 manager, a task.** Its watchdog, bounds and restacking. *Done when* its debt's
-  stories pass on the own core.
+- **M2.17 The X11 manager, a task.** Its watchdog, bounds and restacking; its round trips
+  answered without blocking, so that it runs inline on the manual clock, and the state thread no
+  longer locks its inbox nor waits on its reap (ADR-0152). *Done when* its debt's stories pass on
+  the own core, the two retry stories without retrying.
 - **M2.18 The agents' runtime.** In `yuna-process`: a spawner that clears ambient capabilities,
   programs ended with their Yuna, pidfds, folders swept, replies bounded in bytes, accessibility
   for AccessKit, corrected coordinates. *Done when* a killed `yuna mcp` leaves no program and
@@ -140,14 +134,14 @@ milestone that replaces its module. A new dependency is put to the owner at its 
   Smithay, its fork and `smithay-patches.md` removed. *Done when* no `State` shared by handlers
   remains, ADR-0139's gate scenarios pass, and 2a's gate review is done.
 
-M2.18 may run any time after M2.4. A milestone that turns out too large is split with the owner.
+M2.18 may run any time after M2.4d. A milestone that turns out too large is split with the owner.
 
 ## Status
 
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.3 done; M2.4 next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.3 done; M2.4a next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas

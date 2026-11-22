@@ -83,7 +83,7 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0150](adr/0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md) | nothing |
+| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | nothing |
 | `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |

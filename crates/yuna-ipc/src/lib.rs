@@ -13,14 +13,14 @@
 //!
 //! - Data only: no behaviour beyond naming what a command targets ([`Command::window`],
 //!   [`Command::output`]), no wire format. Hollow's protocol is decided with Hollow's interface
-//!   (Stage 2c), the events at Stage 2a's M2.4.
+//!   (Stage 2c), the events at Stage 2a's M2.4c (ADR-0153).
 //! - A contract in 0.x
 //!   ([ADR-0079](../../../docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
 //!   once Hollow uses it, each change is announced in the changelog. Its enums are
 //!   `#[non_exhaustive]`, so that a command or a reason added is not a break for the programs that
 //!   match on them.
 //! - Level 1 of the crate map, on `yuna-types` alone
-//!   ([ADR-0150](../../../docs/adr/0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md)).
+//!   ([ADR-0151](../../../docs/adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)).
 //!
 //! A command added states, in [`Command::window`] and [`Command::output`], the window and the
 //! output it names, which the compositor checks are its caller's seat's before running it; the
