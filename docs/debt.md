@@ -593,6 +593,80 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   that Mesa needs no newer glibc than Opium's nixpkgs gives (`tests/opium.rs`). Kept: it is weekly,
   off the push's path.
 
+## WLCS
+
+What WLCS's first runs against Yuna found, at M2.3, on WLCS 1.8.1
+([ADR-0149](adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md)).
+Each failing test is `fail` in [`expected.txt`](../crates/yuna-wlcs/expected.txt). Each item is
+paid in the milestone that rewrites its module, which turns its tests to `pass`.
+
+**WLCS's own limits.**
+
+- **Touch.** Yuna has no touch. WLCS's 67 tests that touch are *unsupported*, and 28 of them
+  pass vacuously. Paid when touch input comes. No stage plans it yet: the ROADMAP names the Steam
+  Deck's touch only as an idea.
+- **Buffers before the first configure.** WLCS 1.8.1's surface builder attaches a buffer before
+  the first configure (`src/surface_builder.cpp`), which xdg-shell forbids, and Yuna, through
+  Smithay, refuses it. That fails 259 tests that would otherwise test input regions, popups'
+  positioners and touch on xdg surfaces. Paid when a newer WLCS is put to the owner, before M2.12.
+- **`BadBufferTest.test_truncated_shm_file`** cannot pass on nixpkgs' build. Its truncation is an
+  `assert` the release build removes, so the buffer it sends is not truncated. It is the one test
+  of Smithay's four groups that Yuna fails. Kept: it is WLCS's limit, and Yuna's own `wl_shm`
+  guard has its own test.
+- **`XdgDecorationV1Test.destroying_toplevel_before_decoration_throws_orphaned`** expects the
+  `orphaned` error on the decoration manager. It belongs to the decoration's own interface, where
+  Yuna raises it. Kept: WLCS's expectation looks wrong.
+
+**Yuna's behaviours it found.** These were read from WLCS's failures and sources; their causes in
+Yuna's code were not traced.
+
+- **Subsurfaces.** These are the `*Subsurfaces/Subsurface*Test` tests, with
+  `input_seen_by_subsurface_after_parent_unmapped_and_remapped`.
+  - A desynchronised subsurface's position is applied at its own commit, not its parent's.
+  - `place_above` and `place_below` do not change which surface the pointer hits.
+  - A subsurface beyond its parent gets no pointer.
+  - A surface that moves under a still pointer is not entered again.
+  - Paid at M2.5 (the boundary), which moves the surfaces' state.
+- **xdg-shell.** These are `XdgSurfaceStableTest`, `XdgToplevelStableTest` and
+  `XdgToplevelStableConfigurationTest`.
+  - `get_xdg_surface` on a surface with a role or a buffer raises no error.
+  - A buffer attached before the configure errors at the commit rather than at once.
+  - `xdg_toplevel.wm_capabilities` is never sent, though `xdg_wm_base` is offered at version 7.
+  - A window unmapped and mapped again opens as a new one, centred.
+  - Paid at M2.13 (xdg-shell and popups).
+- **The WLCS seat's windows cannot maximise**, since floating windows do not:
+  `window_can_maximize_itself` and `window_can_unmaximize_itself` fail. Kept: the seat opens its
+  windows floating by the owner's choice (ADR-0149).
+- **Selections.** A selection set with serial 0 by a client without the keyboard is not offered to
+  the focused client (`CopyCutPaste`, `PrimarySelection`). WLCS says its test works only "while Mir
+  fails to validate the serial": Yuna's refusal may be right. Its rule is put to the owner at M2.14
+  (selections and text).
+- **Viewporter, fractional scale and decorations.**
+  - A second viewport or fractional scale on one surface raises its error on `wl_surface`, not on
+    its manager.
+  - A source rectangle out of the buffer, or a source of fractional size with no destination,
+    raises nothing.
+  - xdg-decoration's `set_mode` and `unset_mode` are answered with no configure.
+  - Paid at M2.15 (the other protocols).
+- **wlr-virtual-pointer.** Its events reach the client without the virtual pointer's `frame`
+  (`VirtualPointerV1Test.if_frame_is_not_sent_client_sees_no_events`). Paid at M2.12 (seats and
+  input).
+
+- **Flaky under load.** Two `VirtualPointerV1Test` tests each failed once in 20 runs, 32 at once
+  on the desktop, and are `flaky`. The virtual pointer is a client of its own, which WLCS drives
+  without a hook, so the module cannot let Yuna settle before WLCS asserts. Their cause in Yuna is
+  not traced. Paid at M2.12 (seats and input).
+
+**The module and its runner.**
+
+- **Log noise.** Every compositor start logs Smithay's
+  `Erroneous EGL call didn't set EGLError` at warn, 1,225 times in a run. Paid with Smithay's
+  renderer, at M2.9 (Vulkan the default).
+- **A second copy of a test helper.** `yuna-bench`'s `ends_with_its_thread`
+  (`src/wlcs/running.rs`) copies `crates/yuna/tests/common/dies_with_test.rs`, because
+  `yuna-bench` depends on nothing of Yuna's (ADR-0075). Kept while the two crates share no crate
+  below them.
+
 ## Tests and examples
 
 - A move of the parity baseline whose check fails, or is cancelled, has no repair path: a move is
@@ -877,7 +951,7 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
 - Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
   its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, one
   in `yuna-bench`, none in `yuna-layout` and `yuna-motion`, on 2026-11-19. Nothing checks the new
-  crates' dependencies against ADR-0145's map yet; they match it. Paid at Stage 2a, M2.4 (the map,
+  crates' dependencies against ADR-0150's map yet; they match it. Paid at Stage 2a, M2.4 (the map,
   tasks, frames and events), with the crate map's checks.
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause

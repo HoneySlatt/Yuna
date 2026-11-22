@@ -3,8 +3,8 @@
 //!
 //! This crate is level 0 of the crate map
 //! ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)'s
-//! table of crates, as amended by
-//! [ADR-0145](../../../docs/adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md)):
+//! table of crates, as restated by
+//! [ADR-0150](../../../docs/adr/0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md)):
 //! it depends on nothing, and every crate of the map may depend on it.
 //!
 //! # What it promises

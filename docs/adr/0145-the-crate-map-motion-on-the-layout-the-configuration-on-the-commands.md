@@ -1,6 +1,6 @@
 # 0145. The crate map: motion on the layout, the configuration on the commands
 
-- Status: Accepted; supersedes in part [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) (the crate map)
+- Status: Superseded by [0150](0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md); supersedes in part [0082](0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) (the crate map)
 - Date: 2026-11-20
 
 ## Context

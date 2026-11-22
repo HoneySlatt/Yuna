@@ -165,7 +165,9 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0142](0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md) | Parity: a pinned baseline, figures in classes, three verdicts | Accepted |
 | [0143](0143-allocations-a-frame-counted-by-dhat.md) | Allocations a frame, counted by valgrind's DHAT | Accepted; supersedes in part 0140 |
 | [0144](0144-motions-budget-its-clients-draw-on-the-gpu.md) | Motion's budget: its clients draw on the GPU | Accepted; supersedes in part 0127 |
-| [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | The crate map: motion on the layout, the configuration on the commands | Accepted; supersedes in part 0082 |
+| [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | The crate map: motion on the layout, the configuration on the commands | Superseded by 0150; supersedes in part 0082 |
 | [0146](0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md) | The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller | Accepted |
 | [0147](0147-a-seat-connects-256-clients-at-most.md) | A seat connects 256 clients at most | Accepted |
 | [0148](0148-parity-builds-each-side-in-one-codegen-unit.md) | Parity builds each side in one codegen unit | Accepted |
+| [0149](0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md) | WLCS: nixpkgs' 1.8.1, a shim on the interface, every test's outcome expected | Accepted |
+| [0150](0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md) | The crate map: `yuna-wlcs` owns WLCS's interface | Accepted; supersedes 0145 |

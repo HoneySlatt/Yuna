@@ -83,6 +83,7 @@ nix develop -c cargo run -- --headless --output 1920x1080@60,1   # Yuna without 
 nix develop -c cargo run -- mcp            # an MCP server on standard input and output
 nix develop -c cargo test --workspace     # the tests alone
 nix develop -c cargo test --locked -p yuna --test headless <name>   # the stories whose name holds <name>
+nix develop -c cargo run -p yuna-bench -- wlcs check --listed   # WLCS's tests expected to pass
 nix develop -c cargo fmt --all            # formats, as the check's `format` step wants
 nix develop -c cargo run --release -p yuna-layout --example timing   # the layout's timings
 ```
@@ -484,6 +485,47 @@ Inside `agent-headless`, the other programs' GPU load cannot be read: the report
 so. A timed case on the GPU is then void; on a machine you know to be free of games, give
 `--gpu-load-unknown-ok` by hand.
 
+### WLCS
+
+WLCS, the Wayland conformance suite, runs its tests against Yuna through `crates/yuna-wlcs`
+([ADR-0149](docs/adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#wlcs)). The development shell gives its runner,
+`$YUNA_WLCS_RUNNER`. `yuna-bench wlcs` runs it and judges each test against
+[`crates/yuna-wlcs/expected.txt`](crates/yuna-wlcs/expected.txt):
+
+```sh
+nix develop -c cargo build -p yuna-wlcs
+nix develop -c cargo run -p yuna-bench -- wlcs check --listed   # the tests expected to pass: check.sh's step
+nix develop -c cargo run -p yuna-bench -- wlcs check --full     # every test: CI's `wlcs` job
+```
+
+`cargo run -p yuna-bench -- wlcs --help` gives the rules and every option. One test, its output
+read by eye:
+
+```sh
+nix develop -c env -u WAYLAND_DISPLAY LP_NUM_THREADS=0 "$YUNA_WLCS_RUNNER" \
+    "${CARGO_TARGET_DIR:-target}/debug/libyuna_wlcs.so" --gtest_filter='XdgToplevelStableTest.*'
+```
+
+**Recording the expected outcomes again.** Do it when a change turns a test from failing to
+passing, when a protocol is added to or removed from what an agent's seat offers, or when WLCS
+moves with `flake.lock`. Record on GitHub's runner and on the desktop, then merge:
+
+```sh
+gh workflow run wlcs-record.yml --ref <branch> -f runs=20       # on GitHub's runner
+gh run view <run> --log | sed -n '/WLCS record begins/,/WLCS record ends/p' | sed '1d;$d' \
+    | cut -f3- | sed 's/^[^ ]* //' > runner.json
+nix develop -c cargo run -p yuna-bench -- wlcs record --runs 20 --jobs 32 --out desktop.json
+nix develop -c cargo run -p yuna-bench -- wlcs record --merge runner.json desktop.json \
+    --write crates/yuna-wlcs/expected.txt
+```
+
+The desktop's run, at twice its processors, provokes the races a quiet machine hides. A test whose
+outcome varies is written `flaky`, a debt item each ([debt](docs/debt.md#wlcs)). A crash, a hang
+or a fault of the module writes nothing: fix it first. A test that moves from `pass` to anything
+else is a loss of parity: its commit cites the owner's go or an ADR, as a move of the parity
+baseline does.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/check.sh` in the same shell, on
@@ -491,7 +533,9 @@ each push to `main`, each pull request, and every Monday. The checks stay one jo
 enough ([ADR-0114](docs/adr/0114-gpl-3-0-or-later-public-the-logo-apart.md)); beside them, the
 `package` job builds Yuna's package, and the `parity` job runs
 [the parity script](#the-parity-script), HEAD against the pinned baseline, with the whole history
-checked out. A change of Markdown files alone skips them:
+checked out, and the `wlcs` job runs every test of [WLCS](#wlcs).
+[`.github/workflows/wlcs-record.yml`](.github/workflows/wlcs-record.yml) records WLCS's outcomes
+on GitHub's runner, on demand. A change of Markdown files alone skips them:
 [`.github/workflows/docs.yml`](.github/workflows/docs.yml) runs `scripts/check.sh docs`: their
 links, the length of those read at every session, the ADRs' index, the changelog's fragments and
 the tests of the scripts that check them, with lychee, git and python3 alone, in a minute or two. `scripts/check.sh docs` runs the same locally.

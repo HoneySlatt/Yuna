@@ -41,6 +41,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Boundary** (Stage 2a): the temporary contract between the protocols' modules and the surfaces'
   store, implemented over Smithay first, then over Yuna's own store
   ([ADR-0139](adr/0139-stage-2-in-three-gated-parts-2as-path-revised.md)).
+- **Breaker** (WLCS): the runner's stop after 5 hangs or timeouts of WLCS in a row, the timeouts
+  of tests expected to fail aside, so that a broad regression ends the `wlcs` job early and says
+  so.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
   ([ADR-0119](adr/0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md)).
@@ -113,6 +116,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   commits taken, and the same frame callbacks, pointer events, configures and buffers its client
   received; otherwise its figures are void
   ([ADR-0142](adr/0142-parity-a-pinned-baseline-figures-in-classes-three-verdicts.md)).
+- **Expected outcome** (WLCS): what `crates/yuna-wlcs/expected.txt` says a WLCS test does on Yuna:
+  `pass`, `fail`, `skip`, `unsupported` or `flaky`; the runner judges each run against it
+  (ADR-0149).
 - **Fake fullscreen**: an application told it is fullscreen while its column keeps its size.
 - **Fatal path**: what Yuna does when its state thread panics: it stops at once, never unwinding
   through a state left half changed; `yuna mcp` first ends its programs and removes its folder
@@ -138,6 +144,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   showing frames several times ([ADR-0014](adr/0014-vrr-without-flicker.md)).
 - **Greeter mode**: Yuna running under greetd as the login screen's compositor, without command
   socket, MCP, global shortcuts, portals or XWayland ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
+- **Hang guard** (WLCS): the runner's kill of a WLCS process that prints nothing for 60 s; its
+  running test is a hang, which fails the check whatever was expected.
 - **HDR10**: high dynamic range output as monitors take it: the PQ curve, BT.2020 primaries, at
   least 10 bits per channel, and static metadata sent with the picture (`HDR_OUTPUT_METADATA`).
 - **Headless mode**: Yuna running without a physical screen, on virtual outputs.
@@ -305,6 +313,12 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Sentinel**: in the compositor's tests of misbehaving clients and random requests, a
   well-behaved client that joined first; its frame callbacks, at the exact deadline of its frame,
   show that the others did not stop its frames.
+- **Sentinel group** (WLCS): the tests `wlcs check --full` runs first, `SelfTest`,
+  `FrameSubmission` and `XdgSurfaceStableTest`; one expected to pass that fails stops the run as
+  a broad failure.
+- **Settle** (WLCS): what `yuna-wlcs` does before and after each of WLCS's requests: run Yuna until
+  no refresh is due within one refresh period, at most 0.5 s, so that a focus or an activation
+  Yuna gives at a refresh has reached the client before WLCS asserts it.
 - **Share picker**: the selection Yuna draws when an application asks to share the screen, the same
   as for captures; choosing is the consent
   ([ADR-0107](adr/0107-what-yuna-does-itself-and-what-it-leaves-to-the-shell.md)).
@@ -341,9 +355,14 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   A rival that cannot run headless, niri or cosmic-comp, is measured there alone: **tour only**.
 - **Unresponsive**: said of an X11 window asked to close that left its ping (`_NET_WM_PING`)
   unanswered 5 s; it stays until it answers one, never ended on a timer.
+- **Unsupported** (WLCS): the outcome of a WLCS test that called a hook Yuna cannot honour, such
+  as touch; the module prints `yuna-wlcs: unsupported: …`, and the test never counts as a pass,
+  even when gtest says it passed.
 - **Urgent**: said of a window that asked for the focus and did not get it, because its request
   came without a valid activation token or a fullscreen window held the screen; it stays urgent
   until it gets the focus or closes. Nothing shows it yet.
+- **Vacuous pass** (WLCS): a test gtest passes only because the input it sent did nothing, as a
+  touch test that asserts no surface was touched; filed *unsupported*.
 - **Variant**: a named set of settings in the configuration, applied over it and switched on
   command, such as the shell's compact mode
   ([ADR-0129](adr/0129-configuration-in-kdl-its-includes-and-variants.md)).

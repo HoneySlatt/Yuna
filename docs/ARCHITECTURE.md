@@ -24,7 +24,8 @@ limits are in its code's documentation, linked from here; why each decision was 
   **[The program](#the-program)**, `yuna`, runs `yuna --headless` or `yuna mcp`.
 - **[The rivals' bench](#the-rivals-bench)**, `yuna-bench`, apart: it measures every compositor,
   Yuna included, from outside; beside it, **[the parity script](#the-parity-script)** compares
-  two builds of Yuna on figures the machine's load does not move.
+  two builds of Yuna on figures the machine's load does not move, and **[WLCS](#wlcs)**, the
+  Wayland conformance suite, runs its tests against Yuna through `yuna-wlcs`.
 
 **The main flows:**
 
@@ -82,12 +83,13 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0145](adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | nothing |
+| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0150](adr/0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md) | nothing |
 | `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |
 | `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-ipc`, `yuna-layout`, `yuna-motion`, `yuna-types`, and the crates below |
-| `yuna-bench` | the rivals' bench and the parity script | nothing of Yuna's |
+| `yuna-wlcs` | [WLCS](#wlcs)'s integration module, a shared library WLCS loads, on the `yuna` library's interface | `yuna`, `yuna-types` |
+| `yuna-bench` | the rivals' bench, the parity script and WLCS's runner | nothing of Yuna's |
 
 - Each dependency's reason is a comment beside it, in the root [`Cargo.toml`](../Cargo.toml)'s
   `[workspace.dependencies]` and in each crate's manifest. `deny.toml` holds the policy on
@@ -204,7 +206,7 @@ an arrangement.
 | [`xwayland/`](../crates/yuna/src/xwayland/mod.rs) | each seat's X display, its Xwayland and its X11 window manager |
 | [`dbus/`](../crates/yuna/src/dbus/mod.rs) | Yuna's own D-Bus client, for the accessibility buses |
 | [`mcp/`](../crates/yuna/src/mcp/mod.rs) | the MCP server |
-| [`main.rs`](../crates/yuna/src/main.rs), `fatal.rs`, `stop_signal.rs` | the program alone: its command line, its logs, its signals, its fatal path |
+| [`main.rs`](../crates/yuna/src/main.rs), `fatal.rs`, `stop_signal.rs` | the program alone: its command line, its signals, its fatal path; its logs start through the library's `start_logging`, which WLCS's module shares |
 
 ### A round of the event loop
 
@@ -1094,6 +1096,56 @@ A head from before the GPU and timed tiers, whose thresholds file has no entry f
 is judged on them by the script's own file's entries, which the report says. A base from before
 them may not let the head loosen them unseen either: for each such kind, the head's entry is
 checked against the push before's, else the script's own.
+
+## WLCS
+
+WLCS, the Wayland conformance suite of Canonical's Mir, runs its tests against Yuna
+([ADR-0149](adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md)).
+Its baseline is part of Stage 2a's parity: what passes on Smithay's core today keeps passing.
+
+**WLCS loads Yuna.** WLCS's runner, nixpkgs' 1.8.1 by its store path (`YUNA_WLCS_RUNNER`), loads
+`libyuna_wlcs.so` into its own process. For each test it asks the module for a compositor, starts
+it, connects clients through the sockets the module returns, places windows and moves a pointer,
+then stops it. Its tests run one after another in that one process.
+
+**One thread per compositor.** [`crates/yuna-wlcs`](../crates/yuna-wlcs/src/lib.rs) answers each
+start with a thread, `yuna-wlcs-server`, that owns a `Compositor`:
+
+- on the processor and the real clock;
+- one agent's seat, whose windows open floating;
+- one 1920×1080 output at (0, 0).
+
+WLCS's hooks run on its test thread. Each sends one request through a channel of one message,
+wakes the compositor with its `Waker`, and waits for the answer. The thread lets Yuna settle,
+applies the request, lets Yuna settle again, then answers. Settling means no refresh due within
+one refresh period. Yuna gives keyboard focus and activation at a refresh, and WLCS asserts right
+after one roundtrip, so an answer before the refresh would make its tests race.
+
+**The seams it uses.** These are hidden from the documentation:
+
+- `Compositor::waker`;
+- `connect_client_keyed` and `window_of_surface`, which find the window of a client's `wl_surface`;
+- `set_seat_opens_floating`;
+- `place_window`, a move of a floating window that sends no configure.
+
+**What it cannot do.** Yuna has no touch. A touch hook prints `yuna-wlcs: unsupported: touch`, and
+the test counts as *unsupported*, never passing. A fault of the module prints `yuna-wlcs: error:
+…` and fails. A panic, or a hook unanswered in 10 s, aborts the process with its message.
+
+**The runner judges.** `yuna-bench wlcs`
+([`crates/yuna-bench/src/wlcs/`](../crates/yuna-bench/src/wlcs/mod.rs)) reads each test's lines
+from WLCS's output. It judges them against
+[`crates/yuna-wlcs/expected.txt`](../crates/yuna-wlcs/expected.txt), one expected outcome per
+test.
+
+- `wlcs check --listed`, a step of `scripts/check.sh`, runs the tests expected to pass.
+- `wlcs check --full`, the `wlcs` job of CI, runs them all:
+  - a sentinel group first;
+  - then one process per gtest suite, several at once;
+  - a suite resumed after a crash;
+  - a breaker after hangs in a row;
+  - a deadline.
+- `wlcs record` runs each test alone, many times, and its merge writes the file.
 
 ## Where to start reading
 

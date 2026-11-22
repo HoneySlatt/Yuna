@@ -20,7 +20,7 @@
 //!   `#[non_exhaustive]`, so that a command or a reason added is not a break for the programs that
 //!   match on them.
 //! - Level 1 of the crate map, on `yuna-types` alone
-//!   ([ADR-0145](../../../docs/adr/0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md)).
+//!   ([ADR-0150](../../../docs/adr/0150-the-crate-map-yuna-wlcs-owns-wlcss-interface.md)).
 //!
 //! A command added states, in [`Command::window`] and [`Command::output`], the window and the
 //! output it names, which the compositor checks are its caller's seat's before running it; the
