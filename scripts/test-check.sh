@@ -59,6 +59,8 @@ expect_stopped rules "a crate without the workspace's lints" "lacks the lines" \
     "sed -i '/^\[lints\]/,+1d' crates/yuna-motion/Cargo.toml"
 expect_stopped rules "a test naming Smithay" "name Smithay" \
     "printf 'use smithay::utils::Rectangle;\\n' >> crates/yuna/tests/headless/commands.rs"
+expect_stopped rules "a test naming Smithay through an alias" "name Smithay" \
+    "printf 'use smithay as sm;\\n' >> crates/yuna/tests/headless/commands.rs"
 expect_stopped rules "WLCS's shim naming Smithay" "name Smithay" \
     "printf 'use smithay::utils::Rectangle;\\n' >> crates/yuna-wlcs/src/lib.rs"
 expect_stopped wlcs "a WLCS test expected to pass that fails" "\\[pass\\] BadBufferTest" \
@@ -99,8 +101,7 @@ expect_stopped map "a static not listed" ".static NEXT_RUN. is a global" \
     "printf '\n/// A count.\npub static NEXT_RUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);\n' >> crates/yuna/src/lib.rs"
 expect_stopped map "a static mut not listed" ".static mut HITS. is a global" \
     "printf '\n/// A count.\npub static mut HITS: u32 = 0;\n' >> crates/yuna/src/lib.rs"
-# The program's root expects clippy's lint for fatal.rs's `thread_local!`, which covers the whole
-# program: a second one there passes clippy, and the map stops its static.
+# The program's root expects clippy's lint for fatal.rs's `thread_local!` (crates/yuna/src/main.rs).
 expect_stopped map "a second thread_local! in yuna's program" "stop_signal.rs:[0-9]+: .static SECOND_MARK. is a global" \
     "printf '\nthread_local! {\n    /// A second mark.\n    static SECOND_MARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n' >> crates/yuna/src/stop_signal.rs"
 expect_stopped map "a global's entry that matches nothing" "the global GONE .* matches nothing" \

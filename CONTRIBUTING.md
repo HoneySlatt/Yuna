@@ -320,9 +320,8 @@ only <step>` runs one:
 4. `map`, `scripts/crate-map.py`: the crate map, `crates/map.toml`, against the code
    ([ADR-0151](docs/adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md));
 5. `tests`, the build and the tests;
-6. `wlcs`, WLCS's tests that `crates/yuna-wlcs/expected.txt` expects to pass, against the module
-   built here
-   ([ADR-0149](docs/adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md));
+6. `wlcs`, WLCS's tests that `crates/yuna-wlcs/expected.txt` expects to pass, against the
+   module built here ([ADR-0149](docs/adr/0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md));
 7. `rustdoc`, the documentation, `cargo doc`, warnings as errors;
 8. `dependencies`, `cargo deny`: licences compatible with GPL-3.0-or-later; every RustSec advisory
    and every yanked crate, on any dependency, direct or not; the sources of the dependencies. It

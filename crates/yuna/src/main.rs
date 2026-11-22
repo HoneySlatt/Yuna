@@ -23,8 +23,9 @@
 
 // The one `thread_local!` ADR-0151 allows, `fatal.rs`'s `STATE_THREAD`: the panic hook runs on
 // any thread, given no state, and asks whether it runs on the state thread. Clippy reads its lint's
-// level for a macro that makes items at the crate's root alone, so this crate expects it;
-// crates/map.toml lists the static, so that a second one fails `scripts/crate-map.py`.
+// level for a macro that makes items at the crate's root alone, so this crate expects it, which
+// covers the whole program: a second `thread_local!` here passes clippy, and crates/map.toml,
+// which lists each static, makes `scripts/crate-map.py` fail on it.
 #![expect(
     clippy::disallowed_macros,
     reason = "fatal.rs's `STATE_THREAD`, the panic hook's mark of the state thread"

@@ -36,9 +36,9 @@ check_rules() {
     done
     # The tests, the examples and WLCS's shim drive Yuna through its interface, which names no
     # type of Smithay's (ADR-0146, ADR-0149): one that names Smithay would tie them to what
-    # Stage 2a replaces.
+    # Stage 2a replaces. `smithay` as a whole word, so that an alias (`use smithay as sm;`) counts.
     local named
-    if named=$(grep -rn --include='*.rs' 'smithay::' crates/yuna/tests crates/yuna/examples \
+    if named=$(grep -rnw --include='*.rs' 'smithay' crates/yuna/tests crates/yuna/examples \
         crates/yuna-wlcs); then
         echo "the tests, the examples or WLCS's shim name Smithay:"
         echo "$named"

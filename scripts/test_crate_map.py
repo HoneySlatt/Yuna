@@ -429,6 +429,9 @@ class Globals(CrateMapTest):
         self.sources["crates/yuna/src/shell.rs"] = source
         self.assertFound("crates/yuna/src/shell.rs:2: `static MADE` is a global")
 
+    def test_a_static_named_by_a_raw_identifier(self):
+        self.assertStatics("static r#type: u8 = 0;\nstatic r#ref: u8 = 0;\n", [("r#type", False), ("r#ref", False)])
+
     def test_static_in_a_lifetime_a_comment_or_a_raw_string_is_no_static(self):
         source = (
             "fn name() -> &'static str { r#\"static X: u8 = 0; \"quoted\"\"# }\n"

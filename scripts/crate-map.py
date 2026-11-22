@@ -25,12 +25,13 @@ It fails, each problem naming the crate, the file or the entry and what to do, w
   attributes: one inside an inline module covers that module alone;
 - a `static` in the `src/` of a crate of the map, of any type (`static mut`, statics inside
   functions or a `macro_rules!` body, and those a `thread_local!` declares included), is not
-  listed by file and name, two in one file share a name, or a global's entry matches nothing.
+  listed by file and name, two in one file share a name (statics that a `cfg` makes
+  alternatives of take distinct names too), or a global's entry matches nothing.
   A static that a macro's body names by an argument, `static $name`, cannot be listed, since its
   entry would cover every call of the macro: it is declared by name. Tests, examples and the
   crates outside the map are left out;
-- a file of a transitional crate's `src/` names Smithay (`smithay` as a word in code: a path, a
-  `use` or an `extern crate`) without its entry, or an entry names a file that no longer does.
+- a file of a transitional crate's `src/` names Smithay (any identifier `smithay` in code: a path, a
+  `use`, an `extern crate`, or a local of that name) without its entry, or an entry names a file that no longer does.
 
 What it reads:
 
@@ -44,7 +45,8 @@ What it reads:
   `unsafe impl` and `unsafe trait`, and the unsafe attributes such as `#[unsafe(no_mangle)]`. An
   `unsafe` that a macro of the crate makes counts in the file that calls the macro, whose
   `expect` rustc reads; one in a file compiled into several targets, a library and its tests or a
-  module the tests share, counts once.
+  module the tests share, counts once. Every line clippy prints must be JSON: a procedural macro
+  that printed to standard output would fail the step, the line named.
 - The rest: a scan of the text of every `.rs` file in the crates' folders, compiled or not, its
   comments, string and character literals (raw ones included) and lifetimes (`'static`) left out.
 
@@ -102,7 +104,7 @@ CHARACTER_REST = re.compile(r"\\.[^']*'", re.DOTALL)
 IDENTIFIER = re.compile(r"(?:r#)?\w+")
 BLANKED = re.compile(r"[^\n]")
 
-STATIC = re.compile(r"\bstatic\s+(?:(mut)\s+)?(\$?\w+)")
+STATIC = re.compile(r"\bstatic\s+(?:(mut)\s+)?(\$?(?:r#)?\w+)")
 ATTRIBUTE = re.compile(r"#\s*(!?)\s*\[")
 ATTRIBUTE_NAME = re.compile(r"\s*(\w+(?:\s*::\s*\w+)*)")
 NAMES_UNSAFE_CODE = re.compile(r"\bunsafe_code\b")
@@ -317,6 +319,8 @@ def span_place(span, root):
     if not isinstance(span, dict):
         return None
     file, start, end = span.get("file_name"), span.get("byte_start"), span.get("byte_end")
+    # `type(…) is int`, not `isinstance`: JSON's `true` reads as a bool, which `isinstance` takes
+    # for an int.
     if not isinstance(file, str) or type(start) is not int or type(end) is not int:
         return None
     return repository_path(file, root), start, end
