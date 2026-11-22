@@ -37,13 +37,16 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   alone, and the parity script builds in one since (ADR-0148). The timed and GPU tiers compared
   M2.2's head, `c7ce632`, with the baseline on 2026-11-21: no figure worse
   ([measurements](measurements.md)). **M2.2 is done.**
-- **M2.3, WLCS**, in progress (2026-11-21). Decided by the owner: WLCS 1.8.1 from nixpkgs, the
-  shim declaring WLCS's interface itself, the WLCS seat's windows opening floating, every test's
-  outcome expected and a new pass failing once confirmed alone, WLCS's own CI job
-  (ADR-0149), `yuna-wlcs`'s `unsafe` a named exception of the crate map (ADR-0150); the parity
-  thresholds kept on one-unit builds, two more series measured. Built: the seams, `yuna-wlcs`, the
-  runner `yuna-bench wlcs`, reviewed and corrected. Left: the expected outcomes recorded on
-  GitHub's runner and the desktop, the `wlcs` job's time, a red canary run, the closing review.
+- **M2.3, WLCS**, done on 2026-11-22. Decided by the owner: WLCS 1.8.1 from nixpkgs, the shim
+  declaring WLCS's interface itself, the WLCS seat's windows opening floating, every test's
+  outcome expected and a new pass failing once confirmed alone, WLCS's own CI job (ADR-0149);
+  `yuna-wlcs`'s `unsafe` a named exception of the crate map (ADR-0150); the parity thresholds kept
+  on one-unit builds, two more series measured ([measurements](measurements.md)); M2.3 merged
+  once a `parity` run passed, its runner's failures unexplained ([debt](debt.md)). On `main`:
+  `yuna-wlcs` and its seams, `yuna-bench wlcs`, `crates/yuna-wlcs/expected.txt` (149 tests
+  pass of 1,225), `check.sh`'s `wlcs` step and CI's `wlcs` job; a canary showed CI red when
+  tests expected to pass fail. **M2.3 is done.**
+- **Next: M2.4, the map, tasks, frames and events**, in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -79,6 +82,8 @@ milestone that replaces its module. A new dependency is put to the owner at its 
   scheduling class, runnable inline on the manual clock; a frame's identity from input to
   presentation, each wake named, the GPU priority granted logged; a pidfd at accept; one event
   stream, bounded per subscriber, with a resync; every public contract listed with its version.
+  The table names `yuna-wlcs-server`, the one thread on the real clock alone (ADR-0149); the
+  check allows `yuna-wlcs`'s `unsafe` code and its one `Once` (ADR-0150).
   *Done when* a wrong edge and an unregistered thread fail the check.
 - **M2.5 The boundary.** Its contract first, an ADR, put to the owner: roles, each module's
   double-buffered state applied at commit, checks before a commit, notices after, a read-only
@@ -141,7 +146,7 @@ M2.18 may run any time after M2.4. A milestone that turns out too large is split
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 and M2.2 done; M2.3 in progress |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.3 done; M2.4 next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
