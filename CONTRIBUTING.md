@@ -337,7 +337,8 @@ only <step>` runs one:
 ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)): it clones the last
 commit, breaks the clone one way at a time (a wrong `rust-version`, code not formatted, a
 warning, one in the canaries' code, an `unsafe` block without its comment, a wrong edge or owner
-in the crate map, `unsafe` or a `static` it does not list, a `thread_local!`, a failing test, a
+in the crate map, `unsafe` or a `static` it does not list, a `thread_local!`, a thread started
+outside `tasks::spawn`, a failing test, a
 contract or a protocol changed without its file, a broken link, a licence refused, `AGENTS.md` too
 long, an ADR off the index, a fragment misnamed, SlimeEngine's or Opium's job leaving out the
 drawing path), and expects the step that guards against it to fail, for that reason. Run it after

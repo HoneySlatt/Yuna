@@ -2869,6 +2869,55 @@ fn an_x11_target_that_never_finishes_cancels_the_wayland_source_once_the_manual_
     assert_cancelled(&events);
 }
 
+/// On the manual clock, held, the seat is removed while its X11 manager's drag limit is armed in
+/// Yuna's clock: the manager, let go with its Xwayland, leaves no limit behind, though the clock
+/// never passed it; the layout and the shells stay sound.
+#[test]
+fn a_seat_removed_with_its_managers_limit_armed_leaves_no_limit() {
+    let seat = X11Seat::new("dnd-w-limit-removed", &[at_1_5()], ClockMode::Manual, off());
+    let mut drag = DragSeat::on(seat);
+    let (target, onto, from) = x11_target_and_wayland_window(&mut drag, |atoms| TargetSpec {
+        finish: Finish::Never,
+        ..TargetSpec::copying(atoms, atoms.UTF8_STRING)
+    });
+    let text = b"never finished";
+    let source = wayland_drag_starts(&mut drag, from, &[TEXT], DndAction::Copy, text);
+    move_into(&mut drag, onto);
+    wayland_source_told(&mut drag, source, DndAction::Copy);
+    drag.hold_clock();
+    let limit = drag.seat.compositor.now() + DRAG_TIME_LIMIT;
+    drag.release();
+    let utf8_string = target.atoms.UTF8_STRING;
+    assert_eq!(
+        x11_reads(&mut drag, &target),
+        [Some((utf8_string, text.to_vec()))]
+    );
+    drag.until("the manager's limit is armed", |drag| {
+        (drag.seat.compositor.next_deadline() == Some(limit)).then_some(())
+    });
+
+    let seat = drag.seat.seat;
+    let compositor = &mut drag.seat.compositor;
+    compositor.remove_seat(seat).expect("the seat is removed");
+    let end = Instant::now() + QUIET;
+    while Instant::now() < end {
+        pump_held(compositor);
+    }
+    assert_eq!(compositor.now(), limit - DRAG_TIME_LIMIT, "the clock held");
+    assert_ne!(
+        compositor.next_deadline(),
+        Some(limit),
+        "the manager let go left its limit armed"
+    );
+    compositor
+        .layout()
+        .check_invariants()
+        .expect("the layout keeps its invariants");
+    compositor
+        .check_windows()
+        .expect("the layout and the shells agree");
+}
+
 /// On the manual clock, which X11's times must never come from, a Wayland drag dropped on an
 /// X11 window: its positions and its drop name one X11 time; the window's conversion, named with
 /// the drop's time, is served, and the drop completes.
@@ -3346,11 +3395,13 @@ fn a_third_drag_refuses_the_oldest_of_the_two_ending() {
     drag.until("the first Wayland source is cancelled", |drag| {
         ended(drag.source_events(first)).then_some(())
     });
+    // Held from the first drop on, the clock reached neither Yuna's limit nor the manager's:
+    // the third drag alone ended the first.
     let held = drag.seat.compositor.now() - first_dropped;
-    assert!(
-        held < DRAG_TIME_LIMIT,
-        "cancelled {held:?} after its drop, past the {DRAG_TIME_LIMIT:?} limit, which ends it \
-         as well: the third drag did not"
+    assert_eq!(
+        held,
+        Duration::ZERO,
+        "the clock moved {held:?} past the first drop, toward the {DRAG_TIME_LIMIT:?} limit"
     );
     first_target.order(TargetOrder::Finish);
     drag.until("the first X11 window sends its late XdndFinished", |_| {

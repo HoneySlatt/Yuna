@@ -201,7 +201,9 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   the real monotonic time and moves only when a test, or an agent through the `clock` tool,
   advances it, running each deadline it passes, in order
   ([ADR-0118](adr/0118-frames-presentation-times-and-the-clock.md)). An agent never moves it past real
-  time.
+  time. The X11 managers follow it on their threads: each is sent Yuna's time at a round's end,
+  so that a limit of theirs an advance passes takes effect after the advance returns
+  ([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 - **Map file**: `crates/map.toml`, the machine-readable *crate map*: each crate's level, the
   outside libraries' owners, the modules allowed `unsafe` code and every global, which
   `scripts/crate-map.py` checks (ADR-0151).
@@ -237,7 +239,8 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
   menus, tooltips, a drag's icon.
 - **Owed commands** (X11): the commands Yuna sent a seat's X11 window manager that its thread
   has not taken yet, held in a bound (`manager/owed.rs`); the latest focus, stacking and
-  selection replace the one owed. While a manager owes commands from an earlier round, its
+  selection replace the one owed. On the manual clock, Yuna's times sit among them, so that the
+  manager carries out each at the time it was sent with. While a manager owes commands from an earlier round, its
   **watchdog** is armed: a manager that takes none for `MANAGER_STALL`, and still none
   `STALL_RECHECK` later, is stalled, and its Xwayland is ended, as one owed past the bound is.
 - **Parent** (bench): a compositor that another runs inside, in the same sandbox, counted in the

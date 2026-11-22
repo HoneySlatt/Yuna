@@ -3495,9 +3495,9 @@ fn a_homes_folder_is_made_whatever_folder_another_user_put_in_its_way() {
 /// ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)): the
 /// call is answered with `isError`, the encoder is no longer counted, and Yuna goes on. The
 /// panics are asked through `YUNA_PANIC_IN_ENCODERS`, which a debug build alone has: the first
-/// `MAX_ENCODERS` + 1 encoders panic, one more than a count that kept them would let start, so
-/// that each of those captures fails as its encoder's, none refused for encoders running; the
-/// next is encoded.
+/// `MAX_ENCODERS` + 1 encoders panic, more than a count that kept them would let start, the
+/// machine's limit being four at most, so that each of those captures fails as its encoder's,
+/// none refused for encoders running; the next is encoded.
 #[cfg(debug_assertions)]
 #[test]
 fn an_encoders_panic_fails_its_capture_alone() {

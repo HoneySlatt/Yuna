@@ -848,8 +848,10 @@ fn assert_still_waiting(answers: &HashMap<u64, (Instant, Value)>, id: u64, asked
 #[test]
 fn captures_copied_in_one_round_encode_the_limit_at_a_time() {
     let mut mcp = Mcp::new(ClockMode::Real);
-    let limit = mcp.server.encoder_limit();
-    assert!((1..=MAX_ENCODERS).contains(&limit), "{limit}");
+    // The machine's cores less one, at least one, at most four (ADR-0152).
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    let limit = cores.saturating_sub(1).clamp(1, MAX_ENCODERS);
+    assert_eq!(mcp.server.encoder_limit(), limit, "{cores} cores");
     let seats: Vec<u64> = (0..=limit)
         .map(|_| {
             let created = mcp.call(

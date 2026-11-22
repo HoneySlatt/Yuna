@@ -60,13 +60,12 @@ limits are in its code's documentation, linked from here; why each decision was 
   nothing with `State`: it talks to Yuna's loop through its channel of events and what Yuna owes
   it.
 
-**What runs on which thread**
-(the table of tasks, [`tasks.rs`](../crates/yuna/src/tasks.rs), gives each its owner, inbox, stop
-and failure): the *state thread* runs the event loop and everything `State` holds, and in `yuna
-mcp` the server, and never waits on a client, a pipe or an X server; each running Xwayland's X11
-window manager waits on X11 on a thread of its own; in `yuna mcp`, encoder threads make the
-captures' PNGs, at most the cores less one. Every thread starts through `tasks::spawn`, which
-names it `yuna-…`
+**What runs on which thread** (the table of tasks, [`tasks.rs`](../crates/yuna/src/tasks.rs), gives
+each its owner, inbox, stop and failure): the *state thread* runs the event loop and everything
+`State` holds, and in `yuna mcp` the server, and never waits on a client, a pipe or an X server;
+each running Xwayland's X11 window manager waits on X11 on a thread of its own; in `yuna mcp`,
+encoder threads make the captures' PNGs, four at most, or the cores less one if fewer. Every thread
+starts through `tasks::spawn`, which names it `yuna-…`
 ([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)).
 
 **What survives which failure** ([ADR-0080](adr/0080-what-survives-a-failure-and-yunas-own-panics.md)):
@@ -218,7 +217,8 @@ an arrangement.
 | [`colour/`](../crates/yuna/src/colour/mod.rs) | `color-management-v1`: what outputs announce and surfaces declare |
 | [`rest.rs`](../crates/yuna/src/rest.rs) | the rest auditor, through which every event source is inserted |
 | [`canary.rs`](../crates/yuna/src/canary.rs) | the parity script's canaries, costs injected only with the `parity-canary` feature, which no shipped build has |
-| [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, what Yuna reads of a process in `/proc`, and its limit of open files |
+| [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, what Yuna reads of a process in `/proc`, its limit of open files, and the bounded reap of a process it killed |
+| [`tasks.rs`](../crates/yuna/src/tasks.rs) | the table of tasks and the one spawner of Yuna's threads, with their bounded joins |
 | [`xwayland/`](../crates/yuna/src/xwayland/mod.rs) | each seat's X display, its Xwayland and its X11 window manager |
 | [`dbus/`](../crates/yuna/src/dbus/mod.rs) | Yuna's own D-Bus client, for the accessibility buses |
 | [`mcp/`](../crates/yuna/src/mcp/mod.rs) | the MCP server |
@@ -239,9 +239,9 @@ tests call `dispatch` themselves, and `Compositor::advance` on the manual clock.
 3. The clients' requests are read: Smithay dispatches them to Yuna's handlers.
 4. The clock's deadlines due by now run.
 5. The round ends (`Compositor::flush`): the clients the display ended are freed, Yuna's writes
-   of agents' clipboards go on, the X11 window managers get their commands, and on the manual
-   clock Yuna's time, what closed windows
-   and destroyed surfaces left is freed, and the events written are sent.
+   of agents' clipboards go on, the X11 window managers get their commands (on the manual
+   clock, with Yuna's time before them), what closed windows and destroyed surfaces left is
+   freed, and the events written are sent.
 
 ### Time and deadlines
 
@@ -569,8 +569,10 @@ for it; `manager/` the X11 window manager.
   manager passes its bound, and when it outlives its manager's connection by `MANAGER_GRACE`. Its
   seat's X11 programs end with it, and the display is watched again. Its pidfd reaps it; in
   `yuna mcp`, whose reaping of every child may take it first, `Compositor::child_reaped` hands its
-  status over. When the compositor drops, it ends its Xwaylands, waits until each is reaped, and
-  removes the displays' files.
+  status over. When the compositor drops, it lets its X11 managers go, ends its Xwaylands,
+  reaps each within `REAP_BOUND` (1 s), joins the managers within their bound, and removes the
+  displays' files; past a bound it leaves a process or a thread with a warning
+  ([`tasks.rs`](../crates/yuna/src/tasks.rs)).
 
 ### An X11 window's life
 

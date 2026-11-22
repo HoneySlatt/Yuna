@@ -256,8 +256,8 @@ pub(crate) const REAP_BOUND: Duration = Duration::from_secs(1);
 /// Ends the process of `pidfd` and reaps it, waiting on its pidfd for at most [`REAP_BOUND`]:
 /// when its owner drops, with no loop left to watch it (ADR-0152). SIGKILL cannot be ignored, so
 /// the wait is the kernel's tearing down, which a process held in the kernel, by a driver or a
-/// dead mount, may prolong: past the bound it is left, to its pidfd's source while Yuna runs, or
-/// to Yuna's own end, and a warning says so.
+/// dead mount, may prolong: past the bound it is left, to its pidfd's source if Yuna's loop
+/// watches one, else a zombie until Yuna ends, and a warning says so.
 pub(crate) fn kill_and_reap(pidfd: &OwnedFd) {
     kill(pidfd);
     if reap_within(pidfd.as_fd(), REAP_BOUND).is_none() {

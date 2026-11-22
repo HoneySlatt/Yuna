@@ -40,7 +40,8 @@
 //! `drags.rs`).
 //!
 //! A seat removed ends its Xwayland and removes its display's files; so does the compositor when
-//! it drops, waiting for its Xwaylands to be reaped. At rest, before the first connection and
+//! it drops, which reaps each Xwayland within `REAP_BOUND` and joins its manager within its
+//! bound (`tasks.rs`). At rest, before the first connection and
 //! after Xwayland exits, Yuna holds two sockets per seat and nothing else: no process, no timer.
 
 mod answers;

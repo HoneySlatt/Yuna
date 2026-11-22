@@ -931,6 +931,13 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   2026-11-19 (`grep -E '^impl .*Handler for State' -r crates/yuna/src | wc -l` counts them): any
   handler can change any state. Smithay's shape; Stage 2's core gives each protocol module its
   own objects. Paid at Stage 2a, M2.19's done-when (Smithay removed).
+- The X11 manager's thread is not yet a task of ADR-0082 item 6 whole
+  ([ADR-0152](adr/0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md)): its
+  inbox is a list under a `Mutex` the state thread locks too (`xwayland/manager/owed.rs`), and
+  when a new Xwayland's pidfd cannot be watched, the state thread kills and reaps it while it
+  serves, waiting up to `REAP_BOUND`, 1 s (`xwayland/mod.rs`), where it waited without end
+  before M2.4b. A process left past the bound stays a zombie until Yuna ends. Paid at Stage 2a,
+  M2.17 (the X11 manager, a task), where it runs inline.
 - A global, `OPENED_DISPLAYS` (`crates/yuna/src/render.rs`), keeps EGL displays alive because
   tests run several compositors in one process; Yuna's Vulkan core needs none. Paid at Stage 2a,
   M2.9 (Vulkan the default): it leaves with EGL.

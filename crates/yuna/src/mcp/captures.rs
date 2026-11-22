@@ -29,9 +29,8 @@ pub const RECENT_CAPTURES: usize = 16;
 
 /// The most captures' images encoded at once, each on a thread of its own with its pixels, about
 /// 33 MB at 4K's physical size; a machine of fewer than five cores encodes fewer
-/// (`encoder_limit`). An
-/// encoder is counted when it starts: a capture copied while the limit runs waits for one to
-/// end, and a capture asked meanwhile is refused.
+/// (`encoder_limit`). An encoder is counted when it starts: a capture copied while the limit
+/// runs waits for one to end, and a capture asked meanwhile is refused.
 pub const MAX_ENCODERS: usize = 4;
 
 /// How many encoders may run at once on a machine of `cores` (unknown: none): the smaller of
@@ -89,10 +88,16 @@ impl Server {
         };
         // A capture cancelled while encoding leaves its encoder running, out of `captures`.
         if self.encoders_running >= self.encoder_limit {
-            let limit = self.encoder_limit;
-            return Some(ToolResult::failed(format!(
-                "{limit} captures are being encoded: wait for them"
-            )));
+            let refusal = match self.encoder_limit {
+                1 => "a capture is being encoded, the one this machine encodes at a time: wait \
+                      for it"
+                    .to_owned(),
+                limit => format!(
+                    "{limit} captures are being encoded, as many as this machine encodes at \
+                     once: wait for them"
+                ),
+            };
+            return Some(ToolResult::failed(refusal));
         }
         if self.captures.iter().any(|capture| capture.seat == seat) {
             return Some(ToolResult::failed(format!(

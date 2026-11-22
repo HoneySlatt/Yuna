@@ -9,11 +9,46 @@
 //! Yuna's. Programs Yuna starts are not tasks: their spawner, which clears their capabilities,
 //! comes at M2.18.
 //!
-//! | Task | Owner | Inbox, its bound, and when full | Stop order at exit | Failure | Class | Clock |
-//! |---|---|---|---|---|---|---|
-//! | The state thread, the thread that made the [`Compositor`](crate::Compositor) | The program (`main.rs`), or the test that made it | The event loop's sources, each bounded where it reads ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)): a client past its 1 MiB of unread events is ended ([ADR-0136](../../../docs/adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)) | Last: it stops every other task, then returns | Fatal: the panic hook ends the process, and the keeper starts Yuna again ([ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md), `fatal.rs`) | Normal | Yuna's [`Clock`](crate::Clock), real or manual |
-//! | [`Task::X11Manager`], `yuna-x11-<seat>`, one per running Xwayland (`xwayland/manager/`) | Its seat's Xwayland, in `xwayland/mod.rs` | What Yuna owes it (`owed.rs`), `MAX_OWED_BYTES`, 8 MiB of commands: past it, or once it has taken none for `MANAGER_STALL`, Yuna ends that Xwayland. Its events to Yuna: a channel of `EVENT_QUEUE` (256), where the thread waits when it is full | Released, its Xwayland killed and reaped within `REAP_BOUND` (1 s), then joined within its bound; past a bound, left, with a warning. While Yuna serves, it is never waited on: its handle goes when its Xwayland is reaped | Contained: its end ends its Xwayland and that seat's X11 programs; the seat starts another | Normal | Yuna's: the monotonic clock on the real clock; on the manual clock, the time Yuna sends it at each round's end, its next time limit told back so that an advance passes it (`manager/time.rs`, [debt](../../../docs/debt.md#xwayland)) |
-//! | [`Task::Encoder`], `yuna-capture`, in `yuna mcp` (`mcp/captures.rs`) | `yuna mcp`'s server | None: it takes its frame when it starts, and sends its one image back on a channel. At most `MAX_ENCODERS` (4), or the cores less one if fewer, at least one, run at once: a capture copied meanwhile waits for one, and one asked meanwhile is refused. Its channel back holds `MAX_ENCODERS` images, in its type | Joined when the server finishes, within its bound; past it, detached | Contained: its panic fails its capture alone | Normal | None: it reads the real clock only to log how long it took |
+//! The table, a task at a time. Each gives its owner; its inbox, its bound and what happens when
+//! it is full; its place in the stop order at exit; whether its failure is contained or fatal;
+//! its scheduling class; and its clock.
+//!
+//! - **The state thread**, the thread that made the [`Compositor`](crate::Compositor).
+//!   - Owner: the program (`main.rs`), or the test that made it.
+//!   - Inbox: the event loop's sources, each bounded where it reads
+//!     ([ADR-0131](../../../docs/adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)); what
+//!     it sends is bounded too: a client past 1 MiB of unread events is ended
+//!     ([ADR-0136](../../../docs/adr/0136-a-client-that-stops-reading-1-mib-and-its-motion-merged.md)).
+//!   - Stop: last; it stops every other task, then returns.
+//!   - Failure: fatal. The panic hook ends the process (`fatal.rs`,
+//!     [ADR-0080](../../../docs/adr/0080-what-survives-a-failure-and-yunas-own-panics.md)); the
+//!     keeper that starts Yuna again comes with the desktop, at Stage 2b.
+//!   - Class: normal. Clock: Yuna's [`Clock`](crate::Clock), real or manual.
+//! - **[`Task::X11Manager`]**, `yuna-x11-<seat>`, one per running Xwayland (`xwayland/manager/`).
+//!   - Owner: its seat's Xwayland, in `xwayland/mod.rs`.
+//!   - Inbox: what Yuna owes it (`owed.rs`), a list under a `Mutex` that the state thread locks
+//!     too, never while it waits, bounded at `MAX_OWED_BYTES`, 8 MiB. Past it, or once the
+//!     manager has taken nothing for `MANAGER_STALL`, Yuna ends that Xwayland. Its events to
+//!     Yuna: a channel of `EVENT_QUEUE`, 256, where the thread waits when it is full.
+//!   - Stop: let go, its Xwayland killed and reaped within `REAP_BOUND`, 1 s, then joined within
+//!     its bound; past a bound, left, with a warning. While Yuna serves it is never waited on:
+//!     its handle goes when its Xwayland is reaped. The shared lock, and the reap that waits up
+//!     to `REAP_BOUND` when a new Xwayland cannot be watched, leave at M2.17
+//!     ([debt](../../../docs/debt.md#architecture)).
+//!   - Failure: contained. Its end ends its Xwayland and that seat's X11 programs; the seat's
+//!     next X11 connection starts another.
+//!   - Class: normal. Clock: Yuna's. On the real clock, the monotonic clock; on the manual
+//!     clock, the time Yuna sends it at each round's end, its next time limit told back so that
+//!     an advance passes it (`manager/time.rs`, [debt](../../../docs/debt.md#xwayland)).
+//! - **[`Task::Encoder`]**, `yuna-capture`, in `yuna mcp` (`mcp/captures.rs`).
+//!   - Owner: `yuna mcp`'s server.
+//!   - Inbox: none; it takes its frame when it starts, and sends its one image back on a channel
+//!     that holds `MAX_ENCODERS` images, in its type. At most `MAX_ENCODERS`, 4, run at once, or
+//!     the cores less one if fewer, at least one: a capture copied meanwhile waits for one, and
+//!     one asked meanwhile is refused.
+//!   - Stop: joined when the server finishes, within its bound; past it, detached.
+//!   - Failure: contained; its panic fails its capture alone.
+//!   - Class: normal. Clock: none; it reads the real clock only to log how long it took.
 //!
 //! Every task runs at the normal scheduling class: an agent's Yuna is never lowered for a game
 //! ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
@@ -72,8 +107,8 @@ impl Task {
             // Its Xwayland killed, its connection closes and it returns at once: it waits longer
             // only blocked on its full channel of events, which nothing reads any more.
             Task::X11Manager(_) => Duration::from_secs(1),
-            // A 4K image encodes in under 0.1 s in a release build, and in about 1.2 s in a
-            // debug build at its logical size; an image no one will read is left past it.
+            // A 4K image encodes in 68 to 79 ms in a release build (docs/debt.md), longer in a
+            // debug build; an image no one will read is left past the bound.
             Task::Encoder => Duration::from_secs(1),
         }
     }
