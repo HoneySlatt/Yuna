@@ -652,11 +652,6 @@ Yuna's code were not traced.
   (`VirtualPointerV1Test.if_frame_is_not_sent_client_sees_no_events`). Paid at M2.12 (seats and
   input).
 
-- **Flaky under load.** Two `VirtualPointerV1Test` tests each failed once in 20 runs, 32 at once
-  on the desktop, and are `flaky`. The virtual pointer is a client of its own, which WLCS drives
-  without a hook, so the module cannot let Yuna settle before WLCS asserts. Their cause in Yuna is
-  not traced. Paid at M2.12 (seats and input).
-
 **The module and its runner.**
 
 - **Log noise.** Every compositor start logs Smithay's

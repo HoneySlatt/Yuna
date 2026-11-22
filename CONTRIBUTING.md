@@ -513,8 +513,9 @@ moves with `flake.lock`. Record on GitHub's runner and on the desktop, then merg
 
 ```sh
 gh workflow run wlcs-record.yml --ref <branch> -f runs=20       # on GitHub's runner
-gh run view <run> --log | sed -n '/WLCS record begins/,/WLCS record ends/p' | sed '1d;$d' \
-    | cut -f3- | sed 's/^[^ ]* //' > runner.json
+gh run view <run> --log | cut -f3- | sed 's/^\xef\xbb\xbf//; s/^[^ ]* //' \
+    | sed -n '/^----- WLCS record begins -----$/,/^----- WLCS record ends -----$/p' \
+    | sed '1d;$d' > runner.json                               # the log's lines, its time cut
 nix develop -c cargo run -p yuna-bench -- wlcs record --runs 20 --jobs 32 --out desktop.json
 nix develop -c cargo run -p yuna-bench -- wlcs record --merge runner.json desktop.json \
     --write crates/yuna-wlcs/expected.txt

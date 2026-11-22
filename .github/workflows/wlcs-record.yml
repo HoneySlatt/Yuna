@@ -2,7 +2,8 @@
 # times, so that crates/yuna-wlcs/expected.txt is written from the machine CI judges on, merged
 # with a record on the desktop (CONTRIBUTING.md, "WLCS"). The record is printed at the end of the
 # log, between two marker lines, for `gh run view --log` to read; nothing is uploaded or pushed.
-# On demand, on any branch; and on a pull request that changes this file.
+# On demand, on any branch; and on a pull request that changes this file or the module, whose
+# outcomes then want recording again.
 name: WLCS record
 
 on:
@@ -12,7 +13,7 @@ on:
         description: "How many times each test runs"
         default: "20"
   pull_request:
-    paths: [".github/workflows/wlcs-record.yml"]
+    paths: [".github/workflows/wlcs-record.yml", "crates/yuna-wlcs/src/**"]
 
 permissions:
   contents: read
