@@ -41,8 +41,9 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   declaring WLCS's interface itself, the WLCS seat's windows opening floating, every test's
   outcome expected and a new pass failing once confirmed alone, WLCS's own CI job (ADR-0149);
   `yuna-wlcs`'s `unsafe` a named exception of the crate map (ADR-0150); the parity thresholds kept
-  on one-unit builds, two more series measured ([measurements](measurements.md)); M2.3 merged
-  once a `parity` run passed, its runner's failures unexplained ([debt](debt.md)). On `main`:
+  on one-unit builds, two more series measured; LLVM's allocations left out of the parity
+  script's allocations a frame, which made its CI tier fail on the runner
+  ([measurements](measurements.md)). On `main`:
   `yuna-wlcs` and its seams, `yuna-bench wlcs`, `crates/yuna-wlcs/expected.txt` (149 tests
   pass of 1,225), `check.sh`'s `wlcs` step and CI's `wlcs` job; a canary showed CI red when
   tests expected to pass fail. **M2.3 is done.**
