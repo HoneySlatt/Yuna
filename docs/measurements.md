@@ -46,6 +46,13 @@ against itself, five a side, `e1e8ab3`, on the desktop: both exit 0, no figure w
   `motion` and `many`. `Pss_Anon` ranged over 88 to 216 KiB, against 512.
 - **The thresholds stay**, by the owner's choice
   ([thresholds](../crates/yuna-bench/parity-thresholds.toml)).
+- **LLVM's allocations, left out.** On GitHub's runner, M2.3's pull request failed `parity` 6
+  times in 6. Every time, one side's runs of a scenario counted about 450 blocks more or fewer
+  in LLVM, compiling llvmpipe's shaders at Yuna's start. That is ±3.76 blocks a frame on a
+  difference of two runs, and `idle`'s, subtracted from every drawing scenario's, moved them all.
+  Yuna's own allocations never moved. The same code passed 8 times: the pull request's first run,
+  6 runs of debugging on the runner and the desktop. The total now leaves LLVM's blocks out (`valgrind.rs`, the owner's choice of
+  2026-11-22); its instructions are still judged.
 
 ## M2.1 — The timed and GPU tiers, and M2.2's head (2026-11-21)
 

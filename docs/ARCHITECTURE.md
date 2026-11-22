@@ -956,7 +956,8 @@ A run of the CI tier:
    and X displays in every run.
 4. **The figures** (`figures.rs`). A valgrind figure a frame is the run of `2n` periods less the
    run of `n`, over `n`: Yuna's start, warm-up and stop cancel. Allocations a frame leave out
-   what an advance costs alone, `idle`'s. A DHAT run ends Yuna by a signal it does not handle,
+   what an advance costs alone, `idle`'s, and LLVM's, whose count at Yuna's start varies from run
+   to run with where the heap's blocks land. A DHAT run ends Yuna by a signal it does not handle,
    SIGUSR1, so that it frees nothing first: the heap it still holds then, over the frames, is
    its heap's growth, a leak among it. Native runs send each message only once Yuna's main
    thread sleeps, and read `rest`'s wakes, the context switches of Yuna's own threads (its main

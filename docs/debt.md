@@ -674,15 +674,6 @@ Yuna's code were not traced.
   or rewriting history, is the owner's decision when it first happens. Paid at the baseline's
   first move: M2.2 made none, its 1 MiB moving no figure; the next foreseen is M2.9 (Vulkan the
   default).
-- The parity script's CI tier is not always deterministic on GitHub's runner. At M2.3, pull
-  request 10's `parity` job failed 4 times, each time on other figures: `idle`, `input`, then
-  3.75 more allocations a frame outside Yuna's own code in every drawing scenario. The same `yuna`
-  passed the same comparison 8 times: the pull request's first run, 6 runs on the runner (Intel
-  Xeon 8573C and 6975P, AMD EPYC 9V45 and 7763, the last the very model of a failure, its whole
-  tier), and the desktop. The cause is not known. Paid at Stage 2a, M2.4 (the map, tasks, frames
-  and events): the report gives, for a figure of allocations worse, the difference by allocation
-  site, as was compared by hand at M2.3, and the tree against itself is
-  measured on the runner, which the thresholds were never set on.
 - The parity script's `parity` job takes 18 to 29 minutes on GitHub's runner, over the method's
   bar of 20 for a CI job, in 4 of M2.2's 8 runs; its thresholds come from the desktop's spreads
   alone, and every run on the runner since M2.1 passed ([measurements](measurements.md)). The runs take most of it: a side's build takes

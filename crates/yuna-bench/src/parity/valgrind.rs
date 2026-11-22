@@ -142,7 +142,11 @@ fn object_name(spec: &str, names: &mut BTreeMap<String, String>) -> String {
 pub struct Allocations {
     /// The command it ran.
     pub command: String,
-    /// Heap blocks allocated.
+    /// Heap blocks allocated, but for those whose stack passes through LLVM's library: LLVM
+    /// compiling llvmpipe's shaders at Yuna's start allocates a number that varies from run to
+    /// run with where the heap's blocks land, by up to 450 blocks between a run and the next on
+    /// GitHub's runner (M2.3), which a figure a frame, a difference of two runs, cannot cancel.
+    /// Its cost is still judged, in instructions, whose floors absorb it.
     pub blocks: u64,
     /// Bytes allocated.
     pub bytes: u64,
@@ -173,6 +177,7 @@ pub fn read_dhat(text: &str, binary: &Path) -> Result<Allocations, String> {
         .iter()
         .map(|frame| frame.ends_with(&in_binary) || is_rust_source(frame))
         .collect();
+    let llvm: Vec<bool> = frames.iter().map(|frame| is_llvm(frame)).collect();
     let mut result = Allocations {
         command: data
             .get("cmd")
@@ -188,26 +193,35 @@ pub fn read_dhat(text: &str, binary: &Path) -> Result<Allocations, String> {
     let number = |point: &Value, key: &str| point.get(key).and_then(Value::as_u64).unwrap_or(0);
     for point in points {
         let blocks = number(point, "tbk");
-        result.blocks += blocks;
+        let through = |marks: &[bool]| {
+            point
+                .get("fs")
+                .and_then(Value::as_array)
+                .is_some_and(|stack| {
+                    stack.iter().any(|index| {
+                        index
+                            .as_u64()
+                            .and_then(|i| marks.get(i as usize))
+                            .copied()
+                            .unwrap_or(false)
+                    })
+                })
+        };
+        if !through(&llvm) {
+            result.blocks += blocks;
+        }
         result.bytes += number(point, "tb");
         result.end_bytes += number(point, "eb");
-        let through_own = point
-            .get("fs")
-            .and_then(Value::as_array)
-            .is_some_and(|stack| {
-                stack.iter().any(|index| {
-                    index
-                        .as_u64()
-                        .and_then(|i| own.get(i as usize))
-                        .copied()
-                        .unwrap_or(false)
-                })
-            });
-        if through_own {
+        if through(&own) {
             result.own_blocks += blocks;
         }
     }
     Ok(result)
+}
+
+/// Whether a DHAT frame is in LLVM's library, `libLLVM.so…`, as llvmpipe loads it.
+fn is_llvm(frame: &str) -> bool {
+    frame.contains("/libLLVM")
 }
 
 /// Whether a DHAT frame such as `0x4A: f (render.rs:186)` names a Rust source file.
@@ -332,17 +346,20 @@ totals: 1175
             "pps": [
                 {"tb": 100, "tbk": 2, "eb": 64, "fs": [1, 2]},
                 {"tb": 4000, "tbk": 10, "eb": 4000, "fs": [1, 3]},
-                {"tb": 8, "tbk": 1, "eb": 8, "fs": [1, 4]}
+                {"tb": 8, "tbk": 1, "eb": 8, "fs": [1, 4]},
+                {"tb": 16, "tbk": 5, "eb": 0, "fs": [1, 5, 3]}
             ],
             "ftbl": ["[root]",
                 "0x1: malloc (in /nix/store/v-valgrind/vgpreload_dhat.so)",
                 "0x2: yuna::frames::draw (frames.rs:440)",
                 "0x3: lp_scene_new (in /nix/store/m-mesa/lib/libgallium.so)",
-                "0x4: main (in /w/bin/base/yuna)"]}"#;
+                "0x4: main (in /w/bin/base/yuna)",
+                "0x5: SmallVectorBase::grow_pod (in /nix/store/l-llvm/lib/libLLVM.so.21.1)"]}"#;
         let read = read_dhat(text, Path::new("/w/bin/base/yuna")).unwrap();
         assert_eq!(read.command, "/w/bin/base/yuna mcp");
+        // LLVM's 5 blocks are left out of the blocks, not of the bytes.
         assert_eq!(read.blocks, 13);
-        assert_eq!(read.bytes, 4108);
+        assert_eq!(read.bytes, 4124);
         assert_eq!(read.own_blocks, 3);
         assert_eq!(read.end_bytes, 4072);
         assert!(read_dhat("{}", Path::new("/y")).is_err());
