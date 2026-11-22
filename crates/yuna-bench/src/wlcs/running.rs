@@ -361,13 +361,22 @@ fn read_output(pipe: PipeReader, events: &SyncSender<Output>) {
 
 /// Waits for the end of the process `leader` leads without reaping it, so that its process
 /// group's id stays its own until the batch's thread has killed what remains of the group, then
-/// sends [`Output::Exited`].
+/// sends [`Output::Exited`]. A wait that fails sends nothing: the process is then taken as still
+/// running, which the hang guard bounds, rather than as ended, which would kill it after the
+/// grace of a child left behind.
 fn wait_for_exit(leader: Pid, events: &SyncSender<Output>) {
-    while let Err(rustix::io::Errno::INTR) = rustix::process::waitid(
-        WaitId::Pid(leader),
-        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-    ) {}
-    let _ = events.send(Output::Exited);
+    let ended = loop {
+        match rustix::process::waitid(
+            WaitId::Pid(leader),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {
+            Err(rustix::io::Errno::INTR) => {}
+            waited => break waited.is_ok(),
+        }
+    };
+    if ended {
+        let _ = events.send(Output::Exited);
+    }
 }
 
 /// A process's log, cut at [`LOG_KEPT`] bytes. An error writing it is said once, on the standard
@@ -787,7 +796,9 @@ impl Supervisor {
             }
             let now = Instant::now();
             let limit = match exited_at {
-                Some(at) => at + ORPHAN_GRACE,
+                // From the last line too, so that output still draining after the end is never
+                // taken for a child left behind; a child that keeps printing is still bounded.
+                Some(at) => (at.max(last_line) + ORPHAN_GRACE).min(at + self.settings.hang),
                 None => last_line + self.settings.hang,
             };
             match (killed_at, deadline) {

@@ -151,8 +151,9 @@ impl WlcsCompositor {
 
     /// Lets Yuna settle, before and after a request: one round at once, which sends what Yuna
     /// wrote, then rounds until no deadline is due within one refresh, for [`SETTLE_LIMIT`] at
-    /// most, and the length of the round that ends it. Yuna draws what clients committed, and a window where it was placed, at
-    /// the next refresh, and hit tests read the last frame drawn; it gives the keyboard's focus
+    /// most, and the length of the round that ends it. Yuna draws what clients committed, and a
+    /// window where it was placed, at the next refresh, and hit tests read the last frame drawn;
+    /// it gives the keyboard's focus
     /// and a window's activation at the refresh after a click. WLCS checks right after a hook and
     /// one roundtrip, so a hook's request waits for the frame before it, and its answer for the
     /// frame after it. A deadline beyond one refresh, a hidden window's frame callbacks for
@@ -229,30 +230,45 @@ impl WlcsCompositor {
     }
 
     /// Moves the seat's pointer to (`x`, `y`) on the output. Unsupported off the output, which
-    /// Yuna refuses.
-    pub fn move_pointer_to(&mut self, x: f64, y: f64) -> Result<(), Unsupported> {
+    /// Yuna refuses; a shim error for any other failure, the seat or the output the shim made
+    /// unknown to Yuna.
+    pub fn move_pointer_to(&mut self, x: f64, y: f64) -> Result<(), NotDone> {
         self.compositor
             .pointer_move(self.seat, Some(self.output), x, y)
             .map(drop)
-            .map_err(|error| Unsupported::new("a pointer move Yuna refuses", error))
+            .map_err(|error| refused_or_fault("a pointer move Yuna refuses", error))
     }
 
     /// Moves the seat's pointer by (`dx`, `dy`) from where it is, from the output's corner
     /// before it first moved.
-    pub fn move_pointer_by(&mut self, dx: f64, dy: f64) -> Result<(), Unsupported> {
+    pub fn move_pointer_by(&mut self, dx: f64, dy: f64) -> Result<(), NotDone> {
         let pointer = self.compositor.pointer(self.seat);
         self.move_pointer_to(pointer.x + dx, pointer.y + dy)
     }
 
     /// Presses or releases the seat's pointer `button`, a Linux input code. Unsupported for a
     /// code below 0, and for a press of a button held or a release of one not held, which Yuna
-    /// refuses.
-    pub fn press_button(&mut self, button: i32, pressed: bool) -> Result<(), Unsupported> {
-        let code = u32::try_from(button)
-            .map_err(|_| Unsupported::new("a button Yuna refuses", format!("code {button}")))?;
+    /// refuses; a shim error for any other failure.
+    pub fn press_button(&mut self, button: i32, pressed: bool) -> Result<(), NotDone> {
+        let code = u32::try_from(button).map_err(|_| {
+            NotDone::Unsupported(Unsupported::new(
+                "a button Yuna refuses",
+                format!("code {button}"),
+            ))
+        })?;
         self.compositor
             .pointer_button(self.seat, code, pressed)
             .map(drop)
-            .map_err(|error| Unsupported::new("a button Yuna refuses", error))
+            .map_err(|error| refused_or_fault("a button Yuna refuses", error))
+    }
+}
+
+/// What a failure of Yuna's means for a hook: a refusal by design is unsupported (`what`, with
+/// Yuna's reason); any other failure is the shim's fault, as it gave Yuna what Yuna does not
+/// know.
+fn refused_or_fault(what: &'static str, error: Error) -> NotDone {
+    match error {
+        Error::Refused(why) => NotDone::Unsupported(Unsupported::new(what, why)),
+        other => NotDone::ShimError(format!("{what}: {other}")),
     }
 }

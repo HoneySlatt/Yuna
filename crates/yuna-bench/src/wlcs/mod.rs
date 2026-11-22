@@ -163,8 +163,8 @@ line 'yuna-wlcs: error: ...') of any test, whatever the file expects of it; when
 WLCS's list differ, or the file's wlcs line is not $YUNA_WLCS_VERSION; when a test not expected
 to pass passes twice, the second time alone; when the run stops: the sentinel, the breaker, the
 deadline. The breaker stops the run after 5 hangs or timeouts in a row; a timeout of a test the
-file expects to fail or to be flaky does not count, and breaks the row. Flaky tests and other changes are reported,
-not judged. crates/yuna-bench/src/wlcs/mod.rs gives the rules and the files' formats.
+file expects to fail or to be flaky does not count, and breaks the row. Flaky tests and other
+changes are reported, not judged. crates/yuna-bench/src/wlcs/mod.rs gives the rules and the files' formats.
 
 Exit status: 0 passed; 1 a rule failed (a crash of WLCS's listing among them); 2 the run could
 not judge (no runner, no module, a file unreadable).

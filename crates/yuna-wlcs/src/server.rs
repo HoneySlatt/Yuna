@@ -409,18 +409,11 @@ fn answer(wlcs: &mut WlcsCompositor, request: Request) -> Result<Reply, yuna::Er
             x,
             y,
         } => wlcs.place_window(client, surface, x, y).map(|()| None),
-        Request::MovePointerTo { x, y } => wlcs
-            .move_pointer_to(x, y)
-            .map(|()| None)
-            .map_err(NotDone::Unsupported),
-        Request::MovePointerBy { dx, dy } => wlcs
-            .move_pointer_by(dx, dy)
-            .map(|()| None)
-            .map_err(NotDone::Unsupported),
-        Request::PressButton { button, pressed } => wlcs
-            .press_button(button, pressed)
-            .map(|()| None)
-            .map_err(NotDone::Unsupported),
+        Request::MovePointerTo { x, y } => wlcs.move_pointer_to(x, y).map(|()| None),
+        Request::MovePointerBy { dx, dy } => wlcs.move_pointer_by(dx, dy).map(|()| None),
+        Request::PressButton { button, pressed } => {
+            wlcs.press_button(button, pressed).map(|()| None)
+        }
     };
     wlcs.settle()?;
     Ok(match applied {
