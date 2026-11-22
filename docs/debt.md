@@ -952,13 +952,12 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   `yuna_ipc::Refusal`'s, for the fifteen reasons both share, where ADR-0082 item 23 keeps Yuna's
   text in one module. Tests hold both copies to the same words. Its place is put to the owner at
   M2.4a's end.
-- Of the crates, `yuna-types` and `yuna-ipc` alone forbid `unsafe` code; each `unsafe` block has
-  its `// SAFETY:` comment, and `grep -rn 'unsafe {' crates/*/src` lists them: 15 in `yuna`, 2
-  in `yuna-bench`, 23 in `yuna-wlcs` (ADR-0151), none in `yuna-layout` and `yuna-motion`, on
-  2026-11-22. Nothing checks the new
-  crates' dependencies against ADR-0151's map yet; they match it. Paid at Stage 2a, M2.4a (the map's
-  checks and the contracts,
-  [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)).
+- `yuna` is the transitional crate
+  ([ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)): levels
+  2 to 4 at once, it holds `unsafe` code in 9 modules of its sources, 8 globals and 28 files that
+  name Smithay, each listed in [`crates/map.toml`](../crates/map.toml), which the check holds to
+  the code; the lists only shrink. Each milestone that empties a module removes its entries. Paid
+  at Stage 2a, M2.19's done-when (Smithay removed).
 - The process's memory grows by 0.0087 MiB a window, above Hyprland's 0.0063, the budget's figure
   ([ADR-0077](adr/0077-the-budgets-of-a-frame-memory-and-rest-set-from-the-rivals.md)); its cause
   is not isolated. Paid at Stage 2a, M2.16 (the store, wired behind a switch): the new store is

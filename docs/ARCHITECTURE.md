@@ -111,6 +111,14 @@ One Cargo workspace; its crates live in `crates/`.
   `yuna-types` depends on nothing; no crate re-exports another's types: each names the crate
   that defines them (ADR-0146); `yuna-bench` depends on nothing of `yuna`, so that it measures Yuna as it measures the
   others; `yuna` uses `yuna-bench` only in its tests and examples.
+- The crate map is checked
+  ([ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)): the map
+  file, [`crates/map.toml`](../crates/map.toml), holds each crate's level, the outside libraries
+  and who may use them, the modules allowed `unsafe` code with their counts, every `static` by
+  name, and the files of `yuna` that name Smithay; `scripts/check.sh`'s `map` step compares it with
+  `cargo metadata` and with rustc's `unsafe_code` lint. The workspace denies `unsafe` code; a
+  module allowed it expects the lint, and the pure crates forbid it. Clippy refuses
+  `thread_local!`. `yuna` is the transitional crate until M2.19: its lists only shrink.
 
 ## The layout model
 

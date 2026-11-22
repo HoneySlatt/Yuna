@@ -135,10 +135,11 @@ check_indexes() {
     python3 -I scripts/changelog.py
 }
 
-# The documents' scripts' tests, and the test of the path filters of SlimeEngine's and Opium's jobs
+# The scripts' own tests: the documents' scripts', the crate map's (scripts/test_crate_map.py, on
+# fixtures, with no cargo), and the test of the path filters of SlimeEngine's and Opium's jobs
 # (scripts/test_workflows.py), which needs git alone.
 check_script_tests() {
-    step "Tests of the scripts: the documents' and the workflows' path filter"
+    step "Tests of the scripts: the documents', the crate map's and the workflows' path filter"
     python3 -I -B -m unittest discover --start-directory scripts --pattern 'test_*.py'
 }
 

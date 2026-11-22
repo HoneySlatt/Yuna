@@ -331,8 +331,8 @@ only <step>` runs one:
 10. `lengths`, of `AGENTS.md` (1,500 words at most) and `docs/PLAN.md` (2,000), read at every
     session;
 11. `indexes`: the ADRs' index written from the ADRs, and the changelog's fragments' form;
-12. `script-tests`: the tests of those scripts, and of the path filters of SlimeEngine's and
-    Opium's jobs.
+12. `script-tests`: the tests of those scripts and of the crate map's, and of the path filters of
+    SlimeEngine's and Opium's jobs.
 
 `scripts/test-check.sh` proves that each step stops what it guards against
 ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)): it clones the last
