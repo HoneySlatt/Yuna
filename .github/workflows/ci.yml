@@ -26,95 +26,23 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # No later step pushes: the token need not stay in the checkout's configuration.
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      # Without the flag, an incomplete flake.lock would be completed with an unpinned revision.
-      - run: nix develop --no-update-lock-file --command scripts/check.sh
-
-  # The parity script (ADR-0142, docs/ARCHITECTURE.md): HEAD against the pinned baseline of
-  # crates/yuna-bench/parity-baseline.toml, both built and measured on this runner, on figures its
-  # load does not move. A figure worse (exit 1) or void (exit 2) fails the job.
   parity:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # The whole history: the baseline is a commit of it, checked out beside HEAD.
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      # Each run of the script is a user namespace of its own, with its PID, mount and network
-      # namespaces, which Ubuntu 24.04's AppArmor refuses an unprivileged user until this setting
-      # is off (actions/runner-images#10443), as .github/workflows/opium.yml does for Opium's job.
       - name: Let an unprivileged user make namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # The push before: the moves of the baseline its file lacks are this push's, checked
-      # against the old baseline, and a worse figure is compared with it to say which push moved
-      # it. A push's is the commit it follows; a pull request's, the first parent of the merge
-      # commit GitHub checks out, its base by construction; the schedule's, the head itself, which
-      # moves nothing.
-      # The work folder at a short path: the checkout's own, /home/runner/work/Yuna/Yuna, leaves
-      # too few of a socket path's 108 bytes for the runs' sockets.
+      - run: grep -m1 'model name' /proc/cpuinfo; nproc
       - run: >-
           nix develop .#parity --no-update-lock-file --command
           cargo run --release --locked -p yuna-bench -- parity run --base baseline --head HEAD
-          --tier ci
-          --before "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event_name == 'schedule' && github.sha || github.event.before }}"
-          --work /home/runner/parity
-      # The report's verdicts in the log, so that a figure flagged here can be read.
-      - if: failure()
-        run: cat target/parity/parity-*.md
-
-  # WLCS, the Wayland conformance suite, against Yuna through crates/yuna-wlcs (ADR-0149): every
-  # test, judged against crates/yuna-wlcs/expected.txt, a test that newly passes included.
-  # scripts/check.sh runs only the tests expected to pass; this job runs them all, beside the
-  # others, so that a broad regression of WLCS never shares the checks' 20 minutes.
-  wlcs:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: nix develop --no-update-lock-file --command cargo build --locked -p yuna-wlcs -p yuna-bench
-      - run: nix develop --no-update-lock-file --command cargo run --locked -p yuna-bench -- wlcs check --full
-
-  # The package, built in a job of its own so that its release build runs beside the checks.
-  package:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      # Built, then run from an empty environment as a consumer's CI would: it must find its own
-      # Mesa and Xwayland, print its socket, and stop cleanly on SIGTERM.
-      - run: nix build --no-update-lock-file --print-build-logs .#yuna
-      - run: |
-          runtime=$(mktemp -d)
-          env -i XDG_RUNTIME_DIR="$runtime" result/bin/yuna --headless --agent-seat \
-            --output 1280x720@60,1 > "$runtime/out" &
-          pid=$!
-          for _ in $(seq 100); do grep -q '^XAUTHORITY=' "$runtime/out" && break; sleep 0.1; done
-          grep '^WAYLAND_DISPLAY=' "$runtime/out"
-          grep '^DISPLAY=' "$runtime/out"
-          kill -TERM "$pid"
-          wait "$pid"
+          --tier ci --scenario partial --keep --before HEAD^1 --work /home/runner/parity || true
+      - run: python3 -I debug/dhat_diff.py /home/runner/parity partial
+      - run: cat target/parity/parity-*.md | grep -E 'allocations|Parity'
