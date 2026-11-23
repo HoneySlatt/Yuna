@@ -14,19 +14,13 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
   M2.1.
 - Stage 2's opening design is done (2026-11-19): ADR-0133 to ADR-0141, 2a's milestones below,
   the debt placed ([debt](debt.md)).
-- **Done on 2026-11-21/22**: M2.1, the baselines (ADR-0142, ADR-0143); M2.2, the interface
-  (ADR-0145 to ADR-0148); M2.3, WLCS (ADR-0149, ADR-0150); M2.4's design, split in four
-  (ADR-0151 to ADR-0155); M2.4a, the map's checks and the contracts.
-- **M2.4b, the table of tasks**, done on 2026-11-22: `tasks.rs`, the one spawner and clippy's
-  refusal of the others, encoders capped at the cores less one, bounded reaps and joins at exit,
-  the X11 manager's limits on Yuna's manual clock. Its timed parity run waits for the owner's
-  go (ADR-0142).
-- **M2.4c, one event stream and the pidfd**, under way since 2026-11-23. The owner chose two
-  changes to its ADRs: the pidfd's process checked alive by `poll` (ADR-0156), and the logical
-  geometry and `WindowShell` moved to `yuna-types` for the events (ADR-0157). Its steps, each a
-  commit that keeps parity: the move; the refusals' sentences in `yuna-ipc` alone; the pidfd at
-  accept and the program resolved from its record; `yuna_ipc::Event`, the marks, MCP's log per
-  seat and the oracle test; `windows` paged; the documents and the review.
+- **Done on 2026-11-21/22**: M2.1 (ADR-0142, ADR-0143); M2.2 (ADR-0145 to ADR-0148); M2.3
+  (ADR-0149, ADR-0150); M2.4's design (ADR-0151 to ADR-0155); M2.4a; M2.4b, whose timed parity
+  run waits for the owner's go (ADR-0142).
+- **M2.4c**, under way since 2026-11-23, with ADR-0156 (the pidfd checked by `poll`) and ADR-0157
+  (the geometry and `WindowShell` in `yuna-types`). Steps, each a commit that keeps parity: the
+  move; the refusals' sentences in `yuna-ipc` alone; the pidfd; the event stream and its oracle;
+  `windows` paged; the documents and the review.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
