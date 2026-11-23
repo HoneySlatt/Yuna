@@ -18,10 +18,9 @@ use smithay::utils::{Physical, Rectangle};
 use wayland_server::backend::{ClientId, DisconnectReason};
 use wayland_server::{BindError, Display, ListeningSocket};
 use yuna_ipc::{Caller, Command, Refusal};
-use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, OpenOptions};
 use yuna_motion::{Change, Drawn, Settings};
-use yuna_types::{OutputId, PixelRect, SeatId, WindowId};
+use yuna_types::{OutputId, PixelRect, Rect, SeatId, WindowId, WindowShell};
 
 use crate::Error;
 use crate::canary::ParityCanary;
@@ -129,25 +128,6 @@ pub struct Counters {
     /// X11 windows paired with their surface once it committed their serial, the manager having
     /// named it first.
     pub x11_paired_serial_first: u64,
-}
-
-/// The shell behind a window: what its client speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowShell {
-    /// A Wayland client's `xdg_toplevel`.
-    Xdg,
-    /// An X11 program's window, through its seat's Xwayland.
-    X11,
-}
-
-impl WindowShell {
-    /// Its name, as MCP gives it: `xdg` or `x11`.
-    pub fn name(self) -> &'static str {
-        match self {
-            WindowShell::Xdg => "xdg",
-            WindowShell::X11 => "x11",
-        }
-    }
 }
 
 /// A window, as [`Compositor::windows`] describes it.

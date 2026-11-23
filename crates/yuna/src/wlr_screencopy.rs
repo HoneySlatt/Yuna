@@ -37,8 +37,7 @@ use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_output::WlOutput;
 use wayland_server::protocol::wl_shm::Format;
 use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
-use yuna_layout::geometry::Rect;
-use yuna_types::OutputId;
+use yuna_types::{OutputId, Rect};
 
 use crate::capture::{Destination, physical_area};
 use crate::screencopy::{FORMATS, copy_into_shm};

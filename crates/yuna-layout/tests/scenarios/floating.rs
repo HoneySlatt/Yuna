@@ -2,8 +2,7 @@
 
 use crate::harness::*;
 use yuna_layout::OpenOptions;
-use yuna_layout::geometry::Size;
-use yuna_types::Direction;
+use yuna_types::{Direction, Size};
 
 fn floating(size: Option<Size>) -> OpenOptions {
     OpenOptions {

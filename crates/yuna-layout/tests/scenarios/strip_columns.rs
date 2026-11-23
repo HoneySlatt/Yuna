@@ -3,9 +3,8 @@
 //! at scale 1 with gaps of 16: a column of half the width is 936 wide.
 
 use crate::harness::*;
-use yuna_layout::geometry::Size;
 use yuna_layout::{ColumnWidth, OpenOptions, Options};
-use yuna_types::{Direction, Tiling};
+use yuna_types::{Direction, Size, Tiling};
 
 /// Windows 1, 2 and 3 in one column, from top to bottom, the focus on 3.
 fn stacked() -> Model {

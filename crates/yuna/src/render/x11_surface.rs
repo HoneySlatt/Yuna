@@ -40,7 +40,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 use smithay::wayland::compositor::{SurfaceData, with_states};
 use smithay::wayland::viewporter::ViewportCachedState;
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::geometry::Rect;
+use yuna_types::Rect;
 
 use super::{WindowElement, window_pixels};
 use crate::output::{VirtualOutput, to_i32};

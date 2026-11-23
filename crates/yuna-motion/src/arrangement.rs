@@ -9,9 +9,8 @@ mod switch;
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
-use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, Placed};
-use yuna_types::{OutputId, SeatId, WindowId, WorkspaceId};
+use yuna_types::{OutputId, Rect, SeatId, WindowId, WorkspaceId};
 
 use crate::{CurveParams, Easing, SpringParams};
 use output::OutputMotion;

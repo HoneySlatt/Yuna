@@ -55,10 +55,9 @@ use smithay::utils::{Buffer, Point};
 use wayland_server::Resource;
 use wayland_server::protocol::wl_surface::WlSurface;
 use x11rb::protocol::xproto::Window;
-use yuna_layout::geometry::Size;
 use yuna_layout::{MAX_SIZE, OpenOptions};
 use yuna_motion::Change;
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, SeatId, Size, WindowId};
 
 use super::answers::Waits;
 use super::bridge::Selection;

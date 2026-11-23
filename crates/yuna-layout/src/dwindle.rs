@@ -15,12 +15,13 @@
 //! [`Dwindle::opening_slot`].
 
 use crate::area::Area;
-use crate::geometry::{Rect, nearest_in_direction};
+use crate::geometry::nearest_in_direction;
 use crate::workspace::Arranged;
 use crate::{Direction, Layer, WindowId};
+use yuna_types::Rect;
 
 /// The distance from `point` to the nearest point of `rect`; zero inside it.
-fn distance_to_rect(point: crate::geometry::Point, rect: &Rect) -> f64 {
+fn distance_to_rect(point: yuna_types::Point, rect: &Rect) -> f64 {
     let dx = (rect.x - point.x).max(point.x - rect.right()).max(0.0);
     let dy = (rect.y - point.y).max(point.y - rect.bottom()).max(0.0);
     dx.hypot(dy)

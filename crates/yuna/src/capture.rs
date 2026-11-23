@@ -20,8 +20,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use smithay::utils::{Physical, Rectangle};
-use yuna_layout::geometry::Rect;
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, Rect, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::Deadline;

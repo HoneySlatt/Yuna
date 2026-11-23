@@ -18,11 +18,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::Deserialize;
-use yuna_layout::geometry::Rect;
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, Rect, SeatId, WindowId, WindowShell};
 
 use super::programs::End;
-use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription, WindowShell};
+use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
 
 /// How many events a seat's log keeps: its newest. Past it, the oldest is dropped and counted.
 pub const MAX_EVENTS: usize = 1024;

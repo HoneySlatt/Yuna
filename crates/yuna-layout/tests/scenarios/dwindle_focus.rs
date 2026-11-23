@@ -3,9 +3,8 @@
 //! 1080 at scale 1 with gaps of 16, so a tree of one window fills 1888 × 1048.
 
 use crate::harness::*;
-use yuna_layout::geometry::Size;
 use yuna_layout::{OpenOptions, Options};
-use yuna_types::Tiling;
+use yuna_types::{Size, Tiling};
 
 fn dwindle() -> Model {
     Model::with(Options {

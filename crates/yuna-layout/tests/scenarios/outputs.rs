@@ -2,8 +2,8 @@
 //! never lost (niri), and are placed again in an output's new rectangle.
 
 use crate::harness::*;
-use yuna_layout::geometry::Size;
 use yuna_layout::{LayoutError, OpenOptions, Options};
+use yuna_types::Size;
 
 /// `MAIN` with workspaces "a" and "b", "b" shown with window 1; `SIDE` with "c".
 fn two_outputs() -> Model {

@@ -1,5 +1,6 @@
 //! Yuna's shared vocabulary: the ids of what the compositor names, the directions and tilings a
-//! caller asks for, and a region of an output's pixels.
+//! caller asks for, the logical geometry (`Point`, `Size`, `Rect` and `EPSILON`), the shell behind
+//! a window, and a region of an output's pixels.
 //!
 //! This crate is level 0 of the crate map
 //! ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)'s
@@ -9,21 +10,29 @@
 //!
 //! # What it promises
 //!
-//! - Plain data: every type is `Copy`, and compares and hashes by value.
-//! - No dependency, no behaviour: a type here is a name or a choice, never a function of other
+//! - Plain data: every type is `Copy`. The ids, the choices and `PixelRect` compare and hash by
+//!   value. The geometry compares as `f64` does, by `PartialEq` alone, without `Eq` or `Hash`.
+//! - No dependency, no state: a type here is a name, a choice or a value, never a function of other
 //!   state. The models that hand out ids keep that logic (the layout gives workspace and column
-//!   ids).
+//!   ids). The methods of the geometry are pure functions of their values, marked `#[inline]` so
+//!   that a call from another crate costs what it costs inside one.
 //! - No `unsafe` code.
 //!
 //! # What comes here
 //!
-//! A type comes when more than one crate needs it, not before. The rest of level 0 (coordinate
+//! A type comes when more than one crate needs it, not before
+//! ([ADR-0157](../../../docs/adr/0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md)
+//! brought the geometry and `WindowShell`). The rest of level 0 (coordinate
 //! spaces, transforms, the scale in 120ths, time values, dma-buf descriptors) comes with the code
 //! that needs it. No crate re-exports these types: each names `yuna_types` itself.
 
 #![forbid(unsafe_code)]
 
+mod geometry;
+
 use std::num::NonZeroU64;
+
+pub use geometry::{EPSILON, Point, Rect, Size};
 
 /// A window, named by the caller. The caller keeps ids unique among the windows it opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -98,6 +107,25 @@ impl PixelRect {
             y,
             width: 1,
             height: 1,
+        }
+    }
+}
+
+/// The shell behind a window: what its client speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WindowShell {
+    /// A Wayland client's `xdg_toplevel`.
+    Xdg,
+    /// An X11 program's window, through its seat's Xwayland.
+    X11,
+}
+
+impl WindowShell {
+    /// Its name, as MCP gives it: `xdg` or `x11`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowShell::Xdg => "xdg",
+            WindowShell::X11 => "x11",
         }
     }
 }

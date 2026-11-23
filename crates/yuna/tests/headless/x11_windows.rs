@@ -25,13 +25,12 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _, Window};
 use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, CapturedFrame, ClockMode, Compositor, Config,
-    MAX_WINDOWS_PER_CLIENT, OutputMode, WindowDescription, WindowShell, X11_PING_TIMEOUT,
-    X11_SYNC_TIMEOUT, X11Display, XwaylandConfig, axis_taps,
+    MAX_WINDOWS_PER_CLIENT, OutputMode, WindowDescription, X11_PING_TIMEOUT, X11_SYNC_TIMEOUT,
+    X11Display, XwaylandConfig, axis_taps,
 };
 use yuna_ipc::{Caller, Command};
-use yuna_layout::geometry::Rect;
 use yuna_motion::{Change, Motion, Settings};
-use yuna_types::{Direction, OutputId, SeatId, WindowId};
+use yuna_types::{Direction, OutputId, Rect, SeatId, WindowId, WindowShell};
 
 use crate::x11_client::{
     Geometry, Image, PATIENCE, WindowSpec, X11Client, connect, step, step_pumping,

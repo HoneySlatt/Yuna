@@ -4,8 +4,7 @@ use crate::harness::*;
 use yuna_layout::{ColumnWidth, OpenOptions, Options};
 use yuna_types::Direction;
 
-const OUTPUT: yuna_layout::geometry::Rect =
-    yuna_layout::geometry::Rect::new(0.0, 0.0, 1920.0, 1080.0);
+const OUTPUT: yuna_types::Rect = yuna_types::Rect::new(0.0, 0.0, 1920.0, 1080.0);
 
 /// niri: docs/wiki/Fullscreen-and-Maximize.md:32-47.
 #[test]
@@ -227,7 +226,7 @@ fn a_fullscreen_window_of_one_pixel_centred_on_a_half_pixel_keeps_its_pixel() {
     m.ok(|l| l.add_output(OWNER, MAIN, output(60.0, 3840, 2160, 1.25)));
     let tiny = OpenOptions {
         fullscreen: true,
-        committed: Some(yuna_layout::geometry::Size { w: 1.0, h: 1.0 }),
+        committed: Some(yuna_types::Size { w: 1.0, h: 1.0 }),
         ..OpenOptions::default()
     };
     m.open_with(OWNER, 1, tiny);

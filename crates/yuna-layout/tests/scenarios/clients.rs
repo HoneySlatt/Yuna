@@ -8,9 +8,8 @@
 //! in a column 1048 tall.
 
 use crate::harness::*;
-use yuna_layout::geometry::Size;
 use yuna_layout::{LayoutError, OpenOptions, Options, OutputConfig};
-use yuna_types::{Direction, Tiling};
+use yuna_types::{Direction, Size, Tiling};
 
 fn size(w: f64, h: f64) -> Size {
     Size { w, h }
@@ -119,7 +118,7 @@ fn configure_sizes_are_whole_logical_units() {
     });
     m.ok(|l| l.add_seat(OWNER));
     let output = OutputConfig {
-        position: yuna_layout::geometry::Point { x: 0.0, y: 0.0 },
+        position: yuna_types::Point { x: 0.0, y: 0.0 },
         physical_width: 3840,
         physical_height: 2160,
         scale: 1.5,

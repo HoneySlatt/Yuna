@@ -3,10 +3,10 @@
 use crate::area::Area;
 use crate::dwindle::Dwindle;
 use crate::floating::Floating;
-use crate::geometry::{Rect, Size};
 use crate::ids::Ids;
 use crate::scrolling::{ColumnWidth, Scrolling};
 use crate::{ColumnId, Direction, Layer, OutputId, Tiling, WindowId, WorkspaceId, WorkspaceView};
+use yuna_types::{Rect, Size};
 
 /// A window as its workspace places it.
 #[derive(Debug, Clone, Copy)]

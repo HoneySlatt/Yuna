@@ -18,10 +18,9 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use yuna_layout::geometry::Point;
 use yuna_layout::{Layout, OpenOptions, Options, OutputConfig};
 use yuna_motion::{Change, Motion, Settings};
-use yuna_types::{Direction, OutputId, SeatId, WindowId};
+use yuna_types::{Direction, OutputId, Point, SeatId, WindowId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);

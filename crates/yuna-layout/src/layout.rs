@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::area::Area;
 use crate::floating::Floating;
-use crate::geometry::{EPSILON, Point, Rect, Scale, Size};
+use crate::geometry::Scale;
 use crate::ids::Ids;
 use crate::scrolling::{ColumnWidth, Scrolling};
 use crate::sizing::{Sizing, whole_size};
@@ -13,6 +13,7 @@ use crate::{
     Direction, Layer, LayoutError, OpenOptions, Options, OutputConfig, OutputId, Placed, SeatId,
     ShownWorkspaces, Tiling, WindowId, WindowInfo, WorkspaceId, WorkspaceInfo,
 };
+use yuna_types::{EPSILON, Point, Rect, Size};
 
 /// The layout of every seat's windows. See the crate's documentation.
 #[derive(Debug, Clone)]
@@ -2315,7 +2316,7 @@ fn valid_width(width: ColumnWidth) -> bool {
 mod tests {
     use super::*;
     use crate::OutputConfig;
-    use crate::geometry::Point;
+    use yuna_types::Point;
 
     const SEAT: SeatId = SeatId(1);
 

@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use yuna_layout::geometry::{EPSILON, Rect, Scale};
+use yuna_layout::geometry::Scale;
 use yuna_layout::{Layer, Layout, Placed, ShownWorkspaces};
-use yuna_types::{ColumnId, OutputId, WindowId, WorkspaceId};
+use yuna_types::{ColumnId, EPSILON, OutputId, Rect, WindowId, WorkspaceId};
 
 use super::special::SpecialFade;
 use super::switch::{Slide, Switch};

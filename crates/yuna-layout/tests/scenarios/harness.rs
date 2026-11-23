@@ -1,9 +1,8 @@
 //! A model under test: every operation is unwrapped and followed by a check of every invariant,
 //! so that a scenario fails at the step that breaks one.
 
-use yuna_layout::geometry::{Point, Rect};
 use yuna_layout::{Layout, LayoutError, OpenOptions, Options, OutputConfig, Placed, WindowInfo};
-use yuna_types::{OutputId, SeatId, WindowId, WorkspaceId};
+use yuna_types::{OutputId, Point, Rect, SeatId, WindowId, WorkspaceId};
 
 /// The owner's seat.
 pub const OWNER: SeatId = SeatId(1);

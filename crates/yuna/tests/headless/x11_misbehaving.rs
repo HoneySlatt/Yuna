@@ -34,8 +34,7 @@ use yuna::{
     OutputMode, X11Display, XwaylandConfig,
 };
 use yuna_ipc::{Caller, Command};
-use yuna_layout::geometry::Rect;
-use yuna_types::{OutputId, SeatId, WindowId};
+use yuna_types::{OutputId, Rect, SeatId, WindowId};
 
 use crate::client::Client;
 use crate::x11_client::{Image, PATIENCE, WindowSpec, X11Client, connect, step, step_pumping};

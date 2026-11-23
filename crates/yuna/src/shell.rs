@@ -42,14 +42,13 @@ use wayland_server::Resource;
 use wayland_server::backend::ClientId;
 use wayland_server::protocol::{wl_output, wl_seat, wl_surface::WlSurface};
 use yuna_ipc::Refusal;
-use yuna_layout::geometry::{Rect, Size};
 use yuna_layout::{MAX_SIZE, OpenOptions};
 use yuna_motion::Change;
-use yuna_types::{OutputId, WindowId};
+use yuna_types::{OutputId, Rect, Size, WindowId, WindowShell};
 
 use crate::activation::TokenOrigin;
 use crate::command::refusal;
-use crate::compositor::{WindowDescription, WindowShell};
+use crate::compositor::WindowDescription;
 use crate::frames::waits_for_frame;
 use crate::seats::seat_of_surface;
 use crate::state::{ClientState, State};

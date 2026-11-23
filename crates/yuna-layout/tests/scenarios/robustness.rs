@@ -2,9 +2,8 @@
 //! nothing, never a panic (ADR-0080).
 
 use crate::harness::*;
-use yuna_layout::geometry::Point;
 use yuna_layout::{ColumnWidth, LayoutError, OpenOptions, OutputConfig};
-use yuna_types::{Direction, OutputId, SeatId};
+use yuna_types::{Direction, OutputId, Point, SeatId};
 
 #[test]
 fn stale_ids_are_refused() {

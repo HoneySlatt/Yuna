@@ -15,11 +15,11 @@
 //! screen and the columns on its left move, as in niri.
 
 use crate::area::Area;
-use crate::geometry::{Rect, Size};
 use crate::ids::Ids;
 use crate::sizing::{Sizing, whole, whole_floor};
 use crate::workspace::Arranged;
 use crate::{ColumnId, Direction, Layer, WindowId};
+use yuna_types::{Rect, Size};
 
 /// How wide a column is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -212,7 +212,7 @@ impl Column {
         let gaps = (self.windows.len() + 1) as f64 * area.gap;
         let fits = mins.iter().sum::<f64>() + gaps <= area.working.h;
         let asked = heights.iter().sum::<f64>() + gaps;
-        if fits && asked > area.working.h + 0.5 + crate::geometry::EPSILON {
+        if fits && asked > area.working.h + 0.5 + yuna_types::EPSILON {
             return Err(format!(
                 "its windows are asked {asked} high, though their minimums fit in {}",
                 area.working.h
@@ -824,7 +824,7 @@ impl Scrolling {
         let x = self.column_x(self.focused, area) - self.view_x;
         let width = self.strip_width(self.focused, area);
         let view_width = area.working.w;
-        let tolerance = 1.0 / area.scale.get() + crate::geometry::EPSILON;
+        let tolerance = 1.0 / area.scale.get() + yuna_types::EPSILON;
         if column.fullscreen {
             return (area.working.x + x - area.output.x).abs() < tolerance;
         }

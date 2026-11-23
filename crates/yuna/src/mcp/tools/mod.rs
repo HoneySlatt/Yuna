@@ -92,6 +92,7 @@ mod tests {
     use super::arguments::Button;
     use super::results::event_json;
     use super::*;
+    use crate::OutputMode;
     use crate::colour::description::{
         Chromaticities, Description, Luminances, PG32UCDM, TransferFunction,
     };
@@ -104,10 +105,7 @@ mod tests {
     use crate::mcp::protocol::Revision;
     use crate::rest::{RestCounts, Source};
     use crate::xwayland::Selection;
-    use crate::{OutputMode, WindowShell};
-    use yuna_layout::geometry::Rect;
-    use yuna_types::SeatId;
-    use yuna_types::{OutputId, WindowId};
+    use yuna_types::{OutputId, Rect, SeatId, WindowId, WindowShell};
 
     fn args(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap_or_default()

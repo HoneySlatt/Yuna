@@ -70,7 +70,7 @@ pub use capture::{
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
     CLIENT_BUFFER_BYTES, ClientDeparture, ClientProcess, ClientProtocolError, ClientRefusal,
-    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription, WindowShell,
+    Compositor, Config, Counters, OutputDescription, SOCKET_PAUSE, WindowDescription,
 };
 #[doc(hidden)]
 pub use compositor::{ClientKey, Waker};

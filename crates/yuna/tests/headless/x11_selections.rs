@@ -22,9 +22,9 @@ use x11rb::protocol::xproto::{
     SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Timestamp, Window,
 };
 use x11rb::wrapper::ConnectionExt as _;
-use yuna::{ClockMode, Compositor, MAX_X11_TRANSFERS, WindowShell, X11_TRANSFER_TIMEOUT};
+use yuna::{ClockMode, Compositor, MAX_X11_TRANSFERS, X11_TRANSFER_TIMEOUT};
 use yuna_ipc::{Caller, Command};
-use yuna_types::WindowId;
+use yuna_types::{WindowId, WindowShell};
 
 use crate::advance_clock_to;
 use crate::selection_client::{Pipe, SelectionClient, SelectionEvent};

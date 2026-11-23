@@ -11,8 +11,7 @@ use wayland_client::Proxy;
 use yuna::rest::Source;
 use yuna::{Compositor, OutputMode, Waker};
 use yuna_ipc::Refusal;
-use yuna_layout::geometry::Rect;
-use yuna_types::{SeatId, WindowId};
+use yuna_types::{Rect, SeatId, WindowId};
 
 use crate::client::Client;
 use crate::{BLUE, RED, assert_rests, manual_compositor, run_armed_deadlines};

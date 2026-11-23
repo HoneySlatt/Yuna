@@ -21,9 +21,8 @@ use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, ClockMode, Compositor, Config, OWNER_SEAT, OutputMode,
 };
 use yuna_ipc::{Caller, Command};
-use yuna_layout::geometry::Rect;
 use yuna_motion::{Change, Drawn, Motion, Settings, SpringParams};
-use yuna_types::{Direction, OutputId, PixelRect, SeatId, WindowId};
+use yuna_types::{Direction, OutputId, PixelRect, Rect, SeatId, WindowId};
 
 use crate::client::{Client, Feedback, Parent, Placement, State};
 use crate::input_client::{InputClient, InputEvent};

@@ -52,9 +52,11 @@ mod workspace;
 pub use layout::{Layout, MAX_SIZE};
 pub use scrolling::ColumnWidth;
 
-use geometry::{Rect, Size};
-// Named here for the whole crate: its modules reach the ids through `crate::`.
-use yuna_types::{ColumnId, Direction, OutputId, SeatId, Tiling, WindowId, WorkspaceId};
+// Named here for the whole crate: its modules reach the ids through `crate::`; `Rect` and `Size`
+// are this file's own.
+use yuna_types::{
+    ColumnId, Direction, OutputId, Rect, SeatId, Size, Tiling, WindowId, WorkspaceId,
+};
 
 /// The part of its workspace a window is placed in, which says how it moves: the columns of a
 /// strip slide together under one camera, the others do not
@@ -113,7 +115,7 @@ impl Default for Options {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputConfig {
     /// The top-left corner, in logical coordinates shared by all outputs.
-    pub position: geometry::Point,
+    pub position: yuna_types::Point,
     /// The mode's width in physical pixels.
     pub physical_width: u32,
     /// The mode's height in physical pixels.

@@ -12,8 +12,8 @@ limits are in its code's documentation, linked from here; why each decision was 
 
 - **The pure models.** [`yuna-layout`](#the-layout-model) decides where every window goes.
   [`yuna-motion`](#motion) turns the layout's jumps into what each frame draws. Neither knows
-  Wayland, Smithay, a renderer or a clock. Both name their ids from `yuna-types`, the shared
-  vocabulary that depends on nothing.
+  Wayland, Smithay, a renderer or a clock. Both name their ids and geometry from `yuna-types`, the
+  shared vocabulary that depends on nothing.
 - **The headless compositor**, the `yuna` crate's library, on Smithay. In front: the Wayland
   protocols, and for each seat [XWayland](#xwayland) with Yuna's own X11 window manager. Behind:
   the layout and the motion. Underneath: virtual [outputs](#outputs), refreshed by one
@@ -85,7 +85,7 @@ One Cargo workspace; its crates live in `crates/`.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling` and `PixelRect`; level 0 of the map in [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | nothing |
+| `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling`, `PixelRect`, the logical geometry (`Point`, `Size`, `Rect`, `EPSILON`) and `WindowShell` ([ADR-0157](adr/0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md)); level 0 of the map in [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | nothing |
 | `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |

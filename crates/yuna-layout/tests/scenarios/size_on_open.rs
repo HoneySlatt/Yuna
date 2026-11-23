@@ -5,9 +5,8 @@
 //! scale 1.5, is 1706.67 × 960 units, where sizes fall between whole units.
 
 use crate::harness::*;
-use yuna_layout::geometry::Size;
 use yuna_layout::{ColumnWidth, OpenOptions, Options};
-use yuna_types::Tiling;
+use yuna_types::{Size, Tiling};
 
 fn size(w: f64, h: f64) -> Size {
     Size { w, h }

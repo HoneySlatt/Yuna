@@ -7,10 +7,9 @@
 
 use std::time::Duration;
 
-use yuna_layout::geometry::{Point, Rect, Size};
 use yuna_layout::{Layout, LayoutError, OpenOptions, Options, OutputConfig};
 use yuna_motion::{Change, Curve, Drawn, Motion, Settings, Spring};
-use yuna_types::{OutputId, SeatId, Tiling, WindowId};
+use yuna_types::{OutputId, Point, Rect, SeatId, Size, Tiling, WindowId};
 
 const SEAT: SeatId = SeatId(1);
 const OUTPUT: OutputId = OutputId(1);

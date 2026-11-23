@@ -39,9 +39,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{Atom, ConnectionExt as _, Window};
 use yuna::{BUTTON_LEFT, ClockMode, OutputMode, X11_SYNC_TIMEOUT};
 use yuna_ipc::{Caller, Command};
-use yuna_layout::geometry::Rect;
 use yuna_motion::Settings;
-use yuna_types::{OutputId, WindowId};
+use yuna_types::{OutputId, Rect, WindowId};
 
 use crate::advance_clock_to;
 use crate::selection_client::{DragEvent, SelectionClient, SourceDragEvent};

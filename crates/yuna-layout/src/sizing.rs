@@ -11,7 +11,7 @@
 //! floating windows are placed from drawn sizes, as in niri; dwindle draws each window inside
 //! its slot, clipped to it.
 
-use crate::geometry::Size;
+use yuna_types::Size;
 
 /// A window's size limits, its committed size, and whether a rule set its floating size.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

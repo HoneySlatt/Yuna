@@ -1,9 +1,10 @@
 //! The space a workspace is laid out in, and how a window's sizes fit it.
 
 use crate::WindowId;
-use crate::geometry::{Rect, Scale, Size};
+use crate::geometry::Scale;
 use crate::layout::Windows;
 use crate::sizing::{Sizing, whole_size};
+use yuna_types::{Rect, Size};
 
 /// Where a workspace is laid out: the output it is shown on, the part of it windows may tile in,
 /// and the gap between windows, all on the output's physical grid; and what the model knows of

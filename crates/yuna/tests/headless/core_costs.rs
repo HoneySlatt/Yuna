@@ -18,8 +18,7 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use yuna::{Compositor, HIDDEN_FRAME_INTERVAL, MAX_WINDOWS_PER_CLIENT, OWNER_SEAT};
 use yuna_ipc::Command;
-use yuna_layout::geometry::Size;
-use yuna_types::{Direction, WindowId};
+use yuna_types::{Direction, Size, WindowId};
 
 use crate::client::{Client, memory_file};
 use crate::{OUTPUT, manual_compositor, owner};

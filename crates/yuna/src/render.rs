@@ -27,7 +27,7 @@ use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
 use smithay::desktop::PopupManager;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 use wayland_server::protocol::wl_surface::WlSurface;
-use yuna_layout::geometry::Rect;
+use yuna_types::Rect;
 
 use crate::Error;
 use crate::output::{VirtualOutput, to_i32};

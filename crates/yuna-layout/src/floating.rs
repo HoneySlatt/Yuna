@@ -9,10 +9,11 @@
 //! ([ADR-0026](../../../docs/adr/0026-real-clients-in-the-layout.md)).
 
 use crate::area::Area;
-use crate::geometry::{Rect, Size, nearest_in_direction};
+use crate::geometry::nearest_in_direction;
 use crate::sizing::whole_size;
 use crate::workspace::Arranged;
 use crate::{Direction, Layer, WindowId};
+use yuna_types::{Rect, Size};
 
 /// One floating window.
 #[derive(Debug, Clone, Copy)]

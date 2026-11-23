@@ -518,7 +518,7 @@ fn a_commit_keeps_the_column() {
     m.ok(|l| {
         l.commit_size(
             w(1),
-            yuna_layout::geometry::Size {
+            yuna_types::Size {
                 w: 700.0,
                 h: 1048.0,
             },

@@ -2,9 +2,8 @@
 //! output comes, goes or changes mode, and where a window sent to a special workspace lands.
 
 use crate::harness::*;
-use yuna_layout::geometry::Point;
 use yuna_layout::{LayoutError, Options, OutputConfig};
-use yuna_types::{Direction, OutputId};
+use yuna_types::{Direction, OutputId, Point};
 
 const THIRD: OutputId = OutputId(3);
 

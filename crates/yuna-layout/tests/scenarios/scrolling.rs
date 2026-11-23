@@ -366,7 +366,7 @@ fn a_column_too_full_for_its_height_asks_one_unit_of_each_window_and_overflows()
         m.ok(|l| l.consume_or_expel(OWNER, Direction::Left));
     }
     // (1920 − 300) × 0.5 − 300 = 510 wide; 1080 − 5 × 300 leaves no height to share.
-    let one_unit = yuna_layout::geometry::Size { w: 510.0, h: 1.0 };
+    let one_unit = yuna_types::Size { w: 510.0, h: 1.0 };
     for n in 0..4 {
         assert_eq!(m.placement(n).configure, one_unit);
     }
@@ -388,7 +388,7 @@ fn a_column_too_full_for_its_height_asks_one_unit_of_each_window_and_overflows()
 /// window leaving the column, the column going fullscreen and back.
 #[test]
 fn the_focused_column_stays_put_when_a_column_on_its_left_changes_width() {
-    use yuna_layout::geometry::Size;
+    use yuna_types::Size;
     let mut m = Model::new();
     m.open(1);
     m.open(2);

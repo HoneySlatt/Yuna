@@ -96,10 +96,9 @@ use usage::{Usage, WARM_UP, print_usage};
 use vkcube::{Clients, vkcube_command};
 use yuna::{ClockMode, Compositor, Config, Device, OWNER_SEAT, OutputMode};
 use yuna_ipc::{Caller, Command};
-use yuna_layout::geometry::Rect;
 use yuna_layout::{Layout, LayoutError};
 use yuna_motion::Settings;
-use yuna_types::{Direction, OutputId, WindowId};
+use yuna_types::{Direction, OutputId, Rect, WindowId};
 
 /// The output's mode without `--output`: Yuna's default, an agent's output, and the mode
 /// ADR-0056 judges at.

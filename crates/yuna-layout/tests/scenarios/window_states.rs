@@ -4,9 +4,8 @@
 //! The output is 1920 × 1080 at scale 1 with gaps of 16.
 
 use crate::harness::*;
-use yuna_layout::geometry::{Point, Size};
 use yuna_layout::{OpenOptions, OutputConfig};
-use yuna_types::Direction;
+use yuna_types::{Direction, Point, Size};
 
 fn floating() -> OpenOptions {
     OpenOptions {
@@ -200,7 +199,7 @@ fn a_dialog_opens_centred_on_its_parent_on_an_output_that_is_not_at_the_origin()
     );
     let (parent, dialog) = (m.rect(1), m.rect(2));
     assert_eq!((parent.x, parent.y), (1920.0 + 16.0, 40.0 + 16.0));
-    let centre = |r: yuna_layout::geometry::Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let centre = |r: yuna_types::Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
     assert_eq!(centre(dialog), centre(parent));
 }
 

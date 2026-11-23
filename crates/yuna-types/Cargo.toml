@@ -1,6 +1,6 @@
 [package]
 name = "yuna-types"
-description = "Yuna's shared vocabulary: ids and directions, with no dependency"
+description = "Yuna's shared vocabulary: ids, directions, the logical geometry and a window's shell, with no dependency"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

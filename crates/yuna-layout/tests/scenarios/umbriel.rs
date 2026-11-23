@@ -6,8 +6,7 @@ use crate::harness::*;
 use yuna_layout::{ColumnWidth, OpenOptions, Options};
 use yuna_types::Tiling;
 
-const OUTPUT: yuna_layout::geometry::Rect =
-    yuna_layout::geometry::Rect::new(0.0, 0.0, 2560.0, 1440.0);
+const OUTPUT: yuna_types::Rect = yuna_types::Rect::new(0.0, 0.0, 2560.0, 1440.0);
 
 fn four_k(tiling: Tiling) -> Model {
     let mut m = Model::bare(Options {
