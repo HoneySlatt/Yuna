@@ -1,6 +1,6 @@
 # 0146. The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller
 
-- Status: Accepted
+- Status: Accepted; superseded in part by [0157](0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md) (what `yuna-types` holds)
 - Date: 2026-11-20
 
 ## Context

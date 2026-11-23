@@ -20,7 +20,13 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - **M2.4b, the table of tasks**, done on 2026-11-22: `tasks.rs`, the one spawner and clippy's
   refusal of the others, encoders capped at the cores less one, bounded reaps and joins at exit,
   the X11 manager's limits on Yuna's manual clock. Its timed parity run waits for the owner's
-  go (ADR-0142). **Next: M2.4c, one event stream and the pidfd**, in a new session.
+  go (ADR-0142).
+- **M2.4c, one event stream and the pidfd**, under way since 2026-11-23. The owner chose two
+  changes to its ADRs: the pidfd's process checked alive by `poll` (ADR-0156), and the logical
+  geometry and `WindowShell` moved to `yuna-types` for the events (ADR-0157). Its steps, each a
+  commit that keeps parity: the move; the refusals' sentences in `yuna-ipc` alone; the pidfd at
+  accept and the program resolved from its record; `yuna_ipc::Event`, the marks, MCP's log per
+  seat and the oracle test; `windows` paged; the documents and the review.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -65,12 +71,12 @@ milestone that replaces its module. A new dependency is put to the owner at its 
   encoders capped at the cores less one; joins and reaps bounded; the X11 manager on Yuna's manual
   time, its inline running and the two retry stories at M2.17. *Done when* an unregistered thread
   fails the check and the X11 drag and transfer stories step the manual clock past their limits.
-- **M2.4c One event stream and the pidfd.** ADR-0153: marks at the change points, `yuna_ipc::Event`
-  built once a round, MCP's log on it numbered per seat, `windows` paged, the comparison a test
-  oracle. ADR-0154: `SO_PEERPIDFD` at accept, the program resolved there. *Done when* a window
-  opened and closed in one round is told, a title changed a thousand times in a round is one
-  event, `missed` is exact, `windows` pages, and a client's program comes from its pidfd, or from
-  today's walk marked inexact when the kernel refuses it.
+- **M2.4c One event stream and the pidfd.** ADR-0153 and ADR-0157: marks at the change points,
+  `yuna_ipc::Event` built once a round, MCP's log on it numbered per seat, `windows` paged, the
+  comparison a test oracle. ADR-0156: `SO_PEERPIDFD` at accept, the program resolved from its
+  record. *Done when* a window opened and closed in one round is told, a title changed a thousand
+  times in a round is one event, `missed` is exact, `windows` pages, and a client's program comes
+  from its pidfd, or from today's walk marked inexact when the kernel refuses it.
 - **M2.4d A frame's identity.** ADR-0155: an opaque `FrameId`, rings of inputs, commits and
   frames, the `frames` tool, exact causes, hidden windows by due time, wakes naming their task or
   X11 client, the GPU priority granted logged. *Done when* a story reads a frame's inputs,
@@ -140,7 +146,7 @@ M2.18 may run any time after M2.4d. A milestone that turns out too large is spli
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4b done; M2.4c next |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4b done; M2.4c under way |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas

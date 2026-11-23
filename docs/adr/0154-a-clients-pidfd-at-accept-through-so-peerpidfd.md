@@ -1,6 +1,6 @@
 # 0154. A client's pidfd at accept, through `SO_PEERPIDFD`
 
-- Status: Accepted
+- Status: Superseded by [0156](0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)
 - Date: 2026-11-22
 
 ## Context

@@ -166,7 +166,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0143](0143-allocations-a-frame-counted-by-dhat.md) | Allocations a frame, counted by valgrind's DHAT | Accepted; supersedes in part 0140 |
 | [0144](0144-motions-budget-its-clients-draw-on-the-gpu.md) | Motion's budget: its clients draw on the GPU | Accepted; supersedes in part 0127 |
 | [0145](0145-the-crate-map-motion-on-the-layout-the-configuration-on-the-commands.md) | The crate map: motion on the layout, the configuration on the commands | Superseded by 0150; supersedes in part 0082 |
-| [0146](0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md) | The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller | Accepted |
+| [0146](0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md) | The compositor's interface: `yuna-types`, and `yuna-ipc`'s commands for a caller | Accepted; superseded in part by 0157 |
 | [0147](0147-a-seat-connects-256-clients-at-most.md) | A seat connects 256 clients at most | Accepted |
 | [0148](0148-parity-builds-each-side-in-one-codegen-unit.md) | Parity builds each side in one codegen unit | Accepted |
 | [0149](0149-wlcs-nixpkgs-1-8-1-a-shim-on-the-interface-every-tests-outcome-expected.md) | WLCS: nixpkgs' 1.8.1, a shim on the interface, every test's outcome expected | Accepted |
@@ -174,5 +174,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0151](0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | The crate map, checked by rustc and a script; `yuna` transitional until M2.19 | Accepted; supersedes 0150; supersedes in part 0082 |
 | [0152](0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md) | The table of tasks: one spawner, one class, the X11 manager inline at M2.17 | Accepted |
 | [0153](0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md) | One event stream: marks where state changes, MCP's log per seat its bound | Accepted; supersedes in part 0082 and 0093 |
-| [0154](0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md) | A client's pidfd at accept, through `SO_PEERPIDFD` | Accepted |
+| [0154](0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md) | A client's pidfd at accept, through `SO_PEERPIDFD` | Superseded by 0156 |
 | [0155](0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md) | A frame's identity: an opaque id, numbered rings, and a `frames` tool | Accepted |
+| [0156](0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md) | A client's pidfd at accept, its life read by `poll` | Accepted; supersedes 0154 |
+| [0157](0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md) | `yuna-types` takes the logical geometry and a window's shell | Accepted; supersedes in part 0146 |
