@@ -54,7 +54,7 @@ use crate::screencopy::ScreencopyState;
 use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
-use crate::{ClientProcess, ClientRefusal, Error};
+use crate::{ClientArrival, ClientProcess, ClientRefusal, Error};
 
 /// The owner's seat, which always exists; agents' seats come after it, from 2
 /// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
@@ -145,6 +145,13 @@ pub(crate) struct State {
     /// A seat tells one a second at most, so it holds one a seat for each second between two
     /// takes.
     pub client_refusals: Option<Vec<ClientRefusal>>,
+    /// The clients served since they were last taken, once someone watches them
+    /// (`Compositor::watch_client_arrivals`): none is kept otherwise. It holds at most the
+    /// clients served between two takes.
+    pub client_arrivals: Option<Vec<ClientArrival>>,
+    /// Whether Yuna has warned that the kernel gives no pidfd of a client's peer: once for the
+    /// process ([`ClientProcess::accepted`]).
+    pub pidfd_refusal_warned: bool,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     _xdg_decoration_state: XdgDecorationState,
@@ -255,6 +262,8 @@ impl State {
             resumed_sockets: Vec::new(),
             departed_clients: DepartedClients::default(),
             client_refusals: None,
+            client_arrivals: None,
+            pidfd_refusal_warned: false,
             // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
             compositor_state: CompositorState::new_v6::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),

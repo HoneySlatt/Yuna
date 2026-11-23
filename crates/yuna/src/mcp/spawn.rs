@@ -125,6 +125,8 @@ impl Server {
 
     /// Starts `start` on `seat` and tells it.
     fn start_program(&mut self, seat: SeatId, start: Start) -> ToolResult {
+        // A start may forget the oldest program that ended.
+        self.resolve_arrivals();
         let Some((programs, _)) = &mut self.programs else {
             return ToolResult::failed("this Yuna starts no program: run `yuna mcp`");
         };

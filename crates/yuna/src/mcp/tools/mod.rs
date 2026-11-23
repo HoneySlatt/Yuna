@@ -723,7 +723,7 @@ mod tests {
         counts.seats.insert(theirs, their_tally);
         let client = |seat: SeatId, wakes: u64| crate::rest::ClientCount {
             seat,
-            process: ClientProcess::connecting(Some(40 + seat.0 as i32), false),
+            process: ClientProcess::unread(Some(40 + seat.0 as i32)),
             xwayland: false,
             tally: crate::rest::ClientTally {
                 wakes,
@@ -754,7 +754,7 @@ mod tests {
                 pace: 0,
             },
         ];
-        let no_program = |_: SeatId, _: &ClientProcess| None;
+        let no_program = |_: u64| None;
 
         let every = rest_json(&counts, None, None, &programs, &no_program);
         assert_eq!(

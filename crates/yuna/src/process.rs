@@ -4,21 +4,28 @@
 //! (`mcp/programs/`), Xwayland (`xwayland/server.rs`) and the accessibility buses' dbus-daemon
 //! (`mcp/accessibility/bus.rs`) start through it. And what Yuna reads of a process in `/proc`:
 //! its parent, its group, and the processes above it up to Yuna, which a client's connection
-//! records (`state.rs`) and a seat's closing follows (`mcp/programs/mod.rs`).
+//! records (`ClientProcess`, `compositor.rs`) and a seat's closing follows
+//! (`mcp/programs/mod.rs`).
 //!
 //! A pidfd names one process: a signal sent through it never reaches a process that took its
 //! pid. `yuna mcp`'s reaping of every child, on SIGCHLD, may reap a process before its own
 //! pidfd's wait does: that wait then finds it reaped, its end [`End::Unknown`].
+//!
+//! A client's connection gives a pidfd of its peer, through `getsockopt`'s `SO_PEERPIDFD`
+//! ([`peer_pidfd`]), declared here by hand: no library of Yuna's gives it
+//! ([ADR-0156](../../../docs/adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)).
+//! Polled without waiting once the peer's lineage is read ([`has_exited`]), it tells whether the
+//! peer had exited, so whether its pid could have been another process's while Yuna read.
 
 #![expect(
     unsafe_code,
-    reason = "`close_range`, and the closures between fork and exec on descriptors and the limit of open files"
+    reason = "`close_range` and `getsockopt`, and the closures between fork and exec on descriptors and the limit of open files"
 )]
 
-use std::ffi::OsString;
+use std::ffi::{OsString, c_void};
 use std::fs;
 use std::io;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -123,12 +130,89 @@ pub(crate) unsafe fn give_descriptors(command: &mut Command, given: Vec<RawFd>) 
 /// `close_range`'s flag that marks the descriptors close-on-exec rather than closing them.
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
 
-// SAFETY: this declaration matches the C library's own, glibc's since 2.34, which the standard
-// library links on Linux; its one call is `unsafe`, with its reason.
+/// `getsockopt`'s level for the options of the socket itself: `<sys/socket.h>`'s `SOL_SOCKET`,
+/// 1 on x86_64 and aarch64.
+const SOL_SOCKET: i32 = 1;
+
+/// The option that gives a pidfd of a Unix socket's peer, since Linux 6.5: 77 on x86_64 and
+/// aarch64, both of which take it from Linux's `asm-generic/socket.h`. Mips, powerpc and sparc
+/// give it other values (ADR-0156).
+const SO_PEERPIDFD: i32 = 77;
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!(
+    "SO_PEERPIDFD and SOL_SOCKET have the values of x86_64 and aarch64 alone: give this \
+     architecture's, from its Linux headers, and say so in a new ADR beside ADR-0156"
+);
+
+/// The length of the C `int` that `getsockopt` writes a pidfd into.
+const INT_LENGTH: u32 = size_of::<i32>() as u32;
+
+// SAFETY: these declarations match the C library's own, which the standard library links on
+// Linux: `close_range`'s, glibc's since 2.34, and `getsockopt`'s, POSIX's; each call is
+// `unsafe`, with its reason.
 unsafe extern "C" {
     /// Linux's `close_range(2)`: `int close_range(unsigned int first, unsigned int last, int
     /// flags)`, its flags passed as the `unsigned int` they are built from.
     fn close_range(first: u32, last: u32, flags: u32) -> i32;
+
+    /// POSIX's `getsockopt(2)`: `int getsockopt(int socket, int level, int name, void *restrict
+    /// value, socklen_t *restrict length)`, `socklen_t` being an `unsigned int` on Linux. It
+    /// writes at most `*length` bytes to `value`, then their count to `length`; it returns 0, or
+    /// -1 with `errno` set.
+    fn getsockopt(socket: i32, level: i32, name: i32, value: *mut c_void, length: *mut u32) -> i32;
+}
+
+/// A pidfd of the process at the other end of the Unix socket `socket`, the one that connected
+/// (`SO_PEERPIDFD`): it names that process and no other, even once another process has taken its
+/// pid. The kernel answers `ENOPROTOOPT` before Linux 6.5; Linux 6.5 to 6.15 answer `EINVAL` for
+/// a peer already reaped, and 6.16 and later give a pidfd of the dead process, which [`has_exited`]
+/// reads as exited (ADR-0156). The pidfd is close-on-exec, as every pidfd is.
+pub(crate) fn peer_pidfd(socket: BorrowedFd<'_>) -> io::Result<OwnedFd> {
+    let mut number: i32 = -1;
+    let mut length = INT_LENGTH;
+    // SAFETY: `socket` is borrowed, so open, for the whole call. `number` and `length` are live
+    // locals, an `i32` and a `u32`, the C `int` and `socklen_t` the declaration names, and the
+    // call is told `number`'s size, so it writes within them alone. Once it has answered 0 with
+    // an `int`'s length, the kernel has installed a new descriptor, `number`, in this process's
+    // table, which nothing else owns: the `OwnedFd` made of it is its one owner, and closes it.
+    unsafe {
+        let answer = getsockopt(
+            socket.as_raw_fd(),
+            SOL_SOCKET,
+            SO_PEERPIDFD,
+            (&raw mut number).cast(),
+            &raw mut length,
+        );
+        if answer != 0 {
+            Err(io::Error::last_os_error())
+        } else if length == INT_LENGTH && number >= 0 {
+            Ok(OwnedFd::from_raw_fd(number))
+        } else {
+            // Never seen: the kernel writes the whole `int` it was given room for.
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SO_PEERPIDFD gave {length} bytes, descriptor {number}"),
+            ))
+        }
+    }
+}
+
+/// Whether the process of `pidfd` has exited, read without waiting: a pidfd reads as ready once
+/// its process has exited, reaped or not (`pidfd_open(2)`). An error says nothing of it.
+pub(crate) fn has_exited(pidfd: BorrowedFd<'_>) -> io::Result<bool> {
+    let no_wait = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let mut exited = [PollFd::from_borrowed_fd(pidfd, PollFlags::IN)];
+    loop {
+        match rustix::event::poll(&mut exited, Some(&no_wait)) {
+            Ok(ready) => return Ok(ready > 0),
+            Err(Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 /// A process as `/proc/<pid>/stat` gives it.
@@ -350,5 +434,40 @@ mod tests {
         let _ = child.wait();
         assert_eq!(lineage, [grandchild, shell]);
         assert_eq!(group, shells_group);
+    }
+
+    /// The process a pidfd names, from the `Pid:` line of its `/proc/self/fdinfo`.
+    fn pidfd_process(pidfd: BorrowedFd<'_>) -> Option<i32> {
+        let fdinfo = fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd())).ok()?;
+        fdinfo
+            .lines()
+            .find_map(|line| line.strip_prefix("Pid:"))
+            .and_then(|pid| pid.trim().parse().ok())
+    }
+
+    /// Either end of a socket pair made in this process has this very process as its peer: its
+    /// pidfd names it, is close-on-exec, and reads as not exited; a kernel before Linux 6.5
+    /// refuses the option.
+    #[test]
+    fn a_socket_pairs_peer_pidfd_is_this_process_or_refused_before_linux_6_5() {
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+        match peer_pidfd(ours.as_fd()) {
+            Ok(pidfd) => {
+                eprintln!("the kernel gives a socket pair's peer pidfd");
+                let me = rustix::process::getpid().as_raw_nonzero().get();
+                assert_eq!(pidfd_process(pidfd.as_fd()), Some(me));
+                let flags = rustix::io::fcntl_getfd(&pidfd).expect("its flags");
+                assert!(flags.contains(FdFlags::CLOEXEC), "{flags:?}");
+                assert!(!has_exited(pidfd.as_fd()).expect("polled"));
+            }
+            Err(error) => {
+                eprintln!("the kernel refuses SO_PEERPIDFD: {error}");
+                assert_eq!(
+                    error.raw_os_error(),
+                    Some(Errno::NOPROTOOPT.raw_os_error()),
+                    "{error}"
+                );
+            }
+        }
     }
 }

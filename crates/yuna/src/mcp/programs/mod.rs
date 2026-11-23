@@ -471,8 +471,10 @@ impl Programs {
     /// The program of `seat` a client belongs to, `process` as it connected: the one that was
     /// its process, or above it, when it connected, alive then, so that its pid was its own;
     /// else the latest one started before that whose process group it was in, as a process of
-    /// a launcher that exited is. None for a client of no program's, or of a program
-    /// forgotten.
+    /// a launcher that exited is. None for a client of no program's, one whose peer had exited
+    /// before the accept, which has no lineage and no group, or of a program forgotten. The
+    /// answer stays the same until a program is forgotten: the server resolves each client once,
+    /// in the round that accepted it (`Server::resolve_arrivals`).
     pub fn program_of(&self, seat: SeatId, process: &ClientProcess) -> Option<u64> {
         let at = process.connected_at;
         let before = |program: &&Program| program.seat == seat && program.started <= at;

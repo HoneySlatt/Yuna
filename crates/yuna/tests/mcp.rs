@@ -2708,6 +2708,77 @@ fn a_program_writing_to_its_output_is_named() {
     assert!(status.success(), "{status}\n{}", yuna.log());
 }
 
+/// A client keeps the program it was resolved to when Yuna accepted it (ADR-0156): the client
+/// of a program whose own process has ended is named by that program in `rest` still once the
+/// program is forgotten, past the 128 programs remembered.
+#[test]
+fn a_clients_program_is_named_still_once_the_program_is_forgotten() {
+    let mut yuna = Yuna::start("rest-forgotten");
+    let script = yuna.folder.join("animated.py");
+    fs::write(&script, ANIMATED).expect("the client's script");
+    // The shell leaves at once; its client, in its process group, goes on under Yuna.
+    let started = yuna.call(
+        "spawn",
+        json!({"action": "start", "seat": SEAT, "command": [
+            "sh", "-c", "python3 -I \"$0\" 120 &", script
+        ]}),
+    );
+    assert_eq!(started["isError"], json!(false), "{started}");
+    let id = json!(program_id(&started));
+    let found = yuna.call(
+        "windows",
+        json!({"seat": SEAT, "app_id": "yuna.test.animated", "wait_ms": 20_000}),
+    );
+    assert_eq!(
+        found["structuredContent"]["windows"][0]["app_id"],
+        json!("yuna.test.animated"),
+        "{found}\n{}",
+        yuna.log()
+    );
+    wait_for("the shell's end", || {
+        (program(&mut yuna, 0)["state"] == json!("exited")).then_some(())
+    });
+    let window = rest(&mut yuna, json!({"seat": SEAT, "wait_ms": 1000}));
+    assert!(
+        entry(&window["clients"], "program", &id).is_some(),
+        "the client is not named by its program: {window}\n{}",
+        yuna.log()
+    );
+    // 128 more that end at once make 129 remembered: the shell, the oldest that ended, goes.
+    for _ in 0..128 {
+        let started = yuna.call(
+            "spawn",
+            json!({"action": "start", "seat": SEAT, "command": ["true"]}),
+        );
+        assert_eq!(started["isError"], json!(false), "{started}");
+        wait_for("a program's end", || {
+            let listed = yuna.call("spawn", json!({"action": "list", "seat": SEAT}));
+            let programs = listed["structuredContent"]["programs"].as_array()?.clone();
+            let running = programs.iter().filter(|p| p["state"] == json!("running"));
+            (running.count() == 0).then_some(())
+        });
+    }
+    let listed = yuna.call("spawn", json!({"action": "list", "seat": SEAT}));
+    let programs = listed["structuredContent"]["programs"]
+        .as_array()
+        .expect("a list");
+    assert_eq!(programs.len(), 128);
+    assert!(
+        programs.iter().all(|program| program["id"] != id),
+        "the shell is still remembered: {listed}"
+    );
+    let window = rest(&mut yuna, json!({"seat": SEAT, "wait_ms": 1000}));
+    let client = entry(&window["clients"], "program", &id).unwrap_or_else(|| {
+        panic!(
+            "the client lost its program once it was forgotten: {window}\n{}",
+            yuna.log()
+        )
+    });
+    assert_eq!(client["seat"], json!(SEAT), "{window}");
+    let status = yuna.close_and_wait();
+    assert!(status.success(), "{status}\n{}", yuna.log());
+}
+
 /// The lines of the rest audit in Yuna's log.
 fn rest_audit_lines(log: &str) -> Vec<String> {
     log.lines()

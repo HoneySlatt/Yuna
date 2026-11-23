@@ -547,7 +547,8 @@ impl Tally {
 pub struct ClientCount {
     /// Its seat.
     pub seat: SeatId,
-    /// Its process, read when it connected, which names its program in `yuna mcp`.
+    /// Its process, read when it connected: `yuna mcp` resolved the client's program from it
+    /// then, once.
     pub process: ClientProcess,
     /// Whether it is its seat's Xwayland: the client of every X11 program of the seat.
     pub xwayland: bool,
@@ -997,11 +998,12 @@ where
 }
 
 /// Logs `second` in one line at `info`: what woke Yuna in it, by source, each client by its
-/// process, its seat and the program `program_of` names, and the frames drawn, by cause.
+/// process, its seat and the program `program_of` names from the client's number, and the frames
+/// drawn, by cause.
 pub(crate) fn log_second(
     second: &Second,
     live: &RestCounts,
-    program_of: &dyn Fn(SeatId, &ClientProcess) -> Option<u64>,
+    program_of: &dyn Fn(u64) -> Option<u64>,
 ) {
     let mut sources = String::new();
     for source in Source::ALL {
@@ -1024,7 +1026,7 @@ pub(crate) fn log_second(
             Some(pid) => format!("pid {pid}"),
             None => "pid unknown".to_owned(),
         };
-        if let Some(program) = program_of(client.seat, &client.process) {
+        if let Some(program) = program_of(*number) {
             name.push_str(&format!(" program {program}"));
         }
         name.push_str(&format!(" seat {}", client.seat.0));
@@ -1098,7 +1100,7 @@ mod tests {
         let mut audit = RestAudit::new(std::time::Duration::ZERO);
         let seat = SeatId(2);
         audit.add_seat(seat);
-        let process = ClientProcess::connecting(None, false);
+        let process = ClientProcess::unread(None);
         for number in [1, 2] {
             audit.client_connected(number, seat, process.clone(), false, None);
         }
@@ -1126,7 +1128,7 @@ mod tests {
         let mut audit = RestAudit::new(std::time::Duration::ZERO);
         let seat = SeatId(2);
         audit.add_seat(seat);
-        audit.client_connected(1, seat, ClientProcess::connecting(None, false), false, None);
+        audit.client_connected(1, seat, ClientProcess::unread(None), false, None);
         for _ in 0..5 {
             audit.client_committed(1);
         }
@@ -1135,7 +1137,7 @@ mod tests {
             audit.client_committed(1);
         }
         audit.client_left(1);
-        audit.client_connected(2, seat, ClientProcess::connecting(None, false), false, None);
+        audit.client_connected(2, seat, ClientProcess::unread(None), false, None);
         audit.client_committed(2);
         audit.client_left(2);
         let window = audit.counts().since(&earlier);
@@ -1199,7 +1201,7 @@ mod tests {
         let seat = SeatId(2);
         audit.add_seat(seat);
         audit.log_each_second();
-        audit.client_connected(1, seat, ClientProcess::connecting(None, false), false, None);
+        audit.client_connected(1, seat, ClientProcess::unread(None), false, None);
         audit.clock_woke(Wake::of_seat(Source::ClockRefresh, seat));
         audit.client_committed(1);
         audit.client_left(1);

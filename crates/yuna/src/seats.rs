@@ -23,6 +23,7 @@
 
 use std::collections::BTreeSet;
 use std::net::Shutdown;
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
@@ -43,7 +44,7 @@ use crate::command::refusal;
 use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
-use crate::{ClientProcess, ClientRefusal, Error};
+use crate::{ClientArrival, ClientProcess, ClientRefusal, Error};
 
 /// The layout every agent's keyboard starts with: the same on every machine and in CI, whatever
 /// the `XKB_DEFAULT_*` variables say (ADR-0037).
@@ -350,11 +351,11 @@ impl State {
 
     /// Serves a client of `seat` on `stream`, and records it on the seat, for its removal, with
     /// who it is: its peer's process, from the socket's credentials, and, for an agent's seat,
-    /// the processes above it, read in `/proc` now. The peer may have exited since it connected
-    /// ([`ClientProcess`]). Refused for a seat that does not exist, and, before anything of the
-    /// client is read, for one that serves [`MAX_CLIENTS_PER_SEAT`] clients already. With
-    /// `sees_every_seat`, it is shown every seat's globals, for tests alone. Returns the
-    /// client's id.
+    /// the processes above it, read in `/proc` now and checked through the peer's pidfd, which
+    /// says whether it had exited since it connected ([`ClientProcess::accepted`]). Refused for
+    /// a seat that does not exist, and, before anything of the client is read, for one that
+    /// serves [`MAX_CLIENTS_PER_SEAT`] clients already. With `sees_every_seat`, it is shown
+    /// every seat's globals, for tests alone. Returns the client's id.
     pub(crate) fn insert_client(
         &mut self,
         seat: SeatId,
@@ -439,7 +440,12 @@ impl State {
         let pid = rustix::net::sockopt::socket_peercred(&stream)
             .ok()
             .map(|credentials| credentials.pid.as_raw_nonzero().get());
-        let process = ClientProcess::connecting(pid, seat != OWNER_SEAT);
+        let process = if seat == OWNER_SEAT {
+            ClientProcess::unread(pid)
+        } else {
+            let pidfd = crate::process::peer_pidfd(stream.as_fd());
+            ClientProcess::accepted(pid, pidfd, &mut self.pidfd_refusal_warned)
+        };
         let data = ClientState::new(
             seat,
             sees_every_seat,
@@ -462,7 +468,7 @@ impl State {
         server: u64,
         pid: i32,
     ) -> Result<(), Error> {
-        let process = ClientProcess::connecting(Some(pid), false);
+        let process = ClientProcess::unread(Some(pid));
         let mut data = ClientState::new(seat, false, process, self.departed_clients.clone());
         data.xwayland = Some(server);
         // Before it can bind a global, so that it never sees an output unscaled.
@@ -472,7 +478,9 @@ impl State {
 
     /// Serves the client of `data`'s seat on `stream`, and records it on the seat and in the
     /// rest auditor, with a second descriptor of its socket, which names it when it wakes Yuna
-    /// (`rest.rs`). Out of descriptors, it is served without one, unnamed. Returns its id.
+    /// (`rest.rs`), and among the arrivals, when they are watched
+    /// (`Compositor::watch_client_arrivals`). Out of descriptors, it is served without a second
+    /// descriptor, unnamed. Returns its id.
     fn insert_client_state(
         &mut self,
         stream: UnixStream,
@@ -496,6 +504,13 @@ impl State {
             .display_handle
             .insert_client(stream, Arc::new(data))
             .map_err(|e| Error::EventLoop(e.to_string()))?;
+        if let Some(arrivals) = &mut self.client_arrivals {
+            arrivals.push(ClientArrival {
+                seat,
+                number,
+                process: process.clone(),
+            });
+        }
         self.rest
             .client_connected(number, seat, process, xwayland, second);
         if let Some(seat) = self.seat_mut(seat) {
@@ -608,7 +623,251 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, ExitStatus, Stdio};
+    use std::time::Instant;
+
+    use rustix::io::Errno;
+
     use super::*;
+    use crate::process::{has_exited, peer_pidfd};
+    use crate::{Compositor, Config, Identity};
+
+    /// The variable that names the socket [`connect_to_the_socket_the_environment_names`]
+    /// connects to.
+    const CONNECT_TO: &str = "YUNA_TEST_CONNECT_TO";
+
+    /// The longest a step waits: a debug build on a loaded machine is slow.
+    const PATIENCE: Duration = Duration::from_secs(30);
+
+    /// Not a test of its own: what a [`ConnectingChild`] runs, this test binary run again,
+    /// filtered to it. It connects to the socket [`CONNECT_TO`] names, then stays until its
+    /// standard input ends. Without the variable, it does nothing.
+    #[test]
+    #[ignore = "a helper that the accept's tests run in a process of its own"]
+    fn connect_to_the_socket_the_environment_names() {
+        let Some(path) = std::env::var_os(CONNECT_TO) else {
+            return;
+        };
+        let _connection = UnixStream::connect(path).expect("the socket takes the connection");
+        let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut Vec::new());
+    }
+
+    /// A process this test started that connects to the socket at `path`, through
+    /// [`connect_to_the_socket_the_environment_names`]: under a shell when `under_a_shell`, and,
+    /// when `stays`, until it drops. Ended and reaped when it drops, an assertion that failed
+    /// included: its input closed, it leaves by itself, the shell reaping it; only past
+    /// [`PATIENCE`] is the test's own child killed.
+    struct ConnectingChild(Child);
+
+    impl ConnectingChild {
+        fn start(path: &Path, under_a_shell: bool, stays: bool) -> ConnectingChild {
+            let helper = std::env::current_exe().expect("the test binary");
+            let filter = [
+                "seats::tests::connect_to_the_socket_the_environment_names",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+            ];
+            let mut command = if under_a_shell {
+                // Not the last command, so that the shell waits for it rather than running it in
+                // its own place.
+                let mut shell = Command::new("sh");
+                shell
+                    .args(["-c", "\"$0\" \"$@\"; :"])
+                    .arg(helper)
+                    .args(filter);
+                shell
+            } else {
+                let mut command = Command::new(helper);
+                command.args(filter);
+                command
+            };
+            let child = command
+                .env(CONNECT_TO, path)
+                .stdin(if stays { Stdio::piped() } else { Stdio::null() })
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the helper starts");
+            ConnectingChild(child)
+        }
+
+        fn pid(&self) -> i32 {
+            rustix::process::Pid::from_child(&self.0)
+                .as_raw_nonzero()
+                .get()
+        }
+
+        /// Waits for it to end, and reaps it.
+        fn wait(&mut self) -> ExitStatus {
+            self.0.wait().expect("the helper is waited for")
+        }
+    }
+
+    impl Drop for ConnectingChild {
+        fn drop(&mut self) {
+            drop(self.0.stdin.take());
+            let until = Instant::now() + PATIENCE;
+            while Instant::now() < until {
+                if !matches!(self.0.try_wait(), Ok(None)) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A folder of the test's own, short enough for a socket's path, removed when it drops.
+    struct Folder(PathBuf);
+
+    impl Folder {
+        fn new(name: &str) -> Folder {
+            let temp = std::env::temp_dir();
+            let base = if temp.as_os_str().len() <= 16 {
+                temp
+            } else {
+                PathBuf::from("/tmp")
+            };
+            let path = base.join(format!("yuna-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir(&path).expect("the test's folder");
+            Folder(path)
+        }
+    }
+
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Whether this kernel gives a pidfd of a socket's peer: Linux 6.5 and later.
+    fn kernel_gives_peer_pidfds() -> bool {
+        let (ours, _theirs) = UnixStream::pair().expect("a socket pair");
+        match peer_pidfd(ours.as_fd()) {
+            Ok(_) => true,
+            Err(error) if error.raw_os_error() == Some(Errno::NOPROTOOPT.raw_os_error()) => {
+                eprintln!("this kernel refuses SO_PEERPIDFD");
+                false
+            }
+            Err(error) => panic!("SO_PEERPIDFD failed: {error}"),
+        }
+    }
+
+    /// A compositor with an agent's seat that listens on a socket in `folder`, its arrivals
+    /// watched.
+    fn listening_compositor(folder: &Folder) -> (Compositor, PathBuf) {
+        let mut compositor = Compositor::new(Config {
+            outputs: Vec::new(),
+            listen: false,
+            announce_owner_seat: false,
+            ..Config::default()
+        })
+        .expect("the compositor starts");
+        let seat = compositor.add_seat().expect("a seat");
+        let path = folder.0.join("seat");
+        compositor
+            .listen_for_seat(seat, path.clone())
+            .expect("the seat listens");
+        compositor.watch_client_arrivals();
+        (compositor, path)
+    }
+
+    /// The first client the compositor serves, its rounds run until it does.
+    fn first_arrival(compositor: &mut Compositor) -> ClientArrival {
+        let until = Instant::now() + PATIENCE;
+        loop {
+            compositor
+                .dispatch(Some(Duration::from_millis(10)))
+                .expect("a round");
+            if let Some(arrival) = compositor.take_client_arrivals().into_iter().next() {
+                return arrival;
+            }
+            assert!(Instant::now() < until, "no client connected");
+        }
+    }
+
+    /// A peer that connected, then exited and was reaped before the accept, gives `EINVAL` on
+    /// Linux 6.5 to 6.15, or, from 6.16, a pidfd that reads as exited; a kernel before 6.5
+    /// refuses the option. The test says which this kernel gave.
+    #[test]
+    fn a_peer_reaped_before_the_accept_is_refused_or_its_pidfd_reads_exited() {
+        let folder = Folder::new("reaped-peer");
+        let path = folder.0.join("socket");
+        let listener = UnixListener::bind(&path).expect("the socket listens");
+        let mut child = ConnectingChild::start(&path, false, false);
+        assert!(child.wait().success(), "the helper did not connect");
+        let (stream, _) = listener.accept().expect("its connection waits");
+        match peer_pidfd(stream.as_fd()) {
+            Ok(pidfd) => {
+                eprintln!("the kernel gives a pidfd of a peer already reaped");
+                assert!(has_exited(pidfd.as_fd()).expect("polled"));
+            }
+            Err(error) => {
+                eprintln!("the kernel refuses a peer already reaped: {error}");
+                let refusals = [Errno::INVAL, Errno::NOPROTOOPT].map(Errno::raw_os_error);
+                assert!(
+                    error
+                        .raw_os_error()
+                        .is_some_and(|raw| refusals.contains(&raw)),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    /// A child that connected to an agent seat's socket, then exited and was reaped before the
+    /// compositor accepted its connection, is recorded as exited, with no lineage and no group,
+    /// whatever the kernel answered for it, `EINVAL` or a pidfd that reads as exited. A kernel
+    /// that refuses the option leaves the walk alone, marked inexact, which finds no lineage.
+    #[test]
+    fn a_client_whose_peer_was_reaped_before_the_accept_is_recorded_exited() {
+        let checked = kernel_gives_peer_pidfds();
+        let folder = Folder::new("reaped-client");
+        let (mut compositor, path) = listening_compositor(&folder);
+        let mut child = ConnectingChild::start(&path, false, false);
+        assert!(child.wait().success(), "the helper did not connect");
+        let process = first_arrival(&mut compositor).process;
+        let identity = if checked {
+            Identity::Exited
+        } else {
+            Identity::Inexact
+        };
+        assert_eq!(process.identity, identity, "{process:?}");
+        assert_eq!(process.lineage, Vec::<i32>::new(), "{process:?}");
+        assert_eq!(process.group, None, "{process:?}");
+    }
+
+    /// A child's client, connected and accepted while it runs, under a shell the test started,
+    /// is recorded exact: its lineage is the child and the shell, nearest first, its group the
+    /// test's, which the shell did not leave.
+    #[test]
+    fn a_live_childs_client_is_recorded_exact_its_lineage_nearest_first() {
+        let checked = kernel_gives_peer_pidfds();
+        let folder = Folder::new("live-client");
+        let (mut compositor, path) = listening_compositor(&folder);
+        let shell = ConnectingChild::start(&path, true, true);
+        let process = first_arrival(&mut compositor).process;
+        let identity = if checked {
+            Identity::Exact
+        } else {
+            Identity::Inexact
+        };
+        assert_eq!(process.identity, identity, "{process:?}");
+        let helper = process.pid.expect("the peer's pid");
+        assert_ne!(
+            helper,
+            shell.pid(),
+            "the shell ran the helper in its own place"
+        );
+        assert_eq!(process.lineage, [helper, shell.pid()], "{process:?}");
+        let group = rustix::process::getpgrp().as_raw_nonzero().get();
+        assert_eq!(process.group, Some(group), "{process:?}");
+    }
 
     #[test]
     fn refusals_are_told_at_the_first_then_once_a_second_with_those_between() {

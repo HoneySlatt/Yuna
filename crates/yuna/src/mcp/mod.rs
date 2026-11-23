@@ -240,6 +240,13 @@ pub struct Server {
     seat_output: OutputMode,
     /// The programs, when the server may start some, with SIGCHLD's pipe.
     programs: Option<(Programs, OwnedFd)>,
+    /// The program each connected client belongs to, by the client's number
+    /// ([`RestCounts::clients`](crate::rest::RestCounts::clients)), resolved once from the record
+    /// made when Yuna accepted it ([`Server::resolve_arrivals`], ADR-0156): what `client_left`,
+    /// `rest` and the rest audit's log name it by, even once the program is forgotten. A client
+    /// of no program has no entry. Bound: the clients connected, each entry dropped when its
+    /// client's departure is recorded.
+    client_programs: HashMap<u64, u64>,
     /// Whether the timer that ends the programs' throttle is armed.
     throttle_armed: bool,
     /// The seats' accessibility buses and the `accessibility` calls in flight.
@@ -287,6 +294,7 @@ impl Server {
         output: OwnedFd,
         children: Option<OwnedFd>,
     ) -> Result<Server, Error> {
+        compositor.watch_client_arrivals();
         compositor.watch_client_departures();
         compositor.watch_client_refusals();
         let failed = |what: &str, error: &dyn std::fmt::Display| {
@@ -407,6 +415,7 @@ impl Server {
             waiting_encoders: VecDeque::new(),
             seat_output: OutputMode::default(),
             programs,
+            client_programs: HashMap::new(),
             throttle_armed: false,
             accessibility: Accessibility::new(handle.clone()),
             spawn_waits: Vec::new(),
@@ -490,6 +499,8 @@ impl Server {
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         let wakeups = self.compositor.counters().wakeups;
         self.compositor.dispatch(timeout)?;
+        // In the round that accepted them, before a call may forget a program.
+        self.resolve_arrivals();
         // Read now: a call answered below may run the clock's deadlines.
         let round_sources = self.compositor.rest_round_sources();
         let events = std::mem::take(&mut *self.events.borrow_mut());
@@ -541,13 +552,28 @@ impl Server {
         self.answer_event_waits();
         self.write_output();
         self.compositor.log_counters_after(wakeups);
-        let programs = &self.programs;
-        self.compositor.log_ended_rest_second(&|seat, process| {
-            programs
-                .as_ref()
-                .and_then(|(programs, _)| programs.program_of(seat, process))
-        });
+        let client_programs = &self.client_programs;
+        self.compositor
+            .log_ended_rest_second(&|number| client_programs.get(&number).copied());
         Ok(())
+    }
+
+    /// Resolves the program of each client the compositor served since the last call, from the
+    /// record made when Yuna accepted it, and keeps it by the client's number
+    /// ([ADR-0156](../../../../docs/adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)).
+    /// [`Programs::program_of`] gives the same answer at any time until a program is forgotten:
+    /// so this runs in the round that accepted the client, before any step that may forget a
+    /// program, and before the departures are recorded, so that each finds its arrival resolved.
+    fn resolve_arrivals(&mut self) {
+        let arrivals = self.compositor.take_client_arrivals();
+        let Some((programs, _)) = &self.programs else {
+            return;
+        };
+        for arrival in arrivals {
+            if let Some(program) = programs.program_of(arrival.seat, &arrival.process) {
+                self.client_programs.insert(arrival.number, program);
+            }
+        }
     }
 
     /// Runs until the client closes its input, `stop` (the read end of a pipe SIGTERM and SIGINT

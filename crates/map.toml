@@ -105,7 +105,7 @@ tracing-subscriber = { owner = "yuna" }
 "crates/yuna/src/fatal.rs" = { count = 2 }
 "crates/yuna/src/input.rs" = { count = 1 }
 "crates/yuna/src/mcp/accessibility/bus.rs" = { count = 1 }
-"crates/yuna/src/process.rs" = { count = 5 }
+"crates/yuna/src/process.rs" = { count = 6 }
 "crates/yuna/src/render.rs" = { count = 3 }
 "crates/yuna/src/screencopy.rs" = { count = 1 }
 "crates/yuna/src/stop_signal.rs" = { count = 3 }

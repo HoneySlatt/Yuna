@@ -237,7 +237,8 @@ impl Server {
 
     /// Records in the seats' logs what happened since the last time: outputs and windows as the
     /// compositor describes them now, the clients the display ended, with the program each
-    /// belonged to, which keeps the protocol error it was ended for, the connections the seats'
+    /// belonged to, as resolved when Yuna accepted it (`Server::resolve_arrivals`), which keeps
+    /// the protocol error it was ended for while it is remembered, the connections the seats'
     /// sockets refused past their bound, as each seat told them, and the programs reaped.
     /// The windows and outputs are described only when the compositor's description generation
     /// moved since the last look: a round in which only buffers changed, a game drawing,
@@ -261,17 +262,18 @@ impl Server {
                 self.event_log.record(seat, time_ns, data);
             }
         }
+        self.resolve_arrivals();
         for departure in self.compositor.take_client_departures() {
+            // Dropped for every client, those of seats without a log too.
+            let program = self.client_programs.remove(&departure.number);
             if !self.event_log.has_seat(departure.seat) {
                 continue;
             }
-            let program = self.programs.as_mut().and_then(|(programs, _)| {
-                let program = programs.program_of(departure.seat, &departure.process)?;
-                if let Some(error) = &departure.error {
-                    programs.note_protocol_error(program, error.clone());
-                }
-                Some(program)
-            });
+            if let (Some(program), Some(error), Some((programs, _))) =
+                (program, &departure.error, &mut self.programs)
+            {
+                programs.note_protocol_error(program, error.clone());
+            }
             let left = EventData::ClientLeft {
                 pid: departure.process.pid,
                 program,
@@ -382,11 +384,7 @@ impl Server {
         wait_ms: Option<u64>,
         programs: &[ProgramWakes],
     ) -> Value {
-        let program_of = |seat: SeatId, process: &crate::ClientProcess| {
-            self.programs
-                .as_ref()
-                .and_then(|(programs, _)| programs.program_of(seat, process))
-        };
+        let program_of = |number: u64| self.client_programs.get(&number).copied();
         tools::rest_json(counts, seat, wait_ms, programs, &program_of)
     }
 

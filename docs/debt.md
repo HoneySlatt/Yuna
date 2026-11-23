@@ -367,13 +367,14 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
 - Each client costs Yuna a second descriptor, so a seat's socket runs out of descriptors at about
   half the clients it did. A client whose second descriptor cannot be made is served unnamed,
   counted among the unnamed wakes. Kept: the limit is raised at start; the pidfd taken at accept
-  is closed once the client's program is resolved
-  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md)), so it adds none.
-- A client's program is found as a departure's is ([below](#the-mcp-server)), at each answer:
-  one that left its program's tree and group has none. `rest`'s programs are those remembered:
-  one forgotten in a window, past 128 or with its seat, is not listed, its wakes counted in the
-  sources. Paid at Stage 2a, M2.4c (one event stream and the pidfd), by a pidfd taken at accept
-  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md)).
+  is closed before the client is served
+  ([ADR-0156](adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)), so it adds none.
+- `rest`'s programs are those remembered: one forgotten in a window, past 128 or with its seat,
+  is not listed, its wakes counted in the sources. A client's program is found as a departure's
+  is ([below](#the-mcp-server)), once, in the round that accepted it, and kept with the client
+  ([ADR-0156](adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)): a client still
+  names its program once the program is forgotten. Kept: only a program that ended is forgotten,
+  and its wakes stay counted in the sources.
 - The log of each second runs on real time, a manual clock's too. A Yuna that stops within a
   second does not log it. Kept: it is a log for people; `rest` reads the counters.
 
@@ -449,13 +450,16 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   the pidfd): events numbered per seat (ADR-0153).
 - A client's program is found from the processes above it when Yuna accepted it, or its process
   group: one that left both, a double fork with `setsid`, is told with no program, its protocol
-  error kept on none. A client whose process exited before the accept has no lineage, and no
-  program; were its pid taken meanwhile, the lineage read would be the other process's. Paid at
-  Stage 2a, M2.4c (one event stream and the pidfd): a pidfd of the peer taken at accept fixes the
-  client's own process; its parents and an X11 client's pid stay inexact
-  ([ADR-0154](adr/0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md))
-  ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
-  15).
+  error kept on none. The peer's pidfd, taken at the accept and polled once the lineage is read,
+  fixes the client's own process and its group
+  ([ADR-0156](adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md),
+  [ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
+  15). What stays inexact: each parent above the client may have been replaced while Yuna read;
+  a client whose process exited before the accept has no lineage and no program, whatever the
+  kernel answers, one not yet reaped included; a kernel before Linux 6.5 refuses the pidfd, and
+  the walk alone is kept, marked inexact, where a peer reaped before the accept whose pid another
+  process took gives that process's lineage; and an X11 client keeps the pid XRes gives, which
+  may be stale. Kept: ADR-0156 states these limits.
 - Yuna keeps no protocol trace of a client: wayland-rs has none, and a fork for it was not
   taken. `WAYLAND_DEBUG=client` is the client's own, in its log, for clients on libwayland or
   wayland-rs, set before the program starts. Kept: the client's own trace is enough; Stage 2a's parity

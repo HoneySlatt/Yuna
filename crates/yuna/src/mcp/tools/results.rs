@@ -14,7 +14,7 @@ use yuna_types::{Rect, SeatId, WindowId};
 use super::arguments::Button;
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
-use crate::compositor::{ClientProcess, ClientProtocolError, OutputDescription, WindowDescription};
+use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
 use crate::mcp::events::{Event, EventData, Reading};
 use crate::mcp::image::base64;
@@ -358,13 +358,13 @@ pub fn event_json(event: &Event) -> Value {
 
 /// What `counts` holds, as `rest` answers: of `seat` and Yuna's own parts when given, else of
 /// every seat; each program of `programs` that woke Yuna, and each client's program, as
-/// `program_of` names it. Only what woke Yuna or drew is listed.
+/// `program_of` names it from the client's number. Only what woke Yuna or drew is listed.
 pub fn rest_json(
     counts: &RestCounts,
     seat: Option<SeatId>,
     wait_ms: Option<u64>,
     programs: &[ProgramWakes],
-    program_of: &dyn Fn(SeatId, &ClientProcess) -> Option<u64>,
+    program_of: &dyn Fn(u64) -> Option<u64>,
 ) -> Value {
     let seats_tally = seat.map(|seat| counts.seats.get(&seat).cloned().unwrap_or_default());
     let scope = seats_tally.as_ref().unwrap_or(&counts.whole);
@@ -385,12 +385,12 @@ pub fn rest_json(
         .collect();
     let clients: Vec<Value> = counts
         .clients
-        .values()
-        .filter(|client| ours(client.seat) && !client.tally.is_empty())
-        .map(|client| {
+        .iter()
+        .filter(|(_, client)| ours(client.seat) && !client.tally.is_empty())
+        .map(|(&number, client)| {
             json!({
                 "pid": client.process.pid,
-                "program": program_of(client.seat, &client.process),
+                "program": program_of(number),
                 "seat": client.seat.0,
                 "xwayland": client.xwayland,
                 "wakes": client.tally.wakes,

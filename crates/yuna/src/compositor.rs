@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::os::fd::OwnedFd;
+use std::io;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
@@ -13,6 +14,7 @@ use calloop::generic::Generic;
 use calloop::ping::{Ping, make_ping};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken};
+use rustix::io::Errno;
 use rustix::process::{Pid, WaitStatus};
 use smithay::utils::{Physical, Rectangle};
 use wayland_server::backend::{ClientId, DisconnectReason};
@@ -30,7 +32,7 @@ use crate::colour::SurfaceColourDescription;
 use crate::input::PointerDescription;
 use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
-use crate::process::lineage_under_yuna;
+use crate::process::{has_exited, lineage_under_yuna};
 use crate::render::Device;
 use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::selection::SelectionRead;
@@ -179,12 +181,20 @@ pub struct WindowDescription {
 
 /// Who a client is, read once, when Yuna accepts its connection: its process, and, for a client
 /// of an agent's seat, the processes above it up to Yuna, which name the program it belongs to
-/// (`mcp/programs/mod.rs`) even once it has exited and been reaped.
+/// (`mcp/programs/mod.rs`). The MCP server resolves that program once, from this record, as the
+/// compositor tells it the client arrived ([`Compositor::take_client_arrivals`]), and keeps it
+/// with the client, even once the program is forgotten.
 ///
-/// The peer may have exited between its `connect` and Yuna's accept: its lineage is then empty,
-/// or, if it has been reaped and its pid taken by another process meanwhile, that other
-/// process's. A pidfd of the peer (`SO_PEERPIDFD`) would make it exact
-/// ([debt](../../../docs/debt.md#the-mcp-server)).
+/// For an agent's seat, the peer's pidfd, taken at the accept (`SO_PEERPIDFD`), checks the
+/// record ([ADR-0156](../../../docs/adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)):
+/// the lineage is read in `/proc`, then the pidfd polled without waiting. Not ready, the peer had
+/// not exited, so no other process had its pid while Yuna read: the process, the lineage's first,
+/// and its group are the client's own ([`Identity::Exact`]). Ready, the peer had exited before
+/// the accept: it has no lineage and no group, so no program ([`Identity::Exited`]). The pidfd is
+/// closed then, so a client costs no descriptor more. What stays inexact: each parent above the
+/// client may have been replaced while Yuna read; a kernel that refuses the pidfd, one before
+/// Linux 6.5, leaves the walk alone ([`Identity::Inexact`]); and an X11 client's pid, which XRes
+/// gives ([debt](../../../docs/debt.md#the-mcp-server)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientProcess {
     /// Its process id, as the kernel gave it for its socket, as [`Compositor::windows`] gives
@@ -192,29 +202,125 @@ pub struct ClientProcess {
     /// Xwayland's own for its socket pair.
     pub pid: Option<i32>,
     /// Its process and those above it up to Yuna, Yuna left out, nearest first, as `/proc` gave
-    /// them then; empty when it was not under Yuna, and for a client not of an agent's seat, or
-    /// an Xwayland, whose lineage is not read.
+    /// them then; empty when it was not under Yuna, when it had exited before the accept, and for
+    /// a client not of an agent's seat, or an Xwayland, whose lineage is not read.
     pub lineage: Vec<i32>,
     /// Its process group then; none when its lineage is empty.
     pub group: Option<i32>,
+    /// How far this record is its own process's.
+    pub identity: Identity,
     /// When it connected, on real time.
     pub connected_at: Instant,
 }
 
+/// How far a client's record ([`ClientProcess`]) is its own process's, as Yuna checked it
+/// through the peer's pidfd when it accepted the connection (ADR-0156).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Identity {
+    /// The peer's pidfd, polled once its lineage was read, said that it had not exited: its pid
+    /// was its own while Yuna read, so its process, the lineage's first, and its group are the
+    /// client's. Each parent above it, read from `/proc`, may still have been replaced.
+    Exact,
+    /// The kernel gave no pidfd of the peer, `ENOPROTOOPT` before Linux 6.5, or out of
+    /// descriptors, or the pidfd could not be polled: the lineage is the walk alone. Were the peer
+    /// reaped before the accept and its pid taken by another process, the lineage would be that
+    /// process's.
+    Inexact,
+    /// The client's lineage is not read, so nothing was checked: the owner's seat's clients, a
+    /// seat's Xwayland, whose pid is Yuna's own child's, a peer whose pid the kernel did not give,
+    /// and a peer that is Yuna itself, a test's socket pair. It names no program.
+    Unread,
+    /// The peer had exited before Yuna accepted it, reaped or not: the record holds no lineage and
+    /// no group, so no program.
+    Exited,
+}
+
 impl ClientProcess {
-    /// The client whose process is `pid`, connecting now: its lineage read in `/proc` when
-    /// `read_lineage`.
-    pub(crate) fn connecting(pid: Option<i32>, read_lineage: bool) -> ClientProcess {
-        let (lineage, group) = pid
-            .filter(|_| read_lineage)
-            .map_or_else(Default::default, lineage_under_yuna);
+    /// A client whose lineage Yuna does not read, process `pid`, connecting now: no lineage, no
+    /// group, [`Identity::Unread`]. For the owner's seat's clients, Xwayland, and tests.
+    pub(crate) fn unread(pid: Option<i32>) -> ClientProcess {
         ClientProcess {
             pid,
-            lineage,
-            group,
+            lineage: Vec::new(),
+            group: None,
+            identity: Identity::Unread,
             connected_at: Instant::now(),
         }
     }
+
+    /// A client of an agent's seat, connecting now: process `pid`, as its socket's credentials
+    /// give it, and `pidfd`, the kernel's answer to `SO_PEERPIDFD`
+    /// ([`peer_pidfd`](crate::process::peer_pidfd)). Its lineage is read in `/proc`, then the
+    /// pidfd polled ([`Identity`]): not ready, the record is exact; ready, or `EINVAL`, the answer
+    /// of Linux 6.5 to 6.15 for a peer already reaped, the peer had exited, and the record holds
+    /// no lineage. Any other answer leaves the walk alone, inexact: `ENOPROTOOPT`, a kernel before
+    /// 6.5, is warned of once for the process, as `refusal_warned` remembers, and the others, out
+    /// of descriptors for one, are logged. A peer whose pid the kernel did not give, or that is
+    /// Yuna itself, has no lineage to read: unread. The pidfd is closed on return.
+    pub(crate) fn accepted(
+        pid: Option<i32>,
+        pidfd: io::Result<OwnedFd>,
+        refusal_warned: &mut bool,
+    ) -> ClientProcess {
+        let yuna = rustix::process::getpid().as_raw_nonzero().get();
+        let Some(pid) = pid.filter(|&pid| pid != yuna) else {
+            return ClientProcess::unread(pid);
+        };
+        let connected_at = Instant::now();
+        // Read before the pidfd is polled: a peer that had not exited then had its pid all along.
+        let (lineage, group) = lineage_under_yuna(pid);
+        let identity = match pidfd {
+            Ok(pidfd) => match has_exited(pidfd.as_fd()) {
+                Ok(false) => Identity::Exact,
+                Ok(true) => Identity::Exited,
+                Err(error) => {
+                    tracing::debug!(%error, "a client's pidfd could not be polled");
+                    Identity::Inexact
+                }
+            },
+            Err(error) if error.raw_os_error() == Some(Errno::INVAL.raw_os_error()) => {
+                Identity::Exited
+            }
+            Err(error) => {
+                let refused = error.raw_os_error() == Some(Errno::NOPROTOOPT.raw_os_error());
+                if refused && !std::mem::replace(refusal_warned, true) {
+                    tracing::warn!(
+                        %error,
+                        "the kernel gives no client's pidfd (SO_PEERPIDFD, Linux 6.5): clients' \
+                         programs are found from /proc alone, marked inexact (ADR-0156)"
+                    );
+                } else {
+                    tracing::debug!(%error, "a client's pidfd cannot be taken");
+                }
+                Identity::Inexact
+            }
+        };
+        // What was read of an exited peer may be another process's, which took its pid.
+        let (lineage, group) = match identity {
+            Identity::Exited => (Vec::new(), None),
+            Identity::Exact | Identity::Inexact | Identity::Unread => (lineage, group),
+        };
+        ClientProcess {
+            pid: Some(pid),
+            lineage,
+            group,
+            identity,
+            connected_at,
+        }
+    }
+}
+
+/// A client the compositor serves, as [`Compositor::take_client_arrivals`] tells it: what the MCP
+/// server resolves its program from, once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientArrival {
+    /// The seat it belongs to.
+    pub seat: SeatId,
+    /// Its number: its key in [`RestCounts::clients`](crate::rest::RestCounts::clients) while it
+    /// is connected, given by its [`ClientDeparture`] too. Numbers are never reused.
+    pub number: u64,
+    /// Who it is, as its connection was read when Yuna accepted it.
+    pub process: ClientProcess,
 }
 
 /// A client the display ended, as [`Compositor::take_client_departures`] tells it.
@@ -222,6 +328,8 @@ impl ClientProcess {
 pub struct ClientDeparture {
     /// The seat it belonged to.
     pub seat: SeatId,
+    /// Its number, as its [`ClientArrival`] gave it.
+    pub number: u64,
     /// Who it was.
     pub process: ClientProcess,
     /// The protocol error it was ended for, as Yuna sent it; none when its connection closed:
@@ -582,6 +690,23 @@ impl Compositor {
         self.state.client_pids(seat)
     }
 
+    /// From now on, keeps each client the compositor serves, with its seat, its number and who it
+    /// is, until [`Compositor::take_client_arrivals`] takes them: what the MCP server resolves
+    /// each client's program from, once (ADR-0156).
+    pub fn watch_client_arrivals(&mut self) {
+        self.state.client_arrivals.get_or_insert_with(Vec::new);
+    }
+
+    /// The clients served since the last call, in the order they were served, Xwaylands
+    /// included; none unless [`Compositor::watch_client_arrivals`] was called.
+    pub fn take_client_arrivals(&mut self) -> Vec<ClientArrival> {
+        self.state
+            .client_arrivals
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
     /// From now on, keeps each client the display ends, with who it was and why, until
     /// [`Compositor::take_client_departures`] takes them: what the MCP server tells agents.
     pub fn watch_client_departures(&mut self) {
@@ -880,7 +1005,7 @@ impl Compositor {
             let wakeups = self.state.counters.wakeups;
             self.dispatch(None)?;
             self.log_counters_after(wakeups);
-            self.log_ended_rest_second(&|_, _| None);
+            self.log_ended_rest_second(&|_| None);
         }
         tracing::info!("stopping");
         Ok(())
@@ -1017,11 +1142,8 @@ impl Compositor {
     }
 
     /// Logs the second that ended, if one did since the last call, each client's program named
-    /// by `program_of`.
-    pub(crate) fn log_ended_rest_second(
-        &mut self,
-        program_of: &dyn Fn(SeatId, &ClientProcess) -> Option<u64>,
-    ) {
+    /// by `program_of`, from the client's number.
+    pub(crate) fn log_ended_rest_second(&mut self, program_of: &dyn Fn(u64) -> Option<u64>) {
         if let Some(second) = self.state.rest.take_ended_second() {
             crate::rest::log_second(&second, self.state.rest.counts(), program_of);
         }
@@ -1454,6 +1576,7 @@ impl Compositor {
                     };
                     departures.push(ClientDeparture {
                         seat: departed.seat,
+                        number: departed.number,
                         process: departed.process,
                         error,
                     });
@@ -1506,5 +1629,146 @@ fn socket_error(error: BindError) -> Error {
                 .to_owned(),
         ),
         error => Error::Socket(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::{Child, Command};
+
+    use rustix::event::{PollFd, PollFlags, Timespec};
+    use rustix::process::{PidfdFlags, pidfd_open};
+
+    use super::*;
+
+    /// A `sleep` this test started, under it: killed and reaped when it drops, an assertion that
+    /// failed included.
+    struct Sleeper(Child);
+
+    impl Sleeper {
+        fn start() -> Sleeper {
+            Sleeper(
+                Command::new("sleep")
+                    .arg("30")
+                    .spawn()
+                    .expect("sleep starts"),
+            )
+        }
+
+        fn pid(&self) -> i32 {
+            Pid::from_child(&self.0).as_raw_nonzero().get()
+        }
+
+        /// A new pidfd of it.
+        fn pidfd(&self) -> OwnedFd {
+            pidfd_open(Pid::from_child(&self.0), PidfdFlags::empty()).expect("its pidfd")
+        }
+    }
+
+    impl Drop for Sleeper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The kernel's refusal `errno`, as `getsockopt` gives it.
+    fn refused(errno: Errno) -> io::Result<OwnedFd> {
+        Err(io::Error::from_raw_os_error(errno.raw_os_error()))
+    }
+
+    fn test_group() -> i32 {
+        rustix::process::getpgrp().as_raw_nonzero().get()
+    }
+
+    /// A kernel that refuses `SO_PEERPIDFD`, as one before Linux 6.5 does, leaves the walk alone:
+    /// a child of the test is found under it, in the test's group, marked inexact, and the
+    /// refusal is remembered as warned of.
+    #[test]
+    fn a_record_the_kernel_gives_no_pidfd_for_is_the_walk_alone_marked_inexact() {
+        let sleeper = Sleeper::start();
+        let mut warned = false;
+        let record =
+            ClientProcess::accepted(Some(sleeper.pid()), refused(Errno::NOPROTOOPT), &mut warned);
+        assert_eq!(record.identity, Identity::Inexact);
+        assert_eq!(record.pid, Some(sleeper.pid()));
+        assert_eq!(record.lineage, [sleeper.pid()]);
+        assert_eq!(record.group, Some(test_group()));
+        assert!(warned, "the first refusal is warned of");
+    }
+
+    /// `EINVAL`, the answer of Linux 6.5 to 6.15 for a peer already reaped, says the peer had
+    /// exited: the record holds no lineage, even where the walk found one, and no refusal is
+    /// warned of.
+    #[test]
+    fn a_record_given_einval_is_exited_with_no_lineage() {
+        let sleeper = Sleeper::start();
+        let mut warned = false;
+        let record =
+            ClientProcess::accepted(Some(sleeper.pid()), refused(Errno::INVAL), &mut warned);
+        assert_eq!(record.identity, Identity::Exited);
+        assert_eq!(record.lineage, Vec::<i32>::new());
+        assert_eq!(record.group, None);
+        assert!(!warned, "EINVAL is no refusal");
+    }
+
+    /// Another failure, out of descriptors for one, leaves the walk alone, inexact, but is no
+    /// kernel's refusal: the warning stays for one.
+    #[test]
+    fn a_record_whose_pidfd_failed_otherwise_is_inexact_and_not_warned_of() {
+        let sleeper = Sleeper::start();
+        let mut warned = false;
+        let record =
+            ClientProcess::accepted(Some(sleeper.pid()), refused(Errno::MFILE), &mut warned);
+        assert_eq!(record.identity, Identity::Inexact);
+        assert_eq!(record.lineage, [sleeper.pid()]);
+        assert!(!warned, "running out of descriptors is no kernel's refusal");
+    }
+
+    /// A peer that is Yuna itself, a test's socket pair, has nothing to check: unread, whatever
+    /// its pidfd says.
+    #[test]
+    fn a_record_of_yuna_itself_is_unread() {
+        let yuna = rustix::process::getpid();
+        let pidfd = pidfd_open(yuna, PidfdFlags::empty()).expect("Yuna's own pidfd");
+        let mut warned = false;
+        let record =
+            ClientProcess::accepted(Some(yuna.as_raw_nonzero().get()), Ok(pidfd), &mut warned);
+        assert_eq!(record.identity, Identity::Unread);
+        assert_eq!(record.lineage, Vec::<i32>::new());
+        assert_eq!(record.group, None);
+    }
+
+    /// A live peer's pidfd makes its record exact, its lineage the walk's; once the peer has
+    /// exited, its pidfd ready, its record is exited, though it is not yet reaped and `/proc`
+    /// still shows it.
+    #[test]
+    fn a_live_peers_pidfd_makes_its_record_exact_and_an_exited_ones_exited() {
+        let mut sleeper = Sleeper::start();
+        let mut warned = false;
+        let live = ClientProcess::accepted(Some(sleeper.pid()), Ok(sleeper.pidfd()), &mut warned);
+        assert_eq!(live.identity, Identity::Exact);
+        assert_eq!(live.lineage, [sleeper.pid()]);
+        assert_eq!(live.group, Some(test_group()));
+
+        let pidfd = sleeper.pidfd();
+        sleeper.0.kill().expect("sleep is killed");
+        let mut exited = [PollFd::from_borrowed_fd(pidfd.as_fd(), PollFlags::IN)];
+        let patience = Timespec {
+            tv_sec: 30,
+            tv_nsec: 0,
+        };
+        let ready = rustix::event::poll(&mut exited, Some(&patience)).expect("polled");
+        assert_eq!(ready, 1, "sleep never exited");
+        assert_eq!(
+            crate::process::lineage_under_yuna(sleeper.pid()).0,
+            [sleeper.pid()],
+            "not yet reaped, it is still under the test"
+        );
+        let gone = ClientProcess::accepted(Some(sleeper.pid()), Ok(pidfd), &mut warned);
+        assert_eq!(gone.identity, Identity::Exited);
+        assert_eq!(gone.lineage, Vec::<i32>::new());
+        assert_eq!(gone.group, None);
+        assert!(!warned);
     }
 }

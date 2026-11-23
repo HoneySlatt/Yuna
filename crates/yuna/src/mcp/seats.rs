@@ -337,6 +337,7 @@ impl Server {
     /// A closed seat's result; its programs are forgotten, their logs deleted, and its home
     /// removed.
     fn seat_closed(&mut self, seat: SeatId, ended: &[Pid], left: &[Pid]) -> ToolResult {
+        self.resolve_arrivals();
         if let Some((programs, _)) = &mut self.programs {
             programs.forget_seat(seat);
         }
