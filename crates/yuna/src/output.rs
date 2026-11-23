@@ -28,6 +28,7 @@ use crate::capture::Failure;
 use crate::clock::Deadline;
 use crate::colour::Record;
 use crate::colour::description::{Monitor, PG32UCDM, sdr_description};
+use crate::command::refusal;
 use crate::compositor::OutputDescription;
 use crate::frames::{Drawings, FailedDrawings};
 use crate::state::State;
@@ -371,13 +372,16 @@ impl State {
             scale: mode.scale(),
         };
         self.layout.add_output(seat, id, config).map_err(|e| {
-            Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
+            Error::InvalidOutput(InvalidOutput(format!(
+                "the layout refuses it: {}",
+                refusal(e)
+            )))
         })?;
         self.note_description_changed();
         let rect = self
             .layout
             .output_rect(id)
-            .map_err(|e| Error::Layout(e.to_string()))?;
+            .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         let output = Output::new(
             format!("HEADLESS-{}", id.0),
             PhysicalProperties {
@@ -525,7 +529,10 @@ impl State {
         self.layout
             .configure_output(id, mode.width(), mode.height(), mode.scale())
             .map_err(|e| {
-                Error::InvalidOutput(InvalidOutput(format!("the layout refuses it: {e}")))
+                Error::InvalidOutput(InvalidOutput(format!(
+                    "the layout refuses it: {}",
+                    refusal(e)
+                )))
             })?;
         // Nothing is refused from here.
         let now = self.clock.now();
@@ -666,7 +673,7 @@ impl State {
     pub(crate) fn drop_output(&mut self, index: usize) {
         let id = self.outputs[index].id;
         if let Err(error) = self.layout.remove_output(id) {
-            tracing::error!(%error, output = id.0, "the layout has no such output");
+            tracing::error!(error = %refusal(error), output = id.0, "the layout has no such output");
         }
         self.note_description_changed();
         let leaving: Vec<WlSurface> = self

@@ -155,8 +155,11 @@ pub struct OpenOptions {
 }
 
 /// Why an operation was refused: one variant per reason, so that a caller tells them apart
-/// without reading a sentence. The model is unchanged when an operation returns one. Its text
-/// ([`Display`](std::fmt::Display)) is the sentence callers show.
+/// without reading a sentence. The model is unchanged when an operation returns one. It holds no
+/// text: the compositor turns each reason into `yuna_ipc::Refusal`'s, whose sentence is the one
+/// callers show, written there alone
+/// ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
+/// item 23).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutError {
     /// No seat has this id.
@@ -198,34 +201,6 @@ pub enum LayoutError {
     /// ([`Layout::set_pinned`]).
     PinnedNotFloating,
 }
-
-impl std::fmt::Display for LayoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LayoutError::UnknownSeat(id) => write!(f, "no seat {}", id.0),
-            LayoutError::UnknownOutput(id) => write!(f, "no output {}", id.0),
-            LayoutError::UnknownWindow(id) => write!(f, "no window {}", id.0),
-            LayoutError::UnknownWorkspace(name) => write!(f, "no workspace named {name:?}"),
-            LayoutError::AlreadyExists => f.write_str("this id is already used"),
-            LayoutError::InvalidValue => f.write_str("a value is not finite or out of range"),
-            LayoutError::NotEmpty => f.write_str("it still holds windows"),
-            LayoutError::OutputOfAnotherSeat => f.write_str("the output belongs to another seat"),
-            LayoutError::SeatWithoutOutput => f.write_str("the seat has no output"),
-            LayoutError::WorkspaceWithoutOutput => {
-                f.write_str("the window's workspace has no output")
-            }
-            LayoutError::WindowTiled => f.write_str("the window is tiled"),
-            LayoutError::PinnedNotFullscreen => f.write_str("a pinned window cannot be fullscreen"),
-            LayoutError::ScreenHeld => f.write_str("another window's fullscreen holds the screen"),
-            LayoutError::PinnedOutsideShownWorkspace => {
-                f.write_str("only a window of a shown workspace can be pinned")
-            }
-            LayoutError::PinnedNotFloating => f.write_str("only a floating window can be pinned"),
-        }
-    }
-}
-
-impl std::error::Error for LayoutError {}
 
 /// A window placed on an output, as [`Layout::arrange`] and [`Layout::arrange_workspace`] give it.
 #[derive(Debug, Clone, Copy, PartialEq)]

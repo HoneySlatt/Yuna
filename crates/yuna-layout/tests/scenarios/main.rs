@@ -8,7 +8,6 @@
 mod clients;
 mod dwindle;
 mod dwindle_focus;
-mod error_messages;
 mod floating;
 mod fullscreen;
 mod harness;
@@ -16,6 +15,7 @@ mod ids;
 mod output_moves;
 mod outputs;
 mod peek;
+mod refusals;
 mod robustness;
 mod scrolling;
 mod seats;

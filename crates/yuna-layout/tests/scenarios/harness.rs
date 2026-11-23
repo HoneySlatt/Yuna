@@ -63,7 +63,7 @@ impl Model {
     #[track_caller]
     pub fn ok(&mut self, op: impl FnOnce(&mut Layout) -> Result<(), LayoutError>) {
         if let Err(error) = op(&mut self.layout) {
-            panic!("the operation failed: {error}");
+            panic!("the operation failed: {error:?}");
         }
         self.check();
     }

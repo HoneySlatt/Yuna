@@ -953,12 +953,6 @@ replaces it, and nothing new is built on it that Stage 2 would undo.
   one request's string at most. The number of MIME types a data source offers is unbounded: each
   offer fits 4 KiB, but a source that offers many can fill a focused client's buffer. Paid at
   Stage 2a, M2.14 (selections and text), where Yuna's own data devices bound them.
-- A refusal's sentence is written twice: in `yuna_layout::LayoutError`'s `Display` and in
-  `yuna_ipc::Refusal`'s, for the fifteen reasons both share, where ADR-0082 item 23 keeps Yuna's
-  text in one module. A test of `yuna`'s dispatch (`command.rs`) holds the two copies to the
-  same words. Paid at Stage 2a, M2.4c (one event stream), where `yuna-ipc` is touched again: the
-  layout's errors lose their `Display`, and `Refusal` alone writes the sentences (the owner,
-  2026-11-22).
 - `yuna` is the transitional crate
   ([ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)): levels
   2 to 4 at once, it holds `unsafe` code, globals and files that name Smithay, each listed in

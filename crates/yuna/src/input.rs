@@ -61,6 +61,7 @@ use yuna_motion::Change;
 use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
+use crate::command::refusal;
 use crate::keymap::{Chord, KeyPlanner, KeyboardState};
 use crate::output::VirtualOutput;
 use crate::popups::popup_toplevel;
@@ -430,7 +431,7 @@ impl State {
             None => *self
                 .layout
                 .outputs(seat)
-                .map_err(|e| Error::Layout(e.to_string()))?
+                .map_err(|e| Error::Layout(refusal(e).to_string()))?
                 .first()
                 .ok_or_else(|| Error::Refused(format!("seat {} has no output", seat.0)))?,
         };
@@ -553,7 +554,9 @@ impl State {
             {
                 match self.layout.focus_window(id) {
                     Ok(()) => self.mark_layout_changed(Change::Animated),
-                    Err(error) => tracing::debug!(%error, window = id.0, "focus refused"),
+                    Err(error) => {
+                        tracing::debug!(error = %refusal(error), window = id.0, "focus refused")
+                    }
                 }
             }
             if let Some(data) = self.seat_mut(seat) {

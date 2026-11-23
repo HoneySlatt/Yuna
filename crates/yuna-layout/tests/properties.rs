@@ -356,12 +356,12 @@ fn acting_seat(layout: &Layout, op: &Op) -> Option<SeatId> {
 fn check_peeks(layout: &Layout) -> Result<(), String> {
     for seat in SEATS.map(SeatId) {
         for output in layout.outputs(seat).unwrap_or_default() {
-            let drawn = layout.arrange(output).map_err(|e| e.to_string())?;
-            let workspaces = layout.workspaces(output).map_err(|e| e.to_string())?;
+            let drawn = layout.arrange(output).map_err(|e| format!("{e:?}"))?;
+            let workspaces = layout.workspaces(output).map_err(|e| format!("{e:?}"))?;
             for (index, workspace) in workspaces.iter().enumerate() {
                 let peeked = layout
                     .arrange_workspace(output, workspace.id)
-                    .map_err(|e| format!("peek at {output:?}'s workspace {index}: {e}"))?;
+                    .map_err(|e| format!("peek at {output:?}'s workspace {index}: {e:?}"))?;
                 let mut seen = Vec::new();
                 for p in &peeked {
                     if !workspace.windows.contains(&p.window) || seen.contains(&p.window) {
@@ -403,7 +403,9 @@ fn check_peeks_refused(layout: &Layout) -> Result<(), String> {
         .flat_map(|seat| layout.outputs(seat).unwrap_or_default())
         .collect();
     for &output in &outputs {
-        let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
+        let shown = layout
+            .shown_workspaces(output)
+            .map_err(|e| format!("{e:?}"))?;
         let others = outputs
             .iter()
             .filter(|&&other| other != output)
@@ -424,13 +426,15 @@ fn check_peeks_refused(layout: &Layout) -> Result<(), String> {
 fn check_layers(layout: &Layout) -> Result<(), String> {
     for seat in SEATS.map(SeatId) {
         for output in layout.outputs(seat).unwrap_or_default() {
-            let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
-            let workspaces = layout.workspaces(output).map_err(|e| e.to_string())?;
+            let shown = layout
+                .shown_workspaces(output)
+                .map_err(|e| format!("{e:?}"))?;
+            let workspaces = layout.workspaces(output).map_err(|e| format!("{e:?}"))?;
             if workspaces.iter().find(|w| w.shown).map(|w| w.id) != Some(shown.main.id) {
                 return Err(format!("{output:?} shows another workspace than {shown:?}"));
             }
             let views = [Some(shown.main), shown.special];
-            for p in layout.arrange(output).map_err(|e| e.to_string())? {
+            for p in layout.arrange(output).map_err(|e| format!("{e:?}"))? {
                 let view = views
                     .iter()
                     .flatten()
@@ -446,7 +450,7 @@ fn check_layers(layout: &Layout) -> Result<(), String> {
             for workspace in &workspaces {
                 let peeked = layout
                     .arrange_workspace(output, workspace.id)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("{e:?}"))?;
                 for p in peeked {
                     if p.workspace != workspace.id {
                         return Err(format!("{p:?} is in the peek at {:?}", workspace.id));
@@ -553,18 +557,20 @@ fn ids_shown(layout: &Layout) -> Result<(Workspaces, Columns), String> {
     };
     for seat in SEATS.map(SeatId) {
         for output in layout.outputs(seat).unwrap_or_default() {
-            for workspace in layout.workspaces(output).map_err(|e| e.to_string())? {
+            for workspace in layout.workspaces(output).map_err(|e| format!("{e:?}"))? {
                 workspaces.insert(workspace.id, (seat, false));
                 let peeked = layout
                     .arrange_workspace(output, workspace.id)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("{e:?}"))?;
                 add_columns(peeked, workspace.id);
             }
-            let shown = layout.shown_workspaces(output).map_err(|e| e.to_string())?;
+            let shown = layout
+                .shown_workspaces(output)
+                .map_err(|e| format!("{e:?}"))?;
             if let Some(special) = shown.special {
                 workspaces.insert(special.id, (seat, true));
                 add_columns(
-                    layout.arrange(output).map_err(|e| e.to_string())?,
+                    layout.arrange(output).map_err(|e| format!("{e:?}"))?,
                     special.id,
                 );
             }

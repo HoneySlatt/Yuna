@@ -501,7 +501,7 @@ fn finish_set_up(
     windows: &[WindowId],
 ) -> Result<(), String> {
     let what = "the set-up's end";
-    let refused = |e: LayoutError| format!("{what}: the layout refused: {e}");
+    let refused = |e: LayoutError| format!("{what}: the layout refused: {e:?}");
     for &window in windows {
         let command = Command::SetFullWidth {
             window: Some(window),
@@ -532,7 +532,7 @@ fn finish_set_up(
 /// [`COLUMNS`] columns, its first focused; the second below it with one window; one window on the
 /// special workspace, hidden; every window tiled in a column as wide as the output.
 fn check_set_up(layout: &Layout, output: OutputId, windows: &[WindowId]) -> Result<(), String> {
-    let refused = |e: LayoutError| e.to_string();
+    let refused = |e: LayoutError| format!("{e:?}");
     let workspaces = layout.workspaces(output).map_err(refused)?;
     let [first, second] = workspaces.as_slice() else {
         return Err(format!("not two workspaces: {workspaces:?}"));

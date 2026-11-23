@@ -378,7 +378,7 @@ impl State {
             .layout
             .size_on_open(seat_of_surface(root), &options)
             .unwrap_or_else(|error| {
-                tracing::warn!(%error, "no size foretold for a new window; letting it choose");
+                tracing::warn!(error = %refusal(error), "no size foretold for a new window; letting it choose");
                 Size::default()
             });
         let Some(toplevel) = self.toplevels.get(&root.id()) else {
@@ -432,7 +432,7 @@ impl State {
             if let Some(toplevel) = self.toplevels.get_mut(&root.id())
                 && !std::mem::replace(&mut toplevel.refused, true)
             {
-                tracing::warn!(%error, "the layout refuses a window; it is not shown");
+                tracing::warn!(error = %refusal(error), "the layout refuses a window; it is not shown");
             }
             self.window_refused(root);
             return;
@@ -455,7 +455,7 @@ impl State {
         if toplevel.wants_full_width
             && let Err(error) = self.layout.set_full_width(window, true)
         {
-            tracing::debug!(%error, window = window.0, "full width refused");
+            tracing::debug!(error = %refusal(error), window = window.0, "full width refused");
         }
         let waiting_activation = toplevel.waiting_activation.take();
         tracing::debug!(window = window.0, "window opened");
@@ -539,7 +539,9 @@ impl State {
             toplevel.limits = limits;
             match self.layout.set_size_limits(window, limits.0, limits.1) {
                 Ok(()) => changed = true,
-                Err(error) => tracing::debug!(%error, window = window.0, "limits refused"),
+                Err(error) => {
+                    tracing::debug!(error = %refusal(error), window = window.0, "limits refused")
+                }
             }
         }
         // A geometry that only moves in its surface changes where the surface is drawn, which
@@ -558,7 +560,9 @@ impl State {
             toplevel.size_asked = None;
             match self.layout.commit_size(window, size) {
                 Ok(()) => changed = true,
-                Err(error) => tracing::debug!(%error, window = window.0, "size refused"),
+                Err(error) => {
+                    tracing::debug!(error = %refusal(error), window = window.0, "size refused")
+                }
             }
         }
         if changed {
@@ -606,7 +610,7 @@ impl State {
         // After `leave_output`, which reaches the popups through their window's tree.
         self.dismiss_popups_of(root);
         if let Err(error) = self.layout.close_window(window) {
-            tracing::warn!(%error, window = window.0, "closing a window failed");
+            tracing::warn!(error = %refusal(error), window = window.0, "closing a window failed");
         }
         tracing::debug!(window = window.0, "window closed");
         self.surfaces_gone = true;
@@ -920,7 +924,7 @@ impl State {
                 self.mark_layout_changed(Change::Animated);
             }
             Err(error) => {
-                tracing::debug!(%error, window = window.0, "a request is refused");
+                tracing::debug!(error = %refusal(error), window = window.0, "a request is refused");
                 let Some(toplevel) = self.toplevels.get(&root.id()) else {
                     return;
                 };

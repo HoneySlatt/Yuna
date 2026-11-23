@@ -67,6 +67,7 @@ use super::manager::{Command, ManagerEvent, NetState, StateAction, StateChange};
 use super::menus::MenuPlace;
 use super::properties::{FrameExtents, Properties, SizeHints, Wishes, X11Rect};
 use crate::activation::TokenOrigin;
+use crate::command::refusal;
 use crate::input::window_of_surface;
 use crate::output::VirtualOutput;
 use crate::render::x11_surface_size;
@@ -1057,7 +1058,9 @@ impl State {
             }
             match self.layout.set_size_limits(window, limits.0, limits.1) {
                 Ok(()) => changed = true,
-                Err(error) => tracing::debug!(%error, window = window.0, "limits refused"),
+                Err(error) => {
+                    tracing::debug!(error = %refusal(error), window = window.0, "limits refused")
+                }
             }
         }
         let Some(record) = self.x11_window_mut(x11.server, x11.window) else {
@@ -1068,7 +1071,9 @@ impl State {
             if let Some(size) = options.committed {
                 match self.layout.commit_size(window, size) {
                     Ok(()) => changed = true,
-                    Err(error) => tracing::debug!(%error, window = window.0, "size refused"),
+                    Err(error) => {
+                        tracing::debug!(error = %refusal(error), window = window.0, "size refused")
+                    }
                 }
             }
         }
@@ -1153,7 +1158,7 @@ impl State {
                 // Its client's values are checked before the layout sees them: a refusal is
                 // the layout's own, and the window keeps the place its client gave it.
                 Err(error) => {
-                    tracing::debug!(%error, "no size foretold for a new X11 window; letting it choose");
+                    tracing::debug!(error = %refusal(error), "no size foretold for a new X11 window; letting it choose");
                 }
             }
         }
@@ -1362,7 +1367,9 @@ impl State {
                 Ok(false) => {
                     tracing::debug!(window = id.0, "a fullscreen window holds the screen");
                 }
-                Err(error) => tracing::debug!(%error, window = id.0, "activation refused"),
+                Err(error) => {
+                    tracing::debug!(error = %refusal(error), window = id.0, "activation refused")
+                }
             }
         }
         self.mark_urgent(id);

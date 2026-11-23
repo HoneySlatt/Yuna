@@ -170,8 +170,9 @@ impl Command {
 
 /// Why a command was refused: one variant per reason, so that a caller tells them apart without
 /// reading a sentence. Its text ([`Display`](fmt::Display)) is the sentence callers show, MCP's
-/// agents included. Each reason the layout gives has its variant, whether a command reaches it
-/// today or not.
+/// agents included, and Yuna's one copy of it: the layout's reasons hold no text, and the
+/// compositor turns each into its variant here (ADR-0082 item 23). Each reason the layout gives
+/// has its variant, whether a command reaches it today or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Refusal {

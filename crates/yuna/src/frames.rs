@@ -90,6 +90,7 @@ use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::capture::Failure;
 use crate::clock::Deadline;
+use crate::command::refusal;
 use crate::output::{RefreshAt, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
@@ -686,7 +687,7 @@ impl State {
         self.motion.update(&self.layout, now, change);
         for output in &mut self.outputs {
             output.placed = self.layout.arrange(output.id).unwrap_or_else(|error| {
-                tracing::warn!(%error, output = output.id.0, "the layout has no such output");
+                tracing::warn!(error = %refusal(error), output = output.id.0, "the layout has no such output");
                 Vec::new()
             });
             output.told = self.motion.told_visible(output.id, now);

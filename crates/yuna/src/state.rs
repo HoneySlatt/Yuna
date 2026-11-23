@@ -5,6 +5,7 @@
 //! `screencopy.rs`; viewporter needs no handler.
 
 use crate::colour::ColourState;
+use crate::command::refusal;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
@@ -212,10 +213,10 @@ impl State {
         let dh = &display_handle;
         let (renderer, max_output_side) = crate::render::open_renderer(device)?;
         let mut layout = Layout::new(yuna_layout::Options::default())
-            .map_err(|e| Error::Layout(e.to_string()))?;
+            .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         layout
             .add_seat(OWNER_SEAT)
-            .map_err(|e| Error::Layout(e.to_string()))?;
+            .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         let mut seat_state = SeatState::new();
         let owner = SeatData::owner(&mut seat_state, dh, announce_owner_seat)?;
         let mut dmabuf_state = DmabufState::new();

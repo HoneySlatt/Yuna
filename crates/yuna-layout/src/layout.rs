@@ -1935,7 +1935,7 @@ impl Layout {
             else {
                 continue;
             };
-            let drawn = self.arrange(output).map_err(|e| e.to_string())?;
+            let drawn = self.arrange(output).map_err(|e| format!("{e:?}"))?;
             if !drawn.iter().any(|p| p.window == focused && p.activated) {
                 return Err(format!(
                     "seat {:?} focuses {focused:?}, which is not drawn",
@@ -2012,7 +2012,7 @@ impl Layout {
         }
         let placed = self
             .arrange(output.id)
-            .map_err(|e| format!("arranging output {:?}: {e}", output.id))?;
+            .map_err(|e| format!("arranging output {:?}: {e:?}", output.id))?;
         self.check_placed(output, area, &placed)
     }
 

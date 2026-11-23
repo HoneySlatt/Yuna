@@ -190,28 +190,52 @@ mod tests {
 
     use super::*;
 
-    /// A refusal the layout gives reads, to the caller, as the layout words it: the sentences are
-    /// written in both crates (debt), and this holds the two copies together.
+    /// Each reason the layout gives becomes the refusal of the same reason, with what it names:
+    /// `yuna_ipc::Refusal` alone writes the sentence callers read.
     #[test]
-    fn a_refusal_from_the_layout_keeps_its_sentence() {
-        let errors = [
-            LayoutError::UnknownSeat(SeatId(7)),
-            LayoutError::UnknownOutput(OutputId(8)),
-            LayoutError::UnknownWindow(WindowId(9)),
-            LayoutError::UnknownWorkspace("code".to_owned()),
-            LayoutError::AlreadyExists,
-            LayoutError::InvalidValue,
-            LayoutError::NotEmpty,
-            LayoutError::OutputOfAnotherSeat,
-            LayoutError::SeatWithoutOutput,
-            LayoutError::WorkspaceWithoutOutput,
-            LayoutError::WindowTiled,
-            LayoutError::PinnedNotFullscreen,
-            LayoutError::ScreenHeld,
-            LayoutError::PinnedOutsideShownWorkspace,
-            LayoutError::PinnedNotFloating,
+    fn a_refusal_from_the_layout_keeps_its_reason() {
+        let reasons = [
+            (
+                LayoutError::UnknownSeat(SeatId(7)),
+                Refusal::UnknownSeat(SeatId(7)),
+            ),
+            (
+                LayoutError::UnknownOutput(OutputId(8)),
+                Refusal::UnknownOutput(OutputId(8)),
+            ),
+            (
+                LayoutError::UnknownWindow(WindowId(9)),
+                Refusal::UnknownWindow(WindowId(9)),
+            ),
+            (
+                LayoutError::UnknownWorkspace("code".to_owned()),
+                Refusal::UnknownWorkspace("code".to_owned()),
+            ),
+            (LayoutError::AlreadyExists, Refusal::AlreadyExists),
+            (LayoutError::InvalidValue, Refusal::InvalidValue),
+            (LayoutError::NotEmpty, Refusal::NotEmpty),
+            (
+                LayoutError::OutputOfAnotherSeat,
+                Refusal::OutputOfAnotherSeat,
+            ),
+            (LayoutError::SeatWithoutOutput, Refusal::SeatWithoutOutput),
+            (
+                LayoutError::WorkspaceWithoutOutput,
+                Refusal::WorkspaceWithoutOutput,
+            ),
+            (LayoutError::WindowTiled, Refusal::WindowTiled),
+            (
+                LayoutError::PinnedNotFullscreen,
+                Refusal::PinnedNotFullscreen,
+            ),
+            (LayoutError::ScreenHeld, Refusal::ScreenHeld),
+            (
+                LayoutError::PinnedOutsideShownWorkspace,
+                Refusal::PinnedOutsideShownWorkspace,
+            ),
+            (LayoutError::PinnedNotFloating, Refusal::PinnedNotFloating),
         ];
-        for error in errors {
+        for (error, expected) in reasons {
             // Lists every variant, so that a reason added to the layout is added above too.
             match error {
                 LayoutError::UnknownSeat(_)
@@ -230,7 +254,7 @@ mod tests {
                 | LayoutError::PinnedOutsideShownWorkspace
                 | LayoutError::PinnedNotFloating => {}
             }
-            assert_eq!(refusal(error.clone()).to_string(), error.to_string());
+            assert_eq!(refusal(error), expected);
         }
     }
 }

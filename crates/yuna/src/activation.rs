@@ -31,6 +31,7 @@ use wayland_server::protocol::wl_surface::WlSurface;
 use yuna_motion::Change;
 use yuna_types::{SeatId, WindowId};
 
+use crate::command::refusal;
 use crate::input::window_of_surface;
 use crate::seats::{seat_of_surface, seat_of_wl_seat};
 use crate::state::{OWNER_SEAT, State};
@@ -143,7 +144,9 @@ impl State {
                 Ok(false) => {
                     tracing::debug!(window = window.0, "a fullscreen window holds the screen");
                 }
-                Err(error) => tracing::debug!(%error, window = window.0, "activation refused"),
+                Err(error) => {
+                    tracing::debug!(error = %refusal(error), window = window.0, "activation refused")
+                }
             }
         }
         self.mark_urgent(window);

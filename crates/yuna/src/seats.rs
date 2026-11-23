@@ -39,6 +39,7 @@ use xkbcommon::xkb;
 use yuna_motion::Change;
 use yuna_types::SeatId;
 
+use crate::command::refusal;
 use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
@@ -292,7 +293,7 @@ impl State {
         let data = SeatData::agent(id, &mut self.seat_state, &self.display_handle)?;
         self.layout
             .add_seat(id)
-            .map_err(|e| Error::Layout(e.to_string()))?;
+            .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         self.next_seat_id += 1;
         self.seats.push(data);
         self.rest.add_seat(id);
@@ -583,7 +584,7 @@ impl State {
             }
         }
         if let Err(error) = self.layout.remove_seat(id) {
-            tracing::error!(%error, seat = id.0, "the layout keeps a removed seat");
+            tracing::error!(error = %refusal(error), seat = id.0, "the layout keeps a removed seat");
         }
         let Some(index) = self.seats.iter().position(|seat| seat.id == id) else {
             return Ok(());
