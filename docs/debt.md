@@ -413,9 +413,12 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   `presented_ns`. No tool gives a program's presentation feedback, which the program reads
   itself through `wp_presentation`. Paid at Stage 2a, M2.4d (a frame's identity), by
   the `frames` tool.
-- `windows` lists every window of its seat: past a few hundred, its reply passes Claude Code's
-  25,000 tokens of tool output. Paid at Stage 2a, M2.4c (one event stream and the pidfd): `windows`
-  paged.
+- `windows` pages by window id, 128 windows a page at most, but a call that gives neither
+  `after` nor `limit` lists every window of its seat, as before: past a few hundred, its reply
+  passes Claude Code's 25,000 tokens of tool output. Each page describes every window to choose
+  its own, through `Layout::window` ([above](#the-layout-model)). Kept: the tool's description
+  says so, and an agent that expects many windows pages; the description's cost is paid with the
+  layout's index, at Stage 2a, M2.5 (the boundary).
 - A process that empties its environment and leaves its process group and its parents, a
   double fork with `setsid` and `env -i`, escapes its seat's closing
   ([ADR-0117](adr/0117-an-agents-seat-through-mcp-tools-input-keyboard-text-and-closing.md));

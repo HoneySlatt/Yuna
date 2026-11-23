@@ -42,6 +42,12 @@ pub const MAX_WAIT: Duration = Duration::from_secs(50);
 /// would wait is refused.
 pub const MAX_WAITING_CALLS: usize = 64;
 
+/// How many windows a page of `windows` lists at most, and by default once it pages: a window
+/// takes about 100 tokens of an agent's context, so that a page stays near 13,000, under the
+/// 25,000 of tool output Claude Code takes by default
+/// ([ADR-0153](../../../../../docs/adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
+pub const MAX_WINDOWS_PER_PAGE: usize = 128;
+
 /// How many bytes of a log `spawn log` gives by default.
 pub const DEFAULT_LOG_READ: u64 = 64 << 10;
 

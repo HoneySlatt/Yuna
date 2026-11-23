@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::{
     DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES, MAX_LOG_READ, MAX_WAIT,
-    MAX_WORKSPACE_NAME, TEXT_TYPES,
+    MAX_WINDOWS_PER_PAGE, MAX_WORKSPACE_NAME, TEXT_TYPES,
 };
 use crate::mcp::accessibility::MAX_NODES;
 use crate::mcp::events::Kind;
@@ -223,8 +223,13 @@ pub fn definitions() -> Value {
                 color-management-v1, its own, then its subsurfaces' and its popups': the \
                 surface's role, transfer function, primaries (a protocol name, else their \
                 chromaticities), luminances in cd/m², target primaries and luminance, \
-                max_cll, max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches \
-                the filters, when none does yet.",
+                max_cll, max_fall and rendering intent. With after, a window's id, or limit, \
+                gives a page: the windows whose id is above after, in that order, limit at \
+                most (128, its default and its most), and next, the last window given while more \
+                match after it, else null: give it as after for the next page. A window opened \
+                meanwhile comes on a later page; one closed meanwhile is not listed. Without \
+                either, every window, and no next. With wait_ms, waits up to that long for a \
+                window that matches the filters, after included, when none does yet.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -234,6 +239,12 @@ pub fn definitions() -> Value {
                     "colour": { "type": "boolean",
                         "description": "also give the colours each window's surfaces declared; \
                             false by default" },
+                    "after": { "type": "integer", "minimum": 0,
+                        "description": "the page's cursor: a window's id, or a reply's next; \
+                            only the windows above it" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_WINDOWS_PER_PAGE,
+                        "description": "how many windows the page lists at most; 128 by \
+                            default once after is given" },
                     "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
                         "description": "how long to wait for a match; 0 by default" }
                 },

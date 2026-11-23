@@ -113,7 +113,7 @@ pub use protocol::{LEGACY_REVISION, MODERN_REVISION};
 pub use stdio::MAX_LINE;
 pub use tools::{
     DEFAULT_CLIPBOARD_BYTES, DEFAULT_LOG_READ, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES,
-    MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS, MAX_WORKSPACE_NAME,
+    MAX_LOG_READ, MAX_WAIT, MAX_WAITING_CALLS, MAX_WINDOWS_PER_PAGE, MAX_WORKSPACE_NAME,
 };
 
 /// How many bytes of replies may wait for the client before its input stops being read: 16 MiB,

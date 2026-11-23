@@ -35,7 +35,8 @@ use super::events::{EventData, Kind};
 use super::programs::ProgramWakes;
 use super::protocol::Revision;
 use super::tools::{
-    self, EventsCall, MAX_WAIT, MAX_WAITING_CALLS, RestCall, ToolResult, WindowsCall,
+    self, EventsCall, MAX_WAIT, MAX_WAITING_CALLS, MAX_WINDOWS_PER_PAGE, RestCall, ToolResult,
+    WindowsCall,
 };
 use crate::MAX_CLIENTS_PER_SEAT;
 use crate::compositor::WindowDescription;
@@ -78,6 +79,24 @@ pub(super) struct RestWait {
     timer: RegistrationToken,
 }
 
+/// A page of `windows`' reply: its windows, and the cursor of the next page while more wait.
+#[derive(Debug, Default)]
+struct WindowsPage {
+    windows: Vec<Value>,
+    next: Option<u64>,
+}
+
+impl WindowsPage {
+    /// The reply to `call`: its windows, with `next` when the call pages.
+    fn json(self, call: &WindowsCall) -> Value {
+        let mut reply = json!({ "windows": self.windows });
+        if call.pages() {
+            reply["next"] = json!(self.next);
+        }
+        reply
+    }
+}
+
 impl Server {
     /// `windows`: the result now, or none when the call waits.
     pub(super) fn windows(
@@ -100,12 +119,20 @@ impl Server {
                 MAX_WAIT.as_millis()
             )));
         }
-        let matching = self.matching_windows(&call);
+        if call
+            .limit
+            .is_some_and(|limit| !(1..=MAX_WINDOWS_PER_PAGE).contains(&limit))
+        {
+            return Some(ToolResult::failed(format!(
+                "limit is 1 to {MAX_WINDOWS_PER_PAGE}"
+            )));
+        }
+        let page = self.page(&call, &self.compositor.windows());
         // A window that matches but waits for its place is answered once placed, as one that
         // opens later is.
         let placed = !self.compositor.arrangement_pending();
-        if wait.is_zero() || (!matching.is_empty() && placed) {
-            return Some(ToolResult::done(json!({ "windows": matching })));
+        if wait.is_zero() || (!page.windows.is_empty() && placed) {
+            return Some(ToolResult::done(page.json(&call)));
         }
         if self.waiting_calls() >= MAX_WAITING_CALLS {
             return Some(ToolResult::failed(format!(
@@ -128,13 +155,23 @@ impl Server {
         None
     }
 
-    fn matching_windows(&self, call: &WindowsCall) -> Vec<Value> {
-        self.compositor
-            .windows()
-            .iter()
-            .filter(|window| call.matches(window))
-            .map(|window| self.window_json(call, window))
-            .collect()
+    /// The page of `windows`, which the compositor lists by id, that `call` asks for: the
+    /// windows it matches, [`WindowsCall::page_size`] at most, and the last of them when more
+    /// match after it.
+    fn page(&self, call: &WindowsCall, windows: &[WindowDescription]) -> WindowsPage {
+        let mut matching = windows.iter().filter(|window| call.matches(window));
+        let listed: Vec<&WindowDescription> = matching.by_ref().take(call.page_size()).collect();
+        let next = match (matching.next(), listed.last()) {
+            (Some(_), Some(last)) => Some(last.id.0),
+            _ => None,
+        };
+        WindowsPage {
+            windows: listed
+                .into_iter()
+                .map(|window| self.window_json(call, window))
+                .collect(),
+            next,
+        }
     }
 
     /// `window` as `call` asks for it: with its surfaces' colours when it asks for them.
@@ -151,18 +188,14 @@ impl Server {
         let mut index = 0;
         while index < self.waits.len() {
             let call = &self.waits[index].call;
-            let matching: Vec<Value> = windows
-                .iter()
-                .filter(|window| call.matches(window))
-                .map(|window| self.window_json(call, window))
-                .collect();
-            if matching.is_empty() {
+            let page = self.page(call, &windows);
+            if page.windows.is_empty() {
                 index += 1;
                 continue;
             }
+            let result = ToolResult::done(page.json(call));
             let wait = self.waits.remove(index);
             self.compositor.loop_handle().remove(wait.timer);
-            let result = ToolResult::done(json!({ "windows": matching }));
             self.answer_waited(wait.id, wait.revision, result);
         }
     }
@@ -478,8 +511,9 @@ impl Server {
         };
         // Its timer removed itself.
         let wait = self.waits.remove(index);
-        let result = ToolResult::done(json!({ "windows": [], "timed_out": true }));
-        self.answer_waited(wait.id, wait.revision, result);
+        let mut reply = WindowsPage::default().json(&wait.call);
+        reply["timed_out"] = json!(true);
+        self.answer_waited(wait.id, wait.revision, ToolResult::done(reply));
     }
 
     /// Drops the waiting calls of request `id`, unanswered, as MCP asks. A seat closing goes on,

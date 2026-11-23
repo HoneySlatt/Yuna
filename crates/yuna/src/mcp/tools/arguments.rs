@@ -13,7 +13,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use yuna_types::{OutputId, WindowId};
 
-use super::{DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_WORKSPACE_NAME, TEXT_TYPES};
+use super::{
+    DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_WINDOWS_PER_PAGE, MAX_WORKSPACE_NAME,
+    TEXT_TYPES,
+};
 use crate::compositor::WindowDescription;
 use crate::mcp::events::Kind;
 use crate::xwayland::Selection;
@@ -317,12 +320,30 @@ pub struct WindowsCall {
     pub colour: bool,
     #[serde(default)]
     pub wait_ms: u64,
+    /// The page's cursor: only windows whose id is above it.
+    pub after: Option<u64>,
+    /// How many windows the page lists at most.
+    pub limit: Option<usize>,
 }
 
 impl WindowsCall {
-    /// Whether `window` is of the call's seat and passes the filters.
+    /// Whether the call asks for a page: `after` or `limit` given.
+    pub fn pages(&self) -> bool {
+        self.after.is_some() || self.limit.is_some()
+    }
+
+    /// How many windows its reply lists at most: every one when it does not page.
+    pub fn page_size(&self) -> usize {
+        match (self.pages(), self.limit) {
+            (false, _) => usize::MAX,
+            (true, limit) => limit.unwrap_or(MAX_WINDOWS_PER_PAGE),
+        }
+    }
+
+    /// Whether `window` is of the call's seat, passes the filters, and comes after the cursor.
     pub fn matches(&self, window: &WindowDescription) -> bool {
         window.seat.0 == self.seat
+            && self.after.is_none_or(|after| window.id.0 > after)
             && self
                 .app_id
                 .as_ref()

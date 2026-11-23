@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use yuna::colour::description::PG32UCDM;
 use yuna::mcp::{
     MAX_LINE, MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE, MAX_QUEUED_OUTPUT, MAX_WAITING_CALLS,
-    MAX_WORKSPACE_NAME, MODERN_REVISION, Server, Stop,
+    MAX_WINDOWS_PER_PAGE, MAX_WORKSPACE_NAME, MODERN_REVISION, Server, Stop,
 };
 use yuna::{ClockMode, Compositor, Config, OutputMode};
 use yuna_types::SeatId;
@@ -1082,6 +1082,77 @@ fn open_placed_window(mcp: &mut Mcp, client: &mut Client, app_id: &str, title: &
     client.roundtrip(mcp.server.compositor());
     crate::run_armed_deadlines(mcp.server.compositor());
     window
+}
+
+/// `windows` pages by window id: `limit` windows at most after the cursor `after`, by id, and
+/// `next`, the last one given while more wait, else null. A window opened meanwhile, its id
+/// larger, comes on a later page; one closed meanwhile is not listed. With neither argument,
+/// every window, and no `next`.
+#[test]
+fn windows_pages_by_id() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let windows: Vec<usize> = (0..5)
+        .map(|n| open_placed_window(&mut mcp, &mut client, "org.example.Pages", &format!("{n}")))
+        .collect();
+    let ids = |answer: &Value| -> Vec<u64> {
+        answer["windows"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|window| window["id"].as_u64().expect("an id"))
+            .collect()
+    };
+    let page = |mcp: &mut Mcp, arguments: Value| -> Value {
+        let result = mcp.call("windows", arguments);
+        assert_eq!(result["isError"], json!(false), "{result}");
+        result["structuredContent"].clone()
+    };
+
+    let all = page(&mut mcp, json!({"seat": seat}));
+    assert_eq!(ids(&all), [1, 2, 3, 4, 5], "{all}");
+    assert!(all.get("next").is_none(), "{all}");
+
+    let first = page(&mut mcp, json!({"seat": seat, "limit": 2}));
+    assert_eq!((ids(&first), first["next"].clone()), (vec![1, 2], json!(2)));
+    // Window 3 closes and a sixth opens before the next page.
+    client.close(windows[2]);
+    client.roundtrip(mcp.server.compositor());
+    open_placed_window(&mut mcp, &mut client, "org.example.Pages", "5");
+    let second = page(&mut mcp, json!({"seat": seat, "after": 2, "limit": 2}));
+    assert_eq!(
+        (ids(&second), second["next"].clone()),
+        (vec![4, 5], json!(5))
+    );
+    let last = page(&mut mcp, json!({"seat": seat, "after": 5, "limit": 2}));
+    assert_eq!((ids(&last), last["next"].clone()), (vec![6], Value::Null));
+    let past = page(&mut mcp, json!({"seat": seat, "after": 6}));
+    assert_eq!((ids(&past), past["next"].clone()), (vec![], Value::Null));
+
+    // A page that waits is answered with the window opened past its cursor.
+    mcp.send(&json!({"jsonrpc": "2.0", "id": 200, "method": "tools/call",
+                      "params": modern(json!({"name": "windows",
+                          "arguments": {"seat": seat, "after": 6, "wait_ms": 10_000}}))}));
+    assert_eq!(mcp.replies(), Vec::<Value>::new());
+    open_placed_window(&mut mcp, &mut client, "org.example.Pages", "6");
+    let waited = mcp.reply_to(200)["result"]["structuredContent"].clone();
+    assert_eq!(
+        (ids(&waited), waited["next"].clone()),
+        (vec![7], Value::Null)
+    );
+
+    // The filters apply within the page: a page of app ids that match.
+    let none = page(
+        &mut mcp,
+        json!({"seat": seat, "after": 0, "limit": 2, "app_id": "org.example.Other"}),
+    );
+    assert_eq!((ids(&none), none["next"].clone()), (vec![], Value::Null));
+
+    for wrong in [json!(0), json!(MAX_WINDOWS_PER_PAGE + 1)] {
+        let refused = mcp.call("windows", json!({"seat": seat, "limit": wrong}));
+        assert_eq!(refused["isError"], json!(true), "{refused}");
+    }
 }
 
 /// `events`' answer to `arguments`, which must not fail.

@@ -258,10 +258,15 @@
     "title": "Programs"
   },
   {
-    "description": "List a seat's windows, in the order they opened: id, seat, shell (xdg for a Wayland program's window, x11 for an X11 program's), application id (an X11 window's WM_CLASS class; null when its client gave none), title, process id, output, workspace (null for an unnamed one), rect: the logical rectangle it is drawn at now, or where its output's last frame drew it when that frame was sampled later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests once its motion ends (null when hidden), motion_ends_ns: when its output's motion ends, on the clock's scale (null at rest), focus, floating, fullscreen, unresponsive: an X11 window asked to close that left its ping unanswered 5 s. With neither --animations nor --reduced-motion, rect is place and motion_ends_ns null. With colour, each window also gives colours: one entry for each of its surfaces that declared its colours through color-management-v1, its own, then its subsurfaces' and its popups': the surface's role, transfer function, primaries (a protocol name, else their chromaticities), luminances in cd/m², target primaries and luminance, max_cll, max_fall and rendering intent. With wait_ms, waits up to that long for a window that matches the filters, when none does yet.",
+    "description": "List a seat's windows, in the order they opened: id, seat, shell (xdg for a Wayland program's window, x11 for an X11 program's), application id (an X11 window's WM_CLASS class; null when its client gave none), title, process id, output, workspace (null for an unnamed one), rect: the logical rectangle it is drawn at now, or where its output's last frame drew it when that frame was sampled later (null when its output's frame does not draw it), place: its rectangle in the layout, where it rests once its motion ends (null when hidden), motion_ends_ns: when its output's motion ends, on the clock's scale (null at rest), focus, floating, fullscreen, unresponsive: an X11 window asked to close that left its ping unanswered 5 s. With neither --animations nor --reduced-motion, rect is place and motion_ends_ns null. With colour, each window also gives colours: one entry for each of its surfaces that declared its colours through color-management-v1, its own, then its subsurfaces' and its popups': the surface's role, transfer function, primaries (a protocol name, else their chromaticities), luminances in cd/m², target primaries and luminance, max_cll, max_fall and rendering intent. With after, a window's id, or limit, gives a page: the windows whose id is above after, in that order, limit at most (128, its default and its most), and next, the last window given while more match after it, else null: give it as after for the next page. A window opened meanwhile comes on a later page; one closed meanwhile is not listed. Without either, every window, and no next. With wait_ms, waits up to that long for a window that matches the filters, after included, when none does yet.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "after": {
+          "description": "the page's cursor: a window's id, or a reply's next; only the windows above it",
+          "minimum": 0,
+          "type": "integer"
+        },
         "app_id": {
           "description": "only this application id",
           "type": "string"
@@ -269,6 +274,12 @@
         "colour": {
           "description": "also give the colours each window's surfaces declared; false by default",
           "type": "boolean"
+        },
+        "limit": {
+          "description": "how many windows the page lists at most; 128 by default once after is given",
+          "maximum": 128,
+          "minimum": 1,
+          "type": "integer"
         },
         "pid": {
           "description": "only this client process",
