@@ -51,7 +51,6 @@ use crate::command::refusal;
 use crate::compositor::WindowDescription;
 use crate::frames::waits_for_frame;
 use crate::seats::seat_of_surface;
-use crate::rest::DrawCause;
 use crate::state::{ClientState, State, client_number};
 use crate::xwayland::{X11Client, X11Toplevel};
 
@@ -473,8 +472,7 @@ impl State {
         tracing::debug!(window = window.0, "window opened");
         // Its first buffer opened it: its client's commit is the cause of the frames that show
         // the change, even where it opens outside a commit, an X11 window paired by its serial.
-        let opener = client_number(root);
-        self.mark_layout_changed_by(Change::Animated, DrawCause::Commit(opener));
+        self.mark_window_opened(Change::Animated, seat_of_surface(root), client_number(root));
         if let Some(token) = waiting_activation {
             self.activate(window, token);
         }

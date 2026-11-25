@@ -435,3 +435,94 @@ fn a_first_buffer_is_its_clients_commit_and_a_bare_commit_causes_nothing() {
         .collect();
     assert_eq!(tallies, vec![(1, 0), (1, 1)], "{drawn:?}");
 }
+
+/// Commits without a buffer that still change what is drawn, a subsurface moved, are the cause of
+/// the frame they draw when nothing else is: no frame is drawn without a cause, and their client
+/// is named for the draw. (Smithay applies a desynchronised subsurface's new place at that
+/// subsurface's own commit, not at its parent's alone: both commit here.)
+#[test]
+fn a_bare_commit_that_moves_a_subsurface_is_the_cause_of_its_frame() {
+    use yuna::rest::Cause;
+    let mut compositor = crate::manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let window = client.open_window(&mut compositor);
+    client.ack(window);
+    client.attach(window, crate::TILE.0, crate::TILE.1, RED);
+    client.commit(window);
+    let child = client.add_subsurface(window);
+    // Its parent's commit maps it.
+    client.attach(window, crate::TILE.0, crate::TILE.1, RED);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    assert_eq!(compositor.next_deadline(), None);
+    let settled = compositor.rest_counts();
+
+    client.subsurface(child).role.set_position(40, 40);
+    client.subsurface(child).surface.commit();
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    let moved = compositor.rest_counts().since(&settled);
+    assert_eq!(moved.whole.frames, 1, "{moved:?}");
+    assert_eq!(moved.whole.frames_by(Cause::Commit), 1, "{moved:?}");
+    let named = moved.clients.values().next().expect("the client");
+    assert_eq!((named.tally.commits, named.tally.draws), (2, 1), "{moved:?}");
+}
+
+/// A window that opens on one seat is its client's commit on that seat's outputs alone: another
+/// seat's output, which draws its own client's buffer at the same refresh, names that client
+/// alone.
+#[test]
+fn a_window_opened_on_one_seat_is_no_cause_of_another_seats_frames() {
+    use yuna::OutputMode;
+    use yuna::rest::Cause;
+    let mut compositor = crate::manual_compositor();
+    let mode = OutputMode::new(640, 480, 60.0, 1.0).expect("a mode");
+    let (a, b) = (
+        compositor.add_seat().expect("a seat"),
+        compositor.add_seat().expect("a seat"),
+    );
+    compositor.add_output(a, mode).expect("an output");
+    compositor.add_output(b, mode).expect("an output");
+    let mut painter = Client::connect_to(&mut compositor, b);
+    let painted = painter.open_window(&mut compositor);
+    painter.ack(painted);
+    painter.attach(painted, 64, 64, RED);
+    painter.commit(painted);
+    painter.roundtrip(&mut compositor);
+    for _ in 0..4 {
+        crate::run_armed_deadlines(&mut compositor);
+        painter.roundtrip(&mut compositor);
+    }
+    assert_eq!(compositor.next_deadline(), None);
+    let mut opener = Client::connect_to(&mut compositor, a);
+    let opened = opener.open_window(&mut compositor);
+    opener.ack(opened);
+    let settled = compositor.rest_counts();
+
+    opener.attach(opened, 64, 64, crate::BLUE);
+    opener.commit(opened);
+    opener.send();
+    painter.attach(painted, 64, 64, crate::BLUE);
+    painter.commit(painted);
+    painter.roundtrip(&mut compositor);
+    opener.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    let drawn = compositor.rest_counts().since(&settled);
+    assert_eq!(drawn.seats[&b].frames, 1, "{drawn:?}");
+    assert_eq!(drawn.seats[&b].frames_by(Cause::LayoutChange), 0, "{drawn:?}");
+    assert!(drawn.seats[&a].frames >= 1, "{drawn:?}");
+    let draws: Vec<(SeatId, u64)> = drawn
+        .clients
+        .values()
+        .map(|client| (client.seat, client.tally.draws))
+        .collect();
+    assert_eq!(
+        draws,
+        vec![(b, 1), (a, drawn.seats[&a].frames)],
+        "{drawn:?}"
+    );
+}

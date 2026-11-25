@@ -111,6 +111,8 @@ pub struct Window {
 /// `wl_surface.preferred_buffer_scale`.
 pub struct Subsurface {
     pub surface: wl_surface::WlSurface,
+    /// Its role, through which it moves in its parent.
+    pub role: wl_subsurface::WlSubsurface,
     pub enters: u32,
     pub preferred_buffer_scales: Vec<i32>,
 }
@@ -595,6 +597,7 @@ impl Client {
         surface.commit();
         self.state.subsurfaces.push(Subsurface {
             surface: surface.clone(),
+            role: subsurface,
             enters: 0,
             preferred_buffer_scales: Vec::new(),
         });

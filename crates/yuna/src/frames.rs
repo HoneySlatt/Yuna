@@ -123,28 +123,46 @@ impl State {
     /// made until then combine ([`Change::and`]): one that must show at once on some outputs ends
     /// their motions at that arrangement, however many animated changes come with it.
     pub(crate) fn mark_layout_changed(&mut self, change: Change) {
-        self.mark_layout_changed_by(change, DrawCause::LayoutChange);
+        self.mark_layout_changed_by(change, None);
     }
 
-    /// As [`State::mark_layout_changed`], for `cause`: a window's first buffer, which opens it,
-    /// is its client's commit among the causes of the frames it arms.
-    pub(crate) fn mark_layout_changed_by(&mut self, change: Change, cause: DrawCause) {
+    /// As [`State::mark_layout_changed`], for a window of `seat` that its client, of number
+    /// `client`, opened by its first buffer: that commit is the cause of the frames the change
+    /// arms on its seat's outputs. Another seat's outputs arrange again too, and the change is no
+    /// cause of what they draw.
+    pub(crate) fn mark_window_opened(&mut self, change: Change, seat: SeatId, client: Option<u64>) {
+        self.mark_layout_changed_by(change, Some((seat, DrawCause::Commit(client))));
+    }
+
+    /// Marks the layout changed, as [`State::mark_layout_changed`] says: `opened`, a seat and the
+    /// commit that opened a window of it, or a change of the layout on every output.
+    fn mark_layout_changed_by(&mut self, change: Change, opened: Option<(SeatId, DrawCause)>) {
         self.layout_dirty = true;
         self.events.focus_may_have_moved();
         self.layout_change = std::mem::take(&mut self.layout_change).and(change);
-        let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
-        for id in ids {
-            self.schedule_refresh_for_content(id, cause);
+        let outputs: Vec<(OutputId, SeatId)> =
+            self.outputs.iter().map(|o| (o.id, o.seat)).collect();
+        for (output, seat) in outputs {
+            let cause = match opened {
+                None => Some(DrawCause::LayoutChange),
+                Some((opener, cause)) if opener == seat => Some(cause),
+                Some(_) => None,
+            };
+            self.schedule_refresh_for_content(output, cause);
         }
     }
 
-    /// Arms `output`'s next refresh for something new to draw, `cause`: under VRR, unpaced, and
-    /// sooner than a refresh armed already for nothing new.
-    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId, cause: DrawCause) {
+    /// Arms `output`'s next refresh for something new to draw, `cause` when it has one: under
+    /// VRR, unpaced, and sooner than a refresh armed already for nothing new.
+    pub(crate) fn schedule_refresh_for_content(
+        &mut self,
+        output: OutputId,
+        cause: Option<DrawCause>,
+    ) {
         if let Some(index) = self.output_index(output) {
             self.outputs[index].content_pending = true;
         }
-        self.schedule_refresh(output, Some(cause));
+        self.schedule_refresh(output, cause);
     }
 
     /// Notes `cause` among the causes of `output`'s next frame (`rest.rs`), whose refresh is
@@ -158,9 +176,7 @@ impl State {
     /// Arms `output`'s next refresh for `cause`, unless it is armed already: at once when the
     /// output is idle, else at the boundary it aims at minus its lead. See the module's
     /// documentation. Under VRR, a refresh armed for nothing new is paced; something new that
-    /// comes before it arms it again, sooner. Either way `cause` is among the next frame's; none
-    /// for a commit that brought nothing new, whose frame callbacks the refresh answers though it
-    /// is no cause of what it draws.
+    /// comes before it arms it again, sooner. Either way `cause` is among the next frame's.
     pub(crate) fn schedule_refresh(&mut self, output: OutputId, cause: Option<DrawCause>) {
         let deadline = Deadline::Refresh(output);
         let now = self.clock.now();
@@ -247,22 +263,27 @@ impl State {
         if self.ahead_of_committed_surface(surface) {
             return;
         }
-        // A commit is a cause of the frame that shows it only if it brought something new: one
-        // that only asks a frame callback arms the refresh that answers it, and causes nothing.
+        // A commit is a cause of the frame that shows it if it brought something new; one that
+        // brought no buffer, a frame callback or a subsurface moved, only if nothing else caused
+        // what that frame drew (`rest::DrawCause::BareCommit`).
         let content = std::mem::take(&mut self.committed_content);
-        let cause = DrawCause::Commit(self.committing_client);
+        let cause = if content {
+            DrawCause::Commit(self.committing_client)
+        } else {
+            DrawCause::BareCommit(self.committing_client)
+        };
         if mapped && self.layout_dirty {
             // The arrangement arms every output; the commit is among its own output's causes.
-            if content && let Some(output) = shown_on {
+            if let Some(output) = shown_on {
                 self.note_draw_cause(output, cause);
             }
             return;
         }
         if let Some(output) = shown_on {
             if content {
-                self.schedule_refresh_for_content(output, cause);
+                self.schedule_refresh_for_content(output, Some(cause));
             } else {
-                self.schedule_refresh(output, None);
+                self.schedule_refresh(output, Some(cause));
             }
         } else if unseen {
             let trees = self.window_trees(root);
@@ -388,7 +409,7 @@ impl State {
             // changed or failed: a motion never stops short of its end, and a failed drawing of
             // its last frame is drawn again.
             self.outputs[index].in_motion = true;
-            self.schedule_refresh_for_content(output, DrawCause::Motion);
+            self.schedule_refresh_for_content(output, Some(DrawCause::Motion));
         } else if std::mem::take(&mut self.outputs[index].in_motion) {
             self.tell_motion_ended(output, held);
         }
@@ -410,9 +431,10 @@ impl State {
             .collect();
         let menus = self.x11_shown_menus(&self.outputs[index]);
         // What this frame shows; a cause noted from here on is the next frame's.
-        let causes = self.outputs[index].draw_causes.take();
+        let mut causes = self.outputs[index].draw_causes.take();
         let drawing = self.draw(index, &shown, &menus);
         if matches!(drawing, Drawing::Drawn { .. }) {
+            causes.drawn();
             self.rest.frame_drawn(self.outputs[index].seat, &causes);
         }
         self.outputs[index].draw_causes.recycle(causes);
