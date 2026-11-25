@@ -288,8 +288,9 @@ nix build --out-link /tmp/opium github:HoneySlatt/Opium/<revision>
 YUNA_OPIUM=/tmp/opium/bin/opium nix develop -c cargo test -p yuna --test opium -- --ignored
 ```
 
-The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`) and the
-compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`), shrink a failure
+The property tests, the layout model's (`crates/yuna-layout/tests/properties.rs`), the
+compositor's random requests (`crates/yuna/tests/headless/random_requests.rs`) and the events'
+oracle (`crates/yuna/tests/headless/event_stream.rs`), shrink a failure
 to the shortest sequence that still fails, and keep its seed in a `.proptest-regressions` file
 beside the test. Commit that file with the fix: the case then runs at every check. A seed
 replays its case only while the test's generator stays the same; when you change the random
@@ -304,6 +305,10 @@ effect:
 ```sh
 PROPTEST_CASES=2500 nix develop -c cargo test -p yuna --test headless random_requests -- --nocapture
 ```
+
+The events' oracle runs 128 cases in each of its two tests, animations off and on; some marks it
+finds only past a thousand cases, so run it with `PROPTEST_CASES=2000` after a change to a change
+point, and write a sequence it finds into `sequences_written_out`.
 
 The timings are measured on an idle machine, one measurement at a time, and go to
 [`docs/measurements.md`](docs/measurements.md).
@@ -628,7 +633,7 @@ prints; it is raised at each release.
 | The environment Yuna gives its programs, as [`crates/yuna/src/mcp/programs/environment.rs`](crates/yuna/src/mcp/programs/environment.rs) lists it: `YUNA_SEAT`, their seat's throwaway home ([ADR-0105](docs/adr/0105-an-agents-programs-on-a-throwaway-home.md)), and the accessibility variables | Yuna's | the tests of `crates/yuna/tests/mcp.rs` that read a program's variables |
 | The MCP server: its revisions, its tools' names, arguments and results; `tools/list` holds the names, the arguments' schemas, and the results in each tool's description, so that a new field of a result is written there, and the contract file rewritten | the revisions `2026-07-28` and, opened by `initialize`, `2025-11-25` ([`mcp/protocol.rs`](crates/yuna/src/mcp/protocol.rs)); the tools, Yuna's | [`crates/yuna/tests/contracts/tools-list.json`](crates/yuna/tests/contracts/tools-list.json) |
 | The Nix package's outputs: `packages.x86_64-linux.yuna`, also `default`, whose `bin/yuna` draws with its own Mesa and finds Xwayland and dbus-daemon ([ADR-0126](docs/adr/0126-yuna-and-the-owners-other-projects.md)) | Yuna's | CI's `package` job, which builds it and runs it from an empty environment |
-| `yuna-ipc`'s commands, refusals and events, the crate Hollow will use; its changes are announced once Hollow depends on it ([ADR-0146](docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | the crate's, the workspace's; its own semantic versions from then (Stage 2c) | its unit tests, and the tests that drive every command through `Compositor::command` |
+| `yuna-ipc`'s commands, refusals and events, the crate Hollow will use; its changes are announced once Hollow depends on it, what MCP tells of it already ([ADR-0146](docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md), [ADR-0153](docs/adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)) | the crate's, the workspace's; its own semantic versions from then (Stage 2c) | its unit tests, the tests that drive every command through `Compositor::command`, and the events' oracle, `crates/yuna/tests/headless/event_stream.rs` |
 
 None of them is a stored format: Yuna writes no file that another version reads, so no
 contract has a migration yet, and going back to an earlier build is a consumer pinning an earlier

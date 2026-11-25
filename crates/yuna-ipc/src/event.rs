@@ -15,7 +15,8 @@ pub const MAX_EVENT_TEXT: usize = 512;
 /// round, and when a reader asks. A build compares each fact marked with what it last told, so
 /// that a fact changed and changed back tells nothing, and one changed a thousand times tells one
 /// event with its last value: a window is told at most once a build for each kind. A window
-/// opened and closed between two builds is told opened, then closed.
+/// opened and closed between two builds is told opened, then closed; an output added and removed
+/// between two builds is not told.
 ///
 /// A build gives its events in this order: outputs added and changed, in the order they were
 /// created, then outputs removed, by id; then window by window, by id: opened, changed, placed,

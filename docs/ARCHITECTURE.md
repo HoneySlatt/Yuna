@@ -359,7 +359,7 @@ Hollow later ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-
 [`events.rs`](../crates/yuna/src/events.rs) is the one module that makes them.
 
 1. **Nothing is kept until someone watches** (`Compositor::watch_events`); then every window and
-   output there is is marked, so that the first build tells them.
+   output there is, is marked, so that the first build tells them.
 2. **Marks at the change points.** Each place where a fact an event tells changes calls in with
    what changed, never a description: a window mapped or closed, its title or application id, its
    answers to pings; the arrangement, which compares each output's places before and after; a
@@ -375,7 +375,8 @@ Hollow later ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-
 
 A property test, `tests/headless/event_stream.rs`, folds the stream into a state after random
 operations and compares it with what the compositor describes: a change point left unmarked
-fails it.
+fails it when its random cases reach it, which for some takes thousands of cases; the sequences
+they seldom reach are written out beside them, every command of theirs applied.
 
 ### Popups
 
@@ -840,6 +841,10 @@ and each test file's documentation says what the file covers.
   ([measurements](measurements.md#m14-phase-b2--the-protocols-and-the-robustness-tests-2026-11-12)).
   `PROPTEST_CASES=<n>` runs more. A sequence found failing goes into `sequences_found_before`,
   since a seed replays its case only while the generator stays the same.
+- **The events' oracle**: `event_stream.rs` folds the events after random steps into a state and
+  compares it with what the compositor describes, in two tests of 128 cases, animations off and
+  on; `sequences_written_out` holds what its random cases seldom reach
+  ([The compositor's events](#the-compositors-events)).
 - **The program**, run as a process, in `crates/yuna/tests/`: `command_line.rs`; `contracts.rs`,
   which compares `--help` and `tools/list` with `tests/contracts/`; `mcp.rs`, `yuna mcp` with its
   programs; `applications.rs`, real applications, with Yuna's rest read from its log and `/proc`

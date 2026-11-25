@@ -226,10 +226,13 @@ pub fn definitions() -> Value {
                 max_cll, max_fall and rendering intent. With after, a window's id, or limit, \
                 gives a page: the windows whose id is above after, in that order, limit at \
                 most (128, its default and its most), and next, the last window given while more \
-                match after it, else null: give it as after for the next page. A window opened \
-                meanwhile comes on a later page; one closed meanwhile is not listed. Without \
-                either, every window, and no next. With wait_ms, waits up to that long for a \
-                window that matches the filters, after included, when none does yet.",
+                match after it: give it as after for the next page; null on the last page, \
+                where there is none (an after of null is no after). A window opened meanwhile \
+                comes on a later page; one closed meanwhile is not listed. Without either, \
+                every window, and no next: past a few hundred windows, more than an agent's \
+                tool output takes. With wait_ms, waits up to that long for a window that \
+                matches the filters, after included, when none does yet, and for one that \
+                matches to be placed by the layout.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -287,7 +290,7 @@ pub fn definitions() -> Value {
                 reply; an after past the seat's newest event is refused. next is the cursor to \
                 give next, the seat's newest event when no more wait, and missed how many \
                 events of the seat after the cursor its log, which keeps its last 1024, \
-                dropped: read windows again then. Without after, no past event: the reply's \
+                dropped: read windows again then, a page at a time. Without after, no past event: the reply's \
                 next reads what comes. With wait_ms, waits up to that long, on real time \
                 whatever the clock, for a first event that matches, and answers once the round \
                 that recorded it ends, or at once when the log dropped events after the \

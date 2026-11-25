@@ -189,8 +189,8 @@ pub struct WindowDescription {
 /// record ([ADR-0156](../../../docs/adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)):
 /// the lineage is read in `/proc`, then the pidfd polled without waiting. Not ready, the peer had
 /// not exited, so no other process had its pid while Yuna read: the process, the lineage's first,
-/// and its group are the client's own ([`Identity::Exact`]). Ready, the peer had exited before
-/// the accept: it has no lineage and no group, so no program ([`Identity::Exited`]). The pidfd is
+/// and its group are the client's own ([`Identity::Exact`]). Ready, the peer had exited, before
+/// the accept or while Yuna read: it has no lineage and no group, so no program ([`Identity::Exited`]). The pidfd is
 /// closed then, so a client costs no descriptor more. What stays inexact: each parent above the
 /// client may have been replaced while Yuna read; a kernel that refuses the pidfd, one before
 /// Linux 6.5, leaves the walk alone ([`Identity::Inexact`]); and an X11 client's pid, which XRes
@@ -230,8 +230,9 @@ pub enum Identity {
     /// seat's Xwayland, whose pid is Yuna's own child's, a peer whose pid the kernel did not give,
     /// and a peer that is Yuna itself, a test's socket pair. It names no program.
     Unread,
-    /// The peer had exited before Yuna accepted it, reaped or not: the record holds no lineage and
-    /// no group, so no program.
+    /// The peer had exited by the time Yuna polled its pidfd, once its lineage was read, reaped or
+    /// not: before the accept, or while Yuna read. The record holds no lineage and no group, so
+    /// no program.
     Exited,
 }
 
@@ -679,7 +680,9 @@ impl Compositor {
     /// changed many times is one event, and a window opened and closed since is told opened then
     /// closed. A window's place is told once no arrangement is pending, at a later call
     /// otherwise. Its cost follows what changed, not the windows: it reads the windows marked
-    /// alone. None unless [`Compositor::watch_events`] was called.
+    /// alone, counted by [`Compositor::windows_described_for_events`]; a build that places a
+    /// window also reads each output's arrangement once, which the count leaves out. None unless
+    /// [`Compositor::watch_events`] was called.
     pub fn take_events(&mut self) -> Vec<Event> {
         crate::events::take(&mut self.state)
     }

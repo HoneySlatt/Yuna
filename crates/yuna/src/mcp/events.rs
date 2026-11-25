@@ -342,22 +342,65 @@ mod tests {
         assert_eq!(log.last_seq(SEAT), 0);
     }
 
+    /// Each of the compositor's kinds has MCP's: the list names every kind
+    /// `yuna_ipc::Event` has, eleven, MCP's own `program_exited` apart.
     #[test]
     fn every_kind_of_the_compositors_is_known() {
+        use yuna_ipc::Event;
         let seat = SEAT;
         let window = WindowId(1);
         let output = yuna_types::OutputId(1);
         let told = [
             (
-                yuna_ipc::Event::WindowUnresponsive { seat, window },
+                Event::WindowOpened {
+                    seat,
+                    window,
+                    app_id: None,
+                    title: None,
+                    pid: None,
+                    shell: yuna_types::WindowShell::Xdg,
+                },
+                Kind::WindowOpened,
+            ),
+            (
+                Event::WindowChanged {
+                    seat,
+                    window,
+                    title: None,
+                    app_id: None,
+                },
+                Kind::WindowChanged,
+            ),
+            (
+                Event::WindowPlaced {
+                    seat,
+                    window,
+                    output: None,
+                    workspace: None,
+                    place: None,
+                },
+                Kind::WindowPlaced,
+            ),
+            (
+                Event::WindowUnresponsive { seat, window },
                 Kind::WindowUnresponsive,
             ),
+            (Event::WindowClosed { seat, window }, Kind::WindowClosed),
+            (Event::Focus { seat, window: None }, Kind::Focus),
+            (Event::OutputAdded { seat, output }, Kind::OutputAdded),
+            (Event::OutputChanged { seat, output }, Kind::OutputChanged),
+            (Event::OutputRemoved { seat, output }, Kind::OutputRemoved),
             (
-                yuna_ipc::Event::OutputRemoved { seat, output },
-                Kind::OutputRemoved,
+                Event::ClientLeft {
+                    seat,
+                    client: 1,
+                    pid: None,
+                    error: None,
+                },
+                Kind::ClientLeft,
             ),
             (
-                yuna_ipc::Event::ClientRefused {
+                Event::ClientRefused {
                     seat,
                     bound: 1,
                     refused: 1,
@@ -365,6 +408,11 @@ mod tests {
                 Kind::ClientRefused,
             ),
         ];
+        assert_eq!(
+            told.len() + 1,
+            Kind::ALL.len(),
+            "program_exited is MCP's own"
+        );
         for (event, kind) in told {
             assert_eq!(Kind::of(&event), Some(kind));
         }

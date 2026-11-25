@@ -140,7 +140,7 @@ pub(crate) struct State {
     /// clients served between two takes.
     pub client_arrivals: Option<Vec<ClientArrival>>,
     /// Whether Yuna has warned that the kernel gives no pidfd of a client's peer: once for the
-    /// process ([`ClientProcess::accepted`]).
+    /// compositor ([`ClientProcess::accepted`]).
     pub pidfd_refusal_warned: bool,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,

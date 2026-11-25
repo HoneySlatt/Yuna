@@ -24,7 +24,8 @@
 //!   protocol is decided with Hollow's interface (Stage 2c).
 //! - A contract in 0.x
 //!   ([ADR-0079](../../../docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
-//!   each change is announced in the changelog, as MCP's `events` tells the events already. Its
+//!   once Hollow uses it, each change is announced in the changelog; what MCP's `events` and
+//!   `workspaces` tell of it is MCP's contract, whose changes are announced already. Its
 //!   enums are `#[non_exhaustive]`, so that a command, a reason or a kind of event added is not a
 //!   break for the programs that match on them.
 //! - Level 1 of the crate map, on `yuna-types` alone
@@ -85,7 +86,8 @@ pub enum Command {
         /// The output it goes to; the focused one when none.
         output: Option<OutputId>,
     },
-    /// Removes an empty named workspace.
+    /// Removes a named workspace: it loses its name and keeps its windows, unnamed; the layout
+    /// drops it once it is empty and not shown.
     RemoveWorkspace(String),
     /// Moves a window to a workspace; a window named is focused first, as the move follows the
     /// focus.

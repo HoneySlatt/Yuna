@@ -560,6 +560,8 @@ struct Run {
     outputs: Vec<OutputDescription>,
     /// The events told, by kind.
     tally: BTreeMap<&'static str, u64>,
+    /// The commands the compositor refused, with why: a written sequence expects none.
+    refused: Vec<String>,
 }
 
 impl Run {
@@ -591,6 +593,7 @@ impl Run {
             folded: Folded::default(),
             outputs: Vec::new(),
             tally: BTreeMap::new(),
+            refused: Vec::new(),
         }
     }
 
@@ -742,8 +745,10 @@ impl Run {
             }
             Step::Command { seat, order } => {
                 let seat = self.seats[*seat];
-                if let Some(command) = self.command(seat, order) {
-                    let _ = self.compositor.command(Caller::on_seat(seat), command);
+                if let Some(command) = self.command(seat, order)
+                    && let Err(refusal) = self.compositor.command(Caller::on_seat(seat), command)
+                {
+                    self.refused.push(format!("{order:?}: {refusal}"));
                 }
             }
             Step::AddOutput { seat, mode } => {
@@ -825,9 +830,18 @@ impl Run {
 }
 
 /// Runs `steps`, checking the events after the start and after each step.
+/// Whether a sequence's commands must all apply: a written one's, which would test nothing
+/// were one refused; not a random one's, many of whose commands are rightly refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Commands {
+    MustApply,
+    MayBeRefused,
+}
+
 fn run(
     animations: Animations,
     steps: &[Step],
+    commands: Commands,
     tally: &mut BTreeMap<&'static str, u64>,
 ) -> Result<(), TestCaseError> {
     let mut run = Run::new(animations);
@@ -841,6 +855,12 @@ fn run(
         if let Err(error) = run.check(matches!(step, Step::OpenAndClose { .. })) {
             return Err(TestCaseError::fail(format!(
                 "step {index}, {step:?}: {error}"
+            )));
+        }
+        if commands == Commands::MustApply && !run.refused.is_empty() {
+            return Err(TestCaseError::fail(format!(
+                "step {index}, {step:?}: a command was refused: {:?}",
+                run.refused
             )));
         }
     }
@@ -866,7 +886,12 @@ fn run_cases(animations: Animations) {
     let mut runner = TestRunner::new(config);
     let started = Instant::now();
     let result = runner.run(&prop::collection::vec(step(), 1..=MAX_STEPS), |steps| {
-        run(animations, &steps, &mut tally.borrow_mut())
+        run(
+            animations,
+            &steps,
+            Commands::MayBeRefused,
+            &mut tally.borrow_mut(),
+        )
     });
     if let Err(error) = result {
         panic!("{error}\n{runner}");
@@ -889,7 +914,9 @@ fn the_event_stream_tells_what_the_compositor_describes_with_animations() {
 }
 
 /// Sequences whose marks the random cases seldom reach, written out, each run with animations
-/// off and on: a workspace that loses its name, its windows shown, then hidden on it.
+/// off and on, every command of theirs applied: a workspace that loses its name, its windows
+/// shown, then hidden on it; a window whose output is removed while it slides, told its output
+/// once the motion ends.
 #[test]
 fn sequences_written_out() {
     let on_first = |order| Step::Command { seat: 0, order };
@@ -917,10 +944,37 @@ fn sequences_written_out() {
             on_first(Order::RemoveWorkspace(2)),
             Step::Advance(20),
         ],
+        // The oracle's shrunk case for a lost mark where a motion ends (`move_to_output`): with
+        // animations, the output shown changes at the motion's end, not at the arrangement.
+        vec![
+            Step::AddOutput {
+                seat: 0,
+                mode: Mode(0),
+            },
+            open.clone(),
+            Step::Disconnect { slot: 1 },
+            open.clone(),
+            Step::SetTitle {
+                slot: 0,
+                window: 0,
+                title: Text::Short(0),
+            },
+            Step::Advance(34),
+            open.clone(),
+            Step::RemoveOutput {
+                output: 2_915_052_826_143_449_551,
+            },
+            Step::Advance(30),
+        ],
     ];
     for steps in sequences {
         for animations in [Animations::Off, Animations::On] {
-            if let Err(error) = run(animations, &steps, &mut BTreeMap::new()) {
+            if let Err(error) = run(
+                animations,
+                &steps,
+                Commands::MustApply,
+                &mut BTreeMap::new(),
+            ) {
                 panic!("{error}, animations {animations:?}");
             }
         }

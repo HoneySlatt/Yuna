@@ -1,9 +1,10 @@
 //! Costs of the commit and arrangement paths that must follow the work asked, never grow faster
 //! (Stage 1's audit, m1.13): one commit of a window applying its whole tree of subsurfaces, an
-//! arrangement beside thousands of windows refused by the cap, new windows' first commits on a
-//! seat full of windows, and the build of events among a client's 1,000 windows (ADR-0153). Each
-//! story checks what it can count, never a time: a time depends on the machine. Each also prints its times, and runs at the size `YUNA_COST_SIZE` gives, for the
-//! measurements made in release (`docs/measurements.md`).
+//! arrangement beside thousands of windows refused by the cap, new windows' first commits on a seat
+//! full of windows, and the build of events among a client's 1,000 windows (ADR-0153). Each story
+//! checks what it can count, never a time: a time depends on the machine. Each also prints its
+//! times, and runs at the size `YUNA_COST_SIZE` gives, for the measurements made in release
+//! (`docs/measurements.md`).
 //!
 //! A test [`Client`] makes one subsurface at a time; [`Trees`] makes thousands, on an event
 //! queue of its own on the client's connection.

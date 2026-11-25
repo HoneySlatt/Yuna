@@ -15,12 +15,12 @@
 //! - **a title**: a build after one window's title changed: that window alone is read and
 //!   compared with what was told, and one event recorded.
 //!
-//! The compositor's count of the windows its builds read checks each case: none for the first
-//! two, one a round for the third. Each round's build is timed alone, the client's requests and
-//! the compositor's work before it left out. It prints the median, the 99th percentile and the longest of each, in
-//! microseconds, and the load of the machine before and after, which a figure taken while
-//! other programs load the processor reports beside it. Build it for release, then run it in the
-//! development shell, alone among measurements; it needs no screen:
+//! The compositor's count of the windows its builds read checks each case: none for the first two,
+//! one a round for the third. Each round's build is timed alone, the client's requests and the
+//! compositor's work before it left out. It prints the median, the 99th percentile and the longest
+//! of each, in microseconds, and the load of the machine before and after, which a figure taken
+//! while other programs load the processor reports beside it. Build it for release, then run it in
+//! the development shell, alone among measurements; it needs no screen:
 //!
 //! ```sh
 //! nix develop -c cargo build --release -p yuna --example events_look

@@ -1384,7 +1384,7 @@ fn events_wait_from_now_and_kinds_filter_them() {
     assert_eq!(quiet["timed_out"], json!(true));
 }
 
-/// A title changed 1,500 times between two looks is one `window_changed`, with the last title.
+/// A title changed 1,500 times between two builds is one `window_changed`, with the last title.
 #[test]
 fn a_title_changed_1500_times_in_a_round_is_one_event() {
     let mut mcp = Mcp::new(ClockMode::Manual);

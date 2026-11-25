@@ -2,7 +2,7 @@
 
 use crate::harness::*;
 use yuna_layout::{OpenOptions, Options};
-use yuna_types::{Direction, Tiling, WorkspaceId};
+use yuna_types::{Direction, SeatId, Tiling, WorkspaceId};
 
 /// The owner's desk, as Yuna starts: the configuration declares the workspaces, then the
 /// monitors come. The 4K one at scale 1.5 on the left holds workspaces 1, 3 and 5; the 1080p one
@@ -229,4 +229,33 @@ fn a_workspaces_name_is_found_from_its_id_wherever_it_is() {
     m.ok(|l| l.remove_output(SIDE));
     assert_eq!(m.layout.workspace_name(two), Some("2"), "without an output");
     assert_eq!(m.layout.workspace_name(WorkspaceId(9_999)), None);
+}
+
+/// A seat's named workspace lists its windows, tiled in reading order then floating, wherever it
+/// is: shown, hidden on its output, or without an output; an unknown name or seat lists none,
+/// and so does a workspace once it lost its name, though it keeps its windows.
+#[test]
+fn a_named_workspaces_windows_are_listed_tiled_then_floating() {
+    let mut m = desk();
+    m.ok(|l| l.focus_workspace(OWNER, "3"));
+    m.open(1);
+    m.open(2);
+    m.open(3);
+    m.ok(|l| l.set_floating(w(2), true));
+    assert_eq!(
+        m.layout.named_workspace_windows(OWNER, "3"),
+        [w(1), w(3), w(2)]
+    );
+    m.ok(|l| l.focus_workspace(OWNER, "4"));
+    assert_eq!(
+        m.layout.named_workspace_windows(OWNER, "3"),
+        [w(1), w(3), w(2)],
+        "hidden on its output"
+    );
+    assert_eq!(m.layout.named_workspace_windows(OWNER, "none"), []);
+    assert_eq!(m.layout.named_workspace_windows(AGENT, "3"), []);
+    assert_eq!(m.layout.named_workspace_windows(SeatId(9), "3"), []);
+    m.ok(|l| l.remove_workspace(OWNER, "3"));
+    assert_eq!(m.layout.named_workspace_windows(OWNER, "3"), []);
+    assert_eq!(m.info(1).workspace, None, "its windows kept, unnamed");
 }

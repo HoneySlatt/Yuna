@@ -417,7 +417,8 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   `after` nor `limit` lists every window of its seat, as before: past a few hundred, its reply
   passes Claude Code's 25,000 tokens of tool output. Each page describes every window to choose
   its own, through `Layout::window` ([above](#the-layout-model)). Kept: the tool's description
-  says so, and an agent that expects many windows pages; the description's cost is paid with the
+  says that a call without a page may pass an agent's limit, and an agent that expects many
+  windows pages; the description's cost is paid with the
   layout's index, at Stage 2a, M2.5 (the boundary).
 - A process that empties its environment and leaves its process group and its parents, a
   double fork with `setsid` and `env -i`, escapes its seat's closing
