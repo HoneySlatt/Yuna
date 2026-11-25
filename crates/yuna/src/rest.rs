@@ -80,7 +80,8 @@ pub enum Source {
     /// SIGTERM or SIGINT, through its pipe.
     StopSignal,
     /// Another thread woke it through a [`Waker`](crate::Waker), a test seam: the WLCS shim's
-    /// hooks, which reach the compositor's thread this way.
+    /// hooks, which reach the compositor's thread this way. No task of the table uses one: each
+    /// wakes Yuna through a source of its own (`tasks.rs`).
     Waker,
     /// SIGCHLD, through its pipe: a child of `yuna mcp` ended.
     ChildEnded,
@@ -360,6 +361,12 @@ impl Wake {
             source: Some(source),
             seat: Some(seat),
         }
+    }
+
+    /// What it names; none for the auditor's own.
+    #[cfg(test)]
+    pub(crate) fn source(self) -> Option<Source> {
+        self.source
     }
 
     /// The auditor's own source, the timer of the log of each second: what observes Yuna's rest

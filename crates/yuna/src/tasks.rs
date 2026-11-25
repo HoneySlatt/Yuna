@@ -50,6 +50,10 @@
 //!   - Failure: contained; its panic fails its capture alone.
 //!   - Class: normal. Clock: none; it reads the real clock only to log how long it took.
 //!
+//! Each task wakes the state thread through an event source of its own, which [`Task::wake`]
+//! names for the rest auditor (`rest.rs`): the X11 manager's by its seat, the encoders' as
+//! theirs. None uses a [`Waker`](crate::Waker), which the test seams alone hold.
+//!
 //! Every task runs at the normal scheduling class: an agent's Yuna is never lowered for a game
 //! ([ADR-0082](../../../docs/adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md)
 //! item 24). At a session pause and at a GPU loss, the stop order is none until Stage 2b brings
@@ -75,6 +79,8 @@ use std::time::{Duration, Instant};
 
 use yuna_types::SeatId;
 
+use crate::rest::{Source, Wake};
+
 /// The most bytes of a thread's name that Linux keeps (`TASK_COMM_LEN`, less its final zero).
 pub(crate) const MAX_THREAD_NAME: usize = 15;
 
@@ -99,6 +105,17 @@ impl Task {
         // Every name is ASCII, so any byte is a character's boundary.
         name.truncate(MAX_THREAD_NAME);
         name
+    }
+
+    /// What the rest auditor names a wake this task gives Yuna: each task wakes the state thread
+    /// through a source of its own, which names it, and never through a
+    /// [`Waker`](crate::Waker), the test seams' alone. Every insertion of a task's source takes its
+    /// wake from here.
+    pub(crate) fn wake(self) -> Wake {
+        match self {
+            Task::X11Manager(seat) => Wake::of_seat(Source::X11Manager, seat),
+            Task::Encoder => Wake::of(Source::Encoders),
+        }
     }
 
     /// How long a stop waits for its thread to end, at most, before it is detached.
@@ -202,6 +219,21 @@ mod tests {
             let name = task.thread_name();
             assert!(name.len() <= MAX_THREAD_NAME, "{name}");
             assert!(name.starts_with("yuna-"), "{name}");
+        }
+    }
+
+    /// Each task names its own wakes, by a source no other task and no test seam shares; an X11
+    /// manager's by its seat too.
+    #[test]
+    fn each_task_wakes_yuna_through_a_source_of_its_own() {
+        let seat = SeatId(7);
+        let manager = Task::X11Manager(seat).wake();
+        let encoder = Task::Encoder.wake();
+        assert_eq!(manager, Wake::of_seat(Source::X11Manager, seat));
+        assert_eq!(encoder, Wake::of(Source::Encoders));
+        assert_ne!(manager.source(), encoder.source());
+        for wake in [manager, encoder] {
+            assert_ne!(wake.source(), Some(Source::Waker), "{wake:?}");
         }
     }
 

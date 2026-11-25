@@ -359,7 +359,7 @@ impl Server {
         let noted = events.clone();
         insert_source(
             &handle,
-            Wake::of(Source::Encoders),
+            Task::Encoder.wake(),
             encoded,
             move |event, _, _| {
                 if let channel::Event::Msg(message) = event {
