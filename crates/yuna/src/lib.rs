@@ -84,7 +84,7 @@ pub use keymap::{KeyboardLayout, MAX_LAYOUT_NAME};
 pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use process::raise_open_files_limit;
-pub use render::Device;
+pub use render::{Device, GpuPriority};
 pub use screencopy::{MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT};
 pub use seats::{AGENT_KEYBOARD_LAYOUT, MAX_CLIENTS_PER_SEAT};
 pub use selection::{CLIPBOARD_TIMEOUT, MAX_CLIPBOARD_WRITES};

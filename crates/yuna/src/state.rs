@@ -90,6 +90,8 @@ pub(crate) struct State {
     pub renderer: GlesRenderer,
     /// `GL_MAX_RENDERBUFFER_SIZE`: the largest side an output may have.
     pub max_output_side: u32,
+    /// The GPU priority the renderer's context was granted, read once when it was opened.
+    pub gpu_priority: crate::render::GpuPriority,
     pub outputs: Vec<VirtualOutput>,
     next_output_id: u64,
     /// The disabled globals of removed outputs and closed seats, with when each was removed on
@@ -208,7 +210,8 @@ impl State {
         animations: Settings,
     ) -> Result<State, Error> {
         let dh = &display_handle;
-        let (renderer, max_output_side) = crate::render::open_renderer(device)?;
+        let opened = crate::render::open_renderer(device)?;
+        let renderer = opened.renderer;
         let mut layout = Layout::new(yuna_layout::Options::default())
             .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         layout
@@ -227,7 +230,8 @@ impl State {
             clock,
             layout,
             renderer,
-            max_output_side,
+            max_output_side: opened.max_size,
+            gpu_priority: opened.priority,
             outputs: Vec::new(),
             next_output_id: 1,
             retired_globals: Vec::new(),

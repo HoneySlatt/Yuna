@@ -33,7 +33,7 @@ use crate::input::PointerDescription;
 use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
 use crate::process::{has_exited, lineage_under_yuna};
-use crate::render::Device;
+use crate::render::{Device, GpuPriority};
 use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::selection::SelectionRead;
 use crate::state::{OWNER_SEAT, State};
@@ -1053,6 +1053,12 @@ impl Compositor {
     /// offers no `linux-dmabuf` global.
     pub fn dmabuf_format_count(&self) -> usize {
         self.state.dmabuf_offer.formats
+    }
+
+    /// The GPU priority its renderer's context was granted, read once when the renderer was
+    /// opened, and logged then.
+    pub fn gpu_priority(&self) -> GpuPriority {
+        self.state.gpu_priority
     }
 
     /// What it did so far.

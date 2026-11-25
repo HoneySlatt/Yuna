@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use drm_fourcc::DrmFourcc;
+use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::element::surface::{
     WaylandSurfaceRenderElement, render_elements_from_surface_tree,
@@ -72,8 +73,59 @@ render_elements! {
 /// display.
 static OPENED_DISPLAYS: Mutex<Vec<EGLDisplay>> = Mutex::new(Vec::new());
 
-/// Opens the renderer on `device`, and reads the largest renderbuffer it allocates.
-pub(crate) fn open_renderer(device: Device) -> Result<(GlesRenderer, u32), Error> {
+/// The priority the GPU's driver granted the renderer's context, as EGL tells it
+/// (`EGL_IMG_context_priority`). Yuna asks for none, so a driver grants its default, medium; an
+/// agent's Yuna keeps it, and the session's at Stage 2b raises it only on a measure
+/// ([ADR-0135](../../../docs/adr/0135-priority-against-a-game-amds-master-override-turned-on-at-2b-on-a-measure.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuPriority {
+    /// Above every other context of the device: NVIDIA's realtime level.
+    Realtime,
+    /// Above the default.
+    High,
+    /// The default, which a context asking for none is granted.
+    Medium,
+    /// Below the default.
+    Low,
+    /// The driver does not say: it lacks the extension.
+    Unknown,
+}
+
+impl GpuPriority {
+    /// Its name, as the log and MCP's `frames` give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            GpuPriority::Realtime => "realtime",
+            GpuPriority::High => "high",
+            GpuPriority::Medium => "medium",
+            GpuPriority::Low => "low",
+            GpuPriority::Unknown => "unknown",
+        }
+    }
+
+    fn of(context: &EGLContext) -> GpuPriority {
+        match context.get_context_priority() {
+            Some(ContextPriority::RealTime) => GpuPriority::Realtime,
+            Some(ContextPriority::High) => GpuPriority::High,
+            Some(ContextPriority::Medium) => GpuPriority::Medium,
+            Some(ContextPriority::Low) => GpuPriority::Low,
+            None => GpuPriority::Unknown,
+        }
+    }
+}
+
+/// The renderer [`open_renderer`] opened, with what it read of it once.
+pub(crate) struct OpenedRenderer {
+    pub renderer: GlesRenderer,
+    /// The largest renderbuffer it allocates, in pixels a side.
+    pub max_size: u32,
+    /// The priority its context was granted, logged when it was opened.
+    pub priority: GpuPriority,
+}
+
+/// Opens the renderer on `device`, reads the largest renderbuffer it allocates and the GPU
+/// priority its context was granted, and logs that priority.
+pub(crate) fn open_renderer(device: Device) -> Result<OpenedRenderer, Error> {
     let egl_device = find_device(device)?;
     // SAFETY: Smithay keeps a registry of the EGL displays it opens, so that two `EGLDisplay`s
     // on one device share one handle, and the last one dropped terminates it; Yuna keeps one of
@@ -84,13 +136,23 @@ pub(crate) fn open_renderer(device: Device) -> Result<(GlesRenderer, u32), Error
     keep_display(&display);
     let context = EGLContext::new(&display)
         .map_err(|e| Error::Renderer(format!("cannot create an EGL context: {e}")))?;
+    let priority = GpuPriority::of(&context);
+    tracing::info!(
+        priority = priority.name(),
+        ?device,
+        "the GPU priority granted"
+    );
     // SAFETY: the context was created just above on this thread and is current on no other. The
     // renderer never leaves this thread: the `Compositor` that owns it holds calloop's event loop,
     // which is not `Send`.
     let mut renderer = unsafe { GlesRenderer::new(context) }
         .map_err(|e| Error::Renderer(format!("cannot start the GLES renderer: {e}")))?;
     let max_size = max_renderbuffer_size(&mut renderer)?;
-    Ok((renderer, max_size))
+    Ok(OpenedRenderer {
+        renderer,
+        max_size,
+        priority,
+    })
 }
 
 /// Keeps `display` until the process ends, unless a display kept already shares its handle: a
