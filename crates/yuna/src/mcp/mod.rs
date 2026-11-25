@@ -87,7 +87,7 @@ use crate::{CaptureMapping, CapturedFrame, Error};
 use accessibility::Accessibility;
 use captures::CaptureWait;
 use clipboard::ClipboardRead;
-use events::{EventLog, Observer};
+use events::EventLog;
 use image::Encoded;
 use programs::{End, Programs};
 use protocol::{Call, Message, Revision, RpcError, Session};
@@ -101,7 +101,7 @@ pub use accessibility::{
     APP_DEADLINE, MAX_IN_FLIGHT, MAX_NODES, MAX_TEXT, REWALK_AFTER, REWALK_INTERVAL,
 };
 pub use captures::{MAX_ENCODERS, RECENT_CAPTURES};
-pub use events::{MAX_EVENT_TEXT, MAX_EVENTS, MAX_EVENTS_PER_REPLY};
+pub use events::{MAX_EVENTS, MAX_EVENTS_PER_REPLY};
 pub use image::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 pub use outputs::{MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE};
 pub use programs::{
@@ -201,13 +201,8 @@ pub struct Server {
     waits: Vec<WindowWait>,
     event_waits: Vec<EventWait>,
     rest_waits: Vec<RestWait>,
-    /// The agents' seats' events, and what the compositor described at the last look.
+    /// The agents' seats' events.
     event_log: EventLog,
-    observer: Observer,
-    /// The compositor's description generation at the last look; none before the first.
-    looked_at: Option<u64>,
-    /// How many looks described the windows and outputs.
-    looks: u64,
     /// The programs reaped since the events were last recorded.
     program_exits: Vec<(SeatId, u64, End)>,
     /// The keys of waiting calls and of closings, never reused.
@@ -295,8 +290,7 @@ impl Server {
         children: Option<OwnedFd>,
     ) -> Result<Server, Error> {
         compositor.watch_client_arrivals();
-        compositor.watch_client_departures();
-        compositor.watch_client_refusals();
+        compositor.watch_events();
         let failed = |what: &str, error: &dyn std::fmt::Display| {
             Error::EventLoop(format!("the MCP server's {what}: {error}"))
         };
@@ -397,9 +391,6 @@ impl Server {
             event_waits: Vec::new(),
             rest_waits: Vec::new(),
             event_log: EventLog::default(),
-            observer: Observer::default(),
-            looked_at: None,
-            looks: 0,
             program_exits: Vec::new(),
             next_wait: 1,
             closings: Vec::new(),
@@ -463,13 +454,6 @@ impl Server {
     #[doc(hidden)]
     pub fn encoder_limit(&self) -> usize {
         self.encoder_limit
-    }
-
-    /// How many times the server described the compositor's windows and outputs to tell their
-    /// events: once for each look after something they show may have changed. For tests.
-    #[doc(hidden)]
-    pub fn event_looks(&self) -> u64 {
-        self.looks
     }
 
     /// Records the seats' events now, as the end of each round does. For measures.

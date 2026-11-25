@@ -1,8 +1,8 @@
 //! Costs of the commit and arrangement paths that must follow the work asked, never grow faster
 //! (Stage 1's audit, m1.13): one commit of a window applying its whole tree of subsurfaces, an
-//! arrangement beside thousands of windows refused by the cap, and new windows' first commits on
-//! a seat full of windows. Each story checks what it can count, never a time: a time depends on
-//! the machine. Each also prints its times, and runs at the size `YUNA_COST_SIZE` gives, for the
+//! arrangement beside thousands of windows refused by the cap, new windows' first commits on a
+//! seat full of windows, and the build of events among a client's 1,000 windows (ADR-0153). Each
+//! story checks what it can count, never a time: a time depends on the machine. Each also prints its times, and runs at the size `YUNA_COST_SIZE` gives, for the
 //! measurements made in release (`docs/measurements.md`).
 //!
 //! A test [`Client`] makes one subsurface at a time; [`Trees`] makes thousands, on an event
@@ -17,7 +17,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
 use yuna::{Compositor, HIDDEN_FRAME_INTERVAL, MAX_WINDOWS_PER_CLIENT, OWNER_SEAT};
-use yuna_ipc::Command;
+use yuna_ipc::{Command, Event};
 use yuna_types::{Direction, Size, WindowId};
 
 use crate::client::{Client, memory_file};
@@ -543,4 +543,73 @@ fn initial_commits_on_a_full_seat_are_each_foretold_their_size() {
         assert_eq!(configures.len(), 1);
         assert_eq!((configures[0].width, configures[0].height), (1256, 1408));
     }
+}
+
+/// One client's 1,000 windows, its cap, each told opened by the first build of events; then a
+/// title changed among them, and an arrangement that moves none of them. The build after the
+/// title reads that window alone, and the one after the arrangement none, as the compositor
+/// counts the windows its builds read (`Compositor::windows_described_for_events`): a build's
+/// cost follows what changed, never the windows (ADR-0153).
+#[test]
+fn a_build_of_events_reads_the_windows_that_changed_alone() {
+    let mut compositor = manual_compositor();
+    let mut client = Client::connect(&mut compositor);
+    let windows: Vec<usize> = (0..MAX_WINDOWS_PER_CLIENT)
+        .map(|made| {
+            let window = client.create_window();
+            client.commit(window);
+            if made % 500 == 499 {
+                client.roundtrip(&mut compositor);
+            }
+            window
+        })
+        .collect();
+    client.roundtrip(&mut compositor);
+    for (made, &window) in windows.iter().enumerate() {
+        client.ack(window);
+        client.attach(window, 1, 1, GREY);
+        client.commit(window);
+        if made % 500 == 499 {
+            client.roundtrip(&mut compositor);
+        }
+    }
+    client.roundtrip(&mut compositor);
+    settle(&mut compositor, &mut client);
+    assert_eq!(compositor.windows().len(), MAX_WINDOWS_PER_CLIENT);
+
+    compositor.watch_events();
+    let told = compositor.take_events();
+    let opened = told
+        .iter()
+        .filter(|event| matches!(event, Event::WindowOpened { .. }))
+        .count();
+    assert_eq!(opened, MAX_WINDOWS_PER_CLIENT);
+    let read = compositor.windows_described_for_events();
+    assert_eq!(read, MAX_WINDOWS_PER_CLIENT as u64);
+
+    client.set_app_id_and_title(windows[500], "org.example.Many", "renamed");
+    client.roundtrip(&mut compositor);
+    let changed = compositor.take_events();
+    assert!(
+        matches!(&changed[..], [Event::WindowChanged { title: Some(title), .. }] if title == "renamed"),
+        "{changed:?}"
+    );
+    assert_eq!(compositor.windows_described_for_events(), read + 1);
+
+    let arranged = compositor.counters().windows_looked_at_for_hidden_frames;
+    compositor.rearrange();
+    compositor
+        .advance(Duration::from_millis(20))
+        .expect("the manual clock moves");
+    client.roundtrip(&mut compositor);
+    assert!(
+        compositor.counters().windows_looked_at_for_hidden_frames > arranged,
+        "no arrangement ran"
+    );
+    assert_eq!(compositor.take_events(), Vec::<Event>::new());
+    assert_eq!(
+        compositor.windows_described_for_events(),
+        read + 1,
+        "an arrangement that moved nothing made a window read"
+    );
 }

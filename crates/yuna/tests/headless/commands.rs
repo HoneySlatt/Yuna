@@ -4,7 +4,7 @@
 //! operation's own behaviour is the layout model's, tested there and in the stories that use it.
 
 use yuna::OWNER_SEAT;
-use yuna_ipc::{Command, Refusal};
+use yuna_ipc::{Command, Event, Refusal};
 use yuna_types::{Direction, WindowId};
 
 use crate::client::Client;
@@ -140,14 +140,16 @@ fn a_relative_focus_steps_through_the_outputs_workspaces() {
     assert_eq!(shown(&compositor).as_deref(), Some("one"));
 }
 
-/// A refused command changes nothing, so nothing is drawn for it: no refresh is armed, and the
-/// description agents read does not change.
+/// A refused command changes nothing, so nothing is drawn for it: no refresh is armed, and no
+/// event is built for it.
 #[test]
 fn a_refused_command_arms_no_refresh() {
     let mut compositor = manual_compositor();
+    compositor.watch_events();
     run_armed_deadlines(&mut compositor);
     assert_eq!(compositor.next_deadline(), None);
-    let generation = compositor.description_generation();
+    // The output there is, told first.
+    assert_ne!(compositor.take_events(), Vec::<Event>::new());
     for command in [
         Command::RemoveWorkspace("nowhere".to_owned()),
         Command::FocusWindow(WindowId(99)),
@@ -159,7 +161,7 @@ fn a_refused_command_arms_no_refresh() {
         assert!(compositor.command(owner(), command).is_err());
     }
     assert_eq!(compositor.next_deadline(), None);
-    assert_eq!(compositor.description_generation(), generation);
+    assert_eq!(compositor.take_events(), Vec::<Event>::new());
 }
 
 /// Closing a window the layout holds but no client shows is refused as an unknown window: the

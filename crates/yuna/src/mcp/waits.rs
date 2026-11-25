@@ -10,11 +10,11 @@
 //! seat's accessibility bus and `accessibility` together.
 //!
 //! What happens on agents' seats is recorded once a round in each seat's log, `events.rs`: the
-//! windows and outputs as the compositor describes them, compared with the last look; the
-//! clients the display ended, with the program each belongs to and the protocol error it was
-//! ended for, which the program keeps for `spawn list`; the programs reaped. An `events` call
-//! reads it from the agent's cursor, or waits, as `windows` does, for a first event that
-//! matches, answered at the end of the round that recorded it.
+//! compositor's events, built from what changed since the last round
+//! (`Compositor::take_events`), a client that left with the program it belongs to and the
+//! protocol error it was ended for, which the program keeps for `spawn list`; and the programs
+//! reaped. An `events` call reads it from the agent's cursor, or waits, as `windows` does, for a
+//! first event that matches, answered at the end of the round that recorded it.
 //!
 //! The other calls that wait belong to their tools' modules: `clipboard get` to `clipboard.rs`,
 //! `capture` to `captures.rs`, `accessibility` and `spawn start` with accessibility to
@@ -26,6 +26,7 @@ use std::time::Duration;
 use calloop::RegistrationToken;
 use calloop::timer::{TimeoutAction, Timer};
 use serde_json::{Map, Value, json};
+use yuna_ipc::Event;
 use yuna_types::SeatId;
 
 use super::Server;
@@ -38,7 +39,6 @@ use super::tools::{
     self, EventsCall, MAX_WAIT, MAX_WAITING_CALLS, MAX_WINDOWS_PER_PAGE, RestCall, ToolResult,
     WindowsCall,
 };
-use crate::MAX_CLIENTS_PER_SEAT;
 use crate::compositor::WindowDescription;
 use crate::rest::{RestCounts, Source, Wake, insert_source};
 use crate::state::OWNER_SEAT;
@@ -229,11 +229,13 @@ impl Server {
             ));
         }
         self.record_events();
-        let newest = self.event_log.last_seq();
+        let newest = self.event_log.last_seq(seat);
         let after = match call.after {
             Some(after) if after > newest => {
                 return Some(ToolResult::failed(format!(
-                    "after {after} is past the newest event, {newest}: give a reply's next"
+                    "after {after} is past seat {}'s newest event, {newest}: give a reply's \
+                     next, from this seat",
+                    seat.0
                 )));
             }
             Some(after) => after,
@@ -268,15 +270,13 @@ impl Server {
         None
     }
 
-    /// Records in the seats' logs what happened since the last time: outputs and windows as the
-    /// compositor describes them now, the clients the display ended, with the program each
-    /// belonged to, as resolved when Yuna accepted it (`Server::resolve_arrivals`), which keeps
-    /// the protocol error it was ended for while it is remembered, the connections the seats'
-    /// sockets refused past their bound, as each seat told them, and the programs reaped.
-    /// The windows and outputs are described only when the compositor's description generation
-    /// moved since the last look: a round in which only buffers changed, a game drawing,
-    /// describes nothing. Each agent seat has a log from its first look; a closed seat's went
-    /// with it.
+    /// Records in the seats' logs what happened since the last time: the compositor's events,
+    /// built from what changed alone (`Compositor::take_events`), so that a round in which only
+    /// buffers changed, a game drawing, builds nothing; with each client that left, the program
+    /// it belonged to, as resolved when Yuna accepted it (`Server::resolve_arrivals`), which keeps
+    /// the protocol error it was ended for while it is remembered; and the programs reaped. Each
+    /// agent seat has a log from the first call after it was made; a closed seat's went with it,
+    /// and its events are not told.
     pub(super) fn record_events(&mut self) {
         for seat in self.compositor.seats() {
             if seat != OWNER_SEAT {
@@ -284,46 +284,35 @@ impl Server {
             }
         }
         let time_ns = self.compositor.now().as_nanos() as u64;
-        let generation = self.compositor.description_generation();
-        if self.looked_at != Some(generation) {
-            self.looked_at = Some(generation);
-            self.looks += 1;
-            let windows = self.compositor.windows();
-            let outputs = self.compositor.output_descriptions();
-            let arranged = !self.compositor.arrangement_pending();
-            for (seat, data) in self.observer.look(&windows, &outputs, arranged) {
-                self.event_log.record(seat, time_ns, data);
-            }
-        }
+        // Before the departures, so that each finds its arrival resolved.
         self.resolve_arrivals();
-        for departure in self.compositor.take_client_departures() {
-            // Dropped for every client, those of seats without a log too.
-            let program = self.client_programs.remove(&departure.number);
-            if !self.event_log.has_seat(departure.seat) {
+        for event in self.compositor.take_events() {
+            let Some(kind) = Kind::of(&event) else {
+                tracing::debug!(?event, "an event of a kind MCP does not know is not told");
                 continue;
-            }
-            if let (Some(program), Some(error), Some((programs, _))) =
-                (program, &departure.error, &mut self.programs)
-            {
-                programs.note_protocol_error(program, error.clone());
-            }
-            let left = EventData::ClientLeft {
-                pid: departure.process.pid,
-                program,
-                error: departure.error,
             };
-            self.event_log.record(departure.seat, time_ns, left);
-        }
-        for refusal in self.compositor.take_client_refusals() {
-            let refused = EventData::ClientRefused {
-                bound: MAX_CLIENTS_PER_SEAT,
-                refused: refusal.refused,
+            let seat = event.seat();
+            let program = match &event {
+                Event::ClientLeft { client, error, .. } => {
+                    // Dropped for every client, those of seats without a log too.
+                    let program = self.client_programs.remove(client);
+                    if self.event_log.has_seat(seat)
+                        && let (Some(program), Some(error), Some((programs, _))) =
+                            (program, error, &mut self.programs)
+                    {
+                        programs.note_protocol_error(program, error.clone());
+                    }
+                    program
+                }
+                _ => None,
             };
-            self.event_log.record(refusal.seat, time_ns, refused);
+            let data = EventData::Compositor { event, program };
+            self.event_log.record(seat, time_ns, kind, data);
         }
         for (seat, program, end) in std::mem::take(&mut self.program_exits) {
+            let exited = EventData::ProgramExited { program, end };
             self.event_log
-                .record(seat, time_ns, EventData::ProgramExited { program, end });
+                .record(seat, time_ns, Kind::ProgramExited, exited);
         }
     }
 

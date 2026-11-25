@@ -12,6 +12,7 @@
 
 use xkbcommon::xkb;
 use yuna::{BUTTON_LEFT, Compositor, MAX_HELD_BUTTONS, MAX_HELD_KEYS};
+use yuna_ipc::Event;
 use yuna_types::SeatId;
 
 use crate::input_client::{InputClient, InputEvent};
@@ -102,7 +103,7 @@ fn a_virtual_keyboard_holding_many_keys() {
     driver.roundtrip(&mut compositor);
     first.roundtrip(&mut compositor);
     first.take_events();
-    compositor.watch_client_departures();
+    compositor.watch_events();
     assert_eq!(
         compositor.client_pids(a).len(),
         2,
@@ -125,7 +126,11 @@ fn a_virtual_keyboard_holding_many_keys() {
         .expect("the second client's first buffer is taken");
     settle(&mut compositor);
 
-    let departures = compositor.take_client_departures();
+    let departures: Vec<Event> = compositor
+        .take_events()
+        .into_iter()
+        .filter(|event| matches!(event, Event::ClientLeft { .. }))
+        .collect();
     assert!(departures.is_empty(), "clients were ended: {departures:?}");
     assert_eq!(
         compositor.client_pids(a).len(),

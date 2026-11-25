@@ -2,7 +2,7 @@
 
 use crate::harness::*;
 use yuna_layout::{OpenOptions, Options};
-use yuna_types::{Direction, Tiling};
+use yuna_types::{Direction, Tiling, WorkspaceId};
 
 /// The owner's desk, as Yuna starts: the configuration declares the workspaces, then the
 /// monitors come. The 4K one at scale 1.5 on the left holds workspaces 1, 3 and 5; the 1080p one
@@ -198,4 +198,35 @@ fn each_workspace_has_its_own_tiling() {
     let list = m.layout.workspaces(MAIN).unwrap();
     assert_eq!(list[0].tiling, Tiling::Dwindle);
     assert_eq!(list[1].tiling, Tiling::Scrolling);
+}
+
+/// A workspace's name is found from its id wherever the workspace is: shown, on another output,
+/// a special one shown or hidden, or without an output once its outputs are gone; an unnamed
+/// workspace has none, and an id the model never gave names nothing. It agrees with what the
+/// placed windows' [`Placed::workspace`](yuna_layout::Placed::workspace) and
+/// [`Layout::window`](yuna_layout::Layout::window) say.
+#[test]
+fn a_workspaces_name_is_found_from_its_id_wherever_it_is() {
+    let mut m = desk();
+    m.ok(|l| l.focus_workspace(OWNER, "3"));
+    m.open(1);
+    let three = m.placement(1).workspace;
+    assert_eq!(m.layout.workspace_name(three), Some("3"));
+    assert_eq!(m.info(1).workspace.as_deref(), Some("3"));
+    let two = m.workspace_id(SIDE, 0);
+    assert_eq!(m.layout.workspace_name(two), Some("2"));
+
+    m.ok(|l| l.toggle_special(OWNER, "scratch"));
+    m.open(2);
+    let scratch = m.placement(2).workspace;
+    assert_eq!(m.layout.workspace_name(scratch), Some("scratch"));
+    m.ok(|l| l.toggle_special(OWNER, "scratch"));
+    assert_eq!(m.layout.workspace_name(scratch), Some("scratch"), "hidden");
+
+    m.ok(|l| l.remove_workspace(OWNER, "3"));
+    assert_eq!(m.layout.workspace_name(three), None, "it lost its name");
+    m.ok(|l| l.remove_output(MAIN));
+    m.ok(|l| l.remove_output(SIDE));
+    assert_eq!(m.layout.workspace_name(two), Some("2"), "without an output");
+    assert_eq!(m.layout.workspace_name(WorkspaceId(9_999)), None);
 }

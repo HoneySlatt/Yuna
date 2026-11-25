@@ -22,13 +22,14 @@ use std::time::{Duration, Instant};
 use rustix::process::{Pid, Signal, kill_process};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
-use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _, Window};
+use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _, PropMode, Window};
+use x11rb::wrapper::ConnectionExt as _;
 use yuna::{
     BUTTON_LEFT, CaptureSize, CaptureTarget, CapturedFrame, ClockMode, Compositor, Config,
     MAX_WINDOWS_PER_CLIENT, OutputMode, WindowDescription, X11_PING_TIMEOUT, X11_SYNC_TIMEOUT,
     X11Display, XwaylandConfig, axis_taps,
 };
-use yuna_ipc::{Caller, Command};
+use yuna_ipc::{Caller, Command, Event as Told};
 use yuna_motion::{Change, Motion, Settings};
 use yuna_types::{Direction, OutputId, Rect, SeatId, WindowId, WindowShell};
 
@@ -1837,6 +1838,98 @@ fn unresponsive(compositor: &Compositor, window: WindowId) -> bool {
         .iter()
         .find(|listed| listed.id == window)
         .is_some_and(|listed| listed.unresponsive)
+}
+
+/// An X11 window's events (ADR-0153), which the oracle of `event_stream.rs` does not reach: it is
+/// told opened as X11's, with its title and its class; changed once its `_NET_WM_NAME` changes,
+/// as its manager reads it; and unresponsive once a ping it was sent, asked to close, is left
+/// unanswered past its time, once however long it stays so.
+#[test]
+fn an_x11_windows_events_tell_its_texts_and_unresponsiveness() {
+    let mut seat = X11Seat::new("x11-events", &[at_1_5()], ClockMode::Manual, off());
+    seat.compositor.watch_events();
+    let client = seat.client();
+    let spec = WindowSpec {
+        pings: true,
+        ..WindowSpec::named("first")
+    };
+    let (client, window, described, _) = open_drawn(&mut seat.compositor, client, &spec);
+    let id = described.id;
+    let opened = seat.compositor.take_events();
+    assert!(
+        opened
+            .iter()
+            .any(|event| matches!(event, Told::WindowOpened {
+                window, shell: WindowShell::X11, title: Some(title), app_id: Some(class), ..
+            } if *window == id && title == "first" && class == "X11Test")),
+        "{opened:?}"
+    );
+
+    let (client, ()) = step(&mut seat.compositor, client, move |client| {
+        let atoms = client.atoms;
+        client
+            .connection
+            .change_property8(
+                PropMode::REPLACE,
+                window,
+                atoms._NET_WM_NAME,
+                atoms.UTF8_STRING,
+                b"second",
+            )
+            .map_err(|e| e.to_string())?;
+        client.sync()
+    });
+    let changed = wait(
+        &mut seat.compositor,
+        "the title told changed",
+        |compositor| {
+            compositor
+                .take_events()
+                .into_iter()
+                .find(|event| matches!(event, Told::WindowChanged { window, .. } if *window == id))
+        },
+    );
+    assert!(
+        matches!(&changed, Told::WindowChanged { title: Some(title), app_id: Some(class), .. }
+            if title == "second" && class == "X11Test"),
+        "{changed:?}"
+    );
+
+    seat.compositor
+        .command(Caller::on_seat(seat.seat), Command::CloseWindow(Some(id)))
+        .expect("asked to close");
+    let asked = seat.compositor.now();
+    let (client, ()) = step(&mut seat.compositor, client, move |client| {
+        let atoms = client.atoms;
+        client.wait_for("its ping", |event| {
+            matches!(event, Event::ClientMessage(message)
+                if message.window == window && message.data.as_data32()[0] == atoms._NET_WM_PING)
+        })?;
+        Ok(())
+    });
+    let past = asked + X11_PING_TIMEOUT + Duration::from_millis(1);
+    seat.compositor
+        .advance(past.saturating_sub(seat.compositor.now()))
+        .expect("the clock moves");
+    let unanswered = seat.compositor.take_events();
+    assert!(
+        unanswered.contains(&Told::WindowUnresponsive {
+            seat: seat.seat,
+            window: id
+        }),
+        "{unanswered:?}"
+    );
+    seat.compositor
+        .advance(Duration::from_secs(3600))
+        .expect("the clock moves");
+    let (_client, ()) = step(&mut seat.compositor, client, |client| client.sync());
+    let later = seat.compositor.take_events();
+    assert!(
+        !later
+            .iter()
+            .any(|event| matches!(event, Told::WindowUnresponsive { .. })),
+        "told twice: {later:?}"
+    );
 }
 
 #[test]

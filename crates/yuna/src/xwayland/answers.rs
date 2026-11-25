@@ -127,7 +127,9 @@ impl State {
         let waited =
             x11_window.waits.sync.take().is_some() | x11_window.waits.ping.take().is_some();
         x11_window.waits.unresponsive = false;
-        self.note_description_changed();
+        if let Some(id) = self.x11_layout_window(server, window) {
+            self.events.window_answers_changed(id);
+        }
         if waited {
             self.arm_x11_answers();
         }
@@ -156,7 +158,9 @@ impl State {
         let waited = x11_window.waits.ping.take().is_some();
         if std::mem::take(&mut x11_window.waits.unresponsive) {
             tracing::info!(window, "an X11 window answers pings again");
-            self.note_description_changed();
+            if let Some(id) = self.x11_layout_window(server, window) {
+                self.events.window_answers_changed(id);
+            }
         }
         if waited {
             self.arm_x11_answers();
@@ -168,7 +172,7 @@ impl State {
     pub(crate) fn x11_answers_due(&mut self) {
         let now = self.clock.now();
         let mut released = Vec::new();
-        let mut unanswered = false;
+        let mut unanswered = Vec::new();
         for (&server, record) in &mut self.x11.servers {
             for (&window, x11_window) in &mut record.windows {
                 let waits = &mut x11_window.waits;
@@ -187,7 +191,7 @@ impl State {
                 if waits.ping.is_some_and(|due| due <= now) {
                     waits.ping = None;
                     waits.unresponsive = true;
-                    unanswered = true;
+                    unanswered.push((server, window));
                     tracing::info!(
                         window,
                         "an X11 window left its ping unanswered: unresponsive"
@@ -195,8 +199,10 @@ impl State {
                 }
             }
         }
-        if unanswered {
-            self.note_description_changed();
+        for (server, window) in unanswered {
+            if let Some(id) = self.x11_layout_window(server, window) {
+                self.events.window_answers_changed(id);
+            }
         }
         for (server, window) in released {
             self.x11.send(server, Command::AllowCommits(window));

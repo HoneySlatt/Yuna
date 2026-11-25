@@ -1090,7 +1090,9 @@ impl State {
         let counter_changed = record.properties.sync_counter != properties.sync_counter;
         record.properties = properties;
         // Its title and class among them.
-        self.note_description_changed();
+        if let Some(id) = self.x11_layout_window(server, window) {
+            self.events.window_texts_changed(id);
+        }
         if parent_changed {
             self.x11_place_menu_again(server, window);
         }

@@ -53,9 +53,9 @@ read again.
   fades out; each arrangement, which tells the windows shown and, at a motion's end too, looks up
   those not told visible, part of a flood's longest round
   ([measured](measurements.md#m18--a-flood-of-x11-windows-and-menus-2026-11-15));
-  `Compositor::check_windows`; MCP's `windows` and `events` (below). An index of each window's
-  place would make them linear. Paid at Stage 2a, M2.5 (the boundary), when Yuna's core moves and
-  the layout's lookups with it.
+  `Compositor::check_windows`; MCP's `windows`, and the events of a hidden window (below). An
+  index of each window's place would make them linear. Paid at Stage 2a, M2.5 (the boundary),
+  when Yuna's core moves and the layout's lookups with it.
 
 ## The headless compositor
 
@@ -434,23 +434,35 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   characters. 1 MiB of control characters, a terminal's colour codes for one, makes a reply of
   about 13 MiB, each escaped as six bytes and given twice. Paid at Stage 2a, M2.18 (the agents'
   runtime), when replies are bounded in bytes.
-- `events` tells windows by comparing what the compositor describes with its last look: a window
-  that opens and closes between two looks is not seen, and what changed several times shows its
-  last state. A look runs only once the compositor's description generation has moved, so a
-  round in which clients only drew costs 0.2 µs; but a look after a change describes every
-  window, through `Layout::window` ([above](#the-layout-model)): 0.13 ms at 100 windows, 4.4 ms
-  at 1,000 and 11 ms at 2,000 in a release build ([measurements](measurements.md)). A title
-  changed each round, among 1,000 windows, takes a frame's time of 240 Hz. `windows` pays the
-  same. Paid at Stage 2a, M2.4c (one event stream and the pidfd): marks where state changes
-  replace the comparison
-  ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
+- `events` tells what the compositor builds from marks at its change points
+  ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)),
+  reading the windows marked alone. What stays:
+  - A marked window that no output arranges, a hidden one, is named its workspace through
+    `Layout::window` ([above](#the-layout-model)): an output removed with 1,000 windows, each
+    hidden after, costs the square of the windows once. A build that places windows reads each
+    output's arrangement once, a lookup per window it holds. Paid at Stage 2a, M2.5 (the
+    boundary), with the layout's index.
+  - Its cost in a release build is not measured yet: `crates/yuna/examples/events_look.rs`
+    measures it, a timed run left to the owner's go. The comparison it replaced cost 4.4 ms
+    at 1,000 windows for a title changed ([measurements](measurements.md)).
+  - A change point that does not mark tells its fact late, or never. The oracle test
+    (`crates/yuna/tests/headless/event_stream.rs`) finds the marks its random steps reach; X11
+    windows' are not among them, their texts and unresponsiveness tested by their own stories
+    alone. Kept: each core that replaces today's state (M2.13 to M2.17) keeps the oracle.
+  - A window that opens and closes before a build is read at its close: one whose client left
+    first is told opened without its process id, and an X11 window destroyed before it was
+    unmapped, or whose Xwayland ended, without its texts. A change of a window's process id
+    after it opened is not told. Kept: the window is told, which it was not before.
+  - The marks hold what changed since the last build, the windows opened and closed meanwhile
+    with their texts among them: the MCP server builds at each round's end, so that they hold
+    one round's; a library caller that watches the events and never takes them keeps them
+    growing (`Compositor::watch_events`). Kept: the caller's choice.
+  - A seat with no output arranges nothing, since an arrangement runs at an output's refresh: a
+    window's place waits until an output comes, and the last `window_placed` may name an output
+    removed. The comparison before did the same. Kept: `windows` and `output_removed` say it.
 - An event's title, application id or workspace's name is cut to 512 bytes, at a character's
   boundary: a change past the cut is not told. Kept: an event holds 1 KiB of text at most, a
-  seat's log about 1 MiB (`MAX_EVENT_TEXT`).
-- `missed` is exact while a seat's dropped events form at most 1,024 runs of consecutive
-  numbers; past that, other seats' events interleaving, the oldest runs merge, and a cursor
-  inside a merged run is told at most that run's count. Paid at Stage 2a, M2.4c (one event stream and
-  the pidfd): events numbered per seat (ADR-0153).
+  seat's log about 1 MiB (`yuna_ipc::MAX_EVENT_TEXT`).
 - A client's program is found from the processes above it when Yuna accepted it, or its process
   group: one that left both, a double fork with `setsid`, is told with no program, its protocol
   error kept on none. The peer's pidfd, taken at the accept and polled once the lineage is read,

@@ -56,9 +56,10 @@ use calloop::{LoopHandle, RegistrationToken};
 use rustix::pipe::{PipeFlags, pipe_with};
 use rustix::process::{Pid, Signal, WaitStatus};
 
+use yuna_ipc::ProtocolError;
 use yuna_types::SeatId;
 
-use crate::compositor::{ClientProcess, ClientProtocolError};
+use crate::compositor::ClientProcess;
 use crate::process::keep_descriptors_from_the_program;
 use crate::rest::{Source, Wake};
 use crate::state::{OWNER_SEAT, State};
@@ -106,7 +107,7 @@ pub struct Program {
     /// [`LOG_HEAD`] bytes, then a ring of its newest [`LOG_TAIL`] once it wrote more.
     pub log: PathBuf,
     /// The last protocol error one of its Wayland clients was ended for.
-    pub protocol_error: Option<ClientProtocolError>,
+    pub protocol_error: Option<ProtocolError>,
     /// When it started, and when it was reaped: a client connected between was its, when its
     /// process was the program's or under it ([`Programs::program_of`]).
     started: Instant,
@@ -495,7 +496,7 @@ impl Programs {
 
     /// Records `error` as the last protocol error of program `id`, a client of its was ended
     /// for.
-    pub fn note_protocol_error(&mut self, id: u64, error: ClientProtocolError) {
+    pub fn note_protocol_error(&mut self, id: u64, error: ProtocolError) {
         if let Some(program) = self.list.iter_mut().find(|program| program.id == id) {
             program.protocol_error = Some(error);
         }

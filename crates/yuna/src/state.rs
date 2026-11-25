@@ -54,7 +54,7 @@ use crate::screencopy::ScreencopyState;
 use crate::seats::{SeatData, seat_id};
 use crate::selection::Selections;
 use crate::shell::Toplevel;
-use crate::{ClientArrival, ClientProcess, ClientRefusal, Error};
+use crate::{ClientArrival, ClientProcess, Error};
 
 /// The owner's seat, which always exists; agents' seats come after it, from 2
 /// ([ADR-0078](../../../docs/adr/0078-agents-seats-in-one-yuna-frozen-until-stage-2s-core.md)).
@@ -71,7 +71,7 @@ pub(crate) type DmabufImportHook = Box<dyn FnMut()>;
 pub(crate) type DepartedClients = Arc<Mutex<Vec<Departed>>>;
 
 /// A client the display ended, as its [`ClientState`] recorded it then: what Yuna frees, and
-/// tells the MCP server ([`ClientDeparture`](crate::ClientDeparture)).
+/// tells as `yuna_ipc::Event::ClientLeft` (`events.rs`).
 #[derive(Debug)]
 pub(crate) struct Departed {
     pub client: ClientId,
@@ -108,13 +108,9 @@ pub(crate) struct State {
     pub next_window_id: u64,
     /// Whether the layout changed since it was last arranged.
     pub layout_dirty: bool,
-    /// Grows each time something [`State::describe_windows`] or [`State::describe_outputs`]
-    /// gives may have changed, but for windows' drawn rectangles and motion, which move with
-    /// every frame: a window opened or closed, a title or an application id, the layout changed
-    /// or arranged, an X11 window's answers, an output added or removed. What the MCP server reads
-    /// before it describes anything for its events (`Compositor::description_generation`), so
-    /// that a round in which only buffers changed describes nothing.
-    pub description_generation: u64,
+    /// What events tell, marked where it changes, and what they told, once someone watches
+    /// (`Compositor::watch_events`); nothing is marked before (`events.rs`).
+    pub events: crate::events::EventMarks,
     /// How the layout changed since it was last arranged: the changes made since, combined
     /// ([`Change::and`]), instant on the outputs where one of them must show at once
     /// (`frames.rs`).
@@ -139,12 +135,6 @@ pub(crate) struct State {
     pub paused_sockets: Vec<SeatId>,
     pub resumed_sockets: Vec<SeatId>,
     pub departed_clients: DepartedClients,
-    /// The seats' refusals of connections past
-    /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT) told since they were last taken,
-    /// once someone watches them (`Compositor::watch_client_refusals`): none is kept otherwise.
-    /// A seat tells one a second at most, so it holds one a seat for each second between two
-    /// takes.
-    pub client_refusals: Option<Vec<ClientRefusal>>,
     /// The clients served since they were last taken, once someone watches them
     /// (`Compositor::watch_client_arrivals`): none is kept otherwise. It holds at most the
     /// clients served between two takes.
@@ -247,7 +237,7 @@ impl State {
             window_counts: HashMap::new(),
             next_window_id: 1,
             layout_dirty: false,
-            description_generation: 0,
+            events: crate::events::EventMarks::default(),
             layout_change: Change::Animated,
             motion: Motion::new(animations),
             surfaces_gone: false,
@@ -261,7 +251,6 @@ impl State {
             paused_sockets: Vec::new(),
             resumed_sockets: Vec::new(),
             departed_clients: DepartedClients::default(),
-            client_refusals: None,
             client_arrivals: None,
             pidfd_refusal_warned: false,
             // Version 6, so that surfaces are told their preferred buffer scale (`scale.rs`).
@@ -314,11 +303,6 @@ impl State {
         let id = OutputId(self.next_output_id);
         self.next_output_id += 1;
         id
-    }
-
-    /// Notes that something [`State::description_generation`] follows may have changed.
-    pub(crate) fn note_description_changed(&mut self) {
-        self.description_generation += 1;
     }
 
     pub(crate) fn output_index(&self, id: OutputId) -> Option<usize> {

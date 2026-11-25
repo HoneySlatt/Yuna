@@ -437,6 +437,20 @@ impl Client {
         toplevel.set_title(title.to_owned());
     }
 
+    /// Sets the window's title alone.
+    pub fn set_title(&mut self, window: usize, title: &str) {
+        self.state.windows[window]
+            .toplevel
+            .set_title(title.to_owned());
+    }
+
+    /// Sets the window's application id alone.
+    pub fn set_app_id(&mut self, window: usize, app_id: &str) {
+        self.state.windows[window]
+            .toplevel
+            .set_app_id(app_id.to_owned());
+    }
+
     /// Binds `wl_output` by its registry `name` again, as a client that has not yet read the
     /// global's removal does; its events then reach [`ClientState::outputs`].
     pub fn bind_output(&mut self, name: u32) {

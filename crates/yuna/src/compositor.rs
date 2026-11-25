@@ -19,7 +19,7 @@ use rustix::process::{Pid, WaitStatus};
 use smithay::utils::{Physical, Rectangle};
 use wayland_server::backend::{ClientId, DisconnectReason};
 use wayland_server::{BindError, Display, ListeningSocket};
-use yuna_ipc::{Caller, Command, Refusal};
+use yuna_ipc::{Caller, Command, Event, ProtocolError, Refusal};
 use yuna_layout::{Layout, OpenOptions};
 use yuna_motion::{Change, Drawn, Settings};
 use yuna_types::{OutputId, PixelRect, Rect, SeatId, WindowId, WindowShell};
@@ -317,48 +317,11 @@ pub struct ClientArrival {
     /// The seat it belongs to.
     pub seat: SeatId,
     /// Its number: its key in [`RestCounts::clients`](crate::rest::RestCounts::clients) while it
-    /// is connected, given by its [`ClientDeparture`] too. Numbers are never reused.
+    /// is connected, given by the `yuna_ipc::Event::ClientLeft` that tells it left too. Numbers
+    /// are never reused.
     pub number: u64,
     /// Who it is, as its connection was read when Yuna accepted it.
     pub process: ClientProcess,
-}
-
-/// A client the display ended, as [`Compositor::take_client_departures`] tells it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientDeparture {
-    /// The seat it belonged to.
-    pub seat: SeatId,
-    /// Its number, as its [`ClientArrival`] gave it.
-    pub number: u64,
-    /// Who it was.
-    pub process: ClientProcess,
-    /// The protocol error it was ended for, as Yuna sent it; none when its connection closed:
-    /// it left, sent what is not Wayland, or could not take the events written to it.
-    pub error: Option<ClientProtocolError>,
-}
-
-/// Connections a seat's socket refused past [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT),
-/// as [`Compositor::take_client_refusals`] tells them: at the seat's first refusal, then at its
-/// first a second or more, on real time, after the last told, with every refusal since.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClientRefusal {
-    /// The seat whose socket refused them.
-    pub seat: SeatId,
-    /// How many connections it refused since it last told some, this one included.
-    pub refused: u64,
-}
-
-/// A protocol error a client was ended for: `wl_display.error`'s arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientProtocolError {
-    /// The interface of the object it named.
-    pub interface: String,
-    /// That object's id.
-    pub object: u32,
-    /// The error's code, in that interface's `error` enum.
-    pub code: u32,
-    /// What Yuna, or Smithay, wrote of it.
-    pub message: String,
 }
 
 /// An output, as [`Compositor::output_descriptions`] describes it.
@@ -417,10 +380,6 @@ pub struct Compositor {
     /// The source of each seat's socket: the owner's, when it listens, and each agent's that
     /// listens.
     seat_sockets: HashMap<SeatId, RegistrationToken>,
-    /// The clients the display ended since they were last taken, once someone watches them
-    /// ([`Compositor::watch_client_departures`]): none is kept otherwise. Each client leaves
-    /// once, so it holds at most the clients that left between two takes.
-    departures: Option<Vec<ClientDeparture>>,
     /// The parity script's injected cost, with the `parity-canary` feature alone (`canary.rs`).
     canary: ParityCanary,
     /// What every [`Waker`] it gave pings, once one was asked: kept, so that its source stays in
@@ -533,7 +492,6 @@ impl Compositor {
             socket_name,
             timer: None,
             seat_sockets,
-            departures: None,
             canary,
             waker: None,
         })
@@ -707,37 +665,31 @@ impl Compositor {
             .unwrap_or_default()
     }
 
-    /// From now on, keeps each client the display ends, with who it was and why, until
-    /// [`Compositor::take_client_departures`] takes them: what the MCP server tells agents.
-    pub fn watch_client_departures(&mut self) {
-        self.departures.get_or_insert_with(Vec::new);
+    /// From now on, marks what events tell where it changes, and marks every window and output
+    /// there is now, so that the first [`Compositor::take_events`] tells them
+    /// ([ADR-0153](../../../docs/adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)):
+    /// what the MCP server does as it starts. Before, nothing is marked, kept or built. Watching
+    /// again changes nothing.
+    pub fn watch_events(&mut self) {
+        crate::events::watch(&mut self.state);
     }
 
-    /// The clients the display ended since the last call, in the order they were freed; none
-    /// unless [`Compositor::watch_client_departures`] was called.
-    pub fn take_client_departures(&mut self) -> Vec<ClientDeparture> {
-        self.departures
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default()
+    /// What happened since the last call, on every seat, each event with its seat, in the order
+    /// `yuna_ipc::Event` gives: each fact marked compared with what was last told, so that one
+    /// changed many times is one event, and a window opened and closed since is told opened then
+    /// closed. A window's place is told once no arrangement is pending, at a later call
+    /// otherwise. Its cost follows what changed, not the windows: it reads the windows marked
+    /// alone. None unless [`Compositor::watch_events`] was called.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        crate::events::take(&mut self.state)
     }
 
-    /// From now on, keeps each seat's refusals of connections past
-    /// [`MAX_CLIENTS_PER_SEAT`](crate::MAX_CLIENTS_PER_SEAT), as the seat tells them, once a
-    /// second at most, until [`Compositor::take_client_refusals`] takes them: what the MCP
-    /// server tells agents.
-    pub fn watch_client_refusals(&mut self) {
-        self.state.client_refusals.get_or_insert_with(Vec::new);
-    }
-
-    /// The refusals the seats told since the last call, oldest first; none unless
-    /// [`Compositor::watch_client_refusals`] was called.
-    pub fn take_client_refusals(&mut self) -> Vec<ClientRefusal> {
-        self.state
-            .client_refusals
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default()
+    /// How many windows [`Compositor::take_events`] read since [`Compositor::watch_events`]: one
+    /// for each window a call read, so that a test checks a call's cost follows what changed.
+    /// For tests.
+    #[doc(hidden)]
+    pub fn windows_described_for_events(&self) -> u64 {
+        self.state.events.windows_described()
     }
 
     /// Moves agent seat `seat`'s pointer to (`x`, `y`), logical units from the top-left corner
@@ -1075,16 +1027,11 @@ impl Compositor {
         self.state.clock.real_now()
     }
 
-    /// A number that grows each time what [`Compositor::windows`] and
-    /// [`Compositor::output_descriptions`] give may have changed, but for windows' drawn
-    /// rectangles and motion: equal twice, they give the same. Reading it costs nothing.
-    pub fn description_generation(&self) -> u64 {
-        self.state.description_generation
-    }
-
-    /// Whether the layout changed since it was last arranged: the windows' places are those of
-    /// the last arrangement until the next refresh.
-    pub(crate) fn arrangement_pending(&self) -> bool {
+    /// Whether the layout changed since it was last arranged: the windows' places, as
+    /// [`Compositor::windows`] gives them, are those of the last arrangement until the next
+    /// refresh, and no event tells a place meanwhile. A test seam, for the events' oracle.
+    #[doc(hidden)]
+    pub fn arrangement_pending(&self) -> bool {
         self.state.layout_dirty
     }
 
@@ -1564,23 +1511,21 @@ impl Compositor {
                     .display
                     .backend()
                     .dispatch_single_client(&mut self.state, departed.client);
-                if let Some(departures) = &mut self.departures {
-                    let error = match departed.reason {
-                        DisconnectReason::ProtocolError(error) => Some(ClientProtocolError {
-                            interface: error.object_interface,
-                            object: error.object_id,
-                            code: error.code,
-                            message: error.message,
-                        }),
-                        DisconnectReason::ConnectionClosed => None,
-                    };
-                    departures.push(ClientDeparture {
-                        seat: departed.seat,
-                        number: departed.number,
-                        process: departed.process,
-                        error,
-                    });
-                }
+                let error = match departed.reason {
+                    DisconnectReason::ProtocolError(error) => Some(ProtocolError::new(
+                        error.object_interface,
+                        error.object_id,
+                        error.code,
+                        error.message,
+                    )),
+                    DisconnectReason::ConnectionClosed => None,
+                };
+                self.state.events.client_left(
+                    departed.seat,
+                    departed.number,
+                    departed.process.pid,
+                    error,
+                );
             }
         }
     }

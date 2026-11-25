@@ -34,6 +34,7 @@ mod compositor;
 mod dbus;
 mod dialog;
 mod dmabuf;
+mod events;
 mod frames;
 mod input;
 mod keymap;
@@ -69,9 +70,8 @@ pub use capture::{
 };
 pub use clock::{Clock, ClockMode};
 pub use compositor::{
-    CLIENT_BUFFER_BYTES, ClientArrival, ClientDeparture, ClientProcess, ClientProtocolError,
-    ClientRefusal, Compositor, Config, Counters, Identity, OutputDescription, SOCKET_PAUSE,
-    WindowDescription,
+    CLIENT_BUFFER_BYTES, ClientArrival, ClientProcess, Compositor, Config, Counters, Identity,
+    OutputDescription, SOCKET_PAUSE, WindowDescription,
 };
 #[doc(hidden)]
 pub use compositor::{ClientKey, Waker};

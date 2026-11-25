@@ -1,6 +1,6 @@
 [package]
 name = "yuna-ipc"
-description = "Yuna's commands: what a caller may ask of the compositor, and why it refuses one"
+description = "Yuna's commands and events: what a caller may ask of the compositor, why it refuses one, and what it tells has happened"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

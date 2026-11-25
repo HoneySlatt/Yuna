@@ -1252,6 +1252,71 @@ fn events_tell_a_window_opened_then_closed_in_order() {
     assert_eq!(all["next"], json!(numbers[4]));
 }
 
+/// A window that maps and closes in one round, before the server's end of round builds its
+/// events, is told `window_opened`, with what it was, then `window_closed`: the compositor marks
+/// it where it opens and where it closes, rather than the server compare two looks (ADR-0153).
+#[test]
+fn a_window_opened_and_closed_in_one_round_is_told_opened_then_closed() {
+    let mut mcp = Mcp::new(ClockMode::Manual);
+    let seat = mcp.seat();
+    let start = cursor(&mut mcp, seat);
+    let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    let window = client.create_window();
+    client.set_app_id_and_title(window, "org.example.Brief", "Brief");
+    client.commit(window);
+    client.roundtrip(mcp.server.compositor());
+    client.ack(window);
+    client.attach(window, crate::TILE.0, crate::TILE.1, RED);
+    // Mapped by this commit, closed by the requests after it: the compositor reads both in one
+    // round, and the server runs none of its own between them.
+    client.commit(window);
+    client.close(window);
+    client.roundtrip(mcp.server.compositor());
+    let told = events(&mut mcp, json!({"seat": seat, "after": start}));
+    assert_eq!(kinds(&told), ["window_opened", "window_closed"], "{told}");
+    let opened = &told["events"][0];
+    assert_eq!(opened["window"], json!(1));
+    assert_eq!(opened["app_id"], json!("org.example.Brief"));
+    assert_eq!(opened["title"], json!("Brief"));
+    assert_eq!(opened["shell"], json!("xdg"));
+    assert_eq!(opened["pid"], json!(std::process::id()));
+    assert_eq!(told["events"][1]["window"], json!(1));
+    assert_eq!(told["missed"], json!(0));
+}
+
+/// Each seat numbers its own events from 1: the first event of a seat made after another is
+/// `seq` 1 too, and a cursor past a seat's newest event, one another seat's log could take, is
+/// refused there, naming that seat's newest.
+#[test]
+fn each_seat_numbers_its_own_events() {
+    let mut mcp = Mcp::new(ClockMode::Real);
+    let a = mcp.seat();
+    // A second output on seat a: its log holds more events than b's will.
+    let added = mcp.call(
+        "outputs",
+        json!({"action": "create", "seat": a, "width": 64, "height": 64, "rate": 60,
+               "scale": 1}),
+    );
+    assert_eq!(added["isError"], json!(false), "{added}");
+    let b = mcp.seat();
+    let seq_of_first = |mcp: &mut Mcp, seat: u64| -> u64 {
+        let all = events(mcp, json!({"seat": seat, "after": 0}));
+        seqs(&all)[0]
+    };
+    assert_eq!(seq_of_first(&mut mcp, a), 1);
+    assert_eq!(seq_of_first(&mut mcp, b), 1);
+    let newest_a = cursor(&mut mcp, a);
+    let newest_b = cursor(&mut mcp, b);
+    assert!(newest_a > newest_b, "a {newest_a}, b {newest_b}");
+    let refused = mcp.call("events", json!({"seat": b, "after": newest_a}));
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(text.contains(&format!("{newest_b}")), "{refused}");
+    // The same cursor reads on seat a: nothing after its newest.
+    let on_a = events(&mut mcp, json!({"seat": a, "after": newest_a}));
+    assert_eq!(on_a["events"], json!([]), "{on_a}");
+}
+
 /// Without `after`, `events` gives no past event: it waits from now, and is answered once a
 /// window opens, with that window's events alone. `kinds` keeps only the kinds it names; a kind
 /// it does not know is refused.
@@ -1670,17 +1735,19 @@ fn refused_connections_are_told_once_a_second_at_most() {
     assert_eq!(told["events"][1]["refused"], json!(4 + 1), "{told}");
 }
 
-/// The windows and outputs are described for events only when something events tell may have
-/// changed: a client drawing frame after frame, as a game does, while its title, place and focus
-/// stay, makes no look; a title it changes makes one.
+/// A window is read for events only when something events tell of it may have changed: a client
+/// drawing frame after frame, as a game does, while its title, place and focus stay, makes the
+/// server's builds read no window; a title it changes makes them read that window alone, not the
+/// other one open (`Compositor::windows_described_for_events`).
 #[test]
 fn a_client_that_only_draws_makes_no_look() {
     let mut mcp = Mcp::new(ClockMode::Manual);
     let seat = mcp.seat();
     let mut client = Client::connect_to(mcp.server.compositor(), SeatId(seat));
+    open_placed_window(&mut mcp, &mut client, "org.example.Other", "Other");
     let window = open_placed_window(&mut mcp, &mut client, "org.example.Game", "Game");
     cursor(&mut mcp, seat);
-    let looks = mcp.server.event_looks();
+    let described = mcp.server.compositor().windows_described_for_events();
     for colour in [RED, crate::BLUE, RED, crate::BLUE] {
         client.attach(window, crate::TILE.0, crate::TILE.1, colour);
         client.damage(window, crate::TILE.0, crate::TILE.1);
@@ -1689,11 +1756,18 @@ fn a_client_that_only_draws_makes_no_look() {
         crate::run_armed_deadlines(mcp.server.compositor());
         assert_eq!(mcp.replies(), Vec::<Value>::new());
     }
-    assert_eq!(mcp.server.event_looks(), looks, "a frame made a look");
+    assert_eq!(
+        mcp.server.compositor().windows_described_for_events(),
+        described,
+        "a frame made a window read"
+    );
     client.set_app_id_and_title(window, "org.example.Game", "Game, paused");
     client.roundtrip(mcp.server.compositor());
     mcp.replies();
-    assert_eq!(mcp.server.event_looks(), looks + 1);
+    assert_eq!(
+        mcp.server.compositor().windows_described_for_events(),
+        described + 1
+    );
 }
 
 /// A waiting call whose cursor is older than its seat's log is answered at once, with what it

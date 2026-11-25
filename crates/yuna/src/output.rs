@@ -338,6 +338,18 @@ impl VirtualOutput {
     pub fn motion_read_at(&self, now: Duration) -> Duration {
         now.max(self.sampled_at)
     }
+
+    /// It, as [`Compositor::output_descriptions`](crate::Compositor::output_descriptions) and
+    /// the events describe it.
+    pub fn description(&self) -> OutputDescription {
+        OutputDescription {
+            id: self.id,
+            seat: self.seat,
+            name: self.output.name(),
+            mode: self.mode,
+            rect: self.rect,
+        }
+    }
 }
 
 impl State {
@@ -376,7 +388,7 @@ impl State {
                 refusal(e)
             )))
         })?;
-        self.note_description_changed();
+        self.events.output_changed(id);
         let rect = self
             .layout
             .output_rect(id)
@@ -534,6 +546,7 @@ impl State {
                 )))
             })?;
         // Nothing is refused from here.
+        self.events.output_changed(id);
         let now = self.clock.now();
         let colour = (mode.hdr() != old.hdr()).then(|| {
             self.colour.record(
@@ -620,6 +633,9 @@ impl State {
             };
             let corner = |rect: Rect| (rect.x.round() as i32, rect.y.round() as i32);
             let moved = corner(rect) != corner(output.rect);
+            if rect != output.rect {
+                self.events.output_changed(output.id);
+            }
             output.rect = rect;
             if moved {
                 output
@@ -674,7 +690,7 @@ impl State {
         if let Err(error) = self.layout.remove_output(id) {
             tracing::error!(error = %refusal(error), output = id.0, "the layout has no such output");
         }
-        self.note_description_changed();
+        self.events.output_changed(id);
         let leaving: Vec<WlSurface> = self
             .toplevels
             .values()
@@ -685,6 +701,9 @@ impl State {
             self.leave_output(&root, id);
             if let Some(toplevel) = self.toplevels.get_mut(&root.id()) {
                 toplevel.shown_on = None;
+                if let Some(window) = toplevel.window {
+                    self.events.window_moved(window);
+                }
             }
         }
         self.clock.disarm(Deadline::Refresh(id));
@@ -710,13 +729,7 @@ impl State {
     pub(crate) fn describe_outputs(&self) -> Vec<OutputDescription> {
         self.outputs
             .iter()
-            .map(|output| OutputDescription {
-                id: output.id,
-                seat: output.seat,
-                name: output.output.name(),
-                mode: output.mode,
-                rect: output.rect,
-            })
+            .map(VirtualOutput::description)
             .collect()
     }
 

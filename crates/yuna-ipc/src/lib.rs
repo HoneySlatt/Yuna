@@ -1,5 +1,8 @@
-//! Yuna's commands: what a caller may ask of the compositor, and why the compositor refuses one
-//! ([ADR-0146](../../../docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)).
+//! Yuna's commands and events: what a caller may ask of the compositor, why the compositor
+//! refuses one
+//! ([ADR-0146](../../../docs/adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)),
+//! and what it tells has happened
+//! ([ADR-0153](../../../docs/adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
 //!
 //! One command type serves every caller: the tests and MCP today, key bindings, gestures, the
 //! configuration's actions and Hollow later
@@ -9,16 +12,21 @@
 //! binding does. The compositor answers with a [`Refusal`] when it does not apply a command; a
 //! refused command changes nothing.
 //!
+//! One event stream serves every reader in the same way (ADR-0082, item 14): an [`Event`] says
+//! what happened on a seat, a window opened or placed, the focus moved, a client left; its
+//! documentation gives when the compositor builds them, and their order. MCP's `events` tool tells
+//! them today, Hollow later.
+//!
 //! # What it promises
 //!
 //! - Data only: no behaviour beyond naming what a command targets ([`Command::window`],
-//!   [`Command::output`]), no wire format. Hollow's protocol is decided with Hollow's interface
-//!   (Stage 2c), the events at Stage 2a's M2.4c (ADR-0153).
+//!   [`Command::output`]) and the seat of an event ([`Event::seat`]), no wire format. Hollow's
+//!   protocol is decided with Hollow's interface (Stage 2c).
 //! - A contract in 0.x
 //!   ([ADR-0079](../../../docs/adr/0079-yunas-contracts-in-0-x-changes-announced-never-silent.md)):
-//!   once Hollow uses it, each change is announced in the changelog. Its enums are
-//!   `#[non_exhaustive]`, so that a command or a reason added is not a break for the programs that
-//!   match on them.
+//!   each change is announced in the changelog, as MCP's `events` tells the events already. Its
+//!   enums are `#[non_exhaustive]`, so that a command, a reason or a kind of event added is not a
+//!   break for the programs that match on them.
 //! - Level 1 of the crate map, on `yuna-types` alone
 //!   ([ADR-0151](../../../docs/adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md)).
 //!
@@ -28,9 +36,13 @@
 
 #![forbid(unsafe_code)]
 
+mod event;
+
 use std::fmt;
 
 use yuna_types::{Direction, OutputId, SeatId, Tiling, WindowId};
+
+pub use event::{Event, MAX_EVENT_TEXT, ProtocolError};
 
 /// Who asks a command, which decides what it may reach: its seat now; the lock's permission and
 /// Hollow's role when they come.

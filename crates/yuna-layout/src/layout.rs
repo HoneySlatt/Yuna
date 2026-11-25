@@ -1851,6 +1851,38 @@ impl Layout {
             .and_then(|s| s.name.clone()))
     }
 
+    /// The name of the workspace `workspace`, wherever it is, special ones and those without an
+    /// output included; none for an unnamed workspace and for one the model does not hold. Its
+    /// cost grows with the workspaces, never with the windows: what names the workspace of a
+    /// window [`Layout::arrange`] placed, from its [`Placed::workspace`], where
+    /// [`Layout::window`] would walk the workspaces' windows.
+    pub fn workspace_name(&self, workspace: WorkspaceId) -> Option<&str> {
+        self.seats
+            .iter()
+            .flat_map(|seat| {
+                seat.outputs
+                    .iter()
+                    .flat_map(|output| output.workspaces.iter().chain(&output.special))
+                    .chain(&seat.detached)
+                    .chain(&seat.hidden_specials)
+            })
+            .find(|candidate| candidate.id == workspace)
+            .and_then(|found| found.name.as_deref())
+    }
+
+    /// The windows of `seat`'s workspace named `name`, as [`Layout::workspaces`] lists them: its
+    /// tiled windows in reading order, then its floating ones; none for an unknown seat or name.
+    /// What a caller reads before an operation renames or empties the workspace. Its cost grows
+    /// with the seat's workspaces and that workspace's windows.
+    pub fn named_workspace_windows(&self, seat: SeatId, name: &str) -> Vec<WindowId> {
+        let Ok(si) = self.seat_index(seat) else {
+            return Vec::new();
+        };
+        self.named_slot(si, name)
+            .map(|slot| self.workspace(si, slot).windows())
+            .unwrap_or_default()
+    }
+
     /// Checks every rule the model keeps, and says which one is broken. Its cost grows with the
     /// number of windows and workspaces; it is meant for tests.
     pub fn check_invariants(&self) -> Result<(), String> {

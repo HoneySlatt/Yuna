@@ -112,6 +112,18 @@ pub(crate) struct Toplevel {
     owner: Option<WindowOwner>,
 }
 
+/// What a window says of itself: its shell, its texts and its client's process, as
+/// [`State::window_facts`] reads them for its description and its events.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WindowFacts {
+    pub shell: WindowShell,
+    /// Its application id, or an X11 window's `WM_CLASS` class.
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    /// Its client's process, never Xwayland's (`WindowDescription::pid`).
+    pub pid: Option<i32>,
+}
+
 /// Whose windows count together against [`MAX_WINDOWS_PER_CLIENT`]: an xdg-shell window's
 /// Wayland client's, or an X11 window's X11 client's, never Xwayland's.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -438,7 +450,7 @@ impl State {
         }
         self.next_window_id += 1;
         self.windows.insert(window, root.id());
-        self.note_description_changed();
+        self.events.window_opened(window, seat_of_surface(root));
         if let Some(owner) = &owner {
             *self.window_counts.entry(owner.clone()).or_default() += 1;
         }
@@ -602,7 +614,14 @@ impl State {
         toplevel.urgent = false;
         toplevel.size_asked = None;
         self.windows.remove(&window);
-        self.note_description_changed();
+        // Read now, while its toplevel lives, if no build told it opened: the build tells it
+        // opened, then closed.
+        let facts = self
+            .events
+            .awaits_opening(window)
+            .then(|| self.toplevels.get(&root.id()).map(|t| self.window_facts(t)))
+            .flatten();
+        self.events.window_closed(window, facts);
         if let Some(output) = shown_on {
             self.leave_output(root, output);
         }
@@ -811,32 +830,12 @@ impl State {
             .filter_map(|(&window, surface)| {
                 let toplevel = self.toplevels.get(surface)?;
                 let info = self.layout.window(window)?;
-                let root = toplevel.wl_surface();
-                let (shell, app_id, title, pid) = match toplevel.x11() {
-                    // Xwayland's credentials are Yuna's own, through its socket pair: never an
-                    // X11 window's process.
-                    Some(x11) => {
-                        let (app_id, title, pid) = self.x11.describe(x11);
-                        (WindowShell::X11, app_id, title, pid)
-                    }
-                    None => {
-                        let (app_id, title) = with_states(root, |states| {
-                            states
-                                .data_map
-                                .get::<XdgToplevelSurfaceData>()
-                                .map(|data| {
-                                    let data = data.lock().unwrap_or_else(PoisonError::into_inner);
-                                    (data.app_id.clone(), data.title.clone())
-                                })
-                                .unwrap_or_default()
-                        });
-                        let pid = root
-                            .client()
-                            .and_then(|client| client.get_credentials(&self.display_handle).ok())
-                            .map(|credentials| credentials.pid);
-                        (WindowShell::Xdg, app_id, title, pid)
-                    }
-                };
+                let WindowFacts {
+                    shell,
+                    app_id,
+                    title,
+                    pid,
+                } = self.window_facts(toplevel);
                 let on_output = toplevel.shown_on.and_then(|output| outputs.get(&output));
                 let rect = on_output.and_then(|output| output.drawn.get(&window).copied());
                 let place = on_output.and_then(|output| output.places.get(&window).copied());
@@ -862,6 +861,43 @@ impl State {
             .collect();
         windows.sort_by_key(|description| description.id);
         windows
+    }
+
+    /// What the window of `toplevel` says of itself now: its shell, application id, title, and
+    /// its client's process. An X11 window's are Yuna's record of it, none once that is gone.
+    pub(crate) fn window_facts(&self, toplevel: &Toplevel) -> WindowFacts {
+        // Xwayland's credentials are Yuna's own, through its socket pair: never an X11 window's
+        // process.
+        if let Some(x11) = toplevel.x11() {
+            let (app_id, title, pid) = self.x11.describe(x11);
+            return WindowFacts {
+                shell: WindowShell::X11,
+                app_id,
+                title,
+                pid,
+            };
+        }
+        let root = toplevel.wl_surface();
+        let (app_id, title) = with_states(root, |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|data| {
+                    let data = data.lock().unwrap_or_else(PoisonError::into_inner);
+                    (data.app_id.clone(), data.title.clone())
+                })
+                .unwrap_or_default()
+        });
+        let pid = root
+            .client()
+            .and_then(|client| client.get_credentials(&self.display_handle).ok())
+            .map(|credentials| credentials.pid);
+        WindowFacts {
+            shell: WindowShell::Xdg,
+            app_id,
+            title,
+            pid,
+        }
     }
 
     fn window_of(&self, surface: &ToplevelSurface) -> Option<WindowId> {
@@ -1093,14 +1129,19 @@ impl XdgShellHandler for State {
         &mut self.xdg_shell_state
     }
 
-    /// Its title is read where windows are described; this tells that it may have changed.
-    fn title_changed(&mut self, _surface: ToplevelSurface) {
-        self.note_description_changed();
+    /// Its title is read where windows are described; this marks that it may have changed. A
+    /// window not yet mapped is read as it opens.
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_of(&surface) {
+            self.events.window_texts_changed(window);
+        }
     }
 
     /// As [`XdgShellHandler::title_changed`], for its application id.
-    fn app_id_changed(&mut self, _surface: ToplevelSurface) {
-        self.note_description_changed();
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_of(&surface) {
+            self.events.window_texts_changed(window);
+        }
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {

@@ -1,21 +1,23 @@
-//! Measures what `yuna mcp`'s look for events costs a round: describing every window and
-//! output and comparing them with the last look (`mcp/events.rs`), at 100, 1,000 and 2,000
-//! windows, the figures `docs/measurements.md` keeps.
+//! Measures what `yuna mcp`'s events cost a round: the compositor's build of what changed since
+//! the last round (`Compositor::take_events`, `events.rs`), recorded in the seat's log
+//! (`mcp/events.rs`), as `Server::record_events` runs at each round's end, at 100, 1,000 and
+//! 2,000 windows, the figures `docs/measurements.md` keeps.
 //!
 //! It runs the MCP server in its own process, on a manual clock, with one agent seat and its
 //! output, 1920 × 1080 at 60 Hz and scale 1. Its windows come from clients of its own, at most
 //! 1,000 a client (`MAX_WINDOWS_PER_CLIENT`), each window a surface of 64 × 64 pixels. For each
 //! count it times, `--rounds` times each, 1,000 by default:
 //!
-//! - **no change**: a look after nothing changed, as at the end of a round in which a client
-//!   only drew: the server reads the compositor's description generation and stops there;
+//! - **no change**: a build after nothing changed, as at the end of a round in which a client
+//!   only drew: nothing is marked, so nothing is read;
 //! - **a frame**: the same after one window committed a new buffer and its output refreshed, as
-//!   a game drawing makes each round: nothing events tell changed;
-//! - **a title**: a look after one window's title changed: every window and output described
-//!   and compared, and one event recorded.
+//!   a game drawing makes each round: nothing events tell changed, nothing is marked;
+//! - **a title**: a build after one window's title changed: that window alone is read and
+//!   compared with what was told, and one event recorded.
 //!
-//! Each round's look is timed alone, the client's requests and the compositor's work before it
-//! left out. It prints the median, the 99th percentile and the longest of each, in
+//! The compositor's count of the windows its builds read checks each case: none for the first
+//! two, one a round for the third. Each round's build is timed alone, the client's requests and
+//! the compositor's work before it left out. It prints the median, the 99th percentile and the longest of each, in
 //! microseconds, and the load of the machine before and after, which a figure taken while
 //! other programs load the processor reports beside it. Build it for release, then run it in the
 //! development shell, alone among measurements; it needs no screen:
@@ -67,7 +69,7 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// Opens `count` windows on a seat of a server of its own, then times its looks.
+/// Opens `count` windows on a seat of a server of its own, then times its builds.
 fn measure(count: usize, rounds: usize) -> Result<(), String> {
     let failed = |what: &str, error: &dyn std::fmt::Display| format!("{what}: {error}");
     let compositor = Compositor::new(Config {
@@ -109,8 +111,10 @@ fn measure(count: usize, rounds: usize) -> Result<(), String> {
     if described != count {
         return Err(format!("{described} windows of {count} opened"));
     }
-    // The first look sees every window open; the measures start after it.
+    // The first build tells every window open; the measures start after it.
     server.record_events_now();
+    let described = |server: &mut Server| server.compositor().windows_described_for_events();
+    let before = described(&mut server);
 
     let mut still = Vec::with_capacity(rounds);
     for _ in 0..rounds {
@@ -122,16 +126,21 @@ fn measure(count: usize, rounds: usize) -> Result<(), String> {
         run_deadlines(server.compositor())?;
         framed.push(timing::time(|| server.record_events_now()));
     }
-    let looks = server.event_looks();
+    if described(&mut server) != before {
+        return Err(format!(
+            "{} windows read for {rounds} rounds without a change and {rounds} frames",
+            described(&mut server) - before
+        ));
+    }
     let mut retitled = Vec::with_capacity(rounds);
     for round in 0..rounds {
         clients[0].retitle(&mut server, &format!("renamed {round}"))?;
         retitled.push(timing::time(|| server.record_events_now()));
     }
-    if server.event_looks() != looks + rounds as u64 {
+    if described(&mut server) != before + rounds as u64 {
         return Err(format!(
-            "{} looks for {rounds} titles changed",
-            server.event_looks() - looks
+            "{} windows read for {rounds} titles changed",
+            described(&mut server) - before
         ));
     }
     for (case, times) in [
@@ -264,7 +273,7 @@ impl WindowsClient {
 }
 
 /// Sends what the client wrote and lets the compositor handle it, until it has answered all of
-/// it, the client's events handled; the server's own round, which would look, is not run.
+/// it, the client's events handled; the server's own round, which would build, is not run.
 fn roundtrip(
     server: &mut Server,
     connection: &Connection,

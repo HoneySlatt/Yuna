@@ -24,6 +24,7 @@ mod commands;
 mod core_costs;
 mod dialogs;
 mod dmabuf;
+mod event_stream;
 mod input_bounds;
 mod input_client;
 mod keyboard_layouts;

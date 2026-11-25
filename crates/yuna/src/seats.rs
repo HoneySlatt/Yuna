@@ -44,7 +44,7 @@ use crate::command::refusal;
 use crate::keymap::{KeyboardLayout, SeatKeymap};
 use crate::popups::ActivePopupGrab;
 use crate::state::{ClientState, OWNER_SEAT, State};
-use crate::{ClientArrival, ClientProcess, ClientRefusal, Error};
+use crate::{ClientArrival, ClientProcess, Error};
 
 /// The layout every agent's keyboard starts with: the same on every machine and in CI, whatever
 /// the `XKB_DEFAULT_*` variables say (ADR-0037).
@@ -403,10 +403,10 @@ impl State {
 
     /// Closes a connection `seat`'s socket took past [`MAX_CLIENTS_PER_SEAT`], and tells it, with
     /// the refusals before it not yet told, at most once every [`REFUSALS_TOLD_EVERY`] of real
-    /// time ([`Refusals`]): in a warning, and to whoever watches the refusals
-    /// (`Compositor::watch_client_refusals`). The connection is shut down before it is closed,
-    /// so that its peer reads its end of file at once, even while a child that has not yet run
-    /// its program, an Xwayland starting, holds a copy of the descriptor.
+    /// time ([`Refusals`]): in a warning, and as an event (`events.rs`). The connection is shut
+    /// down before it is closed, so that its peer reads its end of file at once, even while a
+    /// child that has not yet run its program, an Xwayland starting, holds a copy of the
+    /// descriptor.
     fn refuse_connection(&mut self, seat: SeatId, stream: UnixStream) {
         // A peer gone already is what shutting down would have made it.
         let _ = stream.shutdown(Shutdown::Both);
@@ -424,9 +424,7 @@ impl State {
             refused,
             "a seat refuses connections past its bound of clients"
         );
-        if let Some(told) = &mut self.client_refusals {
-            told.push(ClientRefusal { seat, refused });
-        }
+        self.events.client_refused(seat, refused);
     }
 
     /// Serves a client of `seat` on `stream`, as [`State::insert_client`] says, whatever the

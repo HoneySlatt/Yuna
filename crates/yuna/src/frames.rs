@@ -124,7 +124,7 @@ impl State {
     /// their motions at that arrangement, however many animated changes come with it.
     pub(crate) fn mark_layout_changed(&mut self, change: Change) {
         self.layout_dirty = true;
-        self.note_description_changed();
+        self.events.focus_may_have_moved();
         self.layout_change = std::mem::take(&mut self.layout_change).and(change);
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
@@ -680,16 +680,16 @@ impl State {
     /// states, and moves each between shown and hidden.
     pub(crate) fn arrange(&mut self) {
         self.layout_dirty = false;
-        // Places and outputs shown on change here, at once or at the next refresh.
-        self.note_description_changed();
         let change = std::mem::take(&mut self.layout_change);
         let now = self.clock.now();
         self.motion.update(&self.layout, now, change);
         for output in &mut self.outputs {
-            output.placed = self.layout.arrange(output.id).unwrap_or_else(|error| {
+            let placed = self.layout.arrange(output.id).unwrap_or_else(|error| {
                 tracing::warn!(error = %refusal(error), output = output.id.0, "the layout has no such output");
                 Vec::new()
             });
+            let before = std::mem::replace(&mut output.placed, placed);
+            self.events.arranged(output.id, &before, &output.placed);
             output.told = self.motion.told_visible(output.id, now);
             output.in_motion = self.motion.end(output.id, now).is_some();
         }
@@ -817,7 +817,9 @@ impl State {
             return;
         }
         // At an arrangement, or where a motion ends.
-        self.note_description_changed();
+        if let Some(window) = toplevel.window {
+            self.events.window_moved(window);
+        }
         if let Some(before) = before {
             self.leave_output(root, before);
         }

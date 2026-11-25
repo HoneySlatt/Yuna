@@ -8,13 +8,14 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+use yuna_ipc::ProtocolError;
 use yuna_layout::WorkspaceInfo;
 use yuna_types::{Rect, SeatId, WindowId};
 
 use super::arguments::Button;
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
-use crate::compositor::{ClientProtocolError, OutputDescription, WindowDescription};
+use crate::compositor::{OutputDescription, WindowDescription};
 use crate::input::PointerDescription;
 use crate::mcp::events::{Event, EventData, Reading};
 use crate::mcp::image::base64;
@@ -275,7 +276,7 @@ pub fn program_json(program: &Program) -> Value {
 }
 
 /// A protocol error a client was ended for.
-fn protocol_error_json(error: &ClientProtocolError) -> Value {
+fn protocol_error_json(error: &ProtocolError) -> Value {
     json!({
         "interface": error.interface,
         "object": error.object,
@@ -299,61 +300,70 @@ pub fn log_json(read: &LogRead) -> Value {
 /// An event, as `events` gives it: its number, time and kind, and its fields.
 pub fn event_json(event: &Event) -> Value {
     let mut described = match &event.data {
-        EventData::WindowOpened {
+        EventData::Compositor { event, program } => compositor_event_json(event, *program),
+        EventData::ProgramExited { program, end } => {
+            let (exit_code, signal) = end_json(*end);
+            json!({ "program": program, "exit_code": exit_code, "signal": signal })
+        }
+    };
+    described["seq"] = json!(event.seq);
+    described["time_ns"] = json!(event.time_ns);
+    described["kind"] = json!(event.kind.name());
+    described
+}
+
+/// The fields of a compositor's event; `program`, a `client_left`'s client's. A kind MCP does
+/// not know is never recorded (`Kind::of`): it has no field here.
+fn compositor_event_json(event: &yuna_ipc::Event, program: Option<u64>) -> Value {
+    use yuna_ipc::Event;
+    match event {
+        Event::WindowOpened {
             window,
             app_id,
             title,
             pid,
             shell,
+            ..
         } => json!({
             "window": window.0, "app_id": app_id, "title": title, "pid": pid,
             "shell": shell.name(),
         }),
-        EventData::WindowClosed { window } | EventData::WindowUnresponsive { window } => {
+        Event::WindowClosed { window, .. } | Event::WindowUnresponsive { window, .. } => {
             json!({ "window": window.0 })
         }
-        EventData::WindowChanged {
+        Event::WindowChanged {
             window,
             title,
             app_id,
+            ..
         } => json!({ "window": window.0, "title": title, "app_id": app_id }),
-        EventData::WindowPlaced {
+        Event::WindowPlaced {
             window,
             output,
             workspace,
             place,
+            ..
         } => json!({
             "window": window.0,
             "output": output.map(|output| output.0),
             "workspace": workspace,
             "place": place.map(rect_json),
         }),
-        EventData::Focus { window } => json!({ "window": window.map(|window| window.0) }),
-        EventData::ProgramExited { program, end } => {
-            let (exit_code, signal) = end_json(*end);
-            json!({ "program": program, "exit_code": exit_code, "signal": signal })
-        }
-        EventData::ClientLeft {
-            pid,
-            program,
-            error,
-        } => json!({
+        Event::Focus { window, .. } => json!({ "window": window.map(|window| window.0) }),
+        Event::ClientLeft { pid, error, .. } => json!({
             "pid": pid,
             "program": program,
             "reason": if error.is_some() { "protocol_error" } else { "closed" },
             "error": error.as_ref().map(protocol_error_json),
         }),
-        EventData::ClientRefused { bound, refused } => {
+        Event::ClientRefused { bound, refused, .. } => {
             json!({ "bound": bound, "refused": refused })
         }
-        EventData::OutputAdded { output }
-        | EventData::OutputRemoved { output }
-        | EventData::OutputChanged { output } => json!({ "output": output.0 }),
-    };
-    described["seq"] = json!(event.seq);
-    described["time_ns"] = json!(event.time_ns);
-    described["kind"] = json!(event.data.kind().name());
-    described
+        Event::OutputAdded { output, .. }
+        | Event::OutputRemoved { output, .. }
+        | Event::OutputChanged { output, .. } => json!({ "output": output.0 }),
+        _ => json!({}),
+    }
 }
 
 /// What `counts` holds, as `rest` answers: of `seat` and Yuna's own parts when given, else of

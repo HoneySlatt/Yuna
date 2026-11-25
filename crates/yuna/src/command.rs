@@ -18,9 +18,13 @@ pub(crate) fn run(state: &mut State, caller: Caller, command: Command) -> Result
         let window = target(&state.layout, caller.seat, window)?;
         return state.close_window(window);
     }
+    let moved = crate::events::moved_by(state, caller.seat, &command);
     let applied = apply_to_layout(&mut state.layout, caller.seat, command);
     if applied.changed {
         state.mark_layout_changed(Change::Animated);
+        for window in moved {
+            state.events.window_moved(window);
+        }
     }
     applied.result
 }

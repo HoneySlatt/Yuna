@@ -103,9 +103,7 @@ mod tests {
         Chromaticities, Description, Luminances, PG32UCDM, TransferFunction,
     };
     use crate::colour::{SurfaceColourDescription, SurfaceRole};
-    use crate::compositor::{
-        ClientProcess, ClientProtocolError, OutputDescription, WindowDescription,
-    };
+    use crate::compositor::{ClientProcess, OutputDescription, WindowDescription};
     use crate::mcp::events::{Event, EventData, Kind};
     use crate::mcp::programs::{End, ProgramWakes};
     use crate::mcp::protocol::Revision;
@@ -614,34 +612,52 @@ mod tests {
         );
     }
 
+    /// A compositor's event as the log keeps it, with `program`, a `client_left`'s.
+    fn told(event: yuna_ipc::Event, program: Option<u64>) -> EventData {
+        EventData::Compositor { event, program }
+    }
+
     #[test]
     fn an_event_gives_its_number_time_kind_and_fields() {
-        let event = |data| Event {
+        let seat = SeatId(2);
+        let event = |data: EventData| Event {
             seq: 3,
             time_ns: 40,
+            kind: match &data {
+                EventData::Compositor { event, .. } => Kind::of(event).expect("a known kind"),
+                EventData::ProgramExited { .. } => Kind::ProgramExited,
+            },
             data,
         };
-        let left = event(EventData::ClientLeft {
-            pid: Some(77),
-            program: Some(2),
-            error: Some(ClientProtocolError {
-                interface: "wl_subcompositor".to_owned(),
-                object: 5,
-                code: 0,
-                message: "role".to_owned(),
-            }),
-        });
+        let left = event(told(
+            yuna_ipc::Event::ClientLeft {
+                seat,
+                client: 9,
+                pid: Some(77),
+                error: Some(yuna_ipc::ProtocolError::new(
+                    "wl_subcompositor".to_owned(),
+                    5,
+                    0,
+                    "role".to_owned(),
+                )),
+            },
+            Some(2),
+        ));
         assert_eq!(
             event_json(&left),
             json!({"seq": 3, "time_ns": 40, "kind": "client_left", "pid": 77, "program": 2,
                    "reason": "protocol_error", "error": {"interface": "wl_subcompositor",
                    "object": 5, "code": 0, "message": "role"}})
         );
-        let closed = event(EventData::ClientLeft {
-            pid: None,
-            program: None,
-            error: None,
-        });
+        let closed = event(told(
+            yuna_ipc::Event::ClientLeft {
+                seat,
+                client: 10,
+                pid: None,
+                error: None,
+            },
+            None,
+        ));
         assert_eq!(event_json(&closed)["reason"], json!("closed"));
         assert_eq!(event_json(&closed)["error"], Value::Null);
         let exited = event(EventData::ProgramExited {
@@ -653,12 +669,16 @@ mod tests {
             json!({"seq": 3, "time_ns": 40, "kind": "program_exited", "program": 4,
                    "exit_code": null, "signal": 9})
         );
-        let placed = event(EventData::WindowPlaced {
-            window: WindowId(1),
-            output: None,
-            workspace: Some("web".to_owned()),
-            place: None,
-        });
+        let placed = event(told(
+            yuna_ipc::Event::WindowPlaced {
+                seat,
+                window: WindowId(1),
+                output: None,
+                workspace: Some("web".to_owned()),
+                place: None,
+            },
+            None,
+        ));
         assert_eq!(
             event_json(&placed),
             json!({"seq": 3, "time_ns": 40, "kind": "window_placed", "window": 1,
@@ -671,10 +691,15 @@ mod tests {
         let refused = Event {
             seq: 8,
             time_ns: 50,
-            data: EventData::ClientRefused {
-                bound: crate::MAX_CLIENTS_PER_SEAT,
-                refused: 3,
-            },
+            kind: Kind::ClientRefused,
+            data: told(
+                yuna_ipc::Event::ClientRefused {
+                    seat: SeatId(2),
+                    bound: crate::MAX_CLIENTS_PER_SEAT,
+                    refused: 3,
+                },
+                None,
+            ),
         };
         assert_eq!(
             event_json(&refused),
