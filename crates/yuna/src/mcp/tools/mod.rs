@@ -23,13 +23,14 @@ mod schemas;
 use std::time::Duration;
 
 pub use arguments::{
-    AccessibilityCall, ButtonCall, CaptureCall, ClipboardCall, ClockCall, EventsCall, KeyboardCall,
-    OutputsCall, PointerCall, RestCall, SeatCall, SpawnCall, WindowsCall, WorkspacesCall,
-    advance_length, arguments, clipboard_bytes, first_text_type,
+    AccessibilityCall, ButtonCall, CaptureCall, ClipboardCall, ClockCall, EventsCall, FramesCall,
+    KeyboardCall, OutputsCall, PointerCall, RestCall, SeatCall, SpawnCall, WindowsCall,
+    WorkspacesCall, advance_length, arguments, clipboard_bytes, first_text_type,
 };
 pub use results::{
-    ClipboardData, CopiedCapture, ToolResult, capture_json, clipboard_json, events_json, log_json,
-    output_json, pointer_json, program_json, rest_json, window_json, workspace_json,
+    ClipboardData, CopiedCapture, ToolResult, capture_json, clipboard_json, events_json,
+    frames_json, log_json, output_json, pointer_json, program_json, rest_json, window_json,
+    workspace_json,
 };
 pub use schemas::definitions;
 
@@ -47,6 +48,16 @@ pub const MAX_WAITING_CALLS: usize = 64;
 /// 25,000 of tool output Claude Code takes by default
 /// ([ADR-0153](../../../../../docs/adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
 pub const MAX_WINDOWS_PER_PAGE: usize = 128;
+
+/// How many frames a reply of `frames` gives by default, and at most.
+pub const DEFAULT_FRAMES_PER_REPLY: usize = 8;
+pub const MAX_FRAMES_PER_REPLY: usize = 16;
+
+/// How many inputs and commits a reply of `frames` lists in all, its frames' together: a frame
+/// takes about 150 tokens of an agent's context, an input or a commit about 30, so that a reply
+/// stays near 6,000 tokens, under the 25,000 of tool output Claude Code takes by default. A
+/// frame past it is given with its lists cut, or waits for the next reply.
+pub const MAX_LISTED_PER_REPLY: usize = 128;
 
 /// How many bytes of a log `spawn log` gives by default.
 pub const DEFAULT_LOG_READ: u64 = 64 << 10;
@@ -133,6 +144,7 @@ mod tests {
                 "spawn",
                 "windows",
                 "events",
+                "frames",
                 "accessibility",
                 "capture",
                 "pointer",
@@ -152,6 +164,18 @@ mod tests {
     fn each_property_a_schema_names_is_read_by_its_arguments() {
         // Every property of each schema, given alone with a valid action, is accepted or
         // refused for its action, never as an unknown field.
+        let frames: Result<FramesCall, _> = arguments(args(
+            json!({"seat": 2, "output": 1, "after": 0, "limit": 4}),
+        ));
+        assert!(matches!(
+            frames,
+            Ok(FramesCall {
+                seat: 2,
+                output: Some(1),
+                after: Some(0),
+                limit: Some(4)
+            })
+        ));
         assert!(matches!(
             arguments(args(json!({
                 "action": "create", "width": 1920, "height": 1080, "rate": 60, "scale": 1

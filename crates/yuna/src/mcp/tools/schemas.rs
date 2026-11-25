@@ -8,7 +8,8 @@
 use serde_json::{Value, json};
 
 use super::{
-    DEFAULT_CLIPBOARD_BYTES, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_TEXT_BYTES, MAX_LOG_READ, MAX_WAIT,
+    DEFAULT_CLIPBOARD_BYTES, DEFAULT_FRAMES_PER_REPLY, MAX_CLIPBOARD_BYTES,
+    MAX_CLIPBOARD_TEXT_BYTES, MAX_FRAMES_PER_REPLY, MAX_LISTED_PER_REPLY, MAX_LOG_READ, MAX_WAIT,
     MAX_WINDOWS_PER_PAGE, MAX_WORKSPACE_NAME, TEXT_TYPES,
 };
 use crate::mcp::accessibility::MAX_NODES;
@@ -16,7 +17,7 @@ use crate::mcp::events::Kind;
 use crate::mcp::outputs::{MAX_OUTPUT_PIXELS, MAX_OUTPUT_SIDE};
 use crate::mcp::stdio::MAX_LINE;
 use crate::rest::{Cause, Source};
-use crate::{CLIPBOARD_TIMEOUT, MAX_LAYOUT_NAME};
+use crate::{CLIPBOARD_TIMEOUT, MAX_COMMITS, MAX_FRAMES, MAX_INPUTS, MAX_LAYOUT_NAME};
 
 /// What a seat's id means in a schema: every tool but `clock` and `rest` acts on one seat, and
 /// `rest` on one when it is given.
@@ -35,6 +36,44 @@ pub fn definitions() -> Value {
         output's range when rate is left out too";
     let hdr_create = "create: true announces the HDR colours of the owner's monitor, a \
         PG32UCDM; false, SDR; by default as the server's default output";
+    let frames_description = format!(
+        "Read what a seat's outputs drew, each frame from the inputs and commits before it to \
+        its presentation, to learn when what you did was shown. Each refresh that ran is a \
+        frame: seq, a number that grows with each frame of its seat and is never reused while \
+        the seat lives; id, the frame's own identity, which a refresh aimed again keeps; \
+        output; outcome, drawn (with damaged, its rectangles), unchanged or failed; causes, \
+        what made it ({cause_list}: a commit that brought a buffer, or a window's first \
+        buffer; one that brought none only when nothing else caused what was drawn); armed_ns \
+        when its refresh was first armed, due_ns when it was due, ran_ns when it ran, ended_ns \
+        when its drawing ended, all on the clock's scale, and took_us how long it drew on real \
+        time; sampled_ns, the time its motion was sampled at; aimed, the boundary its refresh \
+        aimed at (boundary, its number as presentation feedback carries it, and at_ns), and \
+        presented, the boundary it is presented at, null until the clock reaches it, when its \
+        drawing failed, or when its output was removed first (discarded true then); late, \
+        presented after the boundary it aimed at. inputs are the seat's inputs delivered after \
+        the output's previous frame, up to this one's refresh: seq, time_ns, kind (motion, \
+        button, axis, key, text) and device: agent, with request, your call's JSON-RPC id when \
+        it is an integer; virtual_keyboard or virtual_pointer, with client, the client's \
+        number in rest; interface, a caller in Yuna's own process; or yuna, a pointer put on \
+        what moved under it; a run of motions between two frames is one input with count and \
+        last_ns. commits are the seat's commits in the same span, on this output or on none \
+        (a window's first buffer, a hidden window): seq, time_ns, client, surface, window, \
+        output and new_content, whether it attached a buffer; commits_elsewhere counts those \
+        another output showed. These are in the order they came, not causes: which input \
+        made a client commit is not knowable. A reply lists {MAX_LISTED_PER_REPLY} inputs \
+        and commits at most in all; inputs_more and commits_more count those past it, and \
+        inputs_dropped and commits_dropped those the seat's rings, which keep its last \
+        {MAX_INPUTS} inputs and {MAX_COMMITS} commits, no longer hold. With after, a seq \
+        of the seat's or a reply's next, gives the frames after it, oldest first, limit at \
+        most; an after past the seat's newest frame is refused. next is the cursor to give \
+        next, and missed how many frames of the seat after the cursor its ring, which keeps \
+        its last {MAX_FRAMES}, dropped. Without after, no past frame: the reply's next reads \
+        what comes. It never waits: on the manual clock, advance it first. gpu_priority is \
+        the priority the GPU's driver granted Yuna's renderer: realtime, high, medium, low, \
+        or unknown when the driver does not say. Yuna keeps nothing between calls: the \
+        cursor is yours.",
+        cause_list = cause_names.join(", "),
+    );
     let vrr_min = |minimum: u32, more: &str| {
         json!({ "type": "number", "minimum": minimum, "maximum": 500,
             "description": format!("{vrr_min_create}{more}") })
@@ -308,6 +347,28 @@ pub fn definitions() -> Value {
                         "description": "only these kinds; every kind by default" },
                     "wait_ms": { "type": "integer", "minimum": 0, "maximum": MAX_WAIT.as_millis(),
                         "description": "how long to wait for a first event; 0 by default" }
+                },
+                "required": ["seat"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "frames",
+            "title": "Frames",
+            "description": frames_description,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seat": seat,
+                    "output": { "type": "integer", "minimum": 1,
+                        "description": "only this output's frames, one of the seat's; every \
+                            output's by default" },
+                    "after": { "type": "integer", "minimum": 0,
+                        "description": "the cursor: a frame's seq or a reply's next, of this \
+                            seat; 0 for every frame kept; none for what comes from now" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_FRAMES_PER_REPLY,
+                        "description": format!("how many frames a reply gives at most; \
+                            {DEFAULT_FRAMES_PER_REPLY} by default") }
                 },
                 "required": ["seat"],
                 "additionalProperties": false

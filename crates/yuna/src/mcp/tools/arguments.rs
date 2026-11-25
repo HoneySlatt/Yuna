@@ -297,6 +297,16 @@ pub struct RestCall {
     pub wait_ms: Option<u64>,
 }
 
+/// `frames`' arguments.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FramesCall {
+    pub seat: u64,
+    pub output: Option<u64>,
+    pub after: Option<u64>,
+    pub limit: Option<usize>,
+}
+
 /// `events`' arguments.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
