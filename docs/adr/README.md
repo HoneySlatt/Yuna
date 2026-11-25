@@ -175,6 +175,7 @@ below is written by `scripts/adr-index.py --write`; `scripts/check.sh` checks it
 | [0152](0152-the-table-of-tasks-one-spawner-the-x11-manager-inline-at-m2-17.md) | The table of tasks: one spawner, one class, the X11 manager inline at M2.17 | Accepted |
 | [0153](0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md) | One event stream: marks where state changes, MCP's log per seat its bound | Accepted; supersedes in part 0082 and 0093 |
 | [0154](0154-a-clients-pidfd-at-accept-through-so-peerpidfd.md) | A client's pidfd at accept, through `SO_PEERPIDFD` | Superseded by 0156 |
-| [0155](0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md) | A frame's identity: an opaque id, numbered rings, and a `frames` tool | Accepted |
+| [0155](0155-a-frames-identity-an-opaque-id-numbered-rings-and-a-frames-tool.md) | A frame's identity: an opaque id, numbered rings, and a `frames` tool | Superseded by 0158 |
 | [0156](0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md) | A client's pidfd at accept, its life read by `poll` | Accepted; supersedes 0154 |
 | [0157](0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md) | `yuna-types` takes the logical geometry and a window's shell | Accepted; supersedes in part 0146 |
+| [0158](0158-a-frames-identity-each-task-wakes-yuna-through-a-source-of-its-own.md) | A frame's identity, and each task's wake through a source of its own | Accepted; supersedes 0155 |
