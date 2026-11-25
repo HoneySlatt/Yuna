@@ -336,6 +336,19 @@ fn an_agent_reads_its_click_and_the_frame_that_showed_its_answer() {
     assert_eq!(frame["late"], json!(false), "{frame}");
 
     let newest = structured["next"].as_u64().expect("a cursor");
+    // A capture names the frame it copied, the output's last drawn.
+    let captured = mcp.call("capture", json!({"seat": seat}));
+    let captured = &captured["structuredContent"];
+    let last_drawn = frames
+        .iter()
+        .rev()
+        .find(|frame| frame["outcome"] != json!("failed"))
+        .expect("a frame");
+    assert_eq!(
+        captured["frame"], last_drawn["id"],
+        "{captured} {last_drawn}"
+    );
+    assert_eq!(captured["boundary"], last_drawn["presented"]["boundary"]);
     let past = mcp.call("frames", json!({"seat": seat, "after": newest + 1}));
     assert_eq!(past["isError"], json!(true), "{past}");
     let other = mcp.call("frames", json!({"seat": seat, "output": 999}));

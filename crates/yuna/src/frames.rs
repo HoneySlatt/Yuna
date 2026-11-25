@@ -465,7 +465,6 @@ impl State {
         if shown.outcome != FrameOutcome::Failed {
             output.covered_inputs = newest_input;
             output.covered_commits = newest_commit;
-            output.last_frame = Some(begun.armed.id);
         }
         let boundary = |at: RefreshAt| Boundary {
             seq: at.seq,
@@ -611,6 +610,7 @@ impl State {
         };
         shown_frame.presented = Some(presented);
         output.last_refresh = later(output.last_refresh, presented);
+        output.last_frame = Some(id);
         // The frame shown from `presented` on is in the buffer now: the captures that waited.
         self.copy_captures(output_id, drew, presented);
         let output = &mut self.outputs[index];

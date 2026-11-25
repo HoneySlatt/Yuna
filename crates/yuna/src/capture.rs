@@ -24,6 +24,7 @@ use yuna_types::{OutputId, Rect, SeatId, WindowId};
 
 use crate::Error;
 use crate::clock::Deadline;
+use crate::frame_record::FrameId;
 use crate::output::RefreshAt;
 use crate::output::{OutputMode, to_i32};
 use crate::screencopy::ClientFrame;
@@ -116,6 +117,9 @@ pub struct CapturedFrame {
     pub boundary: u64,
     /// That boundary's time on the clock.
     pub presented_at: Duration,
+    /// The frame copied, by its id in the frame record (`frame_record/`): the output's last that
+    /// drew or found nothing changed.
+    pub frame: Option<FrameId>,
     area: Area,
     /// The output's physical pixels per logical unit.
     scale: f64,
@@ -622,6 +626,7 @@ impl State {
             return;
         }
         let (id, mode, drawn_frames) = (output.id, output.mode, output.drawn_frames);
+        let frame = output.last_frame;
         let whole = Rectangle::from_size((to_i32(mode.width()), to_i32(mode.height())).into());
         // Each area clients' frames read is read once for all of them: the whole output for
         // every `ext-image-copy-capture-v1` frame, and each `wlr-screencopy` region.
@@ -649,6 +654,7 @@ impl State {
                                 window,
                                 boundary: presented.seq,
                                 presented_at,
+                                frame,
                                 area,
                                 scale: mode.scale(),
                                 pixels,
@@ -1027,6 +1033,7 @@ mod tests {
             window: None,
             boundary: 0,
             presented_at: Duration::ZERO,
+            frame: None,
             area,
             scale,
             pixels,

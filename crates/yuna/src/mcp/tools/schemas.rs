@@ -422,8 +422,10 @@ pub fn definitions() -> Value {
                 a logical unit, the units pointer takes; size physical gives every physical \
                 pixel. The result tells how the image maps to its output, logical = x + pixel \
                 × units_per_pixel, and gives a capture id: pointer takes it, with x and y in \
-                that image's pixels. One capture of a seat at a time. It comes once the clock \
-                reaches the boundary its frame is presented at: on a manual clock, advance it.",
+                that image's pixels, and the frame copied: frame, its id as frames gives it, \
+                boundary and presented_ns, where it is presented. One capture of a seat at a \
+                time. It comes once the clock reaches the boundary its frame is presented at: \
+                on a manual clock, advance it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

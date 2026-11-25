@@ -204,6 +204,7 @@ pub struct CopiedCapture {
     pub window: Option<WindowId>,
     pub boundary: u64,
     pub presented_at: Duration,
+    pub frame: Option<crate::FrameId>,
 }
 
 impl CopiedCapture {
@@ -213,6 +214,7 @@ impl CopiedCapture {
             window: frame.window,
             boundary: frame.boundary,
             presented_at: frame.presented_at,
+            frame: frame.frame,
         }
     }
 }
@@ -231,6 +233,7 @@ pub fn capture_json(id: u64, frame: &CopiedCapture, png_bytes: usize) -> Value {
         "units_per_pixel": mapping.units_per_pixel,
         "presented_ns": frame.presented_at.as_nanos() as u64,
         "boundary": frame.boundary,
+        "frame": frame.frame.map(|id| id.get()),
         "png_bytes": png_bytes,
     })
 }
