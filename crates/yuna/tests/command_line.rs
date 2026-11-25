@@ -282,7 +282,8 @@ fn stop_cleanly(running: &mut Running, socket_path: &std::path::Path) {
 /// M1.4 and the output asked, and SIGTERM stops it cleanly, its socket removed. `linux-dmabuf` is
 /// offered only when the renderer, llvmpipe here, imports a format: the program's log says which,
 /// and the globals must agree with it. Its socket serves the owner's seat, which is offered no
-/// virtual keyboard or pointer (ADR-0058).
+/// virtual keyboard or pointer (ADR-0058). The log says once which GPU priority the renderer was
+/// granted.
 #[test]
 fn headless_serves_its_globals_and_stops_on_sigterm() {
     let (mut running, log_reader, socket_path) =
@@ -333,6 +334,12 @@ fn headless_serves_its_globals_and_stops_on_sigterm() {
         "the log does not say whether linux-dmabuf is offered: {log}"
     );
     eprintln!("linux-dmabuf offered on the software device: {dmabuf_offered}");
+    // ADR-0155: the priority granted is read once, when the renderer is opened, and logged.
+    assert_eq!(
+        log.matches("the GPU priority granted").count(),
+        1,
+        "the log does not say once which GPU priority was granted: {log}"
+    );
     assert_eq!(
         globals.interfaces.contains("zwp_linux_dmabuf_v1"),
         dmabuf_offered,

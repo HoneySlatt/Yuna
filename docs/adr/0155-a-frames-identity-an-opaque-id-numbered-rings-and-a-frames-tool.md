@@ -1,6 +1,6 @@
 # 0155. A frame's identity: an opaque id, numbered rings, and a `frames` tool
 
-- Status: Accepted
+- Status: Superseded by [0158](0158-a-frames-identity-each-task-wakes-yuna-through-a-source-of-its-own.md)
 - Date: 2026-11-22
 
 ## Context

@@ -25,6 +25,7 @@ mod core_costs;
 mod dialogs;
 mod dmabuf;
 mod event_stream;
+mod frame_record;
 mod input_bounds;
 mod input_client;
 mod keyboard_layouts;

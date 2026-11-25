@@ -21,7 +21,10 @@
 //! causes noted since its last refresh (`PendingCauses`), and a frame drawn is counted once
 //! under each: a client's commit, with the client, a layout change, a motion, a capture, the
 //! output's first frame, its change of mode, or a popup or an X11 menu that came, went or moved
-//! without a commit of its own. A refresh that drew nothing counts nothing.
+//! without a commit of its own. A commit is a cause only when it brought something new, a
+//! buffer attached or removed; one that only asks a frame callback arms the refresh that
+//! answers it, and is none. A window's first buffer, which opens it, is its client's commit, not
+//! a layout change. A refresh that drew nothing counts nothing.
 //!
 //! **Bounds.** Counters only: an array per [`Source`] and per [`Cause`], a map of the clients
 //! connected and one of the seats that exist, each entry dropped when its client leaves or its
@@ -80,7 +83,8 @@ pub enum Source {
     /// SIGTERM or SIGINT, through its pipe.
     StopSignal,
     /// Another thread woke it through a [`Waker`](crate::Waker), a test seam: the WLCS shim's
-    /// hooks, which reach the compositor's thread this way.
+    /// hooks, which reach the compositor's thread this way. No task of the table uses one: each
+    /// wakes Yuna through a source of its own (`tasks.rs`).
     Waker,
     /// SIGCHLD, through its pipe: a child of `yuna mcp` ended.
     ChildEnded,
@@ -281,9 +285,11 @@ const _: () = assert!(Source::SelectionWriteTimeout as usize + 1 == Source::COUN
 /// last refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Cause {
-    /// A client's commit to a surface the output shows: a window's, a popup's, an X11 menu's.
+    /// A client's commit that brought something new to a surface the output shows, a window's,
+    /// a popup's or an X11 menu's; or the first buffer that opened a window.
     Commit,
-    /// The layout changed: a window opened, closed or moved, an output came or went.
+    /// The layout changed: a window closed or moved, an output came or went. A window's opening
+    /// is its client's commit.
     LayoutChange,
     /// The output's motion runs: each of its frames arms the next.
     Motion,
@@ -337,6 +343,42 @@ impl Cause {
 // As for `Source`, with `Popups` last; a frame's causes are bits of a `u8`.
 const _: () = assert!(Cause::Popups as usize + 1 == Cause::COUNT && Cause::COUNT <= 8);
 
+/// A frame's causes: those of [`Cause::ALL`] that armed its refresh or joined it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Causes(u8);
+
+impl Causes {
+    /// Whether `cause` is among them.
+    pub fn contains(self, cause: Cause) -> bool {
+        self.0 & cause.bit() != 0
+    }
+
+    /// Each of them, in [`Cause::ALL`]'s order.
+    pub fn iter(self) -> impl Iterator<Item = Cause> {
+        Cause::ALL
+            .into_iter()
+            .filter(move |cause| self.contains(*cause))
+    }
+}
+
+/// Their names joined by `+`, `none` for none: the `frame drawn` log line's.
+impl std::fmt::Display for Causes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for cause in self.iter() {
+            if !first {
+                f.write_str("+")?;
+            }
+            f.write_str(cause.name())?;
+            first = false;
+        }
+        if first {
+            f.write_str("none")?;
+        }
+        Ok(())
+    }
+}
+
 /// What a source is, given when it is inserted: its kind, and the seat it serves, if any; none
 /// for the auditor's own, which is never counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,6 +404,12 @@ impl Wake {
         }
     }
 
+    /// What it names; none for the auditor's own.
+    #[cfg(test)]
+    pub(crate) fn source(self) -> Option<Source> {
+        self.source
+    }
+
     /// The auditor's own source, the timer of the log of each second: what observes Yuna's rest
     /// is not counted as breaking it, as a `rest` call's own timer is left out of its window.
     pub(crate) fn of_the_auditor() -> Wake {
@@ -375,8 +423,13 @@ impl Wake {
 /// Why an output's refresh is armed, as the frame loop notes it ([`PendingCauses`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DrawCause {
-    /// A commit, by the client of this number, when it is known.
+    /// A commit that brought something new, by the client of this number, when it is known.
     Commit(Option<u64>),
+    /// A commit that attached no buffer, by the client of this number: its frame callbacks need
+    /// the refresh, and it may have changed what is drawn without a buffer (a subsurface moved, a
+    /// viewport, the window's geometry). It counts as a [`Cause::Commit`] only of a frame drawn
+    /// with no other cause.
+    BareCommit(Option<u64>),
     LayoutChange,
     Motion,
     Capture,
@@ -388,7 +441,7 @@ pub(crate) enum DrawCause {
 impl DrawCause {
     fn cause(self) -> Cause {
         match self {
-            DrawCause::Commit(_) => Cause::Commit,
+            DrawCause::Commit(_) | DrawCause::BareCommit(_) => Cause::Commit,
             DrawCause::LayoutChange => Cause::LayoutChange,
             DrawCause::Motion => Cause::Motion,
             DrawCause::Capture => Cause::Capture,
@@ -400,21 +453,39 @@ impl DrawCause {
 }
 
 /// The causes an output's next frame has so far, and the clients whose commits it shows: one
-/// entry each, so at most the clients connected.
+/// entry each, so at most the clients connected. Commits without a buffer are kept apart
+/// ([`DrawCause::BareCommit`]).
 #[derive(Debug, Default)]
 pub(crate) struct PendingCauses {
     causes: u8,
     committers: Vec<u64>,
+    /// Whether a commit without a buffer was noted.
+    bare: bool,
+    /// The clients of those commits, each once.
+    bare_committers: Vec<u64>,
 }
 
 impl PendingCauses {
     /// Notes `cause`, and its client, once.
     pub(crate) fn note(&mut self, cause: DrawCause) {
-        self.causes |= cause.cause().bit();
-        if let DrawCause::Commit(Some(client)) = cause
-            && !self.committers.contains(&client)
+        let (list, client) = match cause {
+            DrawCause::BareCommit(client) => {
+                self.bare = true;
+                (&mut self.bare_committers, client)
+            }
+            DrawCause::Commit(client) => {
+                self.causes |= Cause::Commit.bit();
+                (&mut self.committers, client)
+            }
+            other => {
+                self.causes |= other.cause().bit();
+                return;
+            }
+        };
+        if let Some(client) = client
+            && !list.contains(&client)
         {
-            self.committers.push(client);
+            list.push(client);
         }
     }
 
@@ -422,6 +493,8 @@ impl PendingCauses {
     pub(crate) fn clear(&mut self) {
         self.causes = 0;
         self.committers.clear();
+        self.bare = false;
+        self.bare_committers.clear();
     }
 
     /// The causes noted, leaving none.
@@ -429,18 +502,41 @@ impl PendingCauses {
         std::mem::take(self)
     }
 
-    /// Takes back the clients' list of `used`, emptied, unless clients were noted meanwhile: the
+    /// The frame these causes were noted for was drawn: if nothing else caused it, its commits
+    /// without a buffer did, and they become its commits, with their clients.
+    pub(crate) fn drawn(&mut self) {
+        if self.causes == 0 && self.bare {
+            self.causes = Cause::Commit.bit();
+            std::mem::swap(&mut self.committers, &mut self.bare_committers);
+        }
+    }
+
+    /// Takes back the clients' lists of `used`, emptied, unless clients were noted meanwhile: the
     /// next frame's clients then need no new room.
     pub(crate) fn recycle(&mut self, used: PendingCauses) {
-        if self.committers.is_empty() && self.committers.capacity() < used.committers.capacity() {
-            let mut list = used.committers;
-            list.clear();
-            self.committers = list;
+        let PendingCauses {
+            committers,
+            bare_committers,
+            ..
+        } = used;
+        for (ours, mut theirs) in [
+            (&mut self.committers, committers),
+            (&mut self.bare_committers, bare_committers),
+        ] {
+            if ours.is_empty() && ours.capacity() < theirs.capacity() {
+                theirs.clear();
+                *ours = theirs;
+            }
         }
     }
 
     fn has(&self, cause: Cause) -> bool {
-        self.causes & cause.bit() != 0
+        self.causes().contains(cause)
+    }
+
+    /// The causes noted, without their clients.
+    pub(crate) fn causes(&self) -> Causes {
+        Causes(self.causes)
     }
 }
 

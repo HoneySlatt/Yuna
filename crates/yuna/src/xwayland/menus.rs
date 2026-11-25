@@ -441,7 +441,7 @@ impl State {
             .map(|output| output.id)
             .collect();
         for output in outputs {
-            self.schedule_refresh_for_content(output, crate::rest::DrawCause::Popups);
+            self.schedule_refresh_for_content(output, Some(crate::rest::DrawCause::Popups));
         }
     }
 
@@ -658,12 +658,14 @@ impl State {
                     }
                 }
                 let content = std::mem::take(&mut self.committed_content);
-                let cause = crate::rest::DrawCause::Commit(self.committing_client);
+                let committing = self.committing_client;
                 for output in outputs {
                     if content {
-                        self.schedule_refresh_for_content(output, cause);
+                        let cause = crate::rest::DrawCause::Commit(committing);
+                        self.schedule_refresh_for_content(output, Some(cause));
                     } else {
-                        self.schedule_refresh(output, cause);
+                        let cause = crate::rest::DrawCause::BareCommit(committing);
+                        self.schedule_refresh(output, Some(cause));
                     }
                 }
             }

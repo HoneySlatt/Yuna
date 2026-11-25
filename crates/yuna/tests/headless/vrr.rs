@@ -480,3 +480,59 @@ fn an_output_switched_to_vrr_and_back_presents_as_its_new_mode_from_each_change(
     );
     assert_rests(&mut compositor);
 }
+
+/// A refresh armed for a callback asked without a buffer, then armed again sooner for a buffer,
+/// is one frame under one id: re-aiming it changes when it is due and the boundary it aims at,
+/// not its identity (ADR-0158). The frame record keeps it once, with when it was first armed.
+#[test]
+fn a_refresh_aimed_again_keeps_its_frame_id() {
+    let mut compositor = compositor(true);
+    let mut client = Client::connect(&mut compositor);
+    let window = mapped(&mut compositor, &mut client);
+    compositor
+        .advance(Duration::from_secs(1))
+        .expect("the clock moves");
+    answers_to_empty_callbacks(&mut compositor, &mut client, window, 1);
+    let seat = yuna::OWNER_SEAT;
+    let before = compositor.last_frame(seat);
+    client.request_frame(window);
+    client.commit(window);
+    client.roundtrip(&mut compositor);
+    let paced = compositor.next_deadline().expect("a paced refresh");
+    let first_armed_at = compositor.now();
+    let id = compositor
+        .armed_frame(crate::OUTPUT)
+        .expect("an armed frame");
+
+    compositor
+        .advance(Duration::from_micros(100))
+        .expect("the clock moves");
+    let ready = compositor.now();
+    client.attach(window, 400, 300, BLUE);
+    client.commit(window);
+    // The round that reads the commit aims the refresh again at once, and runs it.
+    client.roundtrip(&mut compositor);
+    run_armed_deadlines(&mut compositor);
+    client.roundtrip(&mut compositor);
+
+    let reading = compositor
+        .frames(seat, None, before, 16)
+        .expect("the seat's frames");
+    let frames: Vec<&yuna::Frame> = reading.frames.iter().map(|(_, frame)| *frame).collect();
+    assert_eq!(frames.len(), 1, "{frames:?}");
+    let frame = frames[0];
+    assert_eq!(frame.id, id);
+    assert_eq!(frame.armed_at, first_armed_at);
+    assert_eq!(frame.due_at, ready);
+    assert!(frame.due_at < paced, "{frame:?}");
+    assert!(
+        matches!(frame.outcome, yuna::FrameOutcome::Drawn { .. }),
+        "{frame:?}"
+    );
+    assert!(
+        frame.causes.contains(yuna::rest::Cause::Commit),
+        "{frame:?}"
+    );
+    // The refresh armed after it, if any, is another frame.
+    assert_ne!(compositor.armed_frame(crate::OUTPUT), Some(id));
+}

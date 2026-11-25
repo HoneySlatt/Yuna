@@ -1227,7 +1227,7 @@ fn listen_for_taken(
     let (taken, source) = ping::make_ping().map_err(|error| error.to_string())?;
     let token = insert_source(
         handle,
-        Wake::of_seat(Source::X11Manager, seat),
+        Task::X11Manager(seat).wake(),
         source,
         move |(), (), state| {
             state
@@ -1248,7 +1248,7 @@ fn listen_to_manager(
 ) -> Result<RegistrationToken, String> {
     insert_source(
         handle,
-        Wake::of_seat(Source::X11Manager, seat),
+        Task::X11Manager(seat).wake(),
         channel,
         move |event, _, state| {
             state.xwayland_notes.push(match event {

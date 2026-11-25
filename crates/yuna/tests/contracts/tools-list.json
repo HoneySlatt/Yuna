@@ -358,6 +358,41 @@
     "title": "Events"
   },
   {
+    "description": "Read what a seat's outputs drew, each frame from the inputs and commits before it to its presentation, to learn when what you did was shown. Each refresh that ran is a frame: seq, a number that grows with each frame of its seat and is never reused while the seat lives; id, the frame's own identity, which a refresh aimed again keeps; output; outcome, drawn (with damaged, its rectangles), unchanged or failed; causes, what made it (commit, layout_change, motion, capture, first_frame, output_change, popups: a commit that brought a buffer, or a window's first buffer; one that brought none only when nothing else caused what was drawn); armed_ns when its refresh was first armed, due_ns when it was due, ran_ns when it ran, ended_ns when its drawing ended, all on the clock's scale, and took_us how long it drew on real time; sampled_ns, the time its motion was sampled at; aimed, the boundary its refresh aimed at (boundary, its number as presentation feedback carries it, and at_ns), and presented, the boundary it is presented at, null until the clock reaches it, when its drawing failed, or when its output was removed first (discarded true then); late, presented after the boundary it aimed at. inputs are the seat's inputs delivered after the output's previous frame, up to this one's refresh: seq, time_ns, kind (motion, button, axis, key, text) and device: agent, with request, your call's JSON-RPC id when it is an integer; virtual_keyboard or virtual_pointer, with client, the client's number in rest; interface, a caller in Yuna's own process; or yuna, a pointer put on what moved under it; a run of motions between two frames is one input with count and last_ns. commits are the seat's commits in the same span, on this output or on none (a window's first buffer, a hidden window): seq, time_ns, client, surface, window, output and new_content, whether it attached a buffer; commits_elsewhere counts those another output showed. These are in the order they came, not causes: which input made a client commit is not knowable. A reply lists 128 inputs and commits at most in all; inputs_more and commits_more count those past it, and inputs_dropped and commits_dropped those the seat's rings, which keep its last 2048 inputs and 2048 commits, no longer hold. With after, a seq of the seat's or a reply's next, gives the frames after it, oldest first, limit at most; an after past the seat's newest frame is refused. next is the cursor to give next, and missed how many frames of the seat after the cursor its ring, which keeps its last 1024, dropped. Without after, no past frame: the reply's next reads what comes. It never waits: on the manual clock, advance it first. gpu_priority is the priority the GPU's driver granted Yuna's renderer: realtime, high, medium, low, or unknown when the driver does not say. Yuna keeps nothing between calls: the cursor is yours.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "description": "the cursor: a frame's seq or a reply's next, of this seat; 0 for every frame kept; none for what comes from now",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "description": "how many frames a reply gives at most; 8 by default",
+          "maximum": 16,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "output": {
+          "description": "only this output's frames, one of the seat's; every output's by default",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "seat": {
+          "description": "the seat's handle, from `seat create`",
+          "minimum": 2,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seat"
+      ],
+      "type": "object"
+    },
+    "name": "frames",
+    "title": "Frames"
+  },
+  {
     "description": "Find nodes of the accessibility trees of a seat's programs started with spawn start and accessibility: true, a button by its name for one: each node's window, app (its process id), role and name as AT-SPI gives them, description, states, and rect, its rectangle in its output's logical units from the output's top-left corner, the units pointer takes: click its centre to press it. name is a part of the node's name, compared without regard to case; role an AT-SPI role name (button, check box, text, frame, label…); states AT-SPI state names the node must all have (focused, checked, sensitive, showing…). window or pid limit the walk to that program's tree. A walk visits max_nodes nodes at most, 10000 by default, and gives 256 nodes at most, more true past them; each program has 3 s to answer, and one that does not is told so in apps, never holding the others. With wait_ms, waits up to that long for a node that matches, walking again as the programs change. A program started without accessibility is not on the bus.",
     "inputSchema": {
       "additionalProperties": false,
@@ -413,7 +448,7 @@
     "title": "Accessibility tree"
   },
   {
-    "description": "Capture what one of a seat's outputs shows, as a PNG image of its newest frame: the one being drawn when a change is on its way, else the last one drawn. All of the output, its first by default, a region of it, or a window: what the output shows where the window is, what covers it included; a hidden window is refused. By default at the logical size, where a pixel is a logical unit, the units pointer takes; size physical gives every physical pixel. The result tells how the image maps to its output, logical = x + pixel × units_per_pixel, and gives a capture id: pointer takes it, with x and y in that image's pixels. One capture of a seat at a time. It comes once the clock reaches the boundary its frame is presented at: on a manual clock, advance it.",
+    "description": "Capture what one of a seat's outputs shows, as a PNG image of its newest frame: the one being drawn when a change is on its way, else the last one drawn. All of the output, its first by default, a region of it, or a window: what the output shows where the window is, what covers it included; a hidden window is refused. By default at the logical size, where a pixel is a logical unit, the units pointer takes; size physical gives every physical pixel. The result tells how the image maps to its output, logical = x + pixel × units_per_pixel, and gives a capture id: pointer takes it, with x and y in that image's pixels, and the frame copied: frame, its id as frames gives it, boundary and presented_ns, where it is presented. One capture of a seat at a time. It comes once the clock reaches the boundary its frame is presented at: on a manual clock, advance it.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

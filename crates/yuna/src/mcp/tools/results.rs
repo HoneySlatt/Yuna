@@ -16,13 +16,16 @@ use super::arguments::Button;
 use crate::colour::SurfaceColourDescription;
 use crate::colour::description::Chromaticities;
 use crate::compositor::{OutputDescription, WindowDescription};
+use crate::frame_record::{
+    Boundary, Commit, Frame, FrameOutcome, Input, InputDevice, Reading as FramesReading,
+};
 use crate::input::PointerDescription;
 use crate::mcp::events::{Event, EventData, Reading};
 use crate::mcp::image::base64;
 use crate::mcp::programs::{End, LogRead, Program, ProgramWakes};
 use crate::mcp::protocol::{self, Revision};
 use crate::rest::{Cause, RestCounts, Source};
-use crate::{CaptureMapping, CapturedFrame};
+use crate::{CaptureMapping, CapturedFrame, GpuPriority};
 
 /// A tool's result.
 #[derive(Debug, Clone, PartialEq)]
@@ -201,6 +204,7 @@ pub struct CopiedCapture {
     pub window: Option<WindowId>,
     pub boundary: u64,
     pub presented_at: Duration,
+    pub frame: Option<crate::FrameId>,
 }
 
 impl CopiedCapture {
@@ -210,6 +214,7 @@ impl CopiedCapture {
             window: frame.window,
             boundary: frame.boundary,
             presented_at: frame.presented_at,
+            frame: frame.frame,
         }
     }
 }
@@ -228,6 +233,7 @@ pub fn capture_json(id: u64, frame: &CopiedCapture, png_bytes: usize) -> Value {
         "units_per_pixel": mapping.units_per_pixel,
         "presented_ns": frame.presented_at.as_nanos() as u64,
         "boundary": frame.boundary,
+        "frame": frame.frame.map(|id| id.get()),
         "png_bytes": png_bytes,
     })
 }
@@ -461,6 +467,165 @@ pub fn events_json(reading: &Reading<'_>, timed_out: bool) -> Value {
         answer["timed_out"] = json!(true);
     }
     answer
+}
+
+/// What `frames` answers: the frames read, oldest first, each with the inputs and commits it
+/// covers, [`MAX_LISTED_PER_REPLY`](super::MAX_LISTED_PER_REPLY) of them at most in all; the
+/// cursor to give next; the frames the seat's ring dropped after the cursor; and the GPU priority
+/// granted. A frame past the listing's room waits for the next reply, its cursor the last frame
+/// given; the first is given always, its lists cut. `now` is the clock's: a presentation is
+/// told once it has passed.
+pub fn frames_json(reading: &FramesReading<'_>, now: Duration, priority: GpuPriority) -> Value {
+    let mut room = super::MAX_LISTED_PER_REPLY;
+    let mut frames = Vec::new();
+    let mut next = reading.next;
+    for (given, (seq, frame)) in reading.frames.iter().enumerate() {
+        if room == 0 && given > 0 {
+            next = reading.frames[given - 1].0;
+            break;
+        }
+        frames.push(frame_json(reading, *seq, frame, now, &mut room));
+    }
+    json!({
+        "frames": frames,
+        "next": next,
+        "missed": reading.missed,
+        "gpu_priority": priority.name(),
+    })
+}
+
+/// A frame, as `frames` tells it, its inputs and commits listed within `room`, which it lessens.
+fn frame_json(
+    reading: &FramesReading<'_>,
+    seq: u64,
+    frame: &Frame,
+    now: Duration,
+    room: &mut usize,
+) -> Value {
+    let nanos = |at: Duration| u64::try_from(at.as_nanos()).unwrap_or(u64::MAX);
+    let boundary = |at: Boundary| json!({ "boundary": at.seq, "at_ns": nanos(at.at) });
+    let (outcome, damaged) = match frame.outcome {
+        FrameOutcome::Drawn { damaged } => ("drawn", Some(damaged)),
+        FrameOutcome::Unchanged => ("unchanged", None),
+        FrameOutcome::Failed => ("failed", None),
+    };
+    let inputs = listed(reading.inputs(frame), room, |(number, input)| {
+        input_json(number, input, nanos)
+    });
+    // Its own output's commits, and those shown on none, a window's first among them; those
+    // another output showed are counted.
+    let on_frame = |commit: &&Commit| commit.output.is_none_or(|output| output == frame.output);
+    let elsewhere = reading
+        .commits(frame)
+        .filter(|(_, commit)| !on_frame(commit))
+        .count();
+    let commits = listed(
+        reading
+            .commits(frame)
+            .filter(|(_, commit)| on_frame(commit)),
+        room,
+        |(number, commit)| commit_json(number, commit, nanos),
+    );
+    json!({
+        "seq": seq,
+        "id": frame.id.get(),
+        "output": frame.output.0,
+        "outcome": outcome,
+        "damaged": damaged,
+        "causes": frame.causes.iter().map(Cause::name).collect::<Vec<&str>>(),
+        "armed_ns": nanos(frame.armed_at),
+        "due_ns": nanos(frame.due_at),
+        "ran_ns": nanos(frame.ran_at),
+        "ended_ns": nanos(frame.ended_at),
+        "took_us": u64::try_from(frame.took.as_micros()).unwrap_or(u64::MAX),
+        "sampled_ns": nanos(frame.sampled_at),
+        "aimed": boundary(frame.aimed),
+        "presented": frame
+            .presented
+            .filter(|presented| presented.at <= now)
+            .map(boundary),
+        "late": frame.late(),
+        "discarded": frame.discarded,
+        "inputs": inputs.listed,
+        "inputs_more": inputs.more,
+        "inputs_dropped": frame.inputs.count().saturating_sub(inputs.kept),
+        "commits": commits.listed,
+        "commits_more": commits.more,
+        "commits_dropped": frame.commits.count().saturating_sub(commits.kept + elsewhere as u64),
+        "commits_elsewhere": elsewhere,
+    })
+}
+
+/// Entries of a frame's list: those given, within the reply's room, how many more there are,
+/// and how many the ring still keeps.
+struct Listed {
+    listed: Vec<Value>,
+    more: u64,
+    kept: u64,
+}
+
+/// Lists `entries` within `room`, each made by `json`, lessening `room` by those given.
+fn listed<T>(
+    entries: impl Iterator<Item = T>,
+    room: &mut usize,
+    json: impl Fn(T) -> Value,
+) -> Listed {
+    let mut list = Listed {
+        listed: Vec::new(),
+        more: 0,
+        kept: 0,
+    };
+    for entry in entries {
+        list.kept += 1;
+        if *room == 0 {
+            list.more += 1;
+            continue;
+        }
+        *room -= 1;
+        list.listed.push(json(entry));
+    }
+    list
+}
+
+/// An input, as `frames` tells it.
+fn input_json(number: u64, input: &Input, nanos: impl Fn(Duration) -> u64) -> Value {
+    let (device, request, client) = match input.device {
+        InputDevice::Interface => ("interface", None, None),
+        InputDevice::Yuna => ("yuna", None, None),
+        InputDevice::Agent { request } => ("agent", request, None),
+        InputDevice::VirtualKeyboard { client } => ("virtual_keyboard", None, Some(client)),
+        InputDevice::VirtualPointer { client } => ("virtual_pointer", None, Some(client)),
+    };
+    let mut entry = json!({
+        "seq": number,
+        "time_ns": nanos(input.time),
+        "kind": input.kind.name(),
+        "device": device,
+    });
+    if matches!(input.device, InputDevice::Agent { .. }) {
+        entry["request"] = json!(request);
+    }
+    if let Some(client) = client {
+        entry["client"] = json!(client);
+    }
+    if input.count > 1 {
+        entry["count"] = json!(input.count);
+        entry["last_ns"] = json!(nanos(input.last));
+    }
+    entry
+}
+
+/// A commit, as `frames` tells it.
+fn commit_json(number: u64, commit: &Commit, nanos: impl Fn(Duration) -> u64) -> Value {
+    json!({
+        "seq": number,
+        "time_ns": nanos(commit.time),
+        "client": commit.client,
+        "surface": commit.surface,
+        "window": commit.window.map(|window| window.0),
+        "output": commit.output.map(|output| output.0),
+        "new_content": commit.new_content,
+    })
 }
 
 /// What `clipboard get` read of its selection, as one of its types.

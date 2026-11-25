@@ -90,6 +90,8 @@ pub(crate) struct State {
     pub renderer: GlesRenderer,
     /// `GL_MAX_RENDERBUFFER_SIZE`: the largest side an output may have.
     pub max_output_side: u32,
+    /// The GPU priority the renderer's context was granted, read once when it was opened.
+    pub gpu_priority: crate::render::GpuPriority,
     pub outputs: Vec<VirtualOutput>,
     next_output_id: u64,
     /// The disabled globals of removed outputs and closed seats, with when each was removed on
@@ -188,6 +190,8 @@ pub(crate) struct State {
     pub committing_client: Option<u64>,
     /// What woke Yuna and what made it draw (`rest.rs`).
     pub rest: crate::rest::RestAudit,
+    /// Each seat's last inputs, commits and frames, and the frames' ids (`frame_record/`).
+    pub frame_record: crate::frame_record::FrameRecord,
     /// `color-management-v1`'s identities and feedback objects (`colour/`).
     pub colour: ColourState,
     /// What XWayland's sources noted in this round, for the compositor to act on after it
@@ -208,7 +212,8 @@ impl State {
         animations: Settings,
     ) -> Result<State, Error> {
         let dh = &display_handle;
-        let (renderer, max_output_side) = crate::render::open_renderer(device)?;
+        let opened = crate::render::open_renderer(device)?;
+        let renderer = opened.renderer;
         let mut layout = Layout::new(yuna_layout::Options::default())
             .map_err(|e| Error::Layout(refusal(e).to_string()))?;
         layout
@@ -221,13 +226,17 @@ impl State {
         let clock = Clock::new(clock_mode);
         let mut rest = crate::rest::RestAudit::new(clock.now());
         rest.add_seat(OWNER_SEAT);
+        let mut frame_record = crate::frame_record::FrameRecord::default();
+        frame_record.add_seat(OWNER_SEAT);
         Ok(State {
             display_handle: display_handle.clone(),
             rest,
+            frame_record,
             clock,
             layout,
             renderer,
-            max_output_side,
+            max_output_side: opened.max_size,
+            gpu_priority: opened.priority,
             outputs: Vec::new(),
             next_output_id: 1,
             retired_globals: Vec::new(),
@@ -384,6 +393,16 @@ pub(crate) struct ClientState {
     departed: DepartedClients,
 }
 
+/// The rest auditor's number of `surface`'s client; none for a surface whose client is gone, or
+/// is not Yuna's.
+pub(crate) fn client_number(surface: &WlSurface) -> Option<u64> {
+    surface.client().and_then(|client| {
+        client
+            .get_data::<ClientState>()
+            .map(|data| data.rest_number)
+    })
+}
+
 impl ClientState {
     pub(crate) fn new(
         seat: SeatId,
@@ -430,6 +449,44 @@ impl ClientData for ClientState {
 /// The state Smithay asks for a client that Yuna did not insert: none exists, since every
 /// client comes through `insert_client` with a `ClientState`, but a reference must be returned.
 static NO_CLIENT_STATE: LazyLock<CompositorClientState> = LazyLock::new(Default::default);
+
+impl State {
+    /// Keeps in `seat`'s frame record a commit of `surface`, in the tree of `root`, by the client
+    /// of number `client`, with its window and the output that shows it, once the handlers have
+    /// run: a first buffer has opened its window by then.
+    fn record_commit(
+        &mut self,
+        seat: SeatId,
+        client: Option<u64>,
+        surface: &WlSurface,
+        root: &WlSurface,
+        new_content: bool,
+    ) {
+        let placed = |state: &State, root: &WlSurface| {
+            state
+                .toplevels
+                .get(&root.id())
+                .map(|toplevel| (toplevel.window, toplevel.shown_on))
+        };
+        let (window, output) = placed(self, root)
+            .or_else(|| {
+                (get_role(root) == Some(XDG_POPUP_ROLE))
+                    .then(|| crate::popups::popup_toplevel(root))
+                    .flatten()
+                    .and_then(|toplevel| placed(self, &toplevel))
+            })
+            .unwrap_or((None, None));
+        let commit = crate::frame_record::Commit {
+            time: self.clock.now(),
+            client,
+            surface: surface.id().protocol_id(),
+            window,
+            output,
+            new_content,
+        };
+        self.frame_record.commit(seat, commit);
+    }
+}
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -519,6 +576,9 @@ impl CompositorHandler for State {
         } else if get_role(&root) == Some(crate::xwayland::SURFACE_ROLE) {
             // An override-redirect window's: a menu or a tooltip.
             self.x11_menu_committed(&root);
+        }
+        if let Some(seat) = seat {
+            self.record_commit(seat, number, surface, &root, content);
         }
         self.committing_client = None;
     }

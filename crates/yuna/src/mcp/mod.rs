@@ -39,6 +39,7 @@
 //! - `spawn.rs`: `spawn` and `accessibility`, and the programs' throttle and end;
 //! - `waits.rs`: `windows`, `events` and `rest`, the seats' events recorded, and what every call
 //!   that waits shares: its bound, its timer, its time up, its cancellation, its seat closed;
+//! - `frames.rs`: `frames`, read from the compositor's frame record;
 //! - `clipboard.rs`: `clipboard`;
 //! - `captures.rs`: `capture`, and the encoders of its images;
 //! - `clock.rs`: `clock`.
@@ -52,6 +53,7 @@ mod captures;
 mod clipboard;
 mod clock;
 mod events;
+mod frames;
 mod image;
 mod input;
 mod outputs;
@@ -359,7 +361,7 @@ impl Server {
         let noted = events.clone();
         insert_source(
             &handle,
-            Wake::of(Source::Encoders),
+            Task::Encoder.wake(),
             encoded,
             move |event, _, _| {
                 if let channel::Event::Msg(message) = event {
@@ -768,8 +770,8 @@ impl Server {
                     },
                     "outputs" => self.outputs(arguments),
                     "workspaces" => self.workspaces(arguments),
-                    "pointer" => self.pointer(arguments),
-                    "keyboard" => self.keyboard(arguments),
+                    "pointer" => self.pointer(id.as_i64(), arguments),
+                    "keyboard" => self.keyboard(id.as_i64(), arguments),
                     "spawn" => match self.spawn(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits for its seat's accessibility bus, and is answered later.
@@ -790,6 +792,7 @@ impl Server {
                         // It waits, and is answered later.
                         None => return,
                     },
+                    "frames" => self.frames(arguments),
                     "rest" => match self.rest(&id, revision, arguments) {
                         Some(result) => result,
                         // It counts until its time is up, and is answered then.

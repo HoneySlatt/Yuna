@@ -327,6 +327,14 @@ pub(crate) struct VirtualOutput {
     /// Why its next refresh draws, noted since its last: what the rest auditor counts a frame
     /// drawn by (`rest.rs`).
     pub draw_causes: crate::rest::PendingCauses,
+    /// Its armed refresh's frame id and when it was first armed; taken when the refresh runs
+    /// (`frame_record/`).
+    pub armed_frame: Option<crate::frame_record::ArmedFrame>,
+    /// The numbers of its seat's newest input and commit its last recorded frame covered.
+    pub covered_inputs: u64,
+    pub covered_commits: u64,
+    /// The frame its buffer holds: the last that drew or found nothing changed.
+    pub last_frame: Option<crate::frame_record::FrameId>,
 }
 
 impl VirtualOutput {
@@ -427,6 +435,7 @@ impl State {
             seq: 0,
             at: created_at,
         };
+        let (covered_inputs, covered_commits) = self.frame_record.newest(seat);
         self.outputs.push(VirtualOutput {
             id,
             seat,
@@ -457,6 +466,10 @@ impl State {
             told: Vec::new(),
             in_motion: false,
             draw_causes: crate::rest::PendingCauses::default(),
+            armed_frame: None,
+            covered_inputs,
+            covered_commits,
+            last_frame: None,
         });
         tracing::info!(
             output = id.0,
@@ -715,6 +728,8 @@ impl State {
         for (_, mut feedback) in removed.held_feedback {
             feedback.discarded();
         }
+        let now = self.clock.now();
+        self.frame_record.output_removed(seat, id, now);
         self.display_handle
             .disable_global::<State>(removed.global.clone());
         self.retired_globals

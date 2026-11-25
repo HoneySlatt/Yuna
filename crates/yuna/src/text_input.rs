@@ -17,6 +17,7 @@ use wayland_server::DisplayHandle;
 use yuna_types::SeatId;
 
 use crate::Error;
+use crate::frame_record::{InputDevice, InputKind};
 use crate::state::State;
 
 /// The most bytes of text sent in one event, so that a message stays under libwayland's 4,096
@@ -50,8 +51,13 @@ impl State {
 
     /// Gives the text field enabled where `seat`'s keyboard is `text` as committed, replacing
     /// any text being composed, in pieces of [`MAX_TEXT_BYTES`] at most. Refused when no text
-    /// field is enabled there, and for a NUL.
-    pub(crate) fn commit_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+    /// field is enabled there, and for a NUL. Each piece is a text input from `device`.
+    pub(crate) fn commit_text(
+        &mut self,
+        seat: SeatId,
+        text: &str,
+        device: InputDevice,
+    ) -> Result<(), Error> {
         refuse_nul(text)?;
         let mut rest = text;
         while !rest.is_empty() {
@@ -61,6 +67,7 @@ impl State {
             }
             let (piece, after) = rest.split_at(end);
             self.send_to_text_field(seat, |field| field.commit_string(Some(piece.to_owned())))?;
+            self.record_input(seat, InputKind::Text, device);
             // Each piece written out before the next, so that a long text never grows the
             // client's buffer past one piece (ADR-0147).
             self.flush_clients();
@@ -71,8 +78,14 @@ impl State {
 
     /// Shows `text` as being composed in the text field enabled where agent seat `seat`'s
     /// keyboard is, its cursor at its end; empty text clears it. Refused on the owner's seat,
-    /// when no text field is enabled there, for a NUL, and past [`MAX_TEXT_BYTES`].
-    pub(crate) fn compose_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+    /// when no text field is enabled there, for a NUL, and past [`MAX_TEXT_BYTES`]. It is a text
+    /// input from `device`.
+    pub(crate) fn compose_text(
+        &mut self,
+        seat: SeatId,
+        text: &str,
+        device: InputDevice,
+    ) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         refuse_nul(text)?;
         if text.len() > MAX_TEXT_BYTES {
@@ -85,7 +98,9 @@ impl State {
             if !text.is_empty() {
                 field.preedit_string(Some(text.to_owned()), end, end);
             }
-        })
+        })?;
+        self.record_input(seat, InputKind::Text, device);
+        Ok(())
     }
 
     /// Sends `events` to the enabled text field of `seat`, then `done`, which applies them: a

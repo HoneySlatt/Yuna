@@ -35,6 +35,7 @@ mod dbus;
 mod dialog;
 mod dmabuf;
 mod events;
+mod frame_record;
 mod frames;
 mod input;
 mod keymap;
@@ -75,6 +76,10 @@ pub use compositor::{
 };
 #[doc(hidden)]
 pub use compositor::{ClientKey, Waker};
+pub use frame_record::{
+    Boundary, Commit, Frame, FrameId, FrameOutcome, Input, InputDevice, InputKind, MAX_COMMITS,
+    MAX_FRAMES, MAX_INPUTS, Numbers, Reading,
+};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
     BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_HELD_BUTTONS,
@@ -84,7 +89,7 @@ pub use keymap::{KeyboardLayout, MAX_LAYOUT_NAME};
 pub use output::{InvalidOutput, MAX_OUTPUTS, OutputMode, RETIRED_GLOBAL_LIFETIME};
 pub use popups::{MAX_POPUP_DEPTH, MAX_POPUPS_PER_WINDOW};
 pub use process::raise_open_files_limit;
-pub use render::Device;
+pub use render::{Device, GpuPriority};
 pub use screencopy::{MAX_CAPTURE_SESSIONS, MAX_CAPTURE_SESSIONS_PER_CLIENT};
 pub use seats::{AGENT_KEYBOARD_LAYOUT, MAX_CLIENTS_PER_SEAT};
 pub use selection::{CLIPBOARD_TIMEOUT, MAX_CLIPBOARD_WRITES};

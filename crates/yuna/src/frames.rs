@@ -47,6 +47,11 @@
 //!    nothing changed shows its frame again, so that the panel refreshes where the loop counts
 //!    a refresh and the motion keeps the shortest refresh.
 //!
+//! Each refresh that runs is a frame of the frame record (`frame_record/`, ADR-0158): it takes
+//! its output's frame id as it begins, before the arrangement, which may arm the output again for
+//! another frame, and is recorded once it has drawn, found nothing changed or failed, with the
+//! seat's inputs and commits it covers.
+//!
 //! What a client is told follows its place, not its drawn rectangle: a window is told it is
 //! visible, `enter` and full-rate callbacks, when its place comes onto the output, at an
 //! arrangement; it stays told while the motion draws it, and is told it is hidden only at the
@@ -91,10 +96,11 @@ use yuna_types::{OutputId, SeatId, WindowId};
 use crate::capture::Failure;
 use crate::clock::Deadline;
 use crate::command::refusal;
+use crate::frame_record::{ArmedFrame, Boundary, Frame, FrameId, FrameOutcome, Numbers};
 use crate::output::{RefreshAt, VirtualOutput};
 use crate::popups::window_surface_trees;
 use crate::render;
-use crate::rest::{DrawCause, Source, Wake};
+use crate::rest::{Causes, DrawCause, Source, Wake};
 use crate::seats::seat_of_surface;
 use crate::shell::Told;
 use crate::state::State;
@@ -123,18 +129,42 @@ impl State {
     /// made until then combine ([`Change::and`]): one that must show at once on some outputs ends
     /// their motions at that arrangement, however many animated changes come with it.
     pub(crate) fn mark_layout_changed(&mut self, change: Change) {
+        self.mark_layout_changed_by(change, None);
+    }
+
+    /// As [`State::mark_layout_changed`], for a window of `seat` that its client, of number
+    /// `client`, opened by its first buffer: that commit is the cause of the frames the change
+    /// arms on its seat's outputs. Another seat's outputs arrange again too, and the change is no
+    /// cause of what they draw.
+    pub(crate) fn mark_window_opened(&mut self, change: Change, seat: SeatId, client: Option<u64>) {
+        self.mark_layout_changed_by(change, Some((seat, DrawCause::Commit(client))));
+    }
+
+    /// Marks the layout changed, as [`State::mark_layout_changed`] says: `opened`, a seat and the
+    /// commit that opened a window of it, or a change of the layout on every output.
+    fn mark_layout_changed_by(&mut self, change: Change, opened: Option<(SeatId, DrawCause)>) {
         self.layout_dirty = true;
         self.events.focus_may_have_moved();
         self.layout_change = std::mem::take(&mut self.layout_change).and(change);
-        let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
-        for id in ids {
-            self.schedule_refresh_for_content(id, DrawCause::LayoutChange);
+        let outputs: Vec<(OutputId, SeatId)> =
+            self.outputs.iter().map(|o| (o.id, o.seat)).collect();
+        for (output, seat) in outputs {
+            let cause = match opened {
+                None => Some(DrawCause::LayoutChange),
+                Some((opener, cause)) if opener == seat => Some(cause),
+                Some(_) => None,
+            };
+            self.schedule_refresh_for_content(output, cause);
         }
     }
 
-    /// Arms `output`'s next refresh for something new to draw, `cause`: under VRR, unpaced, and
-    /// sooner than a refresh armed already for nothing new.
-    pub(crate) fn schedule_refresh_for_content(&mut self, output: OutputId, cause: DrawCause) {
+    /// Arms `output`'s next refresh for something new to draw, `cause` when it has one: under
+    /// VRR, unpaced, and sooner than a refresh armed already for nothing new.
+    pub(crate) fn schedule_refresh_for_content(
+        &mut self,
+        output: OutputId,
+        cause: Option<DrawCause>,
+    ) {
         if let Some(index) = self.output_index(output) {
             self.outputs[index].content_pending = true;
         }
@@ -153,14 +183,16 @@ impl State {
     /// output is idle, else at the boundary it aims at minus its lead. See the module's
     /// documentation. Under VRR, a refresh armed for nothing new is paced; something new that
     /// comes before it arms it again, sooner. Either way `cause` is among the next frame's.
-    pub(crate) fn schedule_refresh(&mut self, output: OutputId, cause: DrawCause) {
+    pub(crate) fn schedule_refresh(&mut self, output: OutputId, cause: Option<DrawCause>) {
         let deadline = Deadline::Refresh(output);
         let now = self.clock.now();
         let Some(index) = self.output_index(output) else {
             return;
         };
         let output = &mut self.outputs[index];
-        output.draw_causes.note(cause);
+        if let Some(cause) = cause {
+            output.draw_causes.note(cause);
+        }
         let paced = !output.content_pending || output.content_misses >= 2;
         // At a fixed rate nothing is paced: a refresh armed stands, as before VRR.
         let variable = output.timing.is_variable();
@@ -209,6 +241,11 @@ impl State {
         output.armed_sample_at = sampled.at;
         output.armed_at = at;
         output.armed_at_once = idle;
+        // A refresh armed while none is is a new frame; one aimed again keeps its id. A refresh
+        // takes its id out as it runs, so that one armed during it is another (ADR-0158).
+        if !self.clock.is_armed(deadline) || output.armed_frame.is_none() {
+            output.armed_frame = Some(self.frame_record.arm_frame(now));
+        }
         self.clock.arm(deadline, at);
     }
 
@@ -237,7 +274,15 @@ impl State {
         if self.ahead_of_committed_surface(surface) {
             return;
         }
-        let cause = DrawCause::Commit(self.committing_client);
+        // A commit is a cause of the frame that shows it if it brought something new; one that
+        // brought no buffer, a frame callback or a subsurface moved, only if nothing else caused
+        // what that frame drew (`rest::DrawCause::BareCommit`).
+        let content = std::mem::take(&mut self.committed_content);
+        let cause = if content {
+            DrawCause::Commit(self.committing_client)
+        } else {
+            DrawCause::BareCommit(self.committing_client)
+        };
         if mapped && self.layout_dirty {
             // The arrangement arms every output; the commit is among its own output's causes.
             if let Some(output) = shown_on {
@@ -246,10 +291,10 @@ impl State {
             return;
         }
         if let Some(output) = shown_on {
-            if std::mem::take(&mut self.committed_content) {
-                self.schedule_refresh_for_content(output, cause);
+            if content {
+                self.schedule_refresh_for_content(output, Some(cause));
             } else {
-                self.schedule_refresh(output, cause);
+                self.schedule_refresh(output, Some(cause));
             }
         } else if unseen {
             let trees = self.window_trees(root);
@@ -356,6 +401,19 @@ impl State {
 
     /// An output's refresh. See the module's documentation.
     fn refresh(&mut self, output: OutputId) {
+        let Some(index) = self.output_index(output) else {
+            return;
+        };
+        // Taken before the arrangement, which may arm this output again: that refresh is
+        // another frame. What it covers ends here: what the arrangement delivers, a pointer put
+        // on what moved under it, is the next frame's.
+        let ran_at = self.clock.now();
+        let armed = match self.outputs[index].armed_frame.take() {
+            Some(armed) => armed,
+            None => self.frame_record.arm_frame(ran_at),
+        };
+        let due_at = self.outputs[index].armed_at;
+        let newest = self.frame_record.newest(self.outputs[index].seat);
         if self.layout_dirty {
             self.arrange();
         }
@@ -364,10 +422,18 @@ impl State {
         };
         let sample_at = self.outputs[index].armed_sample_at;
         let frame = self.motion.frame(output, sample_at);
-        self.draw_and_present(index, frame.windows, sample_at);
+        let shown = self.draw_and_present(index, frame.windows, sample_at, armed.id);
         let Some(index) = self.output_index(output) else {
             return;
         };
+        let begun = Begun {
+            armed,
+            due_at,
+            ran_at,
+            newest,
+            sampled_at: sample_at,
+        };
+        self.record_frame(index, begun, shown);
         // The frame the buffer holds: a failed drawing leaves the one before.
         let held = self.outputs[index].sampled_at;
         if self.motion.end(output, held).is_some() {
@@ -375,16 +441,67 @@ impl State {
             // changed or failed: a motion never stops short of its end, and a failed drawing of
             // its last frame is drawn again.
             self.outputs[index].in_motion = true;
-            self.schedule_refresh_for_content(output, DrawCause::Motion);
+            self.schedule_refresh_for_content(output, Some(DrawCause::Motion));
         } else if std::mem::take(&mut self.outputs[index].in_motion) {
             self.tell_motion_ended(output, held);
         }
     }
 
-    /// Draws output `index`'s frame, `drawn` as the motion gives it, if anything on it is
+    /// Keeps in the frame record what output `index`'s refresh, `begun` so, `shown`: the inputs
+    /// and commits of its seat it covers, from those its last frame covered to the newest when
+    /// it began. A failed drawing covers them without taking them: the next frame shows them.
+    fn record_frame(&mut self, index: usize, begun: Begun, shown: Shown) {
+        let ended_at = self.clock.now();
+        let output = &mut self.outputs[index];
+        let (newest_input, newest_commit) = begun.newest;
+        let inputs = Numbers {
+            first: output.covered_inputs + 1,
+            last: newest_input,
+        };
+        let commits = Numbers {
+            first: output.covered_commits + 1,
+            last: newest_commit,
+        };
+        if shown.outcome != FrameOutcome::Failed {
+            output.covered_inputs = newest_input;
+            output.covered_commits = newest_commit;
+        }
+        let boundary = |at: RefreshAt| Boundary {
+            seq: at.seq,
+            at: at.at,
+        };
+        let frame = Frame {
+            id: begun.armed.id,
+            output: output.id,
+            outcome: shown.outcome,
+            causes: shown.causes,
+            inputs,
+            commits,
+            armed_at: begun.armed.armed_at,
+            due_at: begun.due_at,
+            ran_at: begun.ran_at,
+            ended_at,
+            took: shown.took,
+            sampled_at: begun.sampled_at,
+            aimed: boundary(shown.aimed),
+            presented: shown.presented.map(boundary),
+            discarded: false,
+        };
+        let seat = output.seat;
+        self.frame_record.frame(seat, frame);
+    }
+
+    /// Draws output `index`'s frame `id`, `drawn` as the motion gives it, if anything on it is
     /// damaged; calls back the surfaces it shows or tells they are visible; holds their
     /// presentation feedback until the frame's boundary; and copies the captures that waited.
-    fn draw_and_present(&mut self, index: usize, drawn: Vec<Drawn>, sample_at: Duration) {
+    /// Gives what it showed, for the frame record.
+    fn draw_and_present(
+        &mut self,
+        index: usize,
+        drawn: Vec<Drawn>,
+        sample_at: Duration,
+        id: FrameId,
+    ) -> Shown {
         let output_id = self.outputs[index].id;
         // What waited is drawn now, or found unchanged.
         let armed_for_content = std::mem::take(&mut self.outputs[index].armed_for_content);
@@ -397,11 +514,13 @@ impl State {
             .collect();
         let menus = self.x11_shown_menus(&self.outputs[index]);
         // What this frame shows; a cause noted from here on is the next frame's.
-        let causes = self.outputs[index].draw_causes.take();
+        let mut causes = self.outputs[index].draw_causes.take();
         let drawing = self.draw(index, &shown, &menus);
         if matches!(drawing, Drawing::Drawn { .. }) {
+            causes.drawn();
             self.rest.frame_drawn(self.outputs[index].seat, &causes);
         }
+        let frame_causes = causes.causes();
         self.outputs[index].draw_causes.recycle(causes);
         // Readers follow what the buffer holds: a failed drawing leaves the frame before.
         if !matches!(drawing, Drawing::Failed) {
@@ -430,17 +549,33 @@ impl State {
         };
         let output = &mut self.outputs[index];
         let aimed = output.armed_refresh;
+        let mut shown_frame = Shown {
+            outcome: match drawing {
+                Drawing::Drawn { damaged, .. } => FrameOutcome::Drawn {
+                    damaged: u32::try_from(damaged).unwrap_or(u32::MAX),
+                },
+                Drawing::Unchanged => FrameOutcome::Unchanged,
+                Drawing::Failed => FrameOutcome::Failed,
+            },
+            causes: frame_causes,
+            aimed,
+            presented: None,
+            took: Duration::ZERO,
+        };
         let presented = match drawing {
             Drawing::Drawn { started, damaged } => {
                 let took = now.saturating_sub(output.armed_at);
                 output.drawings.record(now, took);
                 // When the drawing could first show, and never before the refresh it aimed at.
                 let presented = output.timing.present(now, aimed, output.last_refresh);
+                shown_frame.took = started.elapsed();
                 tracing::debug!(
                     output = output.id.0,
+                    frame = id.get(),
+                    causes = %frame_causes,
                     elements = shown.len(),
                     damaged_rectangles = damaged,
-                    took_us = started.elapsed().as_micros(),
+                    took_us = shown_frame.took.as_micros(),
                     lead_us = aimed.at.saturating_sub(output.armed_at).as_micros(),
                     at_once = output.armed_at_once,
                     boundary = aimed.seq,
@@ -470,10 +605,12 @@ impl State {
                     menus.lone.iter().map(|lone| lone.surface.clone()).collect();
                 discard_presentation_feedback(&lone);
                 self.fail_captures(output_id, "its frame could not be drawn", Failure::ForNow);
-                return;
+                return shown_frame;
             }
         };
+        shown_frame.presented = Some(presented);
         output.last_refresh = later(output.last_refresh, presented);
+        output.last_frame = Some(id);
         // The frame shown from `presented` on is in the buffer now: the captures that waited.
         self.copy_captures(output_id, drew, presented);
         let output = &mut self.outputs[index];
@@ -499,12 +636,13 @@ impl State {
         }
         // Nothing to tell: no deadline, so that a frame nobody asked feedback for wakes nothing.
         if !any {
-            return;
+            return shown_frame;
         }
         let output = &mut self.outputs[index];
         output.held_feedback.push((presented, feedback));
         self.clock
             .arm(Deadline::Presentation(output.id), presented.at);
+        shown_frame
     }
 
     /// An output's presentation deadline: the feedback held for each boundary now reached is
@@ -990,6 +1128,29 @@ impl RefusedFrames {
         }
         counted == self.waiting
     }
+}
+
+/// What a refresh noted as it began, for its frame's record.
+struct Begun {
+    armed: ArmedFrame,
+    /// When the refresh was due, as last armed.
+    due_at: Duration,
+    ran_at: Duration,
+    /// The numbers of its seat's newest input and commit then.
+    newest: (u64, u64),
+    sampled_at: Duration,
+}
+
+/// What a refresh showed, for its frame's record.
+struct Shown {
+    outcome: FrameOutcome,
+    causes: Causes,
+    /// The boundary it aimed at, as it drew.
+    aimed: RefreshAt,
+    /// The boundary it is presented at; none when its drawing failed.
+    presented: Option<RefreshAt>,
+    /// How long its drawing took on real time; zero when nothing was drawn.
+    took: Duration,
 }
 
 /// What a refresh's drawing did.
