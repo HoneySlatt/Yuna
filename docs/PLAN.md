@@ -17,11 +17,12 @@ Every milestone ends with the definition of done in [`AGENTS.md`](../AGENTS.md#d
 - **Done on 2026-11-21/22**: M2.1 (ADR-0142, ADR-0143); M2.2 (ADR-0145 to ADR-0148); M2.3
   (ADR-0149, ADR-0150); M2.4's design (ADR-0151 to ADR-0155); M2.4a; M2.4b, whose timed parity
   run waits for the owner's go (ADR-0142).
-- **M2.4c, one event stream and the pidfd**, built on 2026-11-23/25, with ADR-0156 (the pidfd
+- **M2.4c, one event stream and the pidfd**, done on 2026-11-25, with ADR-0156 (the pidfd
   checked by `poll`) and ADR-0157 (the geometry and `WindowShell` in `yuna-types`): the
   refusals' sentences in `yuna-ipc` alone, the pidfd at accept and each client's program kept,
-  `windows` paged, the event stream from marks with its oracle. Its closing review is under way;
-  its timed parity run and `events_look`'s release figures wait for the owner's go.
+  `windows` paged, the event stream from marks with its oracle. Its timed parity run and
+  `events_look`'s release figures wait for the owner's go. **Next: M2.4d, a frame's identity**,
+  in a new session.
 - The owner works on `main` directly: push only a state where `scripts/check.sh` passes, and
   follow CI to green after each push.
 - The owner's desktop runs niri since 2026-11-16: Stage 2's goal is to replace it.
@@ -141,7 +142,7 @@ M2.18 may run any time after M2.4d. A milestone that turns out too large is spli
 | Stage | Goal | Status |
 |---|---|---|
 | [1](history.md#stage-1--the-headless-core--01) | Agents and tests drive Yuna without a screen; every layout behaviour a test | Done, 0.1 |
-| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4b done; M2.4c under way |
+| 2a | Yuna's own base, headless ([ROADMAP](ROADMAP.md)) | M2.1 to M2.4c done; M2.4d next |
 | 2b, 2c | A desktop to log in to; the features | After 2a's gate |
 
 ## Ideas
