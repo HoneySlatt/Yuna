@@ -21,7 +21,10 @@
 //! causes noted since its last refresh (`PendingCauses`), and a frame drawn is counted once
 //! under each: a client's commit, with the client, a layout change, a motion, a capture, the
 //! output's first frame, its change of mode, or a popup or an X11 menu that came, went or moved
-//! without a commit of its own. A refresh that drew nothing counts nothing.
+//! without a commit of its own. A commit is a cause only when it brought something new, a
+//! buffer attached or removed; one that only asks a frame callback arms the refresh that
+//! answers it, and is none. A window's first buffer, which opens it, is its client's commit, not
+//! a layout change. A refresh that drew nothing counts nothing.
 //!
 //! **Bounds.** Counters only: an array per [`Source`] and per [`Cause`], a map of the clients
 //! connected and one of the seats that exist, each entry dropped when its client leaves or its
@@ -282,9 +285,11 @@ const _: () = assert!(Source::SelectionWriteTimeout as usize + 1 == Source::COUN
 /// last refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Cause {
-    /// A client's commit to a surface the output shows: a window's, a popup's, an X11 menu's.
+    /// A client's commit that brought something new to a surface the output shows, a window's,
+    /// a popup's or an X11 menu's; or the first buffer that opened a window.
     Commit,
-    /// The layout changed: a window opened, closed or moved, an output came or went.
+    /// The layout changed: a window closed or moved, an output came or went. A window's opening
+    /// is its client's commit.
     LayoutChange,
     /// The output's motion runs: each of its frames arms the next.
     Motion,

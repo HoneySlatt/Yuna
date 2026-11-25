@@ -51,7 +51,8 @@ use crate::command::refusal;
 use crate::compositor::WindowDescription;
 use crate::frames::waits_for_frame;
 use crate::seats::seat_of_surface;
-use crate::state::{ClientState, State};
+use crate::rest::DrawCause;
+use crate::state::{ClientState, State, client_number};
 use crate::xwayland::{X11Client, X11Toplevel};
 
 /// The `xdg_toplevel` version that has the `suspended` state.
@@ -470,7 +471,10 @@ impl State {
         }
         let waiting_activation = toplevel.waiting_activation.take();
         tracing::debug!(window = window.0, "window opened");
-        self.mark_layout_changed(Change::Animated);
+        // Its first buffer opened it: its client's commit is the cause of the frames that show
+        // the change, even where it opens outside a commit, an X11 window paired by its serial.
+        let opener = client_number(root);
+        self.mark_layout_changed_by(Change::Animated, DrawCause::Commit(opener));
         if let Some(token) = waiting_activation {
             self.activate(window, token);
         }

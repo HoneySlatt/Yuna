@@ -170,9 +170,7 @@ fn at_rest_a_second_names_nothing_woken_and_nothing_drawn() {
     assert!(wakes_of(&started, "mcp_input") >= 4, "{started}");
     assert!(wakes_of(&started, "waiting_call") >= 2, "{started}");
     assert_eq!(frames_of(&started, "first_frame"), 1, "{started}");
-    // The window's first buffer mapped it, a change of the layout, drawn with the output's first
-    // frame when it came before; its second, a commit.
-    assert!(frames_of(&started, "layout_change") >= 1, "{started}");
+    // The window's first buffer opened it, its client's commit, as its second is.
     assert!(frames_of(&started, "commit") >= 1, "{started}");
     let pid = std::process::id();
     let client = &started["clients"][0];
@@ -371,4 +369,69 @@ fn a_refresh_disarmed_by_a_change_of_rate_takes_its_causes_with_it() {
     );
     let named = window_counts.clients.values().next().expect("the client");
     assert_eq!((named.tally.commits, named.tally.draws), (1, 0));
+}
+
+/// A window's first buffer, which opens it, draws as its client's commit, not as a change of the
+/// layout (ADR-0158). A commit that brings nothing new, a frame callback alone, is answered at the
+/// next refresh but is no cause of what that refresh draws: another client's new buffer is, and
+/// only that client is named for the draw.
+#[test]
+fn a_first_buffer_is_its_clients_commit_and_a_bare_commit_causes_nothing() {
+    use yuna::rest::Cause;
+    let mut compositor = crate::manual_compositor();
+    crate::run_armed_deadlines(&mut compositor);
+    let before = compositor.rest_counts();
+
+    let mut opener = Client::connect(&mut compositor);
+    let first = opener.open_window(&mut compositor);
+    opener.ack(first);
+    opener.attach(first, crate::TILE.0, crate::TILE.1, RED);
+    opener.commit(first);
+    opener.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    let opened = compositor.rest_counts().since(&before);
+    assert!(opened.whole.frames >= 1, "{opened:?}");
+    assert_eq!(opened.whole.frames_by(Cause::LayoutChange), 0, "{opened:?}");
+    assert_eq!(
+        opened.whole.frames_by(Cause::Commit),
+        opened.whole.frames,
+        "{opened:?}"
+    );
+    let named = opened.clients.values().next().expect("the opener");
+    assert!(named.tally.draws >= 1, "{opened:?}");
+
+    let mut painter = Client::connect(&mut compositor);
+    let second = painter.open_window(&mut compositor);
+    painter.ack(second);
+    painter.attach(second, crate::TILE.0, crate::TILE.1, crate::BLUE);
+    painter.commit(second);
+    painter.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    opener.roundtrip(&mut compositor);
+    assert_eq!(compositor.next_deadline(), None);
+    let settled = compositor.rest_counts();
+    let called_back = opener.window(first).frames.len();
+
+    opener.request_frame(first);
+    opener.commit(first);
+    opener.send();
+    painter.attach(second, crate::TILE.0, crate::TILE.1, RED);
+    painter.commit(second);
+    painter.roundtrip(&mut compositor);
+    crate::run_armed_deadlines(&mut compositor);
+    opener.roundtrip(&mut compositor);
+    assert_eq!(
+        opener.window(first).frames.len(),
+        called_back + 1,
+        "the bare commit's frame callback is answered"
+    );
+    let drawn = compositor.rest_counts().since(&settled);
+    assert_eq!(drawn.whole.frames, 1, "{drawn:?}");
+    assert_eq!(drawn.whole.frames_by(Cause::Commit), 1, "{drawn:?}");
+    let tallies: Vec<(u64, u64)> = drawn
+        .clients
+        .values()
+        .map(|client| (client.tally.commits, client.tally.draws))
+        .collect();
+    assert_eq!(tallies, vec![(1, 0), (1, 1)], "{drawn:?}");
 }

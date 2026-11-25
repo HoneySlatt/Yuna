@@ -388,6 +388,14 @@ pub(crate) struct ClientState {
     departed: DepartedClients,
 }
 
+/// The rest auditor's number of `surface`'s client; none for a surface whose client is gone, or
+/// is not Yuna's.
+pub(crate) fn client_number(surface: &WlSurface) -> Option<u64> {
+    surface
+        .client()
+        .and_then(|client| client.get_data::<ClientState>().map(|data| data.rest_number))
+}
+
 impl ClientState {
     pub(crate) fn new(
         seat: SeatId,

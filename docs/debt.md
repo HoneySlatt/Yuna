@@ -358,12 +358,10 @@ What the emulation does not reproduce of the owner's monitor, from its two trace
   (a frame's identity)
   ([ADR-0082](adr/0082-the-requirements-of-stage-2s-core-its-bets-made-rules-or-deferred.md) item
   11).
-- A window's first buffer, which maps it, draws as a layout change, not as its client's commit:
-  a client that opens windows again and again is named by its wakes and commits, its frames by
-  the layout. Paid at Stage 2a, M2.4d (a frame's identity).
-- A commit is among a frame's causes when it armed its output's refresh or joined it: one that
-  brought nothing new is named too when another cause drew the frame. Damage is not followed by
-  client. Paid at Stage 2a, M2.4d (a frame's identity).
+- A commit is new content when it attached or removed a buffer: one that attaches the same
+  pixels again is a cause of the frame that shows it, and damage is not followed by client. Paid
+  at Stage 2a, M2.7 (the scene, alone), whose latch finds each surface's damage
+  ([ADR-0133](adr/0133-yunas-scene-retained-its-damage-found-at-each-latch.md)).
 - Each client costs Yuna a second descriptor, so a seat's socket runs out of descriptors at about
   half the clients it did. A client whose second descriptor cannot be made is served unnamed,
   counted among the unnamed wakes. Kept: the limit is raised at start; the pidfd taken at accept

@@ -663,7 +663,8 @@ impl State {
                     if content {
                         self.schedule_refresh_for_content(output, cause);
                     } else {
-                        self.schedule_refresh(output, cause);
+                        // Its frame callbacks need the refresh; it causes nothing drawn.
+                        self.schedule_refresh(output, None);
                     }
                 }
             }
