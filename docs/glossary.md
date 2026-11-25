@@ -47,6 +47,10 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **BTR**: below-the-range, amdgpu's frame insertion: under a VRR range's least rate, each frame
   is shown several times, in refreshes of a fixed length, to keep the panel inside its range
   ([ADR-0119](adr/0119-emulated-vrr-as-amdgpu-and-the-owners-monitor-do.md)).
+- **Build** (events): the compositor's turning of its *marks* into `yuna_ipc::Event`s, each
+  marked fact compared with what was last told; at each round's end in `yuna mcp`, and at each
+  `events` call
+  ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
 - **Camera**: the position of a scrolling workspace's view on its strip, `view_x`; it moves on a
   spring while windows keep their places
   ([ADR-0111](adr/0111-the-layout-models-shape-plain-ids-a-branch-per-seat-asked-and-committed-sizes.md)).
@@ -187,9 +191,6 @@ Terms Yuna uses in a sense of its own, or that a newcomer may not know.
 - **Logical coordinates**: the layout's units, shared by all outputs: an output of 3840 × 2160
   pixels at scale 1.5 measures 2560 × 1440 logical units. Rectangles are snapped to the
   **physical grid**, the output's own pixels.
-- **Look** (MCP): the MCP server's comparison of what the compositor describes of windows and
-  outputs with what it described last, from which it tells their events; run once a round and
-  at each `events` call, only when the compositor's description generation has moved.
 - **Managed window**: an X11 window its manager places, as Yuna's layout does an `xdg_toplevel`:
   one that asks to be mapped, neither override-redirect nor a dock or a desktop
   ([ADR-0066](adr/0066-yunas-own-x11-window-manager-on-x11rb.md)).

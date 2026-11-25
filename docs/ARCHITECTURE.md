@@ -86,7 +86,7 @@ One Cargo workspace; its crates live in `crates/`.
 | Crate | What it is | Depends on |
 |---|---|---|
 | `yuna-types` | the shared vocabulary: the ids, `Direction`, `Tiling`, `PixelRect`, the logical geometry (`Point`, `Size`, `Rect`, `EPSILON`) and `WindowShell` ([ADR-0157](adr/0157-yuna-types-takes-the-logical-geometry-and-a-windows-shell.md)); level 0 of the map in [ADR-0151](adr/0151-the-crate-map-checked-by-rustc-and-a-script-yuna-transitional.md) | nothing |
-| `yuna-ipc` | the commands a caller asks of the compositor, and why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)) | `yuna-types` |
+| `yuna-ipc` | the commands a caller asks of the compositor, why one is refused ([ADR-0146](adr/0146-the-compositors-interface-yuna-types-and-yuna-ipcs-commands.md)), and the events it tells ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)) | `yuna-types` |
 | `yuna-layout` | the layout model | `yuna-types` |
 | `yuna-motion` | the motion of the layout's arrangements | `yuna-layout`, `yuna-types` |
 | `yuna` | the headless compositor as a library, its MCP server, and the `yuna` program (`src/main.rs`) | Smithay, `yuna-ipc`, `yuna-layout`, `yuna-motion`, `yuna-types`, and the crates below |
@@ -216,6 +216,7 @@ an arrangement.
 | [`wlr_screencopy.rs`](../crates/yuna/src/wlr_screencopy.rs) | `wlr-screencopy-unstable-v1`, on captures |
 | [`colour/`](../crates/yuna/src/colour/mod.rs) | `color-management-v1`: what outputs announce and surfaces declare |
 | [`rest.rs`](../crates/yuna/src/rest.rs) | the rest auditor, through which every event source is inserted |
+| [`events.rs`](../crates/yuna/src/events.rs) | the compositor's events: the marks at each change point, and their build into `yuna_ipc::Event`s |
 | [`canary.rs`](../crates/yuna/src/canary.rs) | the parity script's canaries, costs injected only with the `parity-canary` feature, which no shipped build has |
 | [`process.rs`](../crates/yuna/src/process.rs) | what every program Yuna starts shares, what Yuna reads of a process in `/proc`, its limit of open files, and the bounded reap of a process it killed |
 | [`tasks.rs`](../crates/yuna/src/tasks.rs) | the table of tasks and the one spawner of Yuna's threads, with their bounded joins |
@@ -351,6 +352,31 @@ A command added is a variant in `yuna-ipc`, its window and output in `Command::w
 `Command::output`, whose matches list every variant so that the compiler asks for them, and its
 dispatch here, with its story in `tests/headless/commands.rs`.
 
+### The compositor's events
+
+What changes is told as `yuna_ipc::Event`s, one stream for every reader: MCP's agents today,
+Hollow later ([ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)).
+[`events.rs`](../crates/yuna/src/events.rs) is the one module that makes them.
+
+1. **Nothing is kept until someone watches** (`Compositor::watch_events`); then every window and
+   output there is is marked, so that the first build tells them.
+2. **Marks at the change points.** Each place where a fact an event tells changes calls in with
+   what changed, never a description: a window mapped or closed, its title or application id, its
+   answers to pings; the arrangement, which compares each output's places before and after; a
+   window shown on another output; a command that moves a window; an output added, configured,
+   moved or removed; the focus at each change of the layout; a client that left, a connection
+   refused.
+3. **The build** (`Compositor::take_events`), at each round's end in `yuna mcp`, turns the marks
+   into events, comparing each marked fact with what it last told: a title changed a thousand
+   times in a round is one event, and a window opened and closed in one round is told both. It
+   reads the marked windows alone; a window's place waits until no arrangement is pending.
+4. **Each event names its seat.** The core keeps no queue per reader: MCP's log of each seat is the
+   bound ([The MCP server](#the-mcp-server)).
+
+A property test, `tests/headless/event_stream.rs`, folds the stream into a state after random
+operations and compares it with what the compositor describes: a change point left unmarked
+fails it.
+
 ### Popups
 
 Popups ([`popups.rs`](../crates/yuna/src/popups.rs)) are not windows of the layout: Smithay's
@@ -458,6 +484,13 @@ bus.
   with its process (`ClientProcess`), read once when Yuna accepts it. Its windows open on that
   seat's workspaces, and every focus of a seat is on its own clients' surfaces. Yuna's fork of
   Smithay shows each client only its own seat's `wl_seat` and outputs.
+- **Who a client is.** For an agent's seat, Yuna takes the peer's pidfd at the accept
+  (`SO_PEERPIDFD`, `process.rs`), reads the processes above it in `/proc`, then polls the
+  pidfd: a peer still running had its pid all along, so the record is its own (`Identity`); one
+  that had exited has no lineage. The pidfd is closed at once
+  ([ADR-0156](adr/0156-a-clients-pidfd-at-accept-its-life-read-by-poll.md)). The compositor tells
+  each client it accepted (`Compositor::take_client_arrivals`), and MCP resolves its program
+  from that record, once, and keeps it by the client's number.
 - **Input** reaches an agent's seat through the compositor's calls, which MCP makes
   ([`input.rs`](../crates/yuna/src/input.rs)), and through its clients' virtual keyboards and
   pointers ([`virtual_input.rs`](../crates/yuna/src/virtual_input.rs)). A pointer finds what is
@@ -695,12 +728,12 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   Each is locked while Yuna lives (`folder.rs`). `MAX_RUNNING` programs run at once, and
   `MAX_KEPT` are remembered.
 - **Events** ([`mcp/events.rs`](../crates/yuna/src/mcp/events.rs),
-  [ADR-0093](adr/0093-a-call-that-waits-for-the-seats-events.md)). Each agent seat keeps a log of
-  its last `MAX_EVENTS` events. Once a round, when the compositor's description generation has
-  moved, the server looks at its windows and outputs and records what changed; it also records
-  the clients the display ended, with their protocol error, the connections the seats' sockets
-  refused past their bound, and the programs reaped. The cursor is the agent's: the server keeps
-  no state of a call.
+  [ADR-0153](adr/0153-one-event-stream-marks-at-the-change-mcps-log-per-seat-the-bound.md)). Each
+  agent seat keeps a log of its last `MAX_EVENTS` events, numbered per seat, so that `missed` is
+  exact. At each round's end, and at each `events` call, the server records the events the
+  compositor built from its marks ([The compositor's events](#the-compositors-events)), a client
+  that left with the program kept for it, and the programs reaped. The cursor is the agent's: the
+  server keeps no state of a call.
 - **Closing a seat** (`seat close`, [`mcp/seats.rs`](../crates/yuna/src/mcp/seats.rs)). The
   compositor removes the seat at once ([Seats and input](#seats-and-input)) and the calls waiting
   on it fail. Then every process that belongs to the seat gets SIGTERM and SIGCONT, and SIGKILL
@@ -710,7 +743,8 @@ of tools; `protocol.rs` the two revisions it serves; `tools/` the tools' schemas
   found ([debt](debt.md#the-mcp-server)).
 - **Bounds.** A line over `MAX_LINE` ends the connection. While `MAX_QUEUED_OUTPUT` of replies
   wait, no further request is read, and a waiting call's answer is held until the client reads.
-  What an agent may ask is bounded ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
+  `windows` gives pages of `MAX_WINDOWS_PER_PAGE` windows when asked, by window id. What an
+  agent may ask is bounded ([ADR-0131](adr/0131-bounds-on-what-a-client-or-an-agent-may-ask.md)).
 - **Stopping.** When its input closes, or at SIGTERM or SIGINT, Yuna ends every process under it
   while it still serves their clients, then removes its folder and the seats' homes. The folders
   a Yuna killed by SIGKILL left are removed by the next `yuna mcp` that finds them, once their
@@ -878,8 +912,9 @@ To add a test:
     ([ADR-0127](adr/0127-motions-budget-no-frame-lost-to-motion.md));
     `xwayland_time.rs`, XWayland's start and cost; `instances.rs`, N `yuna mcp` against one with N
     seats; `layout_time.rs`, a keyboard layout's change; `rest_cost.rs`, the rest auditor's cost;
-    `events_look.rs`, the events' look. What they share is in `examples/common/`, whose
-    [`mod.rs`](../crates/yuna/examples/common/mod.rs) says which file each one includes;
+    `events_look.rs`, the build of the events from their marks. What they share is in
+    `examples/common/`, whose [`mod.rs`](../crates/yuna/examples/common/mod.rs) says which file
+    each one includes;
   - `crates/yuna-layout/examples/timing.rs` and `crates/yuna-motion/examples/motion_timing.rs`:
     the models' costs at an operation and at a frame; `operations.rs` and
     `motion_operations.rs` beside them, the same operations repeated and timed by nothing, for

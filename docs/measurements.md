@@ -4,6 +4,30 @@ What the benchmarks and the measurements by hand found, against the budgets of t
 [`ROADMAP.md`](ROADMAP.md#3-quality-bar). One section per milestone or machine, newest first. A
 section names the machine, the build, the command, and the figures with their spread.
 
+## M2.4c — One event stream and the pidfd (2026-11-23/25)
+
+- **The parity script's CI tier**, on GitHub's runner (`ubuntu-24.04`, Linux 7.0, 4
+  processors), CI's `parity` job: every figure no worse at each push of the milestone:
+  `f3e8c82`, the refusals' sentences (run 45138455087); `df8b552`, the geometry moved to
+  `yuna-types` (run 45141055875), so the move across crates left the layout's operation counts
+  as they were (ADR-0157); `51bc7e8`, the pidfd (run 45144154866); `8e5dacb`, `windows` paged
+  (run 45148215968); `d29efc5`, the event stream (run 45687711857).
+- **The timed tier** was not run, nor `crates/yuna/examples/events_look.rs`, which times a build
+  of the events in a release build: a timed run waits for the owner's go. What a build costs is
+  counted instead, by the windows it reads (`tests/headless/core_costs.rs`): among 1,000 windows,
+  a title changed reads one window, an arrangement that moves none reads none, and a client
+  that only draws reads none.
+- **The oracle**, `tests/headless/event_stream.rs`, a debug build on the desktop: 128 cases of 40
+  steps at most, animations off and on, 7.1 to 8.0 s each; with `PROPTEST_CASES=2000`, 118.1 s
+  and 120.2 s, all passed.
+- **Under load**, one core shared with a busy loop (`taskset`), a debug build: the pidfd's eleven
+  tests (`seats::tests`, `compositor::tests`, `process::tests`) passed twenty runs out of twenty;
+  the event stream's nine stories and the oracle passed ten runs out of ten, 36 s a run.
+- **The kernel's answers**, on the desktop's Linux 7.3.4: a socket pair's `SO_PEERPIDFD` gives a
+  pidfd of Yuna itself; a peer reaped before the accept gives a pidfd that polls ready, Linux 6.16
+  and later's answer. Linux 6.5 to 6.15's `EINVAL` and an older kernel's `ENOPROTOOPT` are tested
+  as answers given to the record, not on such a kernel.
+
 ## M2.4b — The table of tasks (2026-11-22)
 
 - **The parity script's CI tier**, on GitHub's runner (`ubuntu-24.04`, 4 processors), CI's
