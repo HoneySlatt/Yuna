@@ -46,6 +46,7 @@ use wayland_server::protocol::wl_seat::WlSeat;
 use wayland_server::{Client, DisplayHandle};
 use yuna_types::SeatId;
 
+use crate::frame_record::InputDevice;
 use crate::seats::seat_of_wl_seat;
 use crate::state::{ClientState, OWNER_SEAT, State};
 
@@ -65,10 +66,12 @@ pub(crate) struct VirtualInputState {
     modifiers: HashMap<VirtualKeyboardDevice, (u32, u32, u32)>,
 }
 
-/// A device that acts: its seat and its client.
+/// A device that acts: its seat and its client, with the client's number in the rest auditor,
+/// which the frame record names its inputs by.
 struct Acting {
     seat: SeatId,
     client: ClientId,
+    number: u64,
 }
 
 impl VirtualInputState {
@@ -94,7 +97,8 @@ impl VirtualInputState {
     /// [`MAX_VIRTUAL_DEVICES_PER_CLIENT`].
     fn acting(&self, client: Option<Client>, wl_seat: Option<&WlSeat>) -> Option<Acting> {
         let client = client?;
-        let seat = client.get_data::<ClientState>()?.seat;
+        let data = client.get_data::<ClientState>()?;
+        let (seat, number) = (data.seat, data.rest_number);
         if seat == OWNER_SEAT {
             return None;
         }
@@ -117,6 +121,7 @@ impl VirtualInputState {
         Some(Acting {
             seat,
             client: client.id(),
+            number,
         })
     }
 }
@@ -148,11 +153,17 @@ impl VirtualKeyboardHandler for State {
             }
             InputEvent::Keyboard { event } => {
                 let device = event.device();
-                let Some(seat) = self.virtual_input.keyboards.get(&device).map(|a| a.seat) else {
+                let Some((seat, client)) = self
+                    .virtual_input
+                    .keyboards
+                    .get(&device)
+                    .map(|a| (a.seat, a.number))
+                else {
                     return;
                 };
+                let from = InputDevice::VirtualKeyboard { client };
                 let result = self.use_device_keymap(seat, &device).and_then(|()| {
-                    self.send_key(seat, device.source(), event.key_code(), event.state())
+                    self.send_key(seat, device.source(), event.key_code(), event.state(), from)
                 });
                 if let Err(error) = result {
                     tracing::debug!(%error, seat = seat.0, "a virtual key was dropped");
@@ -254,6 +265,17 @@ impl State {
     }
 }
 
+impl State {
+    /// The seat a virtual pointer acts on, and the device its inputs come from; none for one that
+    /// does not act.
+    fn virtual_pointer(&self, device: &VirtualPointerDevice) -> Option<(SeatId, InputDevice)> {
+        self.virtual_input
+            .pointers
+            .get(device)
+            .map(|a| (a.seat, InputDevice::VirtualPointer { client: a.number }))
+    }
+}
+
 impl VirtualPointerHandler for State {
     fn process_virtual_pointer_event(&mut self, event: InputEvent<VirtualPointerBackend>) {
         let result = match event {
@@ -269,7 +291,7 @@ impl VirtualPointerHandler for State {
             }
             InputEvent::PointerMotionAbsolute { event } => {
                 let device = event.device();
-                let Some(seat) = self.virtual_input.pointers.get(&device).map(|a| a.seat) else {
+                let Some((seat, from)) = self.virtual_pointer(&device) else {
                     return;
                 };
                 let Some((corner, end)) = self.absolute_motion_box(seat, &device) else {
@@ -280,33 +302,33 @@ impl VirtualPointerHandler for State {
                 // next output, or on none.
                 let x = (corner.x + event.x_transformed(1) * width).min(end.x - 1.0);
                 let y = (corner.y + event.y_transformed(1) * height).min(end.y - 1.0);
-                self.pointer_move_to(seat, Point::from((x, y)))
+                self.pointer_move_to(seat, Point::from((x, y)), from)
             }
             InputEvent::PointerMotion { event } => {
                 let device = event.device();
-                let Some(seat) = self.virtual_input.pointers.get(&device).map(|a| a.seat) else {
+                let Some((seat, from)) = self.virtual_pointer(&device) else {
                     return;
                 };
                 self.pointer_location(seat).and_then(|location| {
                     let moved = location + Point::from((event.delta_x(), event.delta_y()));
                     match self.closest_on_seat(seat, moved) {
-                        Some(on_seat) => self.pointer_move_to(seat, on_seat),
+                        Some(on_seat) => self.pointer_move_to(seat, on_seat, from),
                         None => Ok(()),
                     }
                 })
             }
             InputEvent::PointerButton { event } => {
                 let device = event.device();
-                let Some(seat) = self.virtual_input.pointers.get(&device).map(|a| a.seat) else {
+                let Some((seat, from)) = self.virtual_pointer(&device) else {
                     return;
                 };
                 let pressed = event.state() == smithay::backend::input::ButtonState::Pressed;
-                self.pointer_button(seat, event.button_code(), pressed)
+                self.pointer_button(seat, event.button_code(), pressed, from)
                     .map(|_| ())
             }
             InputEvent::PointerAxis { event } => {
                 let device = event.device();
-                let Some(seat) = self.virtual_input.pointers.get(&device).map(|a| a.seat) else {
+                let Some((seat, from)) = self.virtual_pointer(&device) else {
                     return;
                 };
                 self.agent_pointer(seat).map(|pointer| {
@@ -323,7 +345,7 @@ impl VirtualPointerHandler for State {
                             frame = frame.v120(axis, v120 as i32);
                         }
                     }
-                    self.send_axis(seat, &pointer, frame);
+                    self.send_axis(seat, &pointer, frame, from);
                 })
             }
             _ => Ok(()),

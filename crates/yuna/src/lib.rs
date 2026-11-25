@@ -35,6 +35,7 @@ mod dbus;
 mod dialog;
 mod dmabuf;
 mod events;
+mod frame_record;
 mod frames;
 mod input;
 mod keymap;
@@ -75,6 +76,10 @@ pub use compositor::{
 };
 #[doc(hidden)]
 pub use compositor::{ClientKey, Waker};
+pub use frame_record::{
+    Boundary, Commit, Frame, FrameId, FrameOutcome, Input, InputDevice, InputKind, MAX_COMMITS,
+    MAX_FRAMES, MAX_INPUTS, Numbers, Reading,
+};
 pub use frames::HIDDEN_FRAME_INTERVAL;
 pub use input::{
     BUTTON_BACK, BUTTON_FORWARD, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, MAX_HELD_BUTTONS,

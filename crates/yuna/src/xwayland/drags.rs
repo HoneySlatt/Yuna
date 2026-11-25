@@ -45,6 +45,7 @@ use super::bridge::MAX_X11_TRANSFERS;
 use super::drag_session::{DragAction, DragKey, Effect, Pick, Pressed, SeatDrags};
 use super::manager::{Command, ManagerEvent};
 use crate::clock::Deadline;
+use crate::frame_record::InputDevice;
 use crate::input::Hit;
 use crate::selection::{for_x11, reader_pipe};
 use crate::state::State;
@@ -1054,7 +1055,7 @@ impl State {
         };
         let location = pointer.current_location();
         let under = self.surface_under(seat, location);
-        self.move_pointer(seat, &pointer, location, under);
+        self.move_pointer(seat, &pointer, location, under, InputDevice::Yuna);
     }
 
     /// At the round's end, outside Smithay's grabs: each seat whose Wayland drag's grab ended

@@ -298,6 +298,7 @@ impl State {
         self.next_seat_id += 1;
         self.seats.push(data);
         self.rest.add_seat(id);
+        self.frame_record.add_seat(id);
         tracing::info!(seat = id.0, "seat added");
         Ok(id)
     }

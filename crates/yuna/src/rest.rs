@@ -355,7 +355,27 @@ impl Causes {
 
     /// Each of them, in [`Cause::ALL`]'s order.
     pub fn iter(self) -> impl Iterator<Item = Cause> {
-        Cause::ALL.into_iter().filter(move |cause| self.contains(*cause))
+        Cause::ALL
+            .into_iter()
+            .filter(move |cause| self.contains(*cause))
+    }
+}
+
+/// Their names joined by `+`, `none` for none: the `frame drawn` log line's.
+impl std::fmt::Display for Causes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for cause in self.iter() {
+            if !first {
+                f.write_str("+")?;
+            }
+            f.write_str(cause.name())?;
+            first = false;
+        }
+        if first {
+            f.write_str("none")?;
+        }
+        Ok(())
     }
 }
 

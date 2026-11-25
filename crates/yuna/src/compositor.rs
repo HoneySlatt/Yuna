@@ -29,6 +29,7 @@ use crate::canary::ParityCanary;
 use crate::capture::{CaptureSize, CaptureTarget, CaptureTicket, CapturedFrame};
 use crate::clock::{Clock, ClockMode};
 use crate::colour::SurfaceColourDescription;
+use crate::frame_record::{FrameId, InputDevice, Reading};
 use crate::input::PointerDescription;
 use crate::keymap::KeyboardLayout;
 use crate::output::OutputMode;
@@ -357,6 +358,72 @@ impl Waker {
     }
 }
 
+/// The compositor's input from one device, which every input it delivers names in the frame
+/// record: [`Compositor`]'s own methods are the interface's, MCP's calls an agent's.
+pub(crate) struct InputFrom<'a> {
+    state: &'a mut State,
+    device: InputDevice,
+}
+
+impl InputFrom<'_> {
+    /// As [`Compositor::pointer_move`].
+    pub(crate) fn pointer_move(
+        &mut self,
+        seat: SeatId,
+        output: Option<OutputId>,
+        x: f64,
+        y: f64,
+    ) -> Result<PointerDescription, Error> {
+        self.state.pointer_move(seat, output, x, y, self.device)
+    }
+
+    /// As [`Compositor::pointer_button`].
+    pub(crate) fn pointer_button(
+        &mut self,
+        seat: SeatId,
+        button: u32,
+        pressed: bool,
+    ) -> Result<PointerDescription, Error> {
+        self.state
+            .pointer_button(seat, button, pressed, self.device)
+    }
+
+    /// As [`Compositor::pointer_scroll`].
+    pub(crate) fn pointer_scroll(
+        &mut self,
+        seat: SeatId,
+        dx: f64,
+        dy: f64,
+    ) -> Result<PointerDescription, Error> {
+        self.state.pointer_scroll(seat, dx, dy, self.device)
+    }
+
+    /// As [`Compositor::key`].
+    pub(crate) fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
+        let key = if pressed {
+            self.state.keycode_of(seat, name)?
+        } else {
+            self.state.held_keycode_of(seat, name)?
+        };
+        self.state.key(seat, key, pressed, self.device)
+    }
+
+    /// As [`Compositor::tap_keys`].
+    pub(crate) fn tap_keys(&mut self, seat: SeatId, combination: &str) -> Result<(), Error> {
+        self.state.tap_keys(seat, combination, self.device)
+    }
+
+    /// As [`Compositor::type_text`].
+    pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        self.state.type_text(seat, text, self.device)
+    }
+
+    /// As [`Compositor::compose_text`].
+    pub(crate) fn compose_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+        self.state.compose_text(seat, text, self.device)
+    }
+}
+
 /// A test seam's name (ADR-0149) for a client connected by [`Compositor::connect_client_keyed`],
 /// which [`Compositor::window_of_surface`] takes. It holds nothing of the client: once the client
 /// has left, it names none.
@@ -635,6 +702,7 @@ impl Compositor {
         self.free_departed_clients();
         self.state.finish_removing_seat(seat)?;
         self.state.rest.remove_seat(seat);
+        self.state.frame_record.remove_seat(seat);
         self.flush();
         Ok(pids)
     }
@@ -706,7 +774,8 @@ impl Compositor {
         x: f64,
         y: f64,
     ) -> Result<PointerDescription, Error> {
-        self.state.pointer_move(seat, output, x, y)
+        self.input_from(InputDevice::Interface)
+            .pointer_move(seat, output, x, y)
     }
 
     /// Presses or releases `button` (Linux's code, such as [`BUTTON_LEFT`](crate::BUTTON_LEFT))
@@ -720,7 +789,8 @@ impl Compositor {
         button: u32,
         pressed: bool,
     ) -> Result<PointerDescription, Error> {
-        self.state.pointer_button(seat, button, pressed)
+        self.input_from(InputDevice::Interface)
+            .pointer_button(seat, button, pressed)
     }
 
     /// Scrolls agent seat `seat`'s wheel by `dx` and `dy` steps where its pointer is, positive
@@ -731,7 +801,8 @@ impl Compositor {
         dx: f64,
         dy: f64,
     ) -> Result<PointerDescription, Error> {
-        self.state.pointer_scroll(seat, dx, dy)
+        self.input_from(InputDevice::Interface)
+            .pointer_scroll(seat, dx, dy)
     }
 
     /// The window `seat`'s keyboard is on: its own, or the window of the popup it is on.
@@ -752,19 +823,16 @@ impl Compositor {
     /// one not held, and a press while the seat holds [`MAX_HELD_KEYS`](crate::MAX_HELD_KEYS)
     /// keys.
     pub fn key(&mut self, seat: SeatId, name: &str, pressed: bool) -> Result<(), Error> {
-        let key = if pressed {
-            self.state.keycode_of(seat, name)?
-        } else {
-            self.state.held_keycode_of(seat, name)?
-        };
-        self.state.key(seat, key, pressed)
+        self.input_from(InputDevice::Interface)
+            .key(seat, name, pressed)
     }
 
     /// Taps `combination` on agent seat `seat`'s keyboard: keys joined by `+`, the last pressed
     /// while the others are held ("ctrl+shift+t"); `ctrl`, `shift`, `alt`, `super` and `altgr`
     /// name the left modifiers.
     pub fn tap_keys(&mut self, seat: SeatId, combination: &str) -> Result<(), Error> {
-        self.state.tap_keys(seat, combination)
+        self.input_from(InputDevice::Interface)
+            .tap_keys(seat, combination)
     }
 
     /// Types `text` on agent seat `seat`'s keyboard, to the surface it is on, through its
@@ -774,7 +842,8 @@ impl Compositor {
     /// `text-input-v3`, or, with none, typed through a keymap given to the client for it. At most
     /// [`MAX_TYPED`](crate::MAX_TYPED) characters.
     pub fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
-        self.state.type_text(seat, text)
+        self.input_from(InputDevice::Interface)
+            .type_text(seat, text)
     }
 
     /// Changes agent seat `seat`'s keyboard layout to `layout`, under XKB's evdev rules and the
@@ -843,7 +912,8 @@ impl Compositor {
     /// empty text clears it. Refused when no text field is enabled there, and past
     /// [`MAX_TEXT_BYTES`](crate::MAX_TEXT_BYTES) bytes.
     pub fn compose_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
-        self.state.compose_text(seat, text)
+        self.input_from(InputDevice::Interface)
+            .compose_text(seat, text)
     }
 
     /// Runs one round of the event loop: waits up to `timeout` for a client, a connection, the
@@ -1053,6 +1123,52 @@ impl Compositor {
     /// offers no `linux-dmabuf` global.
     pub fn dmabuf_format_count(&self) -> usize {
         self.state.dmabuf_offer.formats
+    }
+
+    /// Its input from `device`: what each input delivered through it is named by in the frame
+    /// record.
+    pub(crate) fn input_from(&mut self, device: InputDevice) -> InputFrom<'_> {
+        InputFrom {
+            state: &mut self.state,
+            device,
+        }
+    }
+
+    /// `seat`'s frames numbered above `after`, of `output` alone when given, oldest first, at
+    /// most `limit`, with the inputs and commits each covers that its rings still keep
+    /// (`frame_record/`); none for a seat that does not exist. A frame is
+    /// recorded when its refresh runs, whether it drew, found nothing changed or failed.
+    pub fn frames(
+        &self,
+        seat: SeatId,
+        output: Option<OutputId>,
+        after: u64,
+        limit: usize,
+    ) -> Option<Reading<'_>> {
+        self.state.frame_record.read(seat, output, after, limit)
+    }
+
+    /// The id of `output`'s armed refresh, a test seam: none when none is armed, or for an output
+    /// that does not exist.
+    #[doc(hidden)]
+    pub fn armed_frame(&self, output: OutputId) -> Option<FrameId> {
+        let armed = self
+            .state
+            .clock
+            .is_armed(crate::clock::Deadline::Refresh(output));
+        self.state
+            .outputs
+            .iter()
+            .find(|candidate| candidate.id == output)
+            .and_then(|output| output.armed_frame)
+            .filter(|_| armed)
+            .map(|frame| frame.id)
+    }
+
+    /// The number of `seat`'s newest frame: 0 before its first, and for a seat that does not
+    /// exist.
+    pub fn last_frame(&self, seat: SeatId) -> u64 {
+        self.state.frame_record.last_frame(seat)
     }
 
     /// The GPU priority its renderer's context was granted, read once when the renderer was

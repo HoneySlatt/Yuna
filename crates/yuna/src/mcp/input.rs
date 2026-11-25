@@ -13,10 +13,18 @@ use yuna_types::{OutputId, SeatId};
 use super::Server;
 use super::captures::RECENT_CAPTURES;
 use super::tools::{self, ButtonCall, KeyboardCall, PointerCall, ToolResult};
+use crate::frame_record::InputDevice;
 use crate::{Error, KeyboardLayout};
 
 impl Server {
-    pub(super) fn pointer(&mut self, arguments: Map<String, Value>) -> ToolResult {
+    /// The `pointer` tool, for the request whose JSON-RPC id is `request` when it is an
+    /// integer: the inputs it delivers carry it in the frame record.
+    pub(super) fn pointer(
+        &mut self,
+        request: Option<i64>,
+        arguments: Map<String, Value>,
+    ) -> ToolResult {
+        let from = InputDevice::Agent { request };
         let call: PointerCall = match tools::arguments(arguments) {
             Ok(call) => call,
             Err(reason) => return ToolResult::failed(reason),
@@ -43,19 +51,26 @@ impl Server {
                 ..
             } => self
                 .place(seat, x, y, output, capture)
-                .and_then(|(output, x, y)| self.compositor.pointer_move(seat, output, x, y)),
-            PointerCall::Press(button) => self.move_first(seat, &button).and_then(|()| {
+                .and_then(|(output, x, y)| {
+                    self.compositor
+                        .input_from(from)
+                        .pointer_move(seat, output, x, y)
+                }),
+            PointerCall::Press(button) => self.move_first(seat, &button, from).and_then(|()| {
                 self.compositor
+                    .input_from(from)
                     .pointer_button(seat, button.button.code(), true)
             }),
-            PointerCall::Release(button) => self.move_first(seat, &button).and_then(|()| {
+            PointerCall::Release(button) => self.move_first(seat, &button, from).and_then(|()| {
                 self.compositor
+                    .input_from(from)
                     .pointer_button(seat, button.button.code(), false)
             }),
-            PointerCall::Click(button) => self.move_first(seat, &button).and_then(|()| {
+            PointerCall::Click(button) => self.move_first(seat, &button, from).and_then(|()| {
                 let code = button.button.code();
-                self.compositor.pointer_button(seat, code, true)?;
-                self.compositor.pointer_button(seat, code, false)
+                let mut input = self.compositor.input_from(from);
+                input.pointer_button(seat, code, true)?;
+                input.pointer_button(seat, code, false)
             }),
             PointerCall::Scroll {
                 dx,
@@ -66,8 +81,12 @@ impl Server {
                 capture,
                 ..
             } => self
-                .move_to(seat, x, y, output, capture)
-                .and_then(|()| self.compositor.pointer_scroll(seat, dx, dy)),
+                .move_to(seat, x, y, output, capture, from)
+                .and_then(|()| {
+                    self.compositor
+                        .input_from(from)
+                        .pointer_scroll(seat, dx, dy)
+                }),
         };
         match result {
             Ok(pointer) => ToolResult::done(json!({ "pointer": tools::pointer_json(&pointer) })),
@@ -75,13 +94,25 @@ impl Server {
         }
     }
 
-    /// Moves `seat`'s pointer where a button call says, when it says.
-    fn move_first(&mut self, seat: SeatId, button: &ButtonCall) -> Result<(), Error> {
-        self.move_to(seat, button.x, button.y, button.output, button.capture)
+    /// Moves `seat`'s pointer where a button call says, when it says, a motion `from` the call.
+    fn move_first(
+        &mut self,
+        seat: SeatId,
+        button: &ButtonCall,
+        from: InputDevice,
+    ) -> Result<(), Error> {
+        self.move_to(
+            seat,
+            button.x,
+            button.y,
+            button.output,
+            button.capture,
+            from,
+        )
     }
 
     /// Moves `seat`'s pointer to (`x`, `y`), on `output` or in `capture`'s image, when both are
-    /// given; refused for one without the other.
+    /// given, a motion `from` the call; refused for one without the other.
     fn move_to(
         &mut self,
         seat: SeatId,
@@ -89,11 +120,15 @@ impl Server {
         y: Option<f64>,
         output: Option<u64>,
         capture: Option<u64>,
+        from: InputDevice,
     ) -> Result<(), Error> {
         match (x, y) {
             (Some(x), Some(y)) => {
                 let (output, x, y) = self.place(seat, x, y, output, capture)?;
-                self.compositor.pointer_move(seat, output, x, y).map(|_| ())
+                self.compositor
+                    .input_from(from)
+                    .pointer_move(seat, output, x, y)
+                    .map(|_| ())
             }
             (None, None) if output.is_none() && capture.is_none() => Ok(()),
             _ => Err(Error::Refused("give x and y together".to_owned())),
@@ -139,7 +174,14 @@ impl Server {
         Ok((Some(mapping.output), logical_x, logical_y))
     }
 
-    pub(super) fn keyboard(&mut self, arguments: Map<String, Value>) -> ToolResult {
+    /// The `keyboard` tool, for the request whose JSON-RPC id is `request` when it is an
+    /// integer, as [`Server::pointer`].
+    pub(super) fn keyboard(
+        &mut self,
+        request: Option<i64>,
+        arguments: Map<String, Value>,
+    ) -> ToolResult {
+        let from = InputDevice::Agent { request };
         let call: KeyboardCall = match tools::arguments(arguments) {
             Ok(call) => call,
             Err(reason) => return ToolResult::failed(reason),
@@ -160,11 +202,21 @@ impl Server {
         };
         let result = match call {
             KeyboardCall::Get { .. } => Ok(()),
-            KeyboardCall::Press { key, .. } => self.compositor.key(seat, &key, true),
-            KeyboardCall::Release { key, .. } => self.compositor.key(seat, &key, false),
-            KeyboardCall::Tap { keys, .. } => self.compositor.tap_keys(seat, &keys),
-            KeyboardCall::Type { text, .. } => self.compositor.type_text(seat, &text),
-            KeyboardCall::Preedit { text, .. } => self.compositor.compose_text(seat, &text),
+            KeyboardCall::Press { key, .. } => {
+                self.compositor.input_from(from).key(seat, &key, true)
+            }
+            KeyboardCall::Release { key, .. } => {
+                self.compositor.input_from(from).key(seat, &key, false)
+            }
+            KeyboardCall::Tap { keys, .. } => {
+                self.compositor.input_from(from).tap_keys(seat, &keys)
+            }
+            KeyboardCall::Type { text, .. } => {
+                self.compositor.input_from(from).type_text(seat, &text)
+            }
+            KeyboardCall::Preedit { text, .. } => {
+                self.compositor.input_from(from).compose_text(seat, &text)
+            }
             KeyboardCall::Layout {
                 layout,
                 variant,

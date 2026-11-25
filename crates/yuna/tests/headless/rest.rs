@@ -469,7 +469,11 @@ fn a_bare_commit_that_moves_a_subsurface_is_the_cause_of_its_frame() {
     assert_eq!(moved.whole.frames, 1, "{moved:?}");
     assert_eq!(moved.whole.frames_by(Cause::Commit), 1, "{moved:?}");
     let named = moved.clients.values().next().expect("the client");
-    assert_eq!((named.tally.commits, named.tally.draws), (2, 1), "{moved:?}");
+    assert_eq!(
+        (named.tally.commits, named.tally.draws),
+        (2, 1),
+        "{moved:?}"
+    );
 }
 
 /// A window that opens on one seat is its client's commit on that seat's outputs alone: another
@@ -513,7 +517,11 @@ fn a_window_opened_on_one_seat_is_no_cause_of_another_seats_frames() {
     crate::run_armed_deadlines(&mut compositor);
     let drawn = compositor.rest_counts().since(&settled);
     assert_eq!(drawn.seats[&b].frames, 1, "{drawn:?}");
-    assert_eq!(drawn.seats[&b].frames_by(Cause::LayoutChange), 0, "{drawn:?}");
+    assert_eq!(
+        drawn.seats[&b].frames_by(Cause::LayoutChange),
+        0,
+        "{drawn:?}"
+    );
     assert!(drawn.seats[&a].frames >= 1, "{drawn:?}");
     let draws: Vec<(SeatId, u64)> = drawn
         .clients

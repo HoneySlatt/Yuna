@@ -62,6 +62,7 @@ use yuna_types::{OutputId, SeatId, WindowId};
 
 use crate::Error;
 use crate::command::refusal;
+use crate::frame_record::{InputDevice, InputKind};
 use crate::keymap::{Chord, KeyPlanner, KeyboardState};
 use crate::output::VirtualOutput;
 use crate::popups::popup_toplevel;
@@ -395,18 +396,20 @@ impl State {
             _ => false,
         };
         if !unchanged {
-            self.move_pointer(seat, &pointer, location, under);
+            self.move_pointer(seat, &pointer, location, under, InputDevice::Yuna);
         }
     }
 
-    /// Moves `seat`'s pointer to `location`, over `under`: during a drag, what the drag is over
-    /// decides where the motion goes (`xwayland/drags.rs`).
+    /// Moves `seat`'s pointer to `location`, over `under`, a motion from `device`: during a
+    /// drag, what the drag is over decides where the motion goes (`xwayland/drags.rs`). Every
+    /// motion of a seat's pointer goes through here, and the frame record keeps it.
     pub(crate) fn move_pointer(
         &mut self,
         seat: SeatId,
         pointer: &PointerHandle<State>,
         location: Point<f64, Logical>,
         under: Option<(WlSurface, Point<f64, Logical>)>,
+        device: InputDevice,
     ) {
         if let Some(data) = self.seat_mut(seat) {
             data.pointer_moved = true;
@@ -414,16 +417,25 @@ impl State {
         }
         let focus = self.drag_moved(seat, location, under);
         self.send_pointer_motion(pointer, focus, location);
+        self.record_input(seat, InputKind::Motion, device);
+    }
+
+    /// Keeps in `seat`'s frame record an input of `kind` from `device`, delivered now.
+    pub(crate) fn record_input(&mut self, seat: SeatId, kind: InputKind, device: InputDevice) {
+        let now = self.clock.now();
+        self.frame_record.input(seat, kind, device, now);
     }
 
     /// Moves `seat`'s pointer to (`x`, `y`), logical units from the top-left corner of `output`,
-    /// one of the seat's, or of its first output. Refused for a place off that output.
+    /// one of the seat's, or of its first output, a motion from `device`. Refused for a place off
+    /// that output.
     pub(crate) fn pointer_move(
         &mut self,
         seat: SeatId,
         output: Option<OutputId>,
         x: f64,
         y: f64,
+        device: InputDevice,
     ) -> Result<PointerDescription, Error> {
         let pointer = self.agent_pointer(seat)?;
         let output = match output {
@@ -450,16 +462,17 @@ impl State {
         }
         let location = Point::from((rect.x + x, rect.y + y));
         let under = self.surface_under(seat, location);
-        self.move_pointer(seat, &pointer, location, under);
+        self.move_pointer(seat, &pointer, location, under, device);
         Ok(self.describe_pointer(seat))
     }
 
-    /// Moves `seat`'s pointer to `location`, in the layout's logical coordinates. Refused for a
-    /// place on none of the seat's outputs.
+    /// Moves `seat`'s pointer to `location`, in the layout's logical coordinates, a motion from
+    /// `device`. Refused for a place on none of the seat's outputs.
     pub(crate) fn pointer_move_to(
         &mut self,
         seat: SeatId,
         location: Point<f64, Logical>,
+        device: InputDevice,
     ) -> Result<(), Error> {
         let pointer = self.agent_pointer(seat)?;
         if self.output_at(seat, location).is_none() {
@@ -469,7 +482,7 @@ impl State {
             )));
         }
         let under = self.surface_under(seat, location);
-        self.move_pointer(seat, &pointer, location, under);
+        self.move_pointer(seat, &pointer, location, under, device);
         Ok(())
     }
 
@@ -525,6 +538,7 @@ impl State {
         seat: SeatId,
         button: u32,
         pressed: bool,
+        device: InputDevice,
     ) -> Result<PointerDescription, Error> {
         let pointer = self.agent_pointer(seat)?;
         let held = self
@@ -567,6 +581,7 @@ impl State {
             data.pressed_buttons.retain(|held| *held != button);
         }
         self.send_button(&pointer, button, pressed, serial);
+        self.record_input(seat, InputKind::Button, device);
         self.after_popup_grab_input(seat);
         if !pressed
             && self
@@ -630,6 +645,7 @@ impl State {
         seat: SeatId,
         dx: f64,
         dy: f64,
+        device: InputDevice,
     ) -> Result<PointerDescription, Error> {
         let pointer = self.agent_pointer(seat)?;
         let valid = |steps: f64| steps.is_finite() && steps.abs() <= MAX_SCROLL_STEPS;
@@ -647,20 +663,22 @@ impl State {
                     .v120(axis, (steps * 120.0).round() as i32);
             }
         }
-        self.send_axis(seat, &pointer, frame);
+        self.send_axis(seat, &pointer, frame, device);
         Ok(self.describe_pointer(seat))
     }
 
-    /// Sends `frame`, a scroll, to what `seat`'s pointer is on as drawn now.
+    /// Sends `frame`, a scroll from `device`, to what `seat`'s pointer is on as drawn now.
     pub(crate) fn send_axis(
         &mut self,
         seat: SeatId,
         pointer: &PointerHandle<State>,
         frame: AxisFrame,
+        device: InputDevice,
     ) {
         self.focus_what_is_drawn(seat);
         pointer.axis(self, frame);
         pointer.frame(self);
+        self.record_input(seat, InputKind::Axis, device);
     }
 
     /// Where `seat`'s pointer is, and what is under it.
@@ -777,9 +795,16 @@ impl State {
         })
     }
 
-    /// Presses or releases `key` on `seat`'s keyboard, to the surface it is on, read with the
-    /// seat's own keymap. A press of a key held, or a release of one not held, is refused.
-    pub(crate) fn key(&mut self, seat: SeatId, key: Keycode, pressed: bool) -> Result<(), Error> {
+    /// Presses or releases `key` on `seat`'s keyboard, from `device`, to the surface it is on,
+    /// read with the seat's own keymap. A press of a key held, or a release of one not held, is
+    /// refused.
+    pub(crate) fn key(
+        &mut self,
+        seat: SeatId,
+        key: Keycode,
+        pressed: bool,
+        device: InputDevice,
+    ) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         let Some((keyboard, own_keymap)) = self
             .seat(seat)
@@ -797,7 +822,7 @@ impl State {
         } else {
             KeyState::Released
         };
-        self.send_key(seat, KeyboardSource::MAIN, key, state)
+        self.send_key(seat, KeyboardSource::MAIN, key, state, device)
     }
 
     /// Switches `seat`'s keyboard to `keymap` unless it has it: its clients are sent the new
@@ -832,6 +857,7 @@ impl State {
         source: KeyboardSource,
         key: Keycode,
         state: KeyState,
+        device: InputDevice,
     ) -> Result<(), Error> {
         let keyboard = self.agent_keyboard(seat)?;
         if state == KeyState::Pressed {
@@ -848,6 +874,7 @@ impl State {
         {
             data.last_key_press = Some((serial, focus));
         }
+        self.record_input(seat, InputKind::Key, device);
         Ok(())
     }
 
@@ -886,7 +913,12 @@ impl State {
     /// released in the reverse order. Refused, with nothing pressed, for a name no key has, a
     /// key named twice, or a key held already; a key that fails to press or release leaves no
     /// key of the tap held ([`tap_in_order`]).
-    pub(crate) fn tap_keys(&mut self, seat: SeatId, combination: &str) -> Result<(), Error> {
+    pub(crate) fn tap_keys(
+        &mut self,
+        seat: SeatId,
+        combination: &str,
+        device: InputDevice,
+    ) -> Result<(), Error> {
         let mut keys = Vec::new();
         for name in combination.split('+') {
             let name = match name.to_ascii_lowercase().as_str() {
@@ -912,7 +944,7 @@ impl State {
                 "a key of {combination:?} is held already"
             )));
         }
-        tap_in_order(&keys, |key, pressed| self.key(seat, key, pressed))
+        tap_in_order(&keys, |key, pressed| self.key(seat, key, pressed, device))
     }
 
     /// Types `text` on `seat`'s keyboard, to the surface it is on: each character by its keys in
@@ -923,7 +955,12 @@ impl State {
     /// [`MAX_TYPED`] characters, for a character that is no keysym, and when a key the text
     /// needs is held. A key that fails midway stops the typing; the group it started in is
     /// locked again, if the keymap leads back there, before the error is returned.
-    pub(crate) fn type_text(&mut self, seat: SeatId, text: &str) -> Result<(), Error> {
+    pub(crate) fn type_text(
+        &mut self,
+        seat: SeatId,
+        text: &str,
+        device: InputDevice,
+    ) -> Result<(), Error> {
         self.agent_pointer(seat)?;
         if text.chars().count() > MAX_TYPED {
             return Err(Error::Refused(format!(
@@ -947,7 +984,7 @@ impl State {
             ));
         }
         if !text.is_empty() && self.text_field_enabled(seat) {
-            self.compose_text(seat, "")?;
+            self.compose_text(seat, "", device)?;
         }
         // The characters typed by their keys since the last flush; a run committed or injected
         // flushes after each of its pieces.
@@ -968,16 +1005,16 @@ impl State {
             }
             let done = match step {
                 Typed::Keys(chord) => {
-                    tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed))
+                    tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed, device))
                 }
-                Typed::Committed(text) => self.commit_text(seat, &text),
+                Typed::Committed(text) => self.commit_text(seat, &text, device),
                 Typed::Injected(keysyms) => {
-                    self.inject_keysyms(seat, &keysyms);
+                    self.inject_keysyms(seat, &keysyms, device);
                     Ok(())
                 }
             };
             if let Err(error) = done {
-                self.lock_group_again(seat, start_group);
+                self.lock_group_again(seat, start_group, device);
                 return Err(error);
             }
         }
@@ -992,8 +1029,9 @@ impl State {
         }
     }
 
-    /// Types `keysyms` through an injected keymap, to the surface `seat`'s keyboard is on.
-    fn inject_keysyms(&mut self, seat: SeatId, keysyms: &[Keysym]) {
+    /// Types `keysyms` through an injected keymap, to the surface `seat`'s keyboard is on: each
+    /// chunk is one text input from `device` in the frame record.
+    fn inject_keysyms(&mut self, seat: SeatId, keysyms: &[Keysym], device: InputDevice) {
         let Some(keyboard) = self.seat(seat).map(|data| data.keyboard.clone()) else {
             return;
         };
@@ -1002,6 +1040,7 @@ impl State {
         // each, so that a flush follows every few KiB.
         for chunk in keysyms.chunks(INJECTED_BETWEEN_FLUSHES) {
             keyboard.inject_text_keysyms(self, chunk, time);
+            self.record_input(seat, InputKind::Text, device);
             self.flush_clients();
         }
     }
@@ -1009,7 +1048,7 @@ impl State {
     /// After a key failed midway through typing, locks `group` again on `seat`'s keyboard, from
     /// the state it is in now, if the keymap leads there; a key that fails here leaves it as it
     /// is, logged.
-    fn lock_group_again(&mut self, seat: SeatId, group: u32) {
+    fn lock_group_again(&mut self, seat: SeatId, group: u32, device: InputDevice) {
         let back = self
             .seat(seat)
             .and_then(|data| data.keymap.as_ref())
@@ -1024,7 +1063,9 @@ impl State {
             return;
         };
         for chord in chords {
-            if let Err(error) = tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed)) {
+            if let Err(error) =
+                tap_in_order(&chord, |key, pressed| self.key(seat, key, pressed, device))
+            {
                 tracing::warn!(%error, seat = seat.0, group, "typing failed, its group stays");
                 return;
             }
@@ -1089,10 +1130,10 @@ impl State {
         let keys: Vec<Keycode> = data.keyboard.pressed_keys().into_iter().collect();
         let buttons = data.pressed_buttons.clone();
         for key in keys {
-            let _ = self.key(seat, key, false);
+            let _ = self.key(seat, key, false, InputDevice::Yuna);
         }
         for button in buttons {
-            let _ = self.pointer_button(seat, button, false);
+            let _ = self.pointer_button(seat, button, false, InputDevice::Yuna);
         }
     }
 }

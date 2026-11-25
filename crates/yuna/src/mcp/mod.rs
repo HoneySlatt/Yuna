@@ -768,8 +768,8 @@ impl Server {
                     },
                     "outputs" => self.outputs(arguments),
                     "workspaces" => self.workspaces(arguments),
-                    "pointer" => self.pointer(arguments),
-                    "keyboard" => self.keyboard(arguments),
+                    "pointer" => self.pointer(id.as_i64(), arguments),
+                    "keyboard" => self.keyboard(id.as_i64(), arguments),
                     "spawn" => match self.spawn(&id, revision, arguments) {
                         Some(result) => result,
                         // It waits for its seat's accessibility bus, and is answered later.
